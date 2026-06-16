@@ -373,6 +373,58 @@ struct ProfileEdgeGeom {
     end: Point3,
 }
 
+/// Merge consecutive arcs lying on the same circle into a single arc.
+///
+/// A 90° rounded-rect corner can arrive as one arc or as several co-circular
+/// sub-arcs — drawn profiles (`drawRoundedRectangle`) split corners
+/// inconsistently with size (e.g. one section's corner is one arc, another's is
+/// two). Left as-is, the loft profiles get mismatched edge counts and the
+/// curve-preserving path bails to the faceted polygon loft. Normalizing each
+/// profile to canonical one-arc-per-corner lets split- and single-arc corners
+/// align so multi-section lips/sockets keep analytic corners.
+fn merge_cocircular_arcs(edges: Vec<ProfileEdgeGeom>) -> Vec<ProfileEdgeGeom> {
+    use brepkit_math::curves::Circle3D;
+    let tol = Tolerance::new();
+    let same_circle = |c0: &Circle3D, c1: &Circle3D| -> bool {
+        let (Ok(n0), Ok(n1)) = (c0.normal().normalize(), c1.normal().normalize()) else {
+            return false;
+        };
+        n0.dot(n1).abs() >= 1.0 - tol.angular
+            && (c0.center() - c1.center()).length() <= tol.linear
+            && (c0.radius() - c1.radius()).abs() <= tol.linear
+    };
+    let mut out: Vec<ProfileEdgeGeom> = Vec::with_capacity(edges.len());
+    for e in edges {
+        let merge = matches!(&e.curve, EdgeCurve::Circle(_))
+            && out.last().is_some_and(|last| {
+                matches!(
+                    (&last.curve, &e.curve),
+                    (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) if same_circle(c0, c1)
+                )
+            });
+        if merge && let Some(last) = out.last_mut() {
+            last.end = e.end;
+        } else {
+            out.push(e);
+        }
+    }
+    // Wrap-around: a corner split across the closing seam (leading & trailing
+    // arcs share a circle). Fold the trailing arc back into the leading one.
+    if out.len() > 2 {
+        let wrap = matches!(
+            (&out[0].curve, &out[out.len() - 1].curve),
+            (EdgeCurve::Circle(cf), EdgeCurve::Circle(cl)) if same_circle(cf, cl)
+        );
+        if wrap
+            && let Some(last) = out.pop()
+            && let Some(first) = out.first_mut()
+        {
+            first.start = last.start;
+        }
+    }
+    out
+}
+
 /// Extract a planar profile's outer-wire edges in traversal order, each
 /// oriented so `start`→`end` follows the wire. Returns `None` if the face is
 /// not planar or has inner wires (holes) — the general loft handles those.
@@ -398,7 +450,7 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
             end,
         });
     }
-    Some(out)
+    Some(merge_cocircular_arcs(out))
 }
 
 /// When two corner arcs are coaxial (same axis direction, centers differing
@@ -489,13 +541,14 @@ fn try_loft_matching_curved_profiles(
     let tol = Tolerance::new();
     let num_profiles = profiles.len();
 
-    // Scope guard: only curve-preserve a single ruled band (two profiles).
-    // Multi-section curve-preserving lofts (e.g. a 5-section gridfinity lip)
-    // produce chains of curved bands whose downstream boolean cut/fuse/shell
-    // sequences aren't yet robust (near-degenerate corner junctions), so they
-    // fall back to the polygon loft that already handles them. The two-profile
-    // case covers the coincident curved-cap fuse this feature targets.
-    if num_profiles != 2 {
+    // Curve-preserve any chain of N >= 2 profiles. The section loops below
+    // (steps 3b/4/6) already build one ruled band per adjacent profile pair, so
+    // a multi-section gridfinity lip/socket keeps its arc corners analytic
+    // (Cylinder/Cone/ruled-NURBS) instead of faceting to a polygon. An analytic
+    // operand is exactly what the downstream cut/fuse needs to stay watertight —
+    // a faceted multi-section lip is what drove the boolean to its non-manifold
+    // mesh fallback. `loft()` already guarantees >= 2 profiles.
+    if num_profiles < 2 {
         return Ok(None);
     }
 

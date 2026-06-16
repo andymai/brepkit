@@ -530,31 +530,96 @@ fn restrict_curves_to_faces(
                 ext_a.contains(p) && ext_b.contains(p)
             })
             .collect();
-        // Longest contiguous in-both run.
-        let (mut b0, mut b1) = (0usize, 0usize);
-        let mut cur: Option<usize> = None;
-        for (i, &v) in inb.iter().enumerate() {
-            if v {
-                let c = *cur.get_or_insert(i);
-                if i - c > b1 - b0 {
-                    b0 = c;
-                    b1 = i;
-                }
-            } else {
-                cur = None;
-            }
-        }
+        // Longest contiguous in-both run. A closed curve (sample N coincides
+        // with sample 0) may have its in-both arc wrap across the seam, so the
+        // search extends past N for closed curves (`b1` may exceed N, mapped
+        // back via the curve's periodic parameterization).
+        let closed = (raw.p_start - raw.p_end).length() < 1e-7;
+        let (b0, b1) = longest_inboth_run(&inb, closed);
         // An in-both run spanning fewer than two segments (b1-b0 < 2, i.e. at
         // most two consecutive in-both samples) is a tangency/grazing point —
-        // such a curve never splits either face, so drop it. Curves with a real
-        // in-both span are kept whole (the downstream splitter trims them to the
-        // face boundary).
+        // such a curve never splits either face, so drop it.
         if b1 - b0 < 2 {
+            continue;
+        }
+        // A closed ellipse/NURBS loop is kept whole ONLY when the entire curve
+        // is in-both — a genuine shared rim. When just an arc is in-both,
+        // keeping the whole curve leaves a spurious closed self-loop section
+        // edge: the splitter only trims OPEN curves and only adopts closed
+        // CIRCLES (seam adoption / link_existing), so a full ellipse from an
+        // inner tapered wall meeting an outer corner (the gridfinity lip
+        // knife-edge) survives as a degenerate loop and over-connects the rim.
+        // Trim it to its in-both arc so it becomes an open edge the splitter
+        // can place. Circles are left whole (seam adoption handles them); open
+        // curves are left whole (the splitter clips them).
+        if closed && b1 - b0 < N && !matches!(raw.curve, EdgeCurve::Circle(_)) {
+            #[allow(clippy::cast_precision_loss)]
+            let frac = |i: usize| i as f64 / N as f64;
+            let span = raw.t_range.1 - raw.t_range.0;
+            let t0 = raw.t_range.0 + span * frac(b0);
+            let t1 = raw.t_range.0 + span * frac(b1);
+            let p0 = raw
+                .curve
+                .evaluate_with_endpoints(t0, raw.p_start, raw.p_end);
+            let p1 = raw
+                .curve
+                .evaluate_with_endpoints(t1, raw.p_start, raw.p_end);
+            out.push(RawCurve {
+                curve: raw.curve,
+                bbox: raw.bbox,
+                t_range: (t0, t1),
+                p_start: p0,
+                p_end: p1,
+            });
             continue;
         }
         out.push(raw);
     }
     out
+}
+
+/// Longest contiguous run of `true` in `inb` (samples `0..=N`). For a closed
+/// curve (sample `N` == sample `0`) the run may wrap across the seam, so the
+/// search walks the circular sequence and the returned `b1` may exceed `N`
+/// (the caller maps it back through the curve's periodic parameterization). A
+/// run covering every distinct sample returns the whole span `(0, N)`.
+fn longest_inboth_run(inb: &[bool], closed: bool) -> (usize, usize) {
+    let n = inb.len();
+    if !closed || n < 2 {
+        let (mut b0, mut b1) = (0usize, 0usize);
+        let mut start: Option<usize> = None;
+        for (i, &v) in inb.iter().enumerate() {
+            if v {
+                let s = *start.get_or_insert(i);
+                if i - s > b1 - b0 {
+                    b0 = s;
+                    b1 = i;
+                }
+            } else {
+                start = None;
+            }
+        }
+        return (b0, b1);
+    }
+    // Closed: distinct samples are 0..m (sample m duplicates sample 0).
+    let m = n - 1;
+    let (mut b0, mut b1) = (0usize, 0usize);
+    let mut start: Option<usize> = None;
+    for k in 0..2 * m {
+        if inb[k % m] {
+            let s = *start.get_or_insert(k);
+            if k - s >= m {
+                return (0, m); // whole curve in-both
+            }
+            if k - s > b1 - b0 {
+                b0 = s;
+                b1 = k;
+            }
+        } else {
+            start = None;
+        }
+    }
+    (b0, b1)
 }
 
 /// Compute AABB for a face by sampling its boundary edges.
@@ -670,6 +735,85 @@ fn compute_raw_curves(
                 plane_analytic_intersection(*normal, *d, &analytic)
             } else {
                 Ok(Vec::new())
+            }
+        }
+
+        (FaceSurface::Cone(c1), FaceSurface::Cone(c2)) => {
+            // Coaxial cones meet at a single circle that coincides with their
+            // shared cap rim. Emit it as an exact Circle so the closed-circle
+            // handling (seam adoption + `link_existing`) treats it as the
+            // existing shared boundary edge instead of adopting a fresh,
+            // redundant section edge. Non-coaxial cones (None) fall through to
+            // the general marcher.
+            match analytic_intersection::exact_cone_cone(c1, c2)? {
+                Some(exacts) => {
+                    let mut results = Vec::new();
+                    for exact in exacts {
+                        if let analytic_intersection::ExactIntersectionCurve::Circle(circle) = exact
+                        {
+                            let bbox = circle_bbox(&circle);
+                            let domain = (0.0, std::f64::consts::TAU);
+                            let p_start = ParametricCurve::evaluate(&circle, domain.0);
+                            let p_end = ParametricCurve::evaluate(&circle, domain.1);
+                            results.push(RawCurve {
+                                curve: EdgeCurve::Circle(circle),
+                                bbox,
+                                t_range: domain,
+                                p_start,
+                                p_end,
+                            });
+                        }
+                    }
+                    Ok(results)
+                }
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
+        (FaceSurface::Cone(cone), FaceSurface::Cylinder(cyl))
+        | (FaceSurface::Cylinder(cyl), FaceSurface::Cone(cone)) => {
+            // A coaxial cone and cylinder meet at the single circle where the
+            // cone's radius equals the cylinder's — the gridfinity lip's top
+            // knife edge (inner tapered corner = cone, outer corner =
+            // cylinder, concentric, matching at Z_PEAK). Emit it as an exact
+            // Circle so seam adoption links it to the shared cap rim, instead
+            // of letting the marcher fragment the near-tangent contact into
+            // degenerate micro-arcs (the 98-free-edge corruption). Non-coaxial
+            // (None) falls through to the general marcher.
+            match analytic_intersection::exact_cone_cylinder(cone, cyl)? {
+                Some(exacts) => {
+                    let mut results = Vec::new();
+                    for exact in exacts {
+                        if let analytic_intersection::ExactIntersectionCurve::Circle(circle) = exact
+                        {
+                            let bbox = circle_bbox(&circle);
+                            let domain = (0.0, std::f64::consts::TAU);
+                            let p_start = ParametricCurve::evaluate(&circle, domain.0);
+                            let p_end = ParametricCurve::evaluate(&circle, domain.1);
+                            results.push(RawCurve {
+                                curve: EdgeCurve::Circle(circle),
+                                bbox,
+                                t_range: domain,
+                                p_start,
+                                p_end,
+                            });
+                        }
+                    }
+                    Ok(results)
+                }
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
             }
         }
 
@@ -1809,6 +1953,29 @@ fn clip_line_to_polygon(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn longest_run_open_middle() {
+        // Open curve: longest contiguous in-both run, no wrap-around.
+        let inb = [false, true, true, true, false, true, false];
+        assert_eq!(longest_inboth_run(&inb, false), (1, 3));
+    }
+
+    #[test]
+    fn longest_run_closed_wraps_seam() {
+        // Closed curve (sample N duplicates sample 0): in-both at samples 4, 0,
+        // 1 — the longest run wraps the seam, so b1 extends past the distinct
+        // sample count (the caller maps it back via periodic parameterization).
+        let inb = [true, true, false, false, true, true];
+        assert_eq!(longest_inboth_run(&inb, true), (4, 6));
+    }
+
+    #[test]
+    fn longest_run_closed_whole() {
+        // A closed curve entirely in-both returns the whole span (0, m).
+        let inb = [true, true, true, true, true];
+        assert_eq!(longest_inboth_run(&inb, true), (0, 4));
+    }
 
     #[test]
     fn clip_inside_square() {

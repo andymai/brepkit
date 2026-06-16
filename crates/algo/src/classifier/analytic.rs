@@ -923,6 +923,16 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
                 let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
                 let projected = axis * diff_v.dot(axis);
                 let radial_dist = (diff_v - projected).length();
+                // The centroid lying OUTSIDE this cylinder means it is a corner
+                // fillet (or off-axis bore), not a body/cavity-bounding cylinder.
+                // The `ConvexAnalytic` model intersects "inside every cylinder",
+                // which cannot represent a rounded-rect prism (its centre is far
+                // from each corner arc) — it would classify interior points as
+                // Outside. Bail so `classify_point` falls back to the
+                // geometrically-exact ray-cast classifier.
+                if radial_dist > r + tol.linear {
+                    return None;
+                }
                 if radial_dist < r {
                     outer_cylinders.push((origin, axis, r, z_min, z_max));
                 } else {
@@ -947,6 +957,12 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
                 let expected_r = r_min + t * (r_max - r_min);
                 let projected = axis * axial;
                 let radial_dist = (diff_v - projected).length();
+                // See the cylinder arm: a centroid outside this cone means a
+                // corner-fillet/off-axis cone the ConvexAnalytic intersection
+                // model can't represent — bail to ray-cast.
+                if radial_dist > expected_r + tol.linear {
+                    return None;
+                }
                 if radial_dist < expected_r {
                     outer_cones.push((apex, axis, z_min, z_max, r_min, r_max));
                 } else {

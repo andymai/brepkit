@@ -797,16 +797,17 @@ fn section_dims(inset: f64) -> (f64, f64, f64) {
     (w, d, r)
 }
 
-/// Build 5 outer sections (with lip extension) and return face handles.
+/// Build the outer lip sections and return face handles.
+///
+/// The outer frustum is a rectangular tube FLUSH with the bin wall
+/// (inset = 0) — it must coincide with the body's outer wall so the lip
+/// fuses onto the body. (An earlier version tapered the outer profile,
+/// which left the lip narrower than the wall and disjoint from the body, so
+/// the fuse dropped it.) Only the INNER sections taper to form the stacking
+/// ledge. Two sections (bottom extension + peak) suffice for a flush tube.
 fn make_outer_sections(k: &mut BrepKernel) -> Vec<u32> {
     let mut faces = Vec::new();
-    let sections: [(f64, f64); 5] = [
-        (Z_EXT, INSET_BOTTOM),
-        (Z_BASE, INSET_BOTTOM),
-        (Z_TAPER1, INSET_MID),
-        (Z_VERT, INSET_MID),
-        (Z_PEAK, INSET_TOP),
-    ];
+    let sections: [(f64, f64); 2] = [(Z_EXT, 0.0), (Z_PEAK, 0.0)];
     for &(z, inset) in &sections {
         let (w, d, r) = section_dims(inset);
         faces.push(make_rounded_rect_face(k, w, d, r, z));
@@ -1313,8 +1314,10 @@ fn gridfinity_d3_shelled_box_with_lip() {
     assert_ok(&p5, 0);
     let lip_handle = p5[0]["ok"].as_u64().unwrap() as u32;
 
-    // Translate lip to top of box
-    let mat = translate_matrix(0.0, 0.0, WALL_HEIGHT);
+    // Translate lip to top of box. The lip sections are centered at the
+    // origin, but `makeBox` spans [0,DIM] (corner at origin), so the lip must
+    // also be shifted to the box centre or it overlaps only one quadrant.
+    let mat = translate_matrix(OUTER_DIM / 2.0, OUTER_DIM / 2.0, WALL_HEIGHT);
     let r6 = k.execute_batch(&format!(
         r#"[{{"op": "transform", "args": {{"solid": {lip_handle}, "matrix": {mat}}}}}]"#
     ));
@@ -1713,5 +1716,72 @@ fn box_volume_sanity() {
         rel_error < 0.01,
         "box volume should be 1000: got {vol:.1}, error {:.1}%",
         rel_error * 100.0
+    );
+}
+
+/// Regression: a rounded-rectangle shelled body (open-top hollow) must
+/// classify a point in its OPEN CAVITY as Outside, not Inside. The analytic
+/// composite classifier modelled the rounded corners as `ConvexAnalytic`
+/// intersection constraints (`radial_dist < radius` for every corner
+/// cylinder), which the cavity centre fails (it is far from every corner) —
+/// so the cavity was wrongly classified Inside, dropping a fused lip's
+/// inner-cavity faces and forcing a mesh-boolean fallback. The composite now
+/// bails to the exact ray-cast classifier when a cylinder/cone does not
+/// contain the centroid.
+#[test]
+fn rounded_shelled_body_classifies_cavity_outside() {
+    use brepkit_math::vec::Point3;
+    let mut k = BrepKernel::new();
+    let bf = make_rounded_rect_face(&mut k, OUTER_DIM, OUTER_DIM, CORNER_R, 0.0);
+    let bs = parse_batch(&k.execute_batch(&format!(
+        r#"[{{"op":"extrude","args":{{"face":{bf},"dz":1.0,"distance":{WALL_HEIGHT}}}}}]"#
+    )))[0]["ok"]
+        .as_u64()
+        .unwrap() as u32;
+    let tf = k
+        .get_solid_faces(bs)
+        .unwrap()
+        .iter()
+        .copied()
+        .find(|&fh| {
+            k.resolve_face(fh)
+                .ok()
+                .and_then(|fid| k.topo.face(fid).ok())
+                .and_then(brepkit_topology::face::Face::effective_plane_normal)
+                .is_some_and(|n| n.z() > 0.5 * n.length())
+        })
+        .unwrap();
+    let shelled = parse_batch(&k.execute_batch(&format!(
+        r#"[{{"op":"shell","args":{{"solid":{bs},"thickness":{WALL_THICKNESS},"faces":[{tf}]}}}}]"#
+    )))[0]["ok"]
+        .as_u64()
+        .unwrap() as u32;
+    let sid = k.resolve_solid(shelled).unwrap();
+    let topo = &*k.topo;
+    let cavity = brepkit_algo::classifier::classify_point(
+        topo,
+        sid,
+        Point3::new(0.0, 0.0, WALL_HEIGHT / 2.0),
+    )
+    .unwrap();
+    assert_eq!(
+        cavity,
+        brepkit_algo::FaceClass::Outside,
+        "open-cavity centre must classify Outside, got {cavity:?}"
+    );
+    let wall = brepkit_algo::classifier::classify_point(
+        topo,
+        sid,
+        Point3::new(
+            OUTER_DIM / 2.0 - WALL_THICKNESS / 2.0,
+            0.0,
+            WALL_HEIGHT / 2.0,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        wall,
+        brepkit_algo::FaceClass::Inside,
+        "wall-material point must classify Inside, got {wall:?}"
     );
 }

@@ -804,6 +804,7 @@ pub fn intersect_analytic_analytic_bounded(
     // a grid point on A to its projection on B can be large even near
     // the intersection (e.g., sphere R=2 and cylinder R=1 → gap ≈ 1).
     let seed_threshold = diag_a.max(diag_b).max(1.0) * 0.5;
+    let mut min_dist = f64::INFINITY;
 
     #[allow(clippy::cast_precision_loss)]
     for ia in 0..grid_res {
@@ -819,6 +820,7 @@ pub fn intersect_analytic_analytic_bounded(
             let (ub, vb) = project_analytic(&b, pa, u_range_b, v_range_b);
             let pb = surf_b(ub, vb);
             let dist = (pa - pb).length();
+            min_dist = min_dist.min(dist);
 
             if dist < seed_threshold {
                 // Use the coarse seed directly. The marching algorithm
@@ -833,6 +835,19 @@ pub fn intersect_analytic_analytic_bounded(
                 seeds.push((mid, (ua, va), (ub, vb)));
             }
         }
+    }
+
+    // Cheap rejection: the grid samples surface A; the closest sample's
+    // distance to B lower-bounds how near the two bounded patches come. A
+    // transversal crossing puts a sample within ~one grid cell of it
+    // (distance on the order of a cell), so if even the nearest sample is
+    // several cells away the patches cannot cross — skip the expensive
+    // marching and return empty. Result-preserving: non-crossing pairs
+    // already march to nothing, just slowly (this is the gridfinity lip's
+    // ~80 inner-wall × outer-wall pairs that dominate pavefiller time).
+    let reject_dist = (char_size / grid_res as f64) * 3.0;
+    if min_dist > reject_dist {
+        return Ok(vec![]);
     }
 
     if seeds.is_empty() {
@@ -957,8 +972,184 @@ fn try_algebraic_intersection(
         | (AnalyticSurface::Cylinder(c), AnalyticSurface::Sphere(s)) => {
             algebraic_sphere_cylinder(s, c)
         }
+        (AnalyticSurface::Cone(c1), AnalyticSurface::Cone(c2)) => algebraic_cone_cone(c1, c2),
         _ => Ok(None),
     }
+}
+
+/// Exact coaxial cone-cone intersection: returns the shared circle.
+///
+/// Two cones that share an axis are concentric circles at every axial
+/// station, so they meet only where their radii are equal. Each cone's
+/// radius is linear in the axial coordinate `t` (measured along the shared
+/// axis from cone 1's apex): `r1 = m1·t` and `r2 = m2·σ·(t − d2)`, where
+/// `m_i = cot(half_angle_i)`, `σ = sign(axis2·axis1)`, and `d2` is cone 2's
+/// apex position in that coordinate. Equating gives a single crossing `t*`
+/// → one circle (the shared rim). The general marcher mishandles this case:
+/// at the radii-crossing the surfaces are nearly tangent, so a grid-seeded
+/// march fragments the clean circle into dozens of degenerate micro-curves.
+///
+/// Returns `Some(vec![circle])` for a genuine crossing, `Some(vec![])` when
+/// the cones do not meet (parallel radius lines or a crossing on the wrong
+/// nappe), and `None` for the identical-cone overlap or a degenerate
+/// (near-flat) cone — both of which fall through to the general path.
+///
+/// # Errors
+///
+/// Returns [`MathError`] if the shared-rim `Circle3D` cannot be constructed
+/// (e.g. a non-finite center or radius from a malformed cone).
+pub fn exact_cone_cone(
+    c1: &ConicalSurface,
+    c2: &ConicalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let axis = c1.axis();
+    let axis2 = c2.axis();
+
+    // Coaxial check: parallel axes and the second apex lies on the first axis.
+    if axis.dot(axis2).abs() < 1.0 - 1e-10 {
+        return Ok(None); // Non-coaxial: quartic curve, let the marcher handle.
+    }
+    let apex1 = c1.apex();
+    let apex2 = c2.apex();
+    let delta = apex2 - apex1;
+    let delta_v = Vec3::new(delta.x(), delta.y(), delta.z());
+    let along = delta_v.dot(axis);
+    if (delta_v - axis * along).length() > 1e-8 {
+        return Ok(None); // Parallel but offset axes — not coaxial.
+    }
+
+    let (s1, s2) = (c1.half_angle().sin(), c2.half_angle().sin());
+    if s1.abs() < 1e-12 || s2.abs() < 1e-12 {
+        return Ok(None); // Degenerate (near-flat) cone.
+    }
+    let m1 = c1.half_angle().cos() / s1;
+    let m2 = c2.half_angle().cos() / s2;
+    let sigma = if axis.dot(axis2) >= 0.0 { 1.0 } else { -1.0 };
+    let d2 = along; // apex2 position along `axis`, measured from apex1.
+
+    let denom = m1 - m2 * sigma;
+    if denom.abs() < 1e-12 {
+        // Parallel radius lines: identical cones (coincident apex, same opening)
+        // overlap — defer to the general/same-domain path; otherwise no meeting.
+        if sigma > 0.0 && d2.abs() < 1e-9 {
+            return Ok(None);
+        }
+        return Ok(Some(vec![]));
+    }
+
+    let t_star = (-m2 * sigma * d2) / denom;
+    let radius = m1 * t_star;
+    if radius < 1e-12 {
+        return Ok(Some(vec![])); // Crossing on the wrong nappe / no real circle.
+    }
+
+    let center = Point3::new(
+        apex1.x() + axis.x() * t_star,
+        apex1.y() + axis.y() * t_star,
+        apex1.z() + axis.z() * t_star,
+    );
+    let circle = Circle3D::new(center, axis, radius)?;
+    Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
+}
+
+/// Exact coaxial cone-cylinder intersection: returns the shared circle.
+///
+/// A cone and a cylinder sharing an axis are concentric circles at every
+/// axial station, so they meet only where the cone's radius equals the
+/// cylinder's. The cone radius is linear in the axial coordinate `t` from its
+/// apex (`r = m·t`, `m = cot(half_angle)`), the cylinder radius is the
+/// constant `R`, so `m·t = R` gives a single crossing `t*` → one circle. This
+/// is the gridfinity lip's top knife edge (inner tapered corner = cone, outer
+/// corner = cylinder, concentric, radii matching at `Z_PEAK`); the general
+/// marcher fragments that near-tangent contact into dozens of degenerate
+/// micro-curves.
+///
+/// Returns `Some(vec![circle])` for a genuine crossing, `Some(vec![])` when
+/// the crossing degenerates to the apex, and `None` (defer to the marcher)
+/// when the surfaces are not coaxial or the cone is near-flat / near-axial.
+///
+/// # Errors
+///
+/// Returns [`MathError`] if the shared `Circle3D` cannot be constructed.
+pub fn exact_cone_cylinder(
+    cone: &ConicalSurface,
+    cyl: &CylindricalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let axis = cone.axis();
+    let cyl_axis = cyl.axis();
+
+    // Coaxial check: parallel axes and the cone apex on the cylinder's axis.
+    if axis.dot(cyl_axis).abs() < 1.0 - 1e-10 {
+        return Ok(None);
+    }
+    let apex = cone.apex();
+    let delta = apex - cyl.origin();
+    let delta_v = Vec3::new(delta.x(), delta.y(), delta.z());
+    let along = delta_v.dot(cyl_axis);
+    if (delta_v - cyl_axis * along).length() > 1e-8 {
+        return Ok(None);
+    }
+
+    let s = cone.half_angle().sin();
+    if s.abs() < 1e-12 {
+        return Ok(None); // near-flat cone.
+    }
+    let m = cone.half_angle().cos() / s; // dr/dt along the cone axis.
+    if m.abs() < 1e-12 {
+        return Ok(None); // near-axial cone: radius ~constant.
+    }
+
+    let t_star = cyl.radius() / m; // where the cone radius m·t equals R.
+    if t_star.abs() < 1e-12 {
+        return Ok(Some(vec![])); // crossing at the apex — no real circle.
+    }
+    let center = Point3::new(
+        apex.x() + axis.x() * t_star,
+        apex.y() + axis.y() * t_star,
+        apex.z() + axis.z() * t_star,
+    );
+    let circle = Circle3D::new(center, axis, cyl.radius())?;
+    Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
+}
+
+/// Algebraic coaxial cone-cone intersection (NURBS form for the general
+/// bounded path). Delegates to [`exact_cone_cone`] and samples each exact
+/// circle into an interpolated NURBS `IntersectionCurve`, mirroring the
+/// sphere-cylinder algebraic path. phase FF prefers the exact circle form
+/// directly (so the section edge links to the coincident boundary), but a
+/// caller of `intersect_analytic_analytic_bounded` still gets one clean
+/// curve instead of the marcher's fragments.
+fn algebraic_cone_cone(
+    c1: &ConicalSurface,
+    c2: &ConicalSurface,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let Some(exacts) = exact_cone_cone(c1, c2)? else {
+        return Ok(None);
+    };
+    let mut curves = Vec::new();
+    for exact in exacts {
+        let ExactIntersectionCurve::Circle(circle) = exact else {
+            continue;
+        };
+        let n_samples = 33;
+        let mut positions = Vec::with_capacity(n_samples);
+        let mut points = Vec::with_capacity(n_samples);
+        #[allow(clippy::cast_precision_loss)]
+        for i in 0..n_samples {
+            let theta = TAU * i as f64 / (n_samples - 1) as f64;
+            let pt = crate::traits::ParametricCurve::evaluate(&circle, theta);
+            positions.push(pt);
+            points.push(IntersectionPoint {
+                point: pt,
+                param1: (0.0, 0.0),
+                param2: (0.0, 0.0),
+            });
+        }
+        let degree = 3.min(positions.len() - 1);
+        let curve = interpolate(&positions, degree)?;
+        curves.push(IntersectionCurve { curve, points });
+    }
+    Ok(Some(curves))
 }
 
 /// Algebraic sphere-cylinder intersection.
@@ -1677,6 +1868,50 @@ mod tests {
 
         let curves = intersect_plane_cone(&cone, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
         assert!(!curves.is_empty(), "should find intersection with cone");
+    }
+
+    #[test]
+    fn coaxial_cones_cross_at_single_circle() {
+        // Two coaxial truncated cones (outer base r10->top r8, inner r9->r8
+        // over height 10) cross where their radii match: z=10, r=8. The
+        // intersection must be ONE clean circle, not the dozens of degenerate
+        // micro-curves the general marcher produces at near-tangency.
+        let outer = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 50.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            5.0_f64.atan(),
+        )
+        .unwrap();
+        let inner = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 90.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            10.0_f64.atan(),
+        )
+        .unwrap();
+
+        let curves = intersect_analytic_analytic_bounded(
+            AnalyticSurface::Cone(&outer),
+            AnalyticSurface::Cone(&inner),
+            32,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            curves.len(),
+            1,
+            "coaxial cones crossing at one circle must yield exactly one curve, got {}",
+            curves.len()
+        );
+        for p in &curves[0].points {
+            let r = p.point.x().hypot(p.point.y());
+            assert!(
+                (p.point.z() - 10.0).abs() < 1e-6 && (r - 8.0).abs() < 1e-6,
+                "intersection point off the expected z=10,r=8 circle: {:?}",
+                p.point
+            );
+        }
     }
 
     #[test]

@@ -597,3 +597,151 @@ fn loft_rounded_rect_preserves_arc_corners() {
         "rounded-rect frustum volume {vol:.1} should be within 2% of ~{approx:.1}"
     );
 }
+
+#[test]
+fn loft_multi_section_rounded_rect_preserves_arc_corners() {
+    // Regression: a multi-section (>2 profile) rounded-rect loft must keep its
+    // arc corners curve-preserved (NURBS/Cone), not facet them to a polygon. A
+    // faceted multi-section lip/socket is what drove the gridfinity bin fuse to
+    // its non-manifold mesh fallback. Before the fix this was gated out
+    // (`num_profiles != 2`) and fell back to the all-planar polygon loft.
+    let mut topo = Topology::new();
+    let p: Vec<FaceId> = [
+        (10.0, 10.0, 2.0, 0.0),
+        (11.0, 11.0, 2.2, 3.0),
+        (12.0, 12.0, 2.5, 6.0),
+        (14.0, 14.0, 3.0, 10.0),
+    ]
+    .iter()
+    .map(|&(hw, hd, r, z)| make_rr_arcs(&mut topo, hw, hd, r, z))
+    .collect();
+
+    let solid = loft(&mut topo, &p).unwrap();
+    let s = topo.solid(solid).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    let faces = sh.faces();
+
+    // 2 caps + 3 bands * (4 straight walls + 4 arc corners) = 26 faces.
+    assert_eq!(
+        faces.len(),
+        26,
+        "4-section rounded-rect loft should have 26 faces"
+    );
+    let curved = faces
+        .iter()
+        .filter(|&&f| {
+            matches!(
+                topo.face(f).unwrap().surface(),
+                FaceSurface::Nurbs(_) | FaceSurface::Cone(_) | FaceSurface::Cylinder(_)
+            )
+        })
+        .count();
+    assert_eq!(
+        curved, 12,
+        "3 bands x 4 arc corners = 12 curve-preserved side faces (not faceted)"
+    );
+
+    let manifold = brepkit_topology::validation::validate_shell_manifold(sh, &topo);
+    assert!(
+        manifold.is_ok(),
+        "multi-section loft should be a closed manifold: {manifold:?}"
+    );
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, solid).unwrap();
+    #[allow(clippy::cast_possible_wrap)]
+    let euler = (v as i64) - (e as i64) + (f as i64);
+    assert_eq!(
+        euler, 2,
+        "multi-section frustum should be genus-0 (F={f} E={e} V={v})"
+    );
+}
+
+/// Rounded-rect profile with each 90° corner split into TWO co-circular arcs,
+/// mimicking drawn rounded-rects that split corners inconsistently with size.
+fn make_rr_arcs_split(topo: &mut Topology, hw: f64, hd: f64, r: f64, z: f64) -> FaceId {
+    use brepkit_math::curves::Circle3D;
+    let r = r.min(hw.min(hd));
+    let cc = [
+        Point3::new(hw - r, -hd + r, z),
+        Point3::new(hw - r, hd - r, z),
+        Point3::new(-hw + r, hd - r, z),
+        Point3::new(-hw + r, -hd + r, z),
+    ];
+    let ap = [
+        (Point3::new(hw - r, -hd, z), Point3::new(hw, -hd + r, z)),
+        (Point3::new(hw, hd - r, z), Point3::new(hw - r, hd, z)),
+        (Point3::new(-hw + r, hd, z), Point3::new(-hw, hd - r, z)),
+        (Point3::new(-hw, -hd + r, z), Point3::new(-hw + r, -hd, z)),
+    ];
+    let axis = Vec3::new(0.0, 0.0, 1.0);
+    let mut v = Vec::new();
+    for p in &ap {
+        v.push(topo.add_vertex(Vertex::new(p.0, 1e-7)));
+        v.push(topo.add_vertex(Vertex::new(p.1, 1e-7)));
+    }
+    let mut e = Vec::new();
+    e.push(topo.add_edge(Edge::new(v[7], v[0], EdgeCurve::Line)));
+    for i in 0..4 {
+        let circle = Circle3D::new(cc[i], axis, r).unwrap();
+        // Bisector midpoint splits the 90° corner into two co-circular sub-arcs.
+        let bis = ((ap[i].0 - cc[i]) + (ap[i].1 - cc[i])).normalize().unwrap();
+        let vmid = topo.add_vertex(Vertex::new(cc[i] + bis * r, 1e-7));
+        e.push(topo.add_edge(Edge::new(v[2 * i], vmid, EdgeCurve::Circle(circle.clone()))));
+        e.push(topo.add_edge(Edge::new(vmid, v[2 * i + 1], EdgeCurve::Circle(circle))));
+        if i < 3 {
+            e.push(topo.add_edge(Edge::new(v[2 * i + 1], v[2 * i + 2], EdgeCurve::Line)));
+        }
+    }
+    let wire = Wire::new(
+        e.iter().map(|&id| OrientedEdge::new(id, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane { normal: axis, d: z },
+    ))
+}
+
+#[test]
+fn loft_merges_split_arc_corners_for_curve_preservation() {
+    // One profile with single-arc corners + one whose corners are split into two
+    // co-circular sub-arcs (as drawn rounded-rects do, inconsistently). They must
+    // still curve-preserve: the arc-merge pass canonicalizes both so their edges
+    // align. Before the fix the 8-vs-12 edge-count mismatch forced the faceted
+    // polygon loft — the gridfinity lip's faceting.
+    let mut topo = Topology::new();
+    let single = make_rr_arcs(&mut topo, 12.0, 12.0, 2.5, 0.0); // 8 edges, corner center 9.5
+    let split = make_rr_arcs_split(&mut topo, 11.5, 11.5, 2.0, 5.0); // 12 edges, center 9.5
+    let solid = loft(&mut topo, &[single, split]).unwrap();
+    let sh = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+    let curved = sh
+        .faces()
+        .iter()
+        .filter(|&&f| {
+            matches!(
+                topo.face(f).unwrap().surface(),
+                FaceSurface::Nurbs(_) | FaceSurface::Cone(_) | FaceSurface::Cylinder(_)
+            )
+        })
+        .count();
+    assert_eq!(
+        curved, 4,
+        "the 4 corners must stay curve-preserved despite the split-arc profile"
+    );
+    let manifold = brepkit_topology::validation::validate_shell_manifold(sh, &topo);
+    assert!(
+        manifold.is_ok(),
+        "split-arc loft should be a closed manifold: {manifold:?}"
+    );
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, solid).unwrap();
+    #[allow(clippy::cast_possible_wrap)]
+    let euler = (v as i64) - (e as i64) + (f as i64);
+    assert_eq!(
+        euler, 2,
+        "split-arc frustum should be genus-0 (F={f} E={e} V={v})"
+    );
+}

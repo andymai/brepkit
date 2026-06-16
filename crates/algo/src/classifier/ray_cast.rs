@@ -38,6 +38,11 @@ enum FaceGeom {
         v_min: f64,
         v_max: f64,
         hole_bands: Vec<(f64, f64)>,
+        /// For a partial-arc patch (e.g. a rounded-rect corner quarter), the
+        /// angular range NOT covered by the face — a crossing whose `u`
+        /// (circumferential parameter) falls in this gap is off the patch and
+        /// excluded. `None` for a full-period lateral.
+        u_gap: Option<(f64, f64)>,
     },
 }
 
@@ -220,8 +225,41 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                         v_min,
                         v_max,
                         hole_bands,
+                        u_gap: None,
                     });
                     continue;
+                }
+            }
+
+            // Partial-arc cylinder patch (e.g. a rounded-rect corner quarter):
+            // no closed-circle edge, so the full-period path skipped it.
+            // Collect it analytically with an angular trim rather than the
+            // polygon fallback, whose non-planar boundary mis-counts crossings.
+            if face.inner_wires().is_empty() {
+                let verts = wire_polygon(topo, face.outer_wire())?;
+                if verts.len() >= 3 {
+                    let mut pv_min = f64::INFINITY;
+                    let mut pv_max = f64::NEG_INFINITY;
+                    let mut u_samples = Vec::with_capacity(verts.len());
+                    for p in &verts {
+                        let (u, v) = cyl.project_point(*p);
+                        pv_min = pv_min.min(v);
+                        pv_max = pv_max.max(v);
+                        u_samples.push(u);
+                    }
+                    if pv_min.is_finite()
+                        && pv_max > pv_min
+                        && let Some(gap) = largest_u_gap(&u_samples)
+                    {
+                        result.push(FaceGeom::Cylinder {
+                            surface: cyl.clone(),
+                            v_min: pv_min,
+                            v_max: pv_max,
+                            hole_bands: Vec::new(),
+                            u_gap: Some(gap),
+                        });
+                        continue;
+                    }
                 }
             }
         }
@@ -319,7 +357,16 @@ fn ray_geom_crossings(origin: Point3, ray_dir: Vec3, geom: &FaceGeom, tol: Toler
             v_min,
             v_max,
             hole_bands,
-        } => ray_cylinder_crossings(origin, ray_dir, surface, *v_min, *v_max, hole_bands, tol),
+            u_gap,
+        } => ray_cylinder_crossings(
+            origin,
+            ray_dir,
+            surface,
+            (*v_min, *v_max),
+            hole_bands,
+            *u_gap,
+            tol,
+        ),
     }
 }
 
@@ -370,11 +417,12 @@ fn ray_cylinder_crossings(
     origin: Point3,
     ray_dir: Vec3,
     surface: &brepkit_math::surfaces::CylindricalSurface,
-    v_min: f64,
-    v_max: f64,
+    v_range: (f64, f64),
     hole_bands: &[(f64, f64)],
+    u_gap: Option<(f64, f64)>,
     tol: Tolerance,
 ) -> i32 {
+    let (v_min, v_max) = v_range;
     let axis = surface.axis();
     let m = origin - surface.origin();
     let d_perp = ray_dir - axis * ray_dir.dot(axis);
@@ -414,9 +462,60 @@ fn ray_cylinder_crossings(
         {
             continue;
         }
+        // Angular trim for a partial-arc patch: skip a hit on the off-patch
+        // portion of the full cylinder (the rounded-rect corner quarter only
+        // covers a 90° arc; the other 3/4 is not a real face).
+        if let Some(gap) = u_gap {
+            let (u, _) = surface.project_point(hit);
+            if u_in_gap(u, gap) {
+                continue;
+            }
+        }
         crossings += 1;
     }
     crossings
+}
+
+/// Whether circumferential parameter `u` lies in the excluded angular gap
+/// `(lo, hi)` (CCW from `lo` to `hi`, possibly wrapping past 2π).
+fn u_in_gap(u: f64, gap: (f64, f64)) -> bool {
+    use std::f64::consts::TAU;
+    let eps = 1e-6;
+    let u = u.rem_euclid(TAU);
+    let (lo, hi) = (gap.0.rem_euclid(TAU), gap.1.rem_euclid(TAU));
+    if lo <= hi {
+        u > lo + eps && u < hi - eps
+    } else {
+        u > lo + eps || u < hi - eps
+    }
+}
+
+/// Largest angular gap between sorted circumferential samples — the arc the
+/// partial-cylinder face does NOT cover. `None` for too-few samples or a gap
+/// too small to be a genuine partial arc.
+fn largest_u_gap(u_samples: &[f64]) -> Option<(f64, f64)> {
+    use std::f64::consts::TAU;
+    let mut us: Vec<f64> = u_samples.iter().map(|&u| u.rem_euclid(TAU)).collect();
+    us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    us.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    if us.len() < 2 {
+        return None;
+    }
+    let mut best = 0.0_f64;
+    let mut gap = (0.0, 0.0);
+    for i in 0..us.len() {
+        let lo = us[i];
+        let hi = if i + 1 < us.len() {
+            us[i + 1]
+        } else {
+            us[0] + TAU
+        };
+        if hi - lo > best {
+            best = hi - lo;
+            gap = (lo, hi.rem_euclid(TAU));
+        }
+    }
+    if best > 0.2 { Some(gap) } else { None }
 }
 
 /// Test if a 3D point lies inside a planar face polygon by projecting to 2D.
