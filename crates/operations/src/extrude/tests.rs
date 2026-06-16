@@ -899,3 +899,68 @@ fn nurbs_arc_extrude_volume() {
         pct * 100.0
     );
 }
+
+#[test]
+#[ignore = "known bug #869: extruding an EdgeCurve::Ellipse builds a ruled \
+            NURBS side surface from the FULL ellipse (ellipse_to_nurbs ignores \
+            the edge trim), so solid volume over-counts (81.09 vs 65.45). The \
+            planar cap area is correct; only the swept side surface is wrong. \
+            Fix lives in extrude::side_face_surface (Ellipse arm)."]
+fn extrude_half_ellipse_face_volume() {
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::builder::make_ellipse_arc;
+
+    let mut topo = Topology::new();
+    let center = Point3::new(5.0, 0.0, 0.0);
+    let axis = Vec3::new(0.0, 0.0, -1.0);
+    let ref_dir = Vec3::new(0.0, 1.0, 0.0);
+    let start = Point3::new(0.0, 0.0, 0.0);
+    let end = Point3::new(10.0, 0.0, 0.0);
+    // Up half-ellipse arc (0,0) -> (5,8.333) -> (10,0).
+    let arc = make_ellipse_arc(
+        &mut topo,
+        center,
+        axis,
+        8.333_333_333_333_334,
+        5.0,
+        ref_dir,
+        start,
+        end,
+        1e-7,
+    )
+    .unwrap();
+    let (v0, v1) = {
+        let e = topo.edge(arc).unwrap();
+        (e.start(), e.end())
+    };
+    // Closing diameter line (10,0) -> (0,0).
+    let line = topo.add_edge(Edge::new(v1, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![OrientedEdge::new(arc, true), OrientedEdge::new(line, true)],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    // Half-ellipse area = (1/2)*pi*8.333*5 = 65.45; extrude by 1 => vol 65.45.
+    let expected = 0.5 * std::f64::consts::PI * 8.333_333_333_333_334 * 5.0;
+    let face_area = crate::measure::face_area(&topo, face, 0.001).unwrap();
+    // The planar cap already measures correctly; the swept side is the bug.
+    assert!(
+        (face_area - expected).abs() / expected < 0.01,
+        "half-ellipse cap area {face_area:.4} != {expected:.4}"
+    );
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 0.01,
+        "extruded half-ellipse volume {vol:.4} != {expected:.4}"
+    );
+}
