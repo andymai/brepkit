@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.113.0](https://github.com/andymai/brepkit/compare/v2.112.1...v2.113.0) (2026-06-16)
+
+
+### Features
+
+* **topology:** add make_ellipse_arc trimmed-ellipse-arc constructor + wasm export ([#865](https://github.com/andymai/brepkit/issues/865)) ([e1a7e71](https://github.com/andymai/brepkit/commit/e1a7e7134d0e282da553e71b22613c5fa2f453d9))
+
+
+### Bug Fixes
+
+* **section:** collapse coincident section curves so sphere slices aren't degenerate ([#864](https://github.com/andymai/brepkit/issues/864)) ([ec98f09](https://github.com/andymai/brepkit/commit/ec98f09d5a82519cd6c44a99f56d45f9b2d1fe09))
+
 ## [2.112.1](https://github.com/andymai/brepkit/compare/v2.112.0...v2.112.1) (2026-06-15)
 
 
