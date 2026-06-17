@@ -587,7 +587,9 @@ fn planar_faces_overlap(
         let area_i = super::classify_2d::signed_area_2d(&poly_i).abs();
         let area_j = super::classify_2d::signed_area_2d(&poly_j).abs();
         let smaller = area_i.min(area_j);
-        if smaller > tol.linear && overlap > smaller * 0.5 {
+        // `smaller` and `overlap` are areas, so the degenerate-face guard
+        // compares against the squared linear tolerance (area), not `linear`.
+        if smaller > tol.linear_sq() && overlap > smaller * 0.5 {
             return true;
         }
     }
