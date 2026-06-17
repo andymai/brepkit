@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.113.4](https://github.com/andymai/brepkit/compare/v2.113.3...v2.113.4) (2026-06-17)
+
+
+### Bug Fixes
+
+* **algo:** orient solids by surface normal so extrude-down operands fuse (baseplate dovetail hang) ([#875](https://github.com/andymai/brepkit/issues/875)) ([8f1981d](https://github.com/andymai/brepkit/commit/8f1981db9ab0082fa54c2d6f905041cde1fb92f0))
+
 ## [2.113.3](https://github.com/andymai/brepkit/compare/v2.113.2...v2.113.3) (2026-06-17)
 
 
