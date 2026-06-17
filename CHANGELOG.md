@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.113.6](https://github.com/andymai/brepkit/compare/v2.113.5...v2.113.6) (2026-06-17)
+
+
+### Performance
+
+* **algo:** broad-phase culls + analytic line-circle in GFA pave-filler ([#881](https://github.com/andymai/brepkit/issues/881)) ([d4813a6](https://github.com/andymai/brepkit/commit/d4813a65d959b94bcd3f6c87f34e586ae6975539))
+
 ## [2.113.5](https://github.com/andymai/brepkit/compare/v2.113.4...v2.113.5) (2026-06-17)
 
 
