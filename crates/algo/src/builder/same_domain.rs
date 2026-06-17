@@ -203,7 +203,7 @@ pub fn detect_same_domain<S: BuildHasher>(
                 if uf.find(i) == uf.find(j) {
                     continue; // already grouped
                 }
-                if planar_faces_overlap(topo, sub_faces, i, j) {
+                if planar_faces_overlap(topo, sub_faces, i, j, tol) {
                     uf.union(i, j);
                     let key = (i.min(j), i.max(j));
                     pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
@@ -391,7 +391,13 @@ fn compute_edge_set_quantized(
 /// is the conservative criterion that catches boolean residue (issue #696)
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
-fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usize) -> bool {
+fn planar_faces_overlap(
+    topo: &Topology,
+    sub_faces: &[SubFace],
+    i: usize,
+    j: usize,
+    tol: Tolerance,
+) -> bool {
     let Ok(face_i) = topo.face(sub_faces[i].face_id) else {
         return false;
     };
@@ -555,6 +561,35 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
         && !footprint_in_holes(p_j_2d, &poly_j, &poly_i, face_i)
     {
         return true;
+    }
+
+    // Partial overlap. Two coplanar faces can share a genuine 2D area without
+    // either being fully contained in the other — e.g. a faceted scoop ramp's
+    // staircase-shaped wall sub-face lying against a rectangular ramp side
+    // facet. Full-containment misses these; the result is a coincident face
+    // pair that survives the boolean and goes non-manifold.
+    //
+    // Detect it by the intersection AREA of the projected polygons. A positive
+    // intersection area means real overlap; faces that merely tile side-by-side
+    // (sharing only a boundary segment) have zero intersection area, so this
+    // does not reintroduce the side-by-side false positive the containment
+    // guards above defend against. Require the overlap to cover a meaningful
+    // fraction of the smaller face so a sliver of numerical overlap along a
+    // shared edge does not pair disjoint faces.
+    if face_j.inner_wires().is_empty() && face_i.inner_wires().is_empty() {
+        let inter = brepkit_math::polygon_boolean::polygon_boolean(
+            &poly_i,
+            &poly_j,
+            brepkit_math::polygon_boolean::BooleanOp::Intersection,
+            tol.linear,
+        );
+        let overlap = inter.area().abs();
+        let area_i = super::classify_2d::signed_area_2d(&poly_i).abs();
+        let area_j = super::classify_2d::signed_area_2d(&poly_j).abs();
+        let smaller = area_i.min(area_j);
+        if smaller > tol.linear && overlap > smaller * 0.5 {
+            return true;
+        }
     }
     false
 }

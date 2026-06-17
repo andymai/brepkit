@@ -205,6 +205,111 @@ fn reversed_face_flips_same_orientation() {
     );
 }
 
+/// Cross-rank coplanar faces that PARTIALLY overlap — neither fully
+/// contained in the other — must still be paired by the geometric pass.
+/// Two boxes stacked with a lateral offset share a partially-overlapping
+/// coincident planar contact face (a sub-rectangle); the contained-only
+/// test misses this, leaving the coincident pieces un-cancelled and the
+/// fused result non-manifold. Closes the documented same-domain "detects
+/// containment but not overlap" gap.
+///
+/// Discriminating: without the partial-overlap branch in
+/// `planar_faces_overlap`, `pairs` is empty (neither face is contained in
+/// the other, so the two containment checks both fail); with it, the
+/// intersection-area test pairs them.
+#[test]
+fn cross_rank_partial_overlap_marks_overlapping() {
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    // A: [0,10]x[0,10] (area 100). B: [3,13]x[0,10] (area 100), shifted +3x.
+    // Overlap [3,10]x[0,10] = 70 > 50% of the smaller face. B's x=13 lies
+    // outside A and A's x=0 lies outside B, so neither is contained.
+    let face_a = rect_sub_face(
+        &mut topo,
+        0.0,
+        10.0,
+        0.0,
+        10.0,
+        Rank::A,
+        Point3::new(5.0, 5.0, 0.0),
+    );
+    let face_b = rect_sub_face(
+        &mut topo,
+        3.0,
+        13.0,
+        0.0,
+        10.0,
+        Rank::B,
+        Point3::new(8.0, 5.0, 0.0),
+    );
+    let sub_faces = vec![face_a, face_b];
+
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+
+    assert!(
+        result.within_rank_dups.is_empty(),
+        "cross-rank pair should not be reported as within-rank dup"
+    );
+    assert_eq!(
+        result.pairs.len(),
+        1,
+        "partially-overlapping coplanar cross-rank faces must be paired"
+    );
+    assert!(
+        result.pairs[0].b_contained_in_a,
+        "geometric overlap must set b_contained_in_a=true so Cut cancels both"
+    );
+}
+
+/// The partial-overlap branch is gated at 50% of the smaller face: two
+/// coplanar faces sharing only a thin sliver of area must NOT be paired,
+/// so a numerical overlap along a shared edge does not annihilate disjoint
+/// faces.
+#[test]
+fn cross_rank_small_overlap_not_paired() {
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    // A: [0,10]x[0,10] (area 100). B: [9,19]x[0,10] (area 100), shifted +9x.
+    // Overlap [9,10]x[0,10] = 10 < 50% of the smaller face.
+    let face_a = rect_sub_face(
+        &mut topo,
+        0.0,
+        10.0,
+        0.0,
+        10.0,
+        Rank::A,
+        Point3::new(5.0, 5.0, 0.0),
+    );
+    let face_b = rect_sub_face(
+        &mut topo,
+        9.0,
+        19.0,
+        0.0,
+        10.0,
+        Rank::B,
+        Point3::new(14.0, 5.0, 0.0),
+    );
+    let sub_faces = vec![face_a, face_b];
+
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+
+    assert!(
+        result.pairs.is_empty(),
+        "sub-threshold overlap must not pair coplanar faces, got {} pair(s)",
+        result.pairs.len()
+    );
+    assert!(
+        result.within_rank_dups.is_empty(),
+        "sub-threshold overlap must not produce within-rank dups"
+    );
+}
+
 #[test]
 fn planes_same_domain_same_direction() {
     let tol = Tolerance::new();
