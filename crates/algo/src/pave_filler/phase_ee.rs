@@ -187,6 +187,22 @@ fn find_edge_edge_crossings(
         return Ok(Vec::new());
     }
 
+    // Exact line-vs-circle: a line edge crossing an arc edge is extremely
+    // common (every analytic corner arc of a body vs every straight tool
+    // edge). The closed-form segment-circle solve replaces the 32×32 = 1024
+    // segment-pair samples below with at most two candidate roots, which is
+    // the dominant EE cost on solids with many cylindrical-corner arcs.
+    if let EdgeCurve::Circle(circle) = edge_b.curve()
+        && matches!(edge_a.curve(), EdgeCurve::Line)
+    {
+        return Ok(line_circle_intersection(ea, eb, circle, tol, false));
+    }
+    if let EdgeCurve::Circle(circle) = edge_a.curve()
+        && matches!(edge_b.curve(), EdgeCurve::Line)
+    {
+        return Ok(line_circle_intersection(eb, ea, circle, tol, true));
+    }
+
     let n: usize = 32;
     let mut crossings = Vec::new();
 
@@ -251,6 +267,61 @@ fn find_edge_edge_crossings(
     }
 
     Ok(crossings)
+}
+
+/// Exact line-segment vs circular-arc intersection.
+///
+/// `line` is the straight edge, `arc` the circle edge's data, `circle` its
+/// geometry. Returns `(t_a, t_b, point)` triples in the original edge order:
+/// when `circle_is_a` the arc is edge A, otherwise the line is edge A.
+fn line_circle_intersection(
+    line: &EdgeData,
+    arc: &EdgeData,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+    circle_is_a: bool,
+) -> Vec<(f64, f64, Point3)> {
+    let mut out = Vec::new();
+    for (pt, angle) in circle.intersect_segment(line.start_pos, line.end_pos, tol.linear) {
+        // Validate the hit lies within the arc's angular domain. The arc
+        // parameter runs t0..t1 (radians); the solver returns [0, TAU). Test
+        // the angle and its ±TAU shifts so a hit near the seam still matches.
+        let lo = arc.t0.min(arc.t1) - tol.linear;
+        let hi = arc.t0.max(arc.t1) + tol.linear;
+        let in_arc = [
+            angle,
+            angle + std::f64::consts::TAU,
+            angle - std::f64::consts::TAU,
+        ]
+        .iter()
+        .find(|&&a| a >= lo && a <= hi)
+        .copied();
+        let Some(t_arc) = in_arc else {
+            continue;
+        };
+
+        // Line parameter from the foot of the point on the segment.
+        let dir = line.end_pos - line.start_pos;
+        let len_sq = dir.length_squared();
+        if len_sq < tol.linear * tol.linear {
+            continue;
+        }
+        let s = ((pt - line.start_pos).dot(dir) / len_sq).clamp(0.0, 1.0);
+        let t_line = s.mul_add(line.t1 - line.t0, line.t0);
+
+        let triple = if circle_is_a {
+            (t_arc, t_line, pt)
+        } else {
+            (t_line, t_arc, pt)
+        };
+        let is_dup = out.iter().any(|&(ca, cb, _): &(f64, f64, Point3)| {
+            (triple.0 - ca).abs() < 1e-6 && (triple.1 - cb).abs() < 1e-6
+        });
+        if !is_dup {
+            out.push(triple);
+        }
+    }
+    out
 }
 
 /// Algebraic line-line intersection.
@@ -359,5 +430,121 @@ fn closest_segment_pair(
         Some((param_a, param_b, midpoint))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::Vec3;
+
+    fn line_data(start: Point3, end: Point3) -> EdgeData {
+        EdgeData {
+            start_pos: start,
+            end_pos: end,
+            t0: 0.0,
+            t1: 1.0,
+            bbox_min: start,
+            bbox_max: end,
+        }
+    }
+
+    fn arc_data(t0: f64, t1: f64) -> EdgeData {
+        // Positions/bbox are unused by line_circle_intersection (only t0/t1 are).
+        EdgeData {
+            start_pos: Point3::new(0.0, 0.0, 0.0),
+            end_pos: Point3::new(0.0, 0.0, 0.0),
+            t0,
+            t1,
+            bbox_min: Point3::new(0.0, 0.0, 0.0),
+            bbox_max: Point3::new(0.0, 0.0, 0.0),
+        }
+    }
+
+    #[test]
+    fn line_crosses_full_circle_at_two_points() {
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let line = line_data(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+        let arc = arc_data(0.0, std::f64::consts::TAU);
+        let tol = Tolerance::default();
+
+        let mut hits = line_circle_intersection(&line, &arc, &circle, tol, false);
+        hits.sort_by(|a, b| a.2.x().partial_cmp(&b.2.x()).unwrap());
+        assert_eq!(hits.len(), 2, "line should cross full circle at 2 points");
+        assert!((hits[0].2.x() - (-1.0)).abs() < 1e-6, "left hit at x=-1");
+        assert!((hits[1].2.x() - 1.0).abs() < 1e-6, "right hit at x=1");
+    }
+
+    #[test]
+    fn arc_domain_excludes_out_of_range_hit() {
+        // Quarter arc [0, π/2] only contains the +X crossing (angle 0), not the
+        // -X crossing (angle π).
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let line = line_data(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+        let arc = arc_data(0.0, std::f64::consts::FRAC_PI_2);
+        let tol = Tolerance::default();
+
+        let hits = line_circle_intersection(&line, &arc, &circle, tol, false);
+        assert_eq!(hits.len(), 1, "only the in-domain crossing should survive");
+        assert!((hits[0].2.x() - 1.0).abs() < 1e-6, "surviving hit at x=1");
+    }
+
+    #[test]
+    fn order_is_preserved_when_circle_is_edge_a() {
+        // When the circle is edge A, the triple must be (t_arc, t_line, point).
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let line = line_data(Point3::new(1.0, -2.0, 0.0), Point3::new(1.0, 2.0, 0.0));
+        let arc = arc_data(0.0, std::f64::consts::TAU);
+        let tol = Tolerance::default();
+
+        // Line x=1 is tangent to the circle at (1,0,0), angle 0.
+        let hits = line_circle_intersection(&line, &arc, &circle, tol, true);
+        assert!(!hits.is_empty(), "tangent line should touch the circle");
+        // t_arc (first slot) ≈ 0 (angle at (1,0,0)); t_line (second slot) ≈ 0.5
+        // (midpoint of the y-segment).
+        assert!(hits[0].0.abs() < 1e-4, "t_arc should be the angle ~0");
+        assert!(
+            (hits[0].1 - 0.5).abs() < 1e-4,
+            "t_line should be ~0.5 (segment midpoint)"
+        );
+    }
+
+    #[test]
+    fn line_misses_circle() {
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        // Line well outside the circle radius.
+        let line = line_data(Point3::new(-2.0, 5.0, 0.0), Point3::new(2.0, 5.0, 0.0));
+        let arc = arc_data(0.0, std::f64::consts::TAU);
+        let tol = Tolerance::default();
+
+        let hits = line_circle_intersection(&line, &arc, &circle, tol, false);
+        assert!(hits.is_empty(), "line far from circle should not intersect");
     }
 }

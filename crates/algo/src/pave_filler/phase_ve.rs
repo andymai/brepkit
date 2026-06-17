@@ -3,6 +3,7 @@
 //! For each (vertex, edge) pair across solids, checks if the vertex
 //! lies on the edge. If so, adds an extra pave to the edge's pave block.
 
+use brepkit_math::aabb::Aabb3;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
@@ -12,6 +13,25 @@ use brepkit_topology::vertex::VertexId;
 
 use crate::ds::{GfaArena, Interference, Pave};
 use crate::error::AlgoError;
+
+/// Samples used to bound a curved edge's AABB for the broad-phase reject.
+const N_AABB_SAMPLES: usize = 16;
+
+/// Compute a conservative AABB for an edge, expanded by `margin`.
+fn edge_aabb(topo: &Topology, eid: EdgeId, margin: f64) -> Result<Option<Aabb3>, AlgoError> {
+    let edge = topo.edge(eid)?;
+    let start_pos = topo.vertex(edge.start())?.point();
+    let end_pos = topo.vertex(edge.end())?.point();
+    if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+        return Ok(Aabb3::try_from_points([start_pos, end_pos]).map(|a| a.expanded(margin)));
+    }
+    let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+    let pts = (0..=N_AABB_SAMPLES).map(|i| {
+        let t = t0 + (t1 - t0) * (i as f64 / N_AABB_SAMPLES as f64);
+        edge.curve().evaluate_with_endpoints(t, start_pos, end_pos)
+    });
+    Ok(Aabb3::try_from_points(pts).map(|a| a.expanded(margin)))
+}
 
 /// Detect vertices lying on edges between the two solids.
 ///
@@ -60,13 +80,31 @@ fn check_vertex_edge_pairs(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
+    // Broad-phase: bound each edge once. A vertex lying on an edge is within
+    // the edge's AABB, so vertices outside it are rejected before the costly
+    // closest-point projection (32 samples + 20 ternary steps per pair).
+    // Margin covers both the global linear tolerance and per-vertex tolerance,
+    // which is added to `tol.linear` in the fine test below.
+    let mut edge_boxes: Vec<Option<Aabb3>> = Vec::with_capacity(edges.len());
+    for &eid in edges {
+        edge_boxes.push(edge_aabb(topo, eid, tol.linear)?);
+    }
+
     for &vid in vertices {
         let resolved_vid = arena.resolve_vertex(vid);
         let vertex = topo.vertex(resolved_vid)?;
         let pos = vertex.point();
         let vtol = vertex.tolerance();
 
-        for &eid in edges {
+        for (edge_idx, &eid) in edges.iter().enumerate() {
+            // Broad-phase reject: the vertex cannot lie on an edge whose
+            // (tolerance-expanded by vtol) AABB does not contain it.
+            if let Some(ebox) = &edge_boxes[edge_idx]
+                && !ebox.expanded(vtol).contains_point(pos)
+            {
+                continue;
+            }
+
             let edge = topo.edge(eid)?;
 
             // Skip if vertex is already an endpoint of this edge
