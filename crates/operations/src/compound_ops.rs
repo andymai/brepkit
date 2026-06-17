@@ -164,7 +164,10 @@ fn partition_overlapping(bboxes: &[Aabb3]) -> Vec<Vec<usize>> {
 /// acceptable for volume measurement and tessellation (which iterate
 /// faces independently), but algorithms that assume shell connectivity
 /// should be aware. A future improvement would return a `Compound`.
-fn merge_disjoint_solids(
+///
+/// The result references the input solids' existing faces (no deep copy),
+/// so callers that need an independent result must pass copies.
+pub(crate) fn merge_disjoint_solids(
     topo: &mut Topology,
     solids: &[SolidId],
 ) -> Result<SolidId, crate::OperationsError> {
