@@ -302,6 +302,7 @@ pub(super) fn tessellate_planar(
                     arc_range,
                     deflection,
                     angular_tol,
+                    false,
                 );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
@@ -336,6 +337,7 @@ pub(super) fn tessellate_planar(
                     arc_range,
                     deflection,
                     angular_tol,
+                    true,
                 );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(

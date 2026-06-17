@@ -1848,10 +1848,12 @@ fn mesh_boolean_fallback(
     opts: &BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
     // Mesh density here is a boolean-robustness concern, independent of the
-    // rendering angular tolerance; use the linear-only criterion so the
-    // resulting face count is unaffected by the display deflection cap.
-    let mesh_a = crate::tessellate::tessellate_solid_with_tolerance(topo, a, deflection, 0.0)?;
-    let mesh_b = crate::tessellate::tessellate_solid_with_tolerance(topo, b, deflection, 0.0)?;
+    // rendering tolerance: use the linear-only criterion (angular_tol 0.0) so
+    // the face count is unaffected by the display deflection cap, AND keep the
+    // circle curvature floor so co-refinement gets the denser circular sampling
+    // it needs (display tessellation drops that floor for triangle count).
+    let mesh_a = crate::tessellate::tessellate_solid_for_boolean(topo, a, deflection, 0.0)?;
+    let mesh_b = crate::tessellate::tessellate_solid_for_boolean(topo, b, deflection, 0.0)?;
 
     // Compute per-triangle "is on a planar face" flags by matching each
     // triangle's centroid + normal against the input solid's planar

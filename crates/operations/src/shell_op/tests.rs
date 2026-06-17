@@ -819,7 +819,11 @@ fn shell_rounded_rect_watertight() {
         "floor area {floor_total:.2} != expected {floor_area:.2}"
     );
 
-    let vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+    // Measured at deflection 0.005 so the corner-cylinder chord deviation is
+    // negligible: the constant-curvature corners tessellate to the exact chord
+    // count (no curvature floor), and a coarse inscribed-polygon mesh of those
+    // corners legitimately under-fills volume.
+    let vol = crate::measure::solid_volume(&topo, shelled, 0.005).unwrap();
     assert!(
         (vol - expected_volume).abs() < 1.0,
         "shell volume {vol:.2} != expected {expected_volume:.2}"
