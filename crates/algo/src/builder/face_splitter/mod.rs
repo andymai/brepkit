@@ -17,7 +17,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
-use super::classify_2d::{sample_interior_point, signed_area_2d};
+use super::classify_2d::{point_in_polygon_2d, sample_interior_point, signed_area_2d};
 use super::pcurve_compute::evaluate_edge_at_t;
 use super::plane_frame::PlaneFrame;
 use super::split_types::{OrientedPCurveEdge, SectionEdge, SplitSubFace, SurfaceInfo};
@@ -59,6 +59,235 @@ fn seg_cross_param(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<f64
     // `t`/`u` are normalized [0,1] parameters, so these epsilons are already
     // scale-invariant fractions of each segment.
     (t > 1e-6 && t < 1.0 - 1e-6 && u > -1e-6 && u < 1.0 + 1e-6).then_some(t)
+}
+
+/// Midpoint (UV) of an edge — uses the pcurve sample when curved, otherwise the
+/// chord midpoint of a Line edge.
+fn edge_mid_uv(e: &OrientedPCurveEdge) -> Point2 {
+    use brepkit_math::curves2d::Curve2D;
+    match &e.pcurve {
+        Curve2D::Nurbs(nurbs) => {
+            let knots = nurbs.knots();
+            if knots.len() >= 2 {
+                let t = 0.5 * (knots[0] + knots[knots.len() - 1]);
+                return nurbs.evaluate(t);
+            }
+        }
+        Curve2D::Line(_) | Curve2D::Circle(_) | Curve2D::Ellipse(_) => {}
+    }
+    Point2::new(
+        0.5 * (e.start_uv.x() + e.end_uv.x()),
+        0.5 * (e.start_uv.y() + e.end_uv.y()),
+    )
+}
+
+/// Diagonal extent of all edge endpoints in UV (for scale-relative tolerances).
+fn uv_span(edges: &[OrientedPCurveEdge]) -> f64 {
+    let mut lo = Point2::new(f64::MAX, f64::MAX);
+    let mut hi = Point2::new(f64::MIN, f64::MIN);
+    for e in edges {
+        for p in [e.start_uv, e.end_uv] {
+            lo = Point2::new(lo.x().min(p.x()), lo.y().min(p.y()));
+            hi = Point2::new(hi.x().max(p.x()), hi.y().max(p.y()));
+        }
+    }
+    (hi.x() - lo.x()).hypot(hi.y() - lo.y())
+}
+
+/// Retain edges whose `drop_flags` entry is false (indices past `flags.len()`
+/// are always kept), returning how many of the first `count_window` indices
+/// were dropped (the boundary-edge removal count).
+fn retain_by_flags(
+    all_edges: &mut Vec<OrientedPCurveEdge>,
+    drop_flags: &[bool],
+    count_window: usize,
+) -> usize {
+    let removed = (0..count_window)
+        .filter(|&i| drop_flags.get(i).copied().unwrap_or(false))
+        .count();
+    if removed == 0 && !drop_flags.iter().any(|&d| d) {
+        return 0;
+    }
+    let mut idx = 0;
+    all_edges.retain(|_| {
+        let keep = !drop_flags.get(idx).copied().unwrap_or(false);
+        idx += 1;
+        keep
+    });
+    removed
+}
+
+/// Remove boundary + section edges a deepening cut has buried inside an enlarged
+/// notch on a planar face.
+///
+/// Cutting a blind pocket deeper into a wall that a previous cut already notched
+/// (so the wall's opening was a concave notch in the outer wire) leaves the old
+/// notch-floor edge sitting inside the freshly-removed area (material gone on the
+/// side it used to bound) while the new cut reaches the wall via sections that
+/// pick up where the old floor left off. Left as-is, the min-clockwise-turn wire
+/// builder traces the shallow old notch and orphans the deepening sections into
+/// zero-area spurs, so the enlarged notch mouth is never built — leaving free /
+/// non-manifold edges.
+///
+/// Two geometries occur and are each detected conservatively (UV space):
+///   * **flush** — the new cut meets the old floor exactly, so the deepening
+///     sections share the old floor's end vertices and continue the old notch
+///     side walls collinearly. [`drop_collinear_bridge_edges`] drops the floor
+///     edge bridged by such a straight pass-through at both ends.
+///   * **overlapping** — the cuts overlap by `COPLANAR_OVERLAP`, so the new cut
+///     forms a closed section loop just inside the material and its tool lid runs
+///     through the old notch's air. [`drop_buried_loop_edges`] drops the old
+///     floor edge enclosed by that loop and the lid section running through air.
+///
+/// Either pass acts only on its specific signature, so an ordinary cut (sections
+/// carved in from a convex boundary, no buried edge) is untouched. Kept boundary
+/// edges stay contiguous at the front; the count of boundary edges removed is
+/// returned for the caller to fix up `n_boundary`.
+fn clip_buried_cut_edges(
+    all_edges: &mut Vec<OrientedPCurveEdge>,
+    n_boundary: usize,
+    tol: f64,
+) -> usize {
+    if n_boundary < 3 || all_edges.len() <= n_boundary {
+        return 0;
+    }
+    let flush_removed = drop_collinear_bridge_edges(all_edges, n_boundary, tol);
+    let overlap_removed = drop_buried_loop_edges(all_edges, n_boundary - flush_removed, tol);
+    flush_removed + overlap_removed
+}
+
+/// Flush-deepening pass: drop a boundary edge bridged across the notch line at
+/// both endpoints — a boundary neighbour leaves one way along a straight line, a
+/// section continues it the opposite way (into the deeper cut), and the edge
+/// itself branches off that line. See [`clip_buried_cut_edges`].
+fn drop_collinear_bridge_edges(
+    all_edges: &mut Vec<OrientedPCurveEdge>,
+    n_boundary: usize,
+    tol: f64,
+) -> usize {
+    let span = uv_span(all_edges);
+    let vtol = (span * 1e-7).max(tol).max(1e-9);
+    let coincident = |a: Point2, b: Point2| (a - b).length() <= vtol;
+    let out_dir = |idx: usize, v: Point2, edges: &[OrientedPCurveEdge]| -> Option<(f64, f64)> {
+        let e = &edges[idx];
+        let (from, to) = if coincident(e.start_uv, v) {
+            (e.start_uv, e.end_uv)
+        } else if coincident(e.end_uv, v) {
+            (e.end_uv, e.start_uv)
+        } else {
+            return None;
+        };
+        let (dx, dy) = (to.x() - from.x(), to.y() - from.y());
+        let len = dx.hypot(dy);
+        (len > vtol).then(|| (dx / len, dy / len))
+    };
+    let pass_through = |e_idx: usize, v: Point2, edges: &[OrientedPCurveEdge]| -> bool {
+        let Some(e_dir) = out_dir(e_idx, v, edges) else {
+            return false;
+        };
+        let parallel = |a: (f64, f64), b: (f64, f64)| a.0.mul_add(b.0, a.1 * b.1).abs() > 0.999;
+        let opposite = |a: (f64, f64), b: (f64, f64)| a.0.mul_add(b.0, a.1 * b.1) < -0.999;
+        let mut bnd_dirs = Vec::new();
+        let mut sec_dirs = Vec::new();
+        for i in 0..edges.len() {
+            if i == e_idx {
+                continue;
+            }
+            if let Some(d) = out_dir(i, v, edges) {
+                if i < n_boundary {
+                    bnd_dirs.push(d);
+                } else {
+                    sec_dirs.push(d);
+                }
+            }
+        }
+        for &bd in &bnd_dirs {
+            if parallel(bd, e_dir) {
+                continue;
+            }
+            for &sd in &sec_dirs {
+                if opposite(bd, sd) && !parallel(sd, e_dir) {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    let mut drop_flags = vec![false; n_boundary];
+    for e_idx in 0..n_boundary {
+        let (s, e) = (all_edges[e_idx].start_uv, all_edges[e_idx].end_uv);
+        if (s - e).length() <= vtol {
+            continue;
+        }
+        if pass_through(e_idx, s, all_edges) && pass_through(e_idx, e, all_edges) {
+            drop_flags[e_idx] = true;
+        }
+    }
+    retain_by_flags(all_edges, &drop_flags, n_boundary)
+}
+
+/// Overlapping-deepening pass: build the removed-region polygon(s) from the
+/// section edges' own closed loops, drop boundary edges whose midpoint lies
+/// inside such a polygon (the buried old floor), and drop section edges whose
+/// midpoint lies outside the material polygon (the tool lid running through the
+/// old notch's air). See [`clip_buried_cut_edges`].
+fn drop_buried_loop_edges(
+    all_edges: &mut Vec<OrientedPCurveEdge>,
+    n_boundary: usize,
+    tol: f64,
+) -> usize {
+    if n_boundary < 3 || all_edges.len() <= n_boundary {
+        return 0;
+    }
+    let material_poly = sample_wire_loop_uv(&all_edges[..n_boundary]);
+    if material_poly.len() < 3 || signed_area_2d(&material_poly).abs() <= tol * tol {
+        return 0;
+    }
+    let section_edges: Vec<OrientedPCurveEdge> = all_edges[n_boundary..].to_vec();
+    let cut_loops = build_wire_loops(&section_edges, tol, false, false);
+    let cut_polys: Vec<Vec<Point2>> = cut_loops
+        .iter()
+        .map(|lp| sample_wire_loop_uv(lp))
+        .filter(|poly| poly.len() >= 3 && signed_area_2d(poly).abs() > tol * tol)
+        .collect();
+    if cut_polys.is_empty() {
+        return 0;
+    }
+
+    let mut drop_flags = vec![false; all_edges.len()];
+    for (i, e) in all_edges.iter().enumerate().take(n_boundary) {
+        if (e.start_uv - e.end_uv).length() <= tol {
+            continue;
+        }
+        if cut_polys
+            .iter()
+            .any(|poly| point_in_polygon_2d(edge_mid_uv(e), poly))
+        {
+            drop_flags[i] = true;
+        }
+    }
+    for (i, e) in all_edges.iter().enumerate().skip(n_boundary) {
+        if (e.start_uv - e.end_uv).length() <= tol {
+            continue;
+        }
+        if !point_in_polygon_2d(edge_mid_uv(e), &material_poly) {
+            drop_flags[i] = true;
+        }
+    }
+
+    // The deepened-notch signature needs BOTH a buried floor edge and an
+    // air-side lid section; acting on just one risks perturbing other
+    // arrangements (a lone air-side section is already covered by the pendant
+    // pass).
+    let boundary_removed = (0..n_boundary).filter(|&i| drop_flags[i]).count();
+    let section_removed = (n_boundary..all_edges.len())
+        .filter(|&i| drop_flags[i])
+        .count();
+    if boundary_removed == 0 || section_removed == 0 {
+        return 0;
+    }
+    retain_by_flags(all_edges, &drop_flags, all_edges.len())
 }
 
 /// Weave hole boundaries into the section arrangement of a planar face.
@@ -594,7 +823,7 @@ pub fn split_face_2d(
 
     // Convert section edges to OrientedPCurveEdge (both orientations).
     let mut all_edges = boundary_edges;
-    let n_boundary_edges = all_edges.len();
+    let mut n_boundary_edges = all_edges.len();
 
     // Holed planar face cut by sections: weave the hole boundaries into the
     // arrangement (trim sections at hole crossings, split hole edges) so the
@@ -758,6 +987,16 @@ pub fn split_face_2d(
                 }
             }
         }
+    }
+
+    // Drop boundary + section edges a deepening cut buried inside an enlarged
+    // notch: the old notch floor (now removed on its material side) plus, for an
+    // overlapping cut, the tool lid running through the old notch's air. Without
+    // this, the wire builder traces the shallow old notch and orphans the
+    // deepening sections, leaving the enlarged notch mouth unbuilt (free edges).
+    if is_plane && all_edges.len() > n_boundary_edges {
+        let removed = clip_buried_cut_edges(&mut all_edges, n_boundary_edges, tol.linear);
+        n_boundary_edges -= removed;
     }
 
     // Drop pendant section edges that dangle into the face interior — left
