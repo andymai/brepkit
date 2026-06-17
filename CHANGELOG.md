@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.113.3](https://github.com/andymai/brepkit/compare/v2.113.2...v2.113.3) (2026-06-17)
+
+
+### Bug Fixes
+
+* **operations:** close arc-runout corners in rolling-ball fillet ([#873](https://github.com/andymai/brepkit/issues/873)) ([bea3e89](https://github.com/andymai/brepkit/commit/bea3e89582213036382f6bf75529dc55cf7c1dae))
+
 ## [2.113.2](https://github.com/andymai/brepkit/compare/v2.113.1...v2.113.2) (2026-06-16)
 
 
