@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.2](https://github.com/andymai/brepkit/compare/v2.114.1...v2.114.2) (2026-06-17)
+
+
+### Performance
+
+* **operations:** short-circuit disjoint Fuse to a cheap shell merge ([#893](https://github.com/andymai/brepkit/issues/893)) ([66e52fd](https://github.com/andymai/brepkit/commit/66e52fdac840bedd74584ab2f647f29c62c1f26e))
+
 ## [2.114.1](https://github.com/andymai/brepkit/compare/v2.114.0...v2.114.1) (2026-06-17)
 
 
