@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.0](https://github.com/andymai/brepkit/compare/v2.113.7...v2.114.0) (2026-06-17)
+
+
+### Features
+
+* **math:** add robust 2D polygon boolean (union/intersection/difference) ([#889](https://github.com/andymai/brepkit/issues/889)) ([8e4f0d4](https://github.com/andymai/brepkit/commit/8e4f0d475664c8e4d3ceb5f204d9189242bc1487))
+
 ## [2.113.7](https://github.com/andymai/brepkit/compare/v2.113.6...v2.113.7) (2026-06-17)
 
 
