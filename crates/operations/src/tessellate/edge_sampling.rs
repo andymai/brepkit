@@ -8,12 +8,15 @@ use super::shorter_arc_range;
 /// Combined linear+angular segment count for a circular arc.
 ///
 /// Delegates to [`brepkit_math::chord::segments_for_chord_deviation_with_angle`]
-/// with no minimum-edge-length clamp.
+/// with no minimum-edge-length clamp. `apply_curvature_floor` is forwarded:
+/// constant-curvature circles pass `false` (the chord formula is exact),
+/// variable/doubly-curved geometry passes `true`.
 pub(super) fn segments_for_chord_deviation_a(
     radius: f64,
     arc_range: f64,
     deflection: f64,
     angular_tol: f64,
+    apply_curvature_floor: bool,
 ) -> usize {
     brepkit_math::chord::segments_for_chord_deviation_with_angle(
         radius,
@@ -21,6 +24,7 @@ pub(super) fn segments_for_chord_deviation_a(
         deflection,
         angular_tol,
         0.0,
+        apply_curvature_floor,
     )
 }
 
@@ -48,11 +52,17 @@ pub(super) fn plane_axes(normal: Vec3) -> (Vec3, Vec3) {
 /// Compute the number of sample points for an edge based on deflection.
 ///
 /// Uses edge length and curvature to determine sampling density.
+///
+/// `circle_floor` selects whether a circular edge keeps the curvature floor.
+/// Display callers pass `false` (the chord count is exact for a constant-
+/// curvature circle); the boolean mesh-fallback passes `true` because its
+/// co-refinement robustness depends on the denser floored sampling.
 pub(super) fn edge_sample_count(
     topo: &Topology,
     edge: &brepkit_topology::edge::Edge,
     deflection: f64,
     angular_tol: f64,
+    circle_floor: bool,
 ) -> usize {
     use brepkit_topology::edge::EdgeCurve;
 
@@ -66,13 +76,20 @@ pub(super) fn edge_sample_count(
             // allowing the snap path to achieve watertight stitching.
             if let Ok((t_start, t_end)) = circle_param_range(topo, edge, c) {
                 let arc_range = (t_end - t_start).abs();
-                segments_for_chord_deviation_a(radius, arc_range, deflection, angular_tol) + 1
+                segments_for_chord_deviation_a(
+                    radius,
+                    arc_range,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                ) + 1
             } else {
                 segments_for_chord_deviation_a(
                     radius,
                     std::f64::consts::TAU,
                     deflection,
                     angular_tol,
+                    circle_floor,
                 ) + 1
             }
         }
@@ -103,8 +120,14 @@ pub(super) fn edge_sample_count(
             } else {
                 std::f64::consts::TAU
             };
-            segments_for_chord_deviation_a(max_curv_radius, arc_range, deflection, angular_tol)
-                .min(4096)
+            segments_for_chord_deviation_a(
+                max_curv_radius,
+                arc_range,
+                deflection,
+                angular_tol,
+                true,
+            )
+            .min(4096)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
             // Adaptive: coarse-pass deviation measurement, then refine if the
@@ -222,7 +245,7 @@ pub(super) fn circle_param_range(
 ///
 /// The sampling density is driven by `deflection`. For a `Line`, only the
 /// two endpoints are returned. For curves, the point count is proportional
-/// to curvature.
+/// to curvature. `circle_floor` is forwarded to [`edge_sample_count`].
 ///
 /// # Errors
 ///
@@ -232,11 +255,12 @@ pub(super) fn sample_edge(
     edge: &brepkit_topology::edge::Edge,
     deflection: f64,
     angular_tol: f64,
+    circle_floor: bool,
 ) -> Result<Vec<Point3>, crate::OperationsError> {
     use brepkit_geometry::sampling::sample_uniform;
     use brepkit_topology::edge::EdgeCurve;
 
-    let n = edge_sample_count(topo, edge, deflection, angular_tol);
+    let n = edge_sample_count(topo, edge, deflection, angular_tol, circle_floor);
 
     let points = match edge.curve() {
         EdgeCurve::Line => {
@@ -323,6 +347,7 @@ pub(super) fn sample_wire_positions(
                     arc_range,
                     deflection,
                     angular_tol,
+                    false,
                 );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
@@ -356,6 +381,7 @@ pub(super) fn sample_wire_positions(
                     arc_range,
                     deflection,
                     angular_tol,
+                    true,
                 );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(

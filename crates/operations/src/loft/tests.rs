@@ -462,7 +462,10 @@ fn loft_three_coaxial_circles_two_analytic_bands() {
         "three coaxial circles should emit two analytic frustum bands"
     );
 
-    let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+    // Measured at deflection 0.01 so the frustum chord deviation is negligible:
+    // circular bands tessellate to the exact chord count (no curvature floor),
+    // and a coarse mesh of an inscribed polygon legitimately under-fills volume.
+    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
     let rel_err = (vol - expected).abs() / expected;
     assert!(
         rel_err < 0.005,

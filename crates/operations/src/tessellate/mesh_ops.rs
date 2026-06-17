@@ -337,6 +337,7 @@ pub fn sample_solid_edges_filtered(
             edge,
             deflection,
             brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+            false,
         )?;
         result.positions.extend(points);
     }

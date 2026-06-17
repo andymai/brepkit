@@ -162,6 +162,7 @@ pub(super) fn tessellate_nonplanar_cdt(
     face_data: &brepkit_topology::face::Face,
     deflection: f64,
     angular_tol: f64,
+    circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
     point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
@@ -201,7 +202,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         } else {
             // Edge not in shared pool -- insert directly.
             let edge_data = topo.edge(oe.edge())?;
-            let points = sample_edge(topo, edge_data, deflection, angular_tol)?;
+            let points = sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)?;
             let ordered: Vec<Point3> = if is_fwd {
                 points
             } else {
@@ -594,20 +595,34 @@ fn interior_grid_resolution(
     deflection: f64,
     angular_tol: f64,
 ) -> (usize, usize) {
+    // This is the non-standard-boundary CDT fallback (boolean-result faces).
+    // Watertightness comes from the explicit boundary samples, not from these
+    // interior grid counts, and one radius drives both directions; keep the
+    // curvature floor on for all surfaces here as the conservative default.
     match surface {
         FaceSurface::Sphere(sphere) => {
             let r = sphere.radius();
-            let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol).max(2);
-            let n_v = segments_for_chord_deviation_a(r, dv, deflection, angular_tol).max(2);
+            let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol, true).max(2);
+            let n_v = segments_for_chord_deviation_a(r, dv, deflection, angular_tol, true).max(2);
             (n_u, n_v)
         }
         FaceSurface::Torus(torus) => {
-            let n_u =
-                segments_for_chord_deviation_a(torus.major_radius(), du, deflection, angular_tol)
-                    .max(2);
-            let n_v =
-                segments_for_chord_deviation_a(torus.minor_radius(), dv, deflection, angular_tol)
-                    .max(2);
+            let n_u = segments_for_chord_deviation_a(
+                torus.major_radius(),
+                du,
+                deflection,
+                angular_tol,
+                true,
+            )
+            .max(2);
+            let n_v = segments_for_chord_deviation_a(
+                torus.minor_radius(),
+                dv,
+                deflection,
+                angular_tol,
+                true,
+            )
+            .max(2);
             (n_u, n_v)
         }
         FaceSurface::Plane { .. }
@@ -615,8 +630,8 @@ fn interior_grid_resolution(
         | FaceSurface::Cylinder(_)
         | FaceSurface::Cone(_) => {
             let r = estimate_surface_radius(surface);
-            let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol).max(2);
-            let n_v = segments_for_chord_deviation_a(r, dv, deflection, angular_tol).max(2);
+            let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol, true).max(2);
+            let n_v = segments_for_chord_deviation_a(r, dv, deflection, angular_tol, true).max(2);
             (n_u, n_v)
         }
     }

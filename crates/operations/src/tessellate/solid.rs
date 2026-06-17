@@ -55,6 +55,25 @@ pub fn tessellate_solid(
     )
 }
 
+/// Tessellate a solid at a density safe for mesh-boolean co-refinement.
+///
+/// Identical to [`tessellate_solid_with_tolerance`] except circular edges keep
+/// the curvature floor: the mesh boolean's robustness depends on the denser
+/// floored circle sampling, independent of the display deflection cap.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup or face tessellation fails.
+pub fn tessellate_solid_for_boolean(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+    angular_tol: f64,
+) -> Result<TriangleMesh, crate::OperationsError> {
+    tessellate_solid_core(topo, solid, deflection, angular_tol, false, true)
+        .map(|(mesh, _, _)| mesh)
+}
+
 /// Tessellate a solid with explicit linear and angular tolerances.
 ///
 /// `angular_tol` (radians) caps the per-segment tangent turn; pass `0.0` to
@@ -69,7 +88,8 @@ pub fn tessellate_solid_with_tolerance(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
-    tessellate_solid_core(topo, solid, deflection, angular_tol, false).map(|(mesh, _, _)| mesh)
+    tessellate_solid_core(topo, solid, deflection, angular_tol, false, false)
+        .map(|(mesh, _, _)| mesh)
 }
 
 /// Watertight solid tessellation with per-face triangle grouping.
@@ -91,7 +111,7 @@ pub fn tessellate_solid_grouped_with_tolerance(
     angular_tol: f64,
 ) -> Result<(TriangleMesh, Vec<u32>), crate::OperationsError> {
     let (mut mesh, tri_faces, n_faces) =
-        tessellate_solid_core(topo, solid, deflection, angular_tol, true)?;
+        tessellate_solid_core(topo, solid, deflection, angular_tol, true, false)?;
     let tri_faces = tri_faces.unwrap_or_default();
     debug_assert_eq!(tri_faces.len() * 3, mesh.indices.len());
 
@@ -135,13 +155,20 @@ pub fn tessellate_solid_grouped_with_tolerance(
 /// entry per triangle, holding the index of the owning face within
 /// `explorer::solid_faces` order); otherwise the attribution bookkeeping is
 /// skipped and `None` is returned. The face count is always returned.
-#[allow(clippy::too_many_lines)]
+///
+/// `circle_floor` selects whether circular edges keep the curvature floor.
+/// Display callers pass `false` (constant-curvature circles are exact without
+/// it); the boolean mesh-fallback passes `true` for co-refinement robustness.
+/// Because the shared edge pool drives the cylinder/cone band density, this one
+/// flag governs every circular feature in the solid consistently.
+#[allow(clippy::too_many_lines, clippy::fn_params_excessive_bools)]
 fn tessellate_solid_core(
     topo: &Topology,
     solid: SolidId,
     deflection: f64,
     angular_tol: f64,
     track_faces: bool,
+    circle_floor: bool,
 ) -> Result<(TriangleMesh, Option<Vec<u32>>, usize), crate::OperationsError> {
     use brepkit_topology::explorer;
 
@@ -165,7 +192,7 @@ fn tessellate_solid_core(
                     Err(e) => return Some(Err(crate::OperationsError::Topology(e))),
                 };
                 Some(
-                    sample_edge(topo, edge_data, deflection, angular_tol)
+                    sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)
                         .map(|pts| (edge_idx, pts)),
                 )
             })
@@ -182,7 +209,7 @@ fn tessellate_solid_core(
             if let Some(edge_id) = topo.edge_id_from_index(edge_idx)
                 && let Ok(edge_data) = topo.edge(edge_id)
             {
-                let points = sample_edge(topo, edge_data, deflection, angular_tol)?;
+                let points = sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)?;
                 map.insert(edge_idx, points);
             }
         }
@@ -194,7 +221,8 @@ fn tessellate_solid_core(
         for &edge_idx in &edge_indices {
             if let Some(edge_id) = topo.edge_id_from_index(edge_idx) {
                 if let Ok(edge_data) = topo.edge(edge_id) {
-                    let points = sample_edge(topo, edge_data, deflection, angular_tol)?;
+                    let points =
+                        sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)?;
                     map.insert(edge_idx, points);
                 }
             }
@@ -218,6 +246,7 @@ fn tessellate_solid_core(
                         u_range.1 - u_range.0,
                         deflection,
                         angular_tol,
+                        circle_floor,
                     )
                 }
                 FaceSurface::Cylinder(cyl) => {
@@ -227,6 +256,7 @@ fn tessellate_solid_core(
                         u_range.1 - u_range.0,
                         deflection,
                         angular_tol,
+                        circle_floor,
                     )
                 }
                 _ => continue,
@@ -525,6 +555,7 @@ fn tessellate_solid_core(
             all_faces[fi],
             deflection,
             angular_tol,
+            circle_floor,
             &edge_global_indices,
             &mut merged,
             &mut point_to_global,
@@ -642,6 +673,7 @@ pub(super) fn tessellate_face_with_shared_edges(
     face_id: FaceId,
     deflection: f64,
     angular_tol: f64,
+    circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
     point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
@@ -689,7 +721,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 }
             } else {
                 let edge_data = topo.edge(oe.edge())?;
-                let points = sample_edge(topo, edge_data, deflection, angular_tol)?;
+                let points = sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)?;
                 let ordered: Vec<Point3> = if oe.is_forward() {
                     points
                 } else {
@@ -769,6 +801,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             face_data,
             deflection,
             angular_tol,
+            circle_floor,
             edge_global_indices,
             merged,
             point_to_global,
@@ -828,6 +861,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 face_data,
                 deflection,
                 angular_tol,
+                circle_floor,
                 edge_global_indices,
                 merged,
                 point_to_global,
@@ -860,6 +894,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             face_data,
             deflection,
             angular_tol,
+            circle_floor,
             edge_global_indices,
             merged,
             point_to_global,

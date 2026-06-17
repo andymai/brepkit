@@ -115,7 +115,16 @@ fn closed_edge_segments(curve: &EdgeCurve, deflection: f64) -> usize {
     use std::f64::consts::TAU;
     match curve {
         EdgeCurve::Circle(c) => {
-            brepkit_math::chord::segments_for_chord_deviation(c.radius(), TAU, deflection)
+            // Constant curvature: the chord formula is exact, so skip the
+            // curvature floor that the convenience wrapper applies.
+            brepkit_math::chord::segments_for_chord_deviation_with_angle(
+                c.radius(),
+                TAU,
+                deflection,
+                brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+                0.0,
+                false,
+            )
         }
         EdgeCurve::Ellipse(e) => {
             brepkit_math::chord::segments_for_chord_deviation(e.semi_major(), TAU, deflection)

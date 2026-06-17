@@ -40,7 +40,8 @@ pub use mesh_ops::{
     sample_solid_edges_filtered,
 };
 pub use solid::{
-    tessellate_solid, tessellate_solid_grouped_with_tolerance, tessellate_solid_with_tolerance,
+    tessellate_solid, tessellate_solid_for_boolean, tessellate_solid_grouped_with_tolerance,
+    tessellate_solid_with_tolerance,
 };
 
 /// Merge-grid cell size for tolerance-based vertex deduplication.

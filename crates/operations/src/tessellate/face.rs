@@ -103,6 +103,7 @@ pub fn tessellate_with_uvs_a(
                     u_range.1 - u_range.0,
                     deflection,
                     angular_tol,
+                    false,
                 );
                 let nv = 1;
                 let cyl = cyl.clone();
@@ -126,6 +127,7 @@ pub fn tessellate_with_uvs_a(
                 u_range.1 - u_range.0,
                 deflection,
                 angular_tol,
+                false,
             );
             let nv = 1;
             let kind = if v_range.0.abs() < 1e-10 {
@@ -154,12 +156,14 @@ pub fn tessellate_with_uvs_a(
                 u_range.1 - u_range.0,
                 deflection * SPHERE_DIAG,
                 angular_tol * SPHERE_DIAG,
+                true,
             );
             let nv = segments_for_chord_deviation_a(
                 sphere.radius(),
                 v_range.1 - v_range.0,
                 deflection * SPHERE_DIAG,
                 angular_tol * SPHERE_DIAG,
+                true,
             );
             let kind = sphere_analytic_kind(v_range);
             let sphere = sphere.clone();
@@ -181,12 +185,14 @@ pub fn tessellate_with_uvs_a(
                 u_range.1 - u_range.0,
                 deflection,
                 angular_tol,
+                true,
             );
             let nv = segments_for_chord_deviation_a(
                 torus.minor_radius(),
                 v_range.1 - v_range.0,
                 deflection,
                 angular_tol,
+                true,
             );
             let torus = torus.clone();
             Ok(tessellate_analytic(
