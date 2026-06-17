@@ -1098,26 +1098,17 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // from an under-resolved outer-wire polygon can sit on the wrong side of a
     // thin annular ring even when it is not strictly inside a hole, so always
     // re-derive the interior point from the ring between outer and holes.
+    //
+    // A bounding-shape proxy must NOT be used for the hole test: a circle
+    // around the hole centroid wildly over-covers an elongated/rectangular
+    // hole (a cavity opening), flagging a legitimate thin-rim point as
+    // "inside" and then displacing it to the farthest corner — which on a
+    // multi-hole frame (two adjacent cavities sharing a divider) lands inside
+    // the OTHER hole and silently drops the whole frame face. The accurate
+    // `is_inside_any_hole` UV point-in-polygon test avoids that.
     if matches!(&sub_face.surface, FaceSurface::Plane { .. }) && !sub_face.inner_wires.is_empty() {
         interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
     } else if is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
-        interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
-    }
-
-    // Secondary hole check: only the primary `find_point_outside_holes`
-    // fallback (its degenerate-case vertex-midpoint / centroid branch) can
-    // leave `interior_uv` inside a hole. Detect that with an accurate UV
-    // point-in-polygon test against the (densely sampled) hole loops. A
-    // bounding-shape proxy must NOT be used here: a circle around the hole
-    // centroid wildly over-covers an elongated/rectangular hole (a cavity
-    // opening), flagging a legitimate thin-rim point as "inside" and then
-    // displacing it to the farthest corner — which on a multi-hole frame
-    // (e.g. two adjacent cavities sharing a divider) lands inside the OTHER
-    // hole and silently drops the whole frame face.
-    if !sub_face.inner_wires.is_empty() && is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
-        // Re-derive a point in the ring between the outer wire and all holes.
-        // This is the same accurate strategy the primary uses, so the displaced
-        // point is guaranteed outside every hole when a ring point exists.
         interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
     }
 
