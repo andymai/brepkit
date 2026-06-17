@@ -10,6 +10,7 @@ mod ray_cast;
 
 pub use analytic::{AnalyticClassifier, classify_analytic, try_build_analytic_classifier};
 pub use ray_cast::{classify_ray_cast, compute_solid_bbox, point_in_face_3d};
+pub(crate) use ray_cast::{largest_u_gap, u_in_gap};
 
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;

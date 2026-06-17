@@ -478,7 +478,7 @@ fn ray_cylinder_crossings(
 
 /// Whether circumferential parameter `u` lies in the excluded angular gap
 /// `(lo, hi)` (CCW from `lo` to `hi`, possibly wrapping past 2π).
-fn u_in_gap(u: f64, gap: (f64, f64)) -> bool {
+pub fn u_in_gap(u: f64, gap: (f64, f64)) -> bool {
     use std::f64::consts::TAU;
     let eps = 1e-6;
     let u = u.rem_euclid(TAU);
@@ -493,7 +493,7 @@ fn u_in_gap(u: f64, gap: (f64, f64)) -> bool {
 /// Largest angular gap between sorted circumferential samples — the arc the
 /// partial-cylinder face does NOT cover. `None` for too-few samples or a gap
 /// too small to be a genuine partial arc.
-fn largest_u_gap(u_samples: &[f64]) -> Option<(f64, f64)> {
+pub fn largest_u_gap(u_samples: &[f64]) -> Option<(f64, f64)> {
     use std::f64::consts::TAU;
     let mut us: Vec<f64> = u_samples.iter().map(|&u| u.rem_euclid(TAU)).collect();
     us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
