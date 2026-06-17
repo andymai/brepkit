@@ -512,6 +512,30 @@ pub fn boolean(
         }
     }
 
+    // Disjoint-fuse fast path: when A and B are provably spatially disjoint,
+    // their union is a multi-region solid — the same result GFA produces for
+    // disjoint inputs, but built by a cheap shell merge instead of the full
+    // pavefiller/assembly pipeline. This is what makes a pairwise-accumulate
+    // loop over many disjoint pieces (e.g. one tapered foot per gridfinity
+    // cell) scale linearly: each fuse onto the growing accumulator short-
+    // circuits here.
+    //
+    // Disjointness is decided per connected component (not per whole-solid
+    // bbox): the accumulator spans many pieces, so its overall box overlaps
+    // the next piece's box even when no piece actually touches. Component
+    // boxes are conservative outer bounds, and the gap test uses a positive
+    // tolerance margin, so the path only fires on a clear gap — touching or
+    // overlapping operands fall through to GFA, which welds the shared
+    // geometry. The result is independent of the inputs (each operand is
+    // deep-copied before merging), preserving the boolean contract.
+    if op == BooleanOp::Fuse && solids_provably_disjoint(topo, a, b, tol.linear) {
+        let copy_a = crate::copy::copy_solid(topo, a)?;
+        let copy_b = crate::copy::copy_solid(topo, b)?;
+        let merged = crate::compound_ops::merge_disjoint_solids(topo, &[copy_a, copy_b])?;
+        log::debug!("Fuse short-circuited via disjoint shell merge");
+        return Ok(merged);
+    }
+
     let algo_op = match op {
         BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
         BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
@@ -1758,6 +1782,67 @@ fn aabbs_separated(
         || b.max.y() < a.min.y() + margin
         || a.max.z() < b.min.z() + margin
         || b.max.z() < a.min.z() + margin
+}
+
+/// Returns `true` when two axis-aligned boxes have a *clear gap* exceeding
+/// `margin` on at least one axis — i.e. they are separated by a real positive
+/// distance, not merely touching.
+///
+/// This is intentionally stricter than [`aabbs_separated`]: a shared
+/// face/edge/corner (zero gap) returns `false` here. Touching solids must NOT
+/// be treated as disjoint by the fuse fast path — their shared geometry has to
+/// be welded by GFA.
+fn aabbs_clear_gap(
+    a: &brepkit_math::aabb::Aabb3,
+    b: &brepkit_math::aabb::Aabb3,
+    margin: f64,
+) -> bool {
+    b.min.x() - a.max.x() > margin
+        || a.min.x() - b.max.x() > margin
+        || b.min.y() - a.max.y() > margin
+        || a.min.y() - b.max.y() > margin
+        || b.min.z() - a.max.z() > margin
+        || a.min.z() - b.max.z() > margin
+}
+
+/// Returns `true` when solids `a` and `b` are provably spatially disjoint with
+/// a clear gap: every connected face component of `a` is separated from every
+/// connected face component of `b` by more than `margin` on some axis.
+///
+/// Soundness: component AABBs come from [`crate::measure::face_set_bounding_box`],
+/// which is a conservative *outer* bound (vertices plus surface-curvature
+/// expansion). If two components' true geometry overlapped or touched, their
+/// boxes would touch or overlap and [`aabbs_clear_gap`] would (correctly)
+/// return `false`. So a `true` result guarantees a real positive gap between
+/// the two solids — never a false "disjoint" for touching/coincident inputs,
+/// which must still go through GFA to weld shared geometry.
+///
+/// Component-level (rather than whole-solid) granularity is essential: a
+/// multi-region solid (e.g. an accumulator of several already-merged disjoint
+/// pieces) has a single outer shell whose overall box overlaps a nearby piece,
+/// yet none of its pieces actually touch that piece. [`assembly::face_components`]
+/// recovers the individual pieces from the merged shell.
+///
+/// Returns `false` on any topology error or empty operand (fall through to the
+/// general path) rather than risking an unsound merge.
+fn solids_provably_disjoint(topo: &Topology, a: SolidId, b: SolidId, margin: f64) -> bool {
+    let comps_a = assembly::face_components(topo, a);
+    let comps_b = assembly::face_components(topo, b);
+    if comps_a.is_empty() || comps_b.is_empty() {
+        return false;
+    }
+    let boxes = |comps: &[Vec<FaceId>]| -> Option<Vec<brepkit_math::aabb::Aabb3>> {
+        comps
+            .iter()
+            .map(|faces| crate::measure::face_set_bounding_box(topo, faces).ok())
+            .collect()
+    };
+    let (Some(boxes_a), Some(boxes_b)) = (boxes(&comps_a), boxes(&comps_b)) else {
+        return false;
+    };
+    boxes_a
+        .iter()
+        .all(|ba| boxes_b.iter().all(|bb| aabbs_clear_gap(ba, bb, margin)))
 }
 
 /// Check whether every boundary vertex of `solid` is classified as

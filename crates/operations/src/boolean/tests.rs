@@ -127,6 +127,128 @@ fn fuse_disjoint_cubes_volume_chained() {
     );
 }
 
+/// Fusing many disjoint tapered "feet" (the gridfinity base-socket shape:
+/// frustums wider at the top, with a sub-millimetre gap between neighbours)
+/// via the pairwise-accumulate pattern brepjs uses must keep every piece and
+/// the exact total volume. The disjoint-fuse fast path turns each accumulate
+/// step into a cheap shell merge instead of a full GFA fuse.
+#[test]
+fn fuse_disjoint_tapered_feet_grid_keeps_all_pieces() {
+    use crate::boolean::assembly::face_components;
+    use crate::measure::solid_volume;
+    use std::f64::consts::PI;
+
+    // 3×3 grid of frustums: base r=2, top r=2.4 (tapers OUTWARD upward, so the
+    // widest extent — the bbox footprint — is the top disc, radius 2.4), height
+    // 5. Pitch 5.0 → adjacent top discs are 5.0 - 2*2.4 = 0.2 apart: a clear
+    // positive gap, well above linear tolerance, but tight like the real socket.
+    let r_bot = 2.0_f64;
+    let r_top = 2.4_f64;
+    let h = 5.0_f64;
+    let pitch = 5.0_f64;
+    let n = 3;
+
+    let mut topo = Topology::new();
+    let mut feet = Vec::new();
+    for row in 0..n {
+        for col in 0..n {
+            let x = f64::from(col) * pitch;
+            let y = f64::from(row) * pitch;
+            let foot = crate::primitives::make_cone(&mut topo, r_bot, r_top, h).unwrap();
+            crate::transform::transform_solid(
+                &mut topo,
+                foot,
+                &brepkit_math::mat::Mat4::translation(x, y, 0.0),
+            )
+            .unwrap();
+            feet.push(foot);
+        }
+    }
+
+    // Single-foot volume (frustum): V = (pi*h/3)*(r_bot^2 + r_bot*r_top + r_top^2).
+    // A clean single cone uses the exact analytic path; the merged multi-region
+    // result falls back to tessellation (the analytic detector bails on more
+    // than one cone face), so the summed-volume check below uses a 1% chord
+    // tolerance — the documented accuracy for tessellated curved solids.
+    let v_one = PI * h / 3.0 * r_top.mul_add(r_top, r_bot.mul_add(r_bot, r_bot * r_top));
+    let count = feet.len();
+
+    // Pairwise accumulate (the brepkit-kernel adapter's loop).
+    let mut acc = feet[0];
+    for &foot in &feet[1..] {
+        acc = boolean(&mut topo, BooleanOp::Fuse, acc, foot).unwrap();
+    }
+
+    // Every foot survived as its own connected component.
+    let comps = face_components(&topo, acc);
+    assert_eq!(
+        comps.len(),
+        count,
+        "disjoint fuse should keep all {count} feet as separate components, got {}",
+        comps.len()
+    );
+
+    // Total volume is the sum of all feet — no welding, no dropped pieces. A
+    // dropped foot would be a ~11% miss, far outside the 1% tessellation band.
+    let vol = solid_volume(&topo, acc, 0.01).unwrap();
+    let expected = v_one * count as f64;
+    assert!(
+        (vol - expected).abs() < 0.01 * expected,
+        "fused {count}-foot volume {vol} should equal sum {expected}"
+    );
+
+    // The merged outer shell is manifold (each foot is closed; disconnected
+    // groups don't share edges).
+    let sh = topo.shell(topo.solid(acc).unwrap().outer_shell()).unwrap();
+    validate_shell_manifold(sh, &topo).expect("disjoint-fuse merge should be manifold");
+}
+
+/// The disjoint-fuse fast path must NOT fire when the bounding boxes overlap —
+/// such feet share geometry that GFA has to weld. A frustum pair whose top
+/// discs overlap fuses through GFA into a single connected component, not a
+/// two-piece merge, and the union volume is strictly less than the sum.
+#[test]
+fn fuse_overlapping_tapered_feet_welds_via_gfa() {
+    use crate::boolean::assembly::face_components;
+    use crate::measure::solid_volume;
+    use std::f64::consts::PI;
+
+    let r_bot = 2.0_f64;
+    let r_top = 2.5_f64;
+    let h = 5.0_f64;
+
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_cone(&mut topo, r_bot, r_top, h).unwrap();
+    let b = crate::primitives::make_cone(&mut topo, r_bot, r_top, h).unwrap();
+    // Place B so its top disc overlaps A's (centres 4.0 < 2*r_top = 5.0
+    // apart): the boxes clearly overlap → must go through GFA and weld.
+    crate::transform::transform_solid(
+        &mut topo,
+        b,
+        &brepkit_math::mat::Mat4::translation(4.0, 0.0, 0.0),
+    )
+    .unwrap();
+
+    let v_one = PI * h / 3.0 * r_top.mul_add(r_top, r_bot.mul_add(r_bot, r_bot * r_top));
+    let fused = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    // Overlapping feet weld into a single connected component (the fast path
+    // would have wrongly left two).
+    let comps = face_components(&topo, fused);
+    assert_eq!(
+        comps.len(),
+        1,
+        "overlapping feet must weld into one component, got {}",
+        comps.len()
+    );
+    // Union volume is strictly less than the sum (the overlap is shared once).
+    let vol = solid_volume(&topo, fused, 0.01).unwrap();
+    assert!(
+        vol < 2.0 * v_one - 1e-3 && vol > v_one,
+        "overlapping union volume {vol} should be between {v_one} and {}",
+        2.0 * v_one
+    );
+}
+
 #[test]
 fn cut_disjoint_returns_a() {
     let mut topo = Topology::new();

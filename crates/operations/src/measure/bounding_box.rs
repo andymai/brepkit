@@ -1,9 +1,11 @@
 //! Bounding box computation for B-rep solids.
 
+use std::collections::HashSet;
+
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
-use brepkit_topology::face::FaceSurface;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use super::helpers::collect_solid_vertex_points;
@@ -35,6 +37,56 @@ pub fn solid_bounding_box(
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
     for &fid in shell.faces() {
+        if let Ok(face) = topo.face(fid) {
+            expand_aabb_for_face(topo, &mut aabb, fid, face.surface());
+        }
+    }
+
+    Ok(aabb)
+}
+
+/// Compute a conservative axis-aligned bounding box over an arbitrary set of
+/// faces (e.g. one connected component of a multi-region solid).
+///
+/// Like [`solid_bounding_box`], the box starts from the faces' vertex
+/// positions and is then expanded for surface curvature, so the returned box
+/// is a conservative *outer* bound of every face in the set. Used by the
+/// disjoint-fuse fast path to test whether two operands' components are
+/// spatially separated.
+///
+/// # Errors
+///
+/// Returns an error if the face set is empty (no vertices) or a topology
+/// lookup fails.
+pub fn face_set_bounding_box(
+    topo: &Topology,
+    faces: &[FaceId],
+) -> Result<Aabb3, crate::OperationsError> {
+    let mut vertex_ids = HashSet::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            let wire = topo.wire(wire_id)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                vertex_ids.insert(edge.start());
+                vertex_ids.insert(edge.end());
+            }
+        }
+    }
+
+    let mut points = Vec::with_capacity(vertex_ids.len());
+    for vid in vertex_ids {
+        points.push(topo.vertex(vid)?.point());
+    }
+    let mut aabb = Aabb3::try_from_points(points.iter().copied()).ok_or_else(|| {
+        crate::OperationsError::InvalidInput {
+            reason: "face set has no vertices".into(),
+        }
+    })?;
+
+    for &fid in faces {
         if let Ok(face) = topo.face(fid) {
             expand_aabb_for_face(topo, &mut aabb, fid, face.surface());
         }
