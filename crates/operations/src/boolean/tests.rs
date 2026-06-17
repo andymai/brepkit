@@ -4511,3 +4511,61 @@ fn extrude_down_solid_fuses_without_hole_misclassification() {
             .unwrap_or_else(|e| panic!("({base_half},{tip_half}) not watertight: {e:?}"));
     }
 }
+
+/// Axis-aligned box spanning `[x0,x1]x[y0,y1]x[z0,z1]`.
+#[cfg(test)]
+fn box_span(topo: &mut Topology, x0: f64, y0: f64, z0: f64, x1: f64, y1: f64, z1: f64) -> SolidId {
+    let b = crate::primitives::make_box(topo, x1 - x0, y1 - y0, z1 - z0).unwrap();
+    crate::transform::transform_solid(topo, b, &brepkit_math::mat::Mat4::translation(x0, y0, z0))
+        .unwrap();
+    b
+}
+
+/// Watertight (closed, two-manifold) over outer + inner shells.
+#[cfg(test)]
+fn assert_watertight(topo: &Topology, solid: SolidId, label: &str) {
+    use brepkit_topology::adjacency::AdjacencyIndex;
+    use brepkit_topology::explorer::solid_faces;
+    let faces = solid_faces(topo, solid).unwrap();
+    let adj = AdjacencyIndex::build_from_faces(topo, &faces).unwrap();
+    assert!(
+        adj.boundary_edges().is_empty() && adj.non_manifold_edges().is_empty(),
+        "{label}: not watertight ({} free, {} non-manifold edges)",
+        adj.boundary_edges().len(),
+        adj.non_manifold_edges().len()
+    );
+}
+
+/// Regression: deepening an existing blind-pocket notch in a wall must stay
+/// watertight. A first cut notches the slab's seam-side wall (the cutter
+/// overhangs the wall, so its opening is a concave notch in that wall face); a
+/// second cut deepens that notch. The old notch-floor edge then lies inside the
+/// freshly-removed area, and the GFA wire builder used to trace the shallow old
+/// notch and orphan the deepening sections into zero-area spurs, leaving the
+/// enlarged notch mouth unbuilt (free + non-manifold edges).
+///
+/// Covers both the flush meeting (cuts share the floor plane exactly) and the
+/// `COPLANAR_OVERLAP`-style overlap (second cut starts a hair above the old
+/// floor), since the two drive different paths in the face splitter.
+#[test]
+fn deepened_blind_notch_in_overhanging_wall_is_watertight() {
+    for (z_overlap, tag) in [
+        (0.0_f64, "flush"),
+        (0.01, "overlap+0.01"),
+        (1.6, "deep-overlap"),
+    ] {
+        let mut topo = Topology::new();
+        // Slab occupying x in [0, 21]; the x=0 face is a wall (a seam side).
+        let slab = box_span(&mut topo, 0.0, -21.0, -5.0, 21.0, 21.0, 0.0);
+        // First cut: a box overhanging the x=0 wall (x<0), notching it from the
+        // top down to z=-2.8.
+        let top = box_span(&mut topo, -2.5, -2.6, -2.8, 1.0, 2.6, 0.5);
+        let r1 = boolean(&mut topo, BooleanOp::Cut, slab, top).unwrap();
+        assert_watertight(&topo, r1, &format!("after first notch ({tag})"));
+        // Second cut: deepen the notch from -2.8 down to -4.4, starting at
+        // (-2.8 + z_overlap).
+        let bot = box_span(&mut topo, -2.5, -2.6, -4.4, 1.0, 2.6, -2.8 + z_overlap);
+        let r2 = boolean(&mut topo, BooleanOp::Cut, r1, bot).unwrap();
+        assert_watertight(&topo, r2, &format!("deepened notch ({tag})"));
+    }
+}
