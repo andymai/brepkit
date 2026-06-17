@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.113.5](https://github.com/andymai/brepkit/compare/v2.113.4...v2.113.5) (2026-06-17)
+
+
+### Bug Fixes
+
+* **algo:** treat near-collinear wire-builder junctions as continuations ([#879](https://github.com/andymai/brepkit/issues/879)) ([87d30f4](https://github.com/andymai/brepkit/commit/87d30f44ee6ed600e44e4fa8113ba2fc5a3ee683))
+* **operations:** preserve corner arcs on cylindrical fillet pass-through faces (gridfinity 26/26) ([#878](https://github.com/andymai/brepkit/issues/878)) ([ec5f66f](https://github.com/andymai/brepkit/commit/ec5f66fbf83dadf45f1165d28d24c24bd8f94a8d))
+
 ## [2.113.4](https://github.com/andymai/brepkit/compare/v2.113.3...v2.113.4) (2026-06-17)
 
 
