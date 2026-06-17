@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.3](https://github.com/andymai/brepkit/compare/v2.114.2...v2.114.3) (2026-06-17)
+
+
+### Bug Fixes
+
+* **algo:** detect partial-overlap coincident faces in same-domain pass ([#895](https://github.com/andymai/brepkit/issues/895)) ([e65de65](https://github.com/andymai/brepkit/commit/e65de6527f9b29020039b603fb0c2149137d5596))
+
 ## [2.114.2](https://github.com/andymai/brepkit/compare/v2.114.1...v2.114.2) (2026-06-17)
 
 
