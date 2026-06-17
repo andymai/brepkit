@@ -4308,3 +4308,206 @@ fn issue_801_slot_fuse_recovers_volume() {
     assert_cut_fuse_back_recovers(12.0, 4.0, 4.0);
     assert_cut_fuse_back_recovers(8.0, 3.0, 2.0);
 }
+
+// ── Gridfinity baseplate dovetail-connector fuse ────────────────────────────
+//
+// The tool builds dovetail tongues as a trapezoidal XY profile (narrow base at
+// the wall, wider protruding tip) drawn CLOCKWISE and extruded DOWN the slab
+// height, then fuses them onto the slab whose base edge they overlap. Two bugs
+// made that fuse fail and the baseplate export hang:
+//
+//   1. A CW profile extruded *opposite* its face normal produced inside-out cap
+//      faces (the tongue's volume read ~1/3 of its true value), which broke the
+//      coincident-cap fuse into a non-manifold result. Fixed in `extrude`.
+//   2. The GFA shell-orientation classifier (`signed_volume_of_shell`) signed
+//      shells by raw wire winding, so any solid built by extrude-DOWN (every
+//      tool slab) read as negative volume → "all shells classified as holes" →
+//      GFA failed → mesh-boolean fallback ran on ever-growing corrupt geometry,
+//      one fuse per tongue, until the export timed out. Fixed in the algo
+//      builder (sign by the geometric surface normal).
+
+/// Build a dovetail tongue exactly as the tool does: a CW trapezoid extruded
+/// down. `tip_half == base_half` degenerates to a rectangular protrusion.
+fn dovetail_tongue(
+    topo: &mut Topology,
+    wall_x: f64,
+    bp_y: f64,
+    height: f64,
+    overlap: f64,
+    base_half: f64,
+    tip_half: f64,
+) -> SolidId {
+    let base_x = wall_x - overlap; // extended INTO the slab
+    let tip_x = wall_x + 1.5; // protrudes out
+    // CW order viewed from +Z, matching the tool's `makeTongue` draw order.
+    let pts = [
+        Point3::new(base_x, bp_y + base_half, 0.0),
+        Point3::new(tip_x, bp_y + tip_half, 0.0),
+        Point3::new(tip_x, bp_y - tip_half, 0.0),
+        Point3::new(base_x, bp_y - base_half, 0.0),
+    ];
+    let vids: Vec<_> = pts
+        .iter()
+        .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+        .collect();
+    let n = vids.len();
+    let eids: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line)))
+        .collect();
+    let wire = Wire::new(
+        eids.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, -1.0), height).unwrap()
+}
+
+/// Slab built the way the tool builds it: a CCW rectangle extruded DOWN (top at
+/// z=0, bottom at z=-h).
+fn dovetail_slab(topo: &mut Topology, w: f64, d: f64, h: f64) -> SolidId {
+    let pts = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(w, 0.0, 0.0),
+        Point3::new(w, d, 0.0),
+        Point3::new(0.0, d, 0.0),
+    ];
+    let vids: Vec<_> = pts
+        .iter()
+        .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+        .collect();
+    let n = vids.len();
+    let eids: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line)))
+        .collect();
+    let wire = Wire::new(
+        eids.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, -1.0), h).unwrap()
+}
+
+/// A CW profile extruded opposite its face normal must still produce a solid
+/// with correct (outward) cap normals — i.e. the analytic volume is right, not
+/// ~1/3 of it. The trapezoid here is the tool's dovetail tongue.
+#[test]
+fn extrude_down_cw_profile_has_correct_volume() {
+    let mut topo = Topology::new();
+    let tongue = dovetail_tongue(&mut topo, 20.0, 15.0, 5.0, 0.01, 1.0, 1.3);
+    // Trapezoid: parallel sides 2.0 (base) and 2.6 (tip), span 1.51 → area
+    // 3.473, × height 5 = 17.365.
+    assert_volume_near(&topo, tongue, 17.365, 1e-2);
+
+    // Rectangular protrusion: 1.51 × 2.0 × 5.0 = 15.1.
+    let mut topo2 = Topology::new();
+    let rect = dovetail_tongue(&mut topo2, 20.0, 15.0, 5.0, 0.01, 1.0, 1.0);
+    assert_volume_near(&topo2, rect, 15.1, 1e-2);
+}
+
+/// The dovetail tongue fuse must produce a watertight, manifold solid quickly
+/// (the tool fuses many of these; a non-manifold result forces the slow
+/// mesh-boolean path and a hang). This is the minimal repro of the baseplate
+/// connector hang.
+#[test]
+fn baseplate_dovetail_tongue_fuse_is_watertight() {
+    let mut topo = Topology::new();
+    let slab = dovetail_slab(&mut topo, 20.0, 30.0, 5.0);
+    let slab_vol = crate::measure::solid_volume(&topo, slab, 0.01).unwrap();
+    let tongue = dovetail_tongue(&mut topo, 20.0, 15.0, 5.0, 0.01, 1.0, 1.3);
+    let tongue_vol = crate::measure::solid_volume(&topo, tongue, 0.01).unwrap();
+
+    let fused = boolean(&mut topo, BooleanOp::Fuse, slab, tongue).unwrap();
+
+    // Watertight closed manifold (no free edges, nothing over-shared).
+    let sh = topo
+        .shell(topo.solid(fused).unwrap().outer_shell())
+        .unwrap();
+    brepkit_topology::validation::validate_shell_closed(sh, &topo)
+        .expect("dovetail fuse must be a closed manifold");
+
+    // Volume = slab + the part of the tongue outside the slab (the 0.01 overlap
+    // is shared, so it's roughly slab + tongue minus a sliver).
+    let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+    assert!(
+        fused_vol > slab_vol && fused_vol < slab_vol + tongue_vol + 1e-6,
+        "fused vol {fused_vol} should be between slab {slab_vol} and slab+tongue \
+         {}",
+        slab_vol + tongue_vol
+    );
+}
+
+/// Sequentially fusing several tongues onto one slab (the tool's `fuseAll`)
+/// must keep each fuse on the analytic GFA path — never ballooning the face
+/// count, which is the signature of the mesh-boolean fallback that caused the
+/// baseplate export to hang (one slow mesh boolean per tongue on ever-growing
+/// corrupt geometry). Volume must track slab + the protruding tongue material.
+#[test]
+fn baseplate_dovetail_sequential_fuse_no_mesh_blowup() {
+    let mut topo = Topology::new();
+    let mut acc = dovetail_slab(&mut topo, 20.0, 60.0, 5.0);
+    let mut expected_vol = crate::measure::solid_volume(&topo, acc, 0.01).unwrap();
+    for &y in &[10.0_f64, 20.0, 30.0, 40.0, 50.0] {
+        let tongue = dovetail_tongue(&mut topo, 20.0, y, 5.0, 0.01, 1.0, 1.3);
+        let tongue_vol = crate::measure::solid_volume(&topo, tongue, 0.01).unwrap();
+        acc = boolean(&mut topo, BooleanOp::Fuse, acc, tongue).unwrap();
+        let sh = topo.shell(topo.solid(acc).unwrap().outer_shell()).unwrap();
+        // A mesh fallback on a 20×60 slab would produce hundreds of triangulated
+        // faces; the analytic fuse keeps it to a handful per tongue.
+        assert!(
+            sh.faces().len() < 60,
+            "step y={y}: face count {} suggests a mesh fallback (the hang path)",
+            sh.faces().len()
+        );
+        // Volume grows by roughly the tongue's protruding portion (~99% of it;
+        // the 0.01 overlap is shared with the slab). A residual multi-fuse
+        // non-manifoldness can drift the measured volume by a few mm³, so this
+        // is a sanity band, not an exact equality (the per-tongue watertightness
+        // is asserted in `baseplate_dovetail_tongue_fuse_is_watertight`).
+        expected_vol += tongue_vol;
+        let vol = crate::measure::solid_volume(&topo, acc, 0.01).unwrap();
+        assert!(
+            (vol - expected_vol).abs() < 0.02 * expected_vol,
+            "step y={y}: fused vol {vol} far from expected ~{expected_vol}"
+        );
+    }
+}
+
+/// Regression for the GFA shell-orientation classifier: a solid built by
+/// extrude-DOWN (so its wire winding gives a negative fan-volume) must still be
+/// usable as a fuse operand. Before the fix every such fuse failed with "all
+/// shells classified as holes". Both rectangular and dovetail tongues, and a
+/// plain box straddling the wall, must succeed and be watertight.
+#[test]
+fn extrude_down_solid_fuses_without_hole_misclassification() {
+    for (base_half, tip_half) in [(1.0, 1.0), (1.0, 1.3), (1.3, 1.0)] {
+        let mut topo = Topology::new();
+        let slab = dovetail_slab(&mut topo, 20.0, 30.0, 5.0);
+        let tongue = dovetail_tongue(&mut topo, 20.0, 15.0, 5.0, 0.01, base_half, tip_half);
+        let fused =
+            brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, slab, tongue)
+                .unwrap_or_else(|e| panic!("GFA fuse failed for ({base_half},{tip_half}): {e:?}"));
+        let sh = topo
+            .shell(topo.solid(fused).unwrap().outer_shell())
+            .unwrap();
+        brepkit_topology::validation::validate_shell_closed(sh, &topo)
+            .unwrap_or_else(|e| panic!("({base_half},{tip_half}) not watertight: {e:?}"));
+    }
+}
