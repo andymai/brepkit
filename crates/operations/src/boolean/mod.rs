@@ -563,12 +563,20 @@ pub fn boolean(
                 // If Euler>2, try merging duplicate vertices before unify.
                 // This fixes the flush-face case where duplicate vertices at
                 // cross-rank positions inflate V.
-                if euler_pre > 2 {
+                let merged_vertices = euler_pre > 2;
+                if merged_vertices {
                     // Best-effort: don't abort on merge failure
                     let _ = merge_result_vertices(topo, result, tol);
                 }
 
-                let (f2, e2, v2) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
+                // Re-count only when the merge above ran; otherwise the counts
+                // are unchanged from the pre-merge measurement (the merge is the
+                // only mutation in between).
+                let (f2, e2, v2) = if merged_vertices {
+                    brepkit_topology::explorer::solid_entity_counts(topo, result)?
+                } else {
+                    (f_pre, e_pre, v_pre)
+                };
                 #[allow(clippy::cast_possible_wrap)]
                 let euler_pre2 = (v2 as i64) - (e2 as i64) + (f2 as i64);
 
@@ -600,15 +608,34 @@ pub fn boolean(
                 // only pairs faces across opposing ranks with identical edge
                 // sets, so within-rank or different-boundary overlaps slip
                 // through; unify_faces is the safety net for those (issue #696).
-                let needs_unify = !euler_balanced_pre || !is_closed_manifold(topo, result)?;
+                // `is_closed_manifold` is a whole-solid walk. It is needed both
+                // here (to decide unify) and again after unify (the acceptance
+                // gate). Compute the pre-unify value at most once, and reuse it
+                // for the gate when unify changes nothing. It is only evaluated
+                // when `euler_balanced_pre` holds (otherwise `||` short-circuits
+                // and `needs_unify` is already true).
+                let manifold_pre = if euler_balanced_pre {
+                    Some(is_closed_manifold(topo, result)?)
+                } else {
+                    None
+                };
+                let needs_unify = !euler_balanced_pre || manifold_pre == Some(false);
+                let mut unified = false;
                 if needs_unify {
                     for _ in 0..3 {
                         if crate::heal::unify_faces(topo, result)? == 0 {
                             break;
                         }
+                        unified = true;
                     }
                 }
-                let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
+                // Re-count only when unify actually merged faces; otherwise the
+                // counts are unchanged from the (post-merge) measurement above.
+                let (f, e, v) = if unified {
+                    brepkit_topology::explorer::solid_entity_counts(topo, result)?
+                } else {
+                    (f2, e2, v2)
+                };
                 #[allow(clippy::cast_possible_wrap)]
                 let euler = (v as i64) - (e as i64) + (f as i64);
                 // Free edges in an Intersect result mean faces were dropped
@@ -625,17 +652,33 @@ pub fn boolean(
                 // acceptance additionally requires a closed manifold so that
                 // accidental cancellations (open shells whose missing faces
                 // offset the inner-wire surplus) still fail safe to the mesh
-                // fallback.
-                let inner_wire_count = solid_inner_wire_count(topo, result)?;
+                // fallback. Reuse the pre-unify count when unify made no change.
+                let inner_wire_count = if unified {
+                    solid_inner_wire_count(topo, result)?
+                } else {
+                    inner_wire_count_pre
+                };
+                // `is_closed_manifold` walks every face/edge of the result; the
+                // hollow gate, the genus-acceptance gate, and the multi-region
+                // gate below all need it on the same (post-unify) topology, so
+                // compute it once. Reuse the pre-unify value when it was already
+                // computed AND unify changed nothing — the only intervening
+                // mutation. Propagating a topology-query error with `?` here is
+                // equivalent to the old multi-region `unwrap_or(false)`: that
+                // call ran on this same solid, so an error would have surfaced
+                // at the hollow gate (reached first) regardless.
+                let closed_manifold = match manifold_pre {
+                    Some(m) if !unified => m,
+                    _ => is_closed_manifold(topo, result)?,
+                };
                 // A hollow result must additionally have every shell closed:
                 // a missing cavity face could otherwise cancel against the
                 // inner-shell surplus and balance Euler by accident.
-                let hollow_ok = inner_shell_surplus == 0 || is_closed_manifold(topo, result)?;
+                let hollow_ok = inner_shell_surplus == 0 || closed_manifold;
                 let euler_eff = euler - inner_shell_surplus;
                 let euler_ok = hollow_ok
                     && (euler_eff == 2
-                        || (euler_balanced(euler_eff, inner_wire_count)
-                            && is_closed_manifold(topo, result)?));
+                        || (euler_balanced(euler_eff, inner_wire_count) && closed_manifold));
                 if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
                         "GFA boolean succeeded in {:.1}ms ({result_faces} faces)",
@@ -679,7 +722,10 @@ pub fn boolean(
                     && euler == expected_euler
                     && components_are_disjoint_pieces(topo, &components_vec)
                     && cut_safe
-                    && is_closed_manifold(topo, result).unwrap_or(false)
+                    // Reuse the `closed_manifold` computed above: nothing between
+                    // it and here mutates the result (only read-only component
+                    // and classifier queries run in between).
+                    && closed_manifold
                     && validate_boolean_result(topo, result).is_ok()
                 {
                     log::info!(
