@@ -439,10 +439,37 @@ fn shell_is_closed(topo: &Topology, faces: &[FaceId]) -> bool {
     !edge_counts.is_empty() && edge_counts.values().all(|&c| c % 2 == 0)
 }
 
+/// Newell's method normal for a polygon (unnormalized; magnitude = 2·area).
+/// Robust to non-planar / non-convex loops.
+fn newell_normal(verts: &[Point3]) -> Vec3 {
+    let n = verts.len();
+    let mut nx = 0.0;
+    let mut ny = 0.0;
+    let mut nz = 0.0;
+    for i in 0..n {
+        let a = verts[i];
+        let b = verts[(i + 1) % n];
+        nx += (a.y() - b.y()) * (a.z() + b.z());
+        ny += (a.z() - b.z()) * (a.x() + b.x());
+        nz += (a.x() - b.x()) * (a.y() + b.y());
+    }
+    Vec3::new(nx, ny, nz)
+}
+
 /// Compute a signed volume estimate for a shell using the divergence theorem.
 ///
 /// Positive = outward-oriented normals (growth shell).
 /// Negative = inward-oriented normals (hole shell).
+///
+/// Each face's fan-triangulation contribution is oriented by the face's actual
+/// geometric surface normal (which already accounts for `is_reversed`), not by
+/// the raw outer-wire winding. The two agree for solids built with a
+/// CCW-against-the-outward-normal convention (e.g. `make_box`), but diverge for
+/// equally valid solids whose wires were wound the other way (e.g. a profile
+/// extruded *opposite* its face normal). Trusting the wire winding alone made
+/// such a solid read as negative volume, so every shell of a fuse that
+/// consumed it got misclassified as a hole and assembly failed. Anchoring the
+/// sign to the surface normal makes the classifier construction-independent.
 fn signed_volume_of_shell(topo: &Topology, faces: &[FaceId]) -> f64 {
     let mut volume = 0.0;
 
@@ -467,13 +494,38 @@ fn signed_volume_of_shell(topo: &Topology, faces: &[FaceId]) -> f64 {
             continue;
         }
 
-        // Fan triangulation from first vertex
+        // Sign the contribution by the face's outward geometric normal rather
+        // than the wire winding. Use the wire's centroid as the projection
+        // point so curved-surface normals are evaluated near the face interior.
+        let centroid = {
+            let mut c = Vec3::new(0.0, 0.0, 0.0);
+            for v in &verts {
+                c = Vec3::new(c.x() + v.x(), c.y() + v.y(), c.z() + v.z());
+            }
+            let inv = 1.0 / verts.len() as f64;
+            Point3::new(c.x() * inv, c.y() * inv, c.z() * inv)
+        };
+        let wound_normal = newell_normal(&verts);
+        let sign = match face_normal_at(topo, fid, centroid) {
+            // Flip when the wire winds opposite the outward normal so the
+            // fan tets are consistent with the divergence-theorem convention.
+            Some(outward) if wound_normal.dot(outward) < 0.0 => -1.0,
+            Some(_) => 1.0,
+            // No geometric normal available (degenerate face): fall back to the
+            // legacy is_reversed sign.
+            None => {
+                if face.is_reversed() {
+                    -1.0
+                } else {
+                    1.0
+                }
+            }
+        };
         let v0 = verts[0];
-        let sign = if face.is_reversed() { -1.0 } else { 1.0 };
         for i in 1..verts.len() - 1 {
             let v1 = verts[i];
             let v2 = verts[i + 1];
-            // Signed volume of tetrahedron with origin
+            // Signed volume of tetrahedron with the origin as apex.
             volume += sign
                 * (v0.x() * (v1.y() * v2.z() - v2.y() * v1.z())
                     + v1.x() * (v2.y() * v0.z() - v0.y() * v2.z())

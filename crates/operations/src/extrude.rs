@@ -582,16 +582,27 @@ pub fn extrude(
     let n = input_verts.len();
 
     // Detect CW-wound outer wire (e.g. from brepjs polygon approximations).
-    // CW winding makes `edge_dir.cross(offset)` point inward instead of outward.
+    // CW winding makes `edge_dir.cross(offset)` point inward instead of outward;
+    // the side-face surface builder uses this to flip side normals.
     let outer_is_cw = crate::winding::is_cw_winding(&input_positions, &offset);
 
-    // If the outer wire is CW, the stored face normal opposes the actual outward
-    // direction. Negate it so cap normals are derived correctly.
-    if outer_is_cw
-        && let FaceSurface::Plane {
-            ref mut normal,
-            ref mut d,
-        } = input_surface
+    // Orient the cap-deriving normal by the extrusion direction, NOT the wire
+    // winding. The two caps are at the input plane F and the swept plane F+offset;
+    // the cap at F must face away from the sweep (−offset side) and the cap at
+    // F+offset must face along it, regardless of how the profile wire was wound.
+    // `bottom_surface`/`top_surface` below build the F-cap as −normal and the
+    // F+offset-cap as +normal, so set `normal` to −normal whenever the extrusion
+    // runs opposite the face normal (`normal·offset < 0`). This makes both cap
+    // normals point outward for any winding (a CW profile extruded down — common
+    // for brepjs dovetail tongues — previously got inside-out caps that broke the
+    // downstream fuse). The cap wires stay consistent with the chosen normals
+    // because the F-cap wire is the reversed profile and the F+offset-cap wire
+    // keeps the profile winding.
+    if let FaceSurface::Plane {
+        ref mut normal,
+        ref mut d,
+    } = input_surface
+        && normal.dot(offset) < 0.0
     {
         *normal = -*normal;
         *d = -*d;
