@@ -18,7 +18,9 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
 use super::classify_2d::{sample_interior_point, signed_area_2d};
-use super::pcurve_compute::evaluate_edge_at_t;
+use super::pcurve_compute::{
+    compute_pcurve_on_surface, evaluate_edge_at_t, project_point_on_surface,
+};
 use super::plane_frame::PlaneFrame;
 use super::split_types::{OrientedPCurveEdge, SectionEdge, SplitSubFace, SurfaceInfo};
 use super::wire_builder::{build_wire_loops, build_wire_loops_with_winding};
@@ -29,7 +31,10 @@ use conversion::{
     boundary_edges_to_pcurve, extract_plane_normal, is_point_on_boundary_uv,
     uv_endpoints_from_pcurve,
 };
-use edge_splitting::split_boundary_edges_at_3d_points;
+use edge_splitting::{
+    find_splits_on_circle, find_splits_on_ellipse, find_splits_on_line,
+    split_boundary_edges_at_3d_points,
+};
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic};
 use special_cases::{
     split_face_with_internal_loops, split_noseam_face_direct, split_periodic_face_into_bands,
@@ -59,6 +64,250 @@ fn seg_cross_param(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<f64
     // `t`/`u` are normalized [0,1] parameters, so these epsilons are already
     // scale-invariant fractions of each segment.
     (t > 1e-6 && t < 1.0 - 1e-6 && u > -1e-6 && u < 1.0 + 1e-6).then_some(t)
+}
+
+/// Split section edges at interior T-junctions with other sections.
+///
+/// `all_edges[section_start..]` holds the section edges as consecutive
+/// forward/reverse pairs (both carrying the same `source_edge_idx`). When one
+/// section's 3D endpoint lands strictly inside another section's span, the
+/// crossed section is split there so both meet at a shared vertex — without
+/// this the dangling end is pruned as a pendant and the face never splits at
+/// that junction. Boundary edges (`..section_start`) are left untouched.
+///
+/// This covers the analytic (cylinder/cone) faces that
+/// `try_split_crossing_plane_face` (plane-only) does not reach — e.g. a
+/// rounded notch corner whose perpendicular-cut arc meets the axis-parallel
+/// wall-top line on a corner cylinder. Each split piece gets a fresh unique
+/// `source_edge_idx` (forward/reverse of a piece share it) so
+/// `build_topology_face` still shares one topology edge per piece.
+fn split_sections_at_t_junctions(
+    all_edges: &mut Vec<OrientedPCurveEdge>,
+    section_start: usize,
+    surface: &FaceSurface,
+    frame: Option<&PlaneFrame>,
+    wire_pts: &[Point3],
+    tol: f64,
+) {
+    // Every distinct section endpoint (3D) is a candidate split point.
+    let mut endpoints: Vec<Point3> = Vec::new();
+    for e in &all_edges[section_start..] {
+        for p in [e.start_3d, e.end_3d] {
+            if !endpoints.iter().any(|q| (*q - p).length() < tol) {
+                endpoints.push(p);
+            }
+        }
+    }
+
+    let boundary: Vec<OrientedPCurveEdge> = all_edges[..section_start].to_vec();
+    let sections: Vec<OrientedPCurveEdge> = all_edges[section_start..].to_vec();
+
+    // A unique source id per geometric piece, kept stable across the
+    // forward/reverse pair so the topology builder shares one edge per piece.
+    // Start above every existing source id (sections already use ids ≥
+    // section_start) so a fresh piece never collides with an unsplit edge.
+    let mut next_src = all_edges
+        .iter()
+        .filter_map(|e| e.source_edge_idx)
+        .max()
+        .map_or(section_start, |m| m + 1);
+    let mut piece_src: std::collections::HashMap<(i64, i64, i64, i64, i64, i64), usize> =
+        std::collections::HashMap::new();
+    let key = |a: Point3, b: Point3| -> (i64, i64, i64, i64, i64, i64) {
+        let q = |x: f64| (x / tol).round() as i64;
+        let ka = (q(a.x()), q(a.y()), q(a.z()));
+        let kb = (q(b.x()), q(b.y()), q(b.z()));
+        // Order-independent so forward and reverse halves map to one id.
+        if ka <= kb {
+            (ka.0, ka.1, ka.2, kb.0, kb.1, kb.2)
+        } else {
+            (kb.0, kb.1, kb.2, ka.0, ka.1, ka.2)
+        }
+    };
+
+    let mut new_sections: Vec<OrientedPCurveEdge> = Vec::with_capacity(sections.len());
+    for edge in sections {
+        // `find_splits_on_*` already exclude the edge's own endpoints.
+        let splits = match &edge.curve_3d {
+            EdgeCurve::Circle(circle) => find_splits_on_circle(circle, &edge, &endpoints, tol),
+            EdgeCurve::Ellipse(ellipse) => find_splits_on_ellipse(ellipse, &edge, &endpoints, tol),
+            _ => find_splits_on_line(&edge, &endpoints, tol),
+        };
+        if splits.is_empty() {
+            // Keep the original source id so an unsplit pair stays paired.
+            new_sections.push(edge);
+            continue;
+        }
+
+        // The face's section edges already carry UV unwrapped into the face's
+        // continuous parameter window (the partial-band u-unwrap runs earlier),
+        // but a fresh surface projection of a split point returns the raw
+        // parameter (e.g. u in [0, 2pi)). Snap it to the period nearest the
+        // running anchor so the split vertex stays in the same window.
+        let (u_period, v_period) = super::pcurve_compute::surface_periods(surface);
+        let project = |p: Point3, near: Point2| -> Point2 {
+            let raw = if let Some(f) = frame {
+                f.project(p)
+            } else {
+                project_point_on_surface(p, surface, wire_pts, None)
+            };
+            if frame.is_some() {
+                return raw;
+            }
+            let snap = |val: f64, anchor: f64, period: Option<f64>| -> f64 {
+                match period {
+                    Some(p) if p > 1e-12 => val + ((anchor - val) / p).round() * p,
+                    _ => val,
+                }
+            };
+            Point2::new(
+                snap(raw.x(), near.x(), u_period),
+                snap(raw.y(), near.y(), v_period),
+            )
+        };
+
+        let mut prev_3d = edge.start_3d;
+        let mut prev_uv = edge.start_uv;
+        let mut push_piece = |s3: Point3, e3: Point3, s_uv: Point2, e_uv: Point2| {
+            let src = *piece_src.entry(key(s3, e3)).or_insert_with(|| {
+                let v = next_src;
+                next_src += 1;
+                v
+            });
+            let pcurve =
+                compute_pcurve_on_surface(&edge.curve_3d, s3, e3, surface, wire_pts, frame);
+            new_sections.push(OrientedPCurveEdge {
+                curve_3d: edge.curve_3d.clone(),
+                pcurve,
+                start_uv: s_uv,
+                end_uv: e_uv,
+                start_3d: s3,
+                end_3d: e3,
+                forward: edge.forward,
+                source_edge_idx: Some(src),
+                // A split piece is a sub-segment of the original section, so
+                // it must not inherit the parent's pave_block_id — vertex
+                // resolution would snap both halves to the PaveBlock's
+                // (un-split) endpoints. Resolve by position instead;
+                // cross-face sharing is recovered by merge_duplicate_edges.
+                pave_block_id: None,
+            });
+        };
+        for &(t, _) in &splits {
+            let s3 = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+            let s_uv = project(s3, prev_uv);
+            push_piece(prev_3d, s3, prev_uv, s_uv);
+            prev_3d = s3;
+            prev_uv = s_uv;
+        }
+        push_piece(prev_3d, edge.end_3d, prev_uv, edge.end_uv);
+    }
+
+    all_edges.truncate(0);
+    all_edges.extend(boundary);
+    all_edges.extend(new_sections);
+}
+
+/// Split a plane face's boundary arc/line edges at 3D points that land on their
+/// interior. Used to attach a section whose endpoint lands mid-arc on a convex
+/// rounded corner (the notch-straddle case).
+///
+/// Unlike [`split_boundary_edges_at_3d_points`], the arc split parameter is
+/// computed with the SHORTER-arc convention that `evaluate_edge_at_t` uses, so
+/// a corner arc traversed clockwise in its circle frame (as plane-face boundary
+/// arcs are) is split at the geometrically-correct location rather than being
+/// missed because the `domain_with_endpoints` CCW span excludes it.
+fn split_plane_boundary_arcs_at_points(
+    edges: Vec<OrientedPCurveEdge>,
+    split_pts_3d: &[Point3],
+    surface: &FaceSurface,
+    frame: &PlaneFrame,
+    tol: f64,
+) -> Vec<OrientedPCurveEdge> {
+    // Shorter-arc parameter t in (0,1) of `p` on the arc edge from `start` to
+    // `end`, or None if `p` is not on the arc interior.
+    let arc_param = |curve: &EdgeCurve, start: Point3, end: Point3, p: Point3| -> Option<f64> {
+        let (circle_proj, on_curve): (f64, Point3) = match curve {
+            EdgeCurve::Circle(c) => (c.project(p), c.evaluate(c.project(p))),
+            EdgeCurve::Ellipse(e) => (e.project(p), e.evaluate(e.project(p))),
+            _ => return None,
+        };
+        if (p - on_curve).length() > tol {
+            return None;
+        }
+        let (a0, a_end) = match curve {
+            EdgeCurve::Circle(c) => (c.project(start), c.project(end)),
+            EdgeCurve::Ellipse(e) => (e.project(start), e.project(end)),
+            _ => return None,
+        };
+        let span = super::pcurve_compute::shorter_arc_delta(a_end - a0);
+        if span.abs() < 1e-12 {
+            return None;
+        }
+        let d = super::pcurve_compute::shorter_arc_delta(circle_proj - a0);
+        let t = d / span;
+        (t > tol && t < 1.0 - tol).then_some(t)
+    };
+
+    let mut result = Vec::with_capacity(edges.len());
+    for edge in edges {
+        let mut splits: Vec<f64> = match &edge.curve_3d {
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => split_pts_3d
+                .iter()
+                .filter_map(|&p| arc_param(&edge.curve_3d, edge.start_3d, edge.end_3d, p))
+                .collect(),
+            EdgeCurve::Line => {
+                let dir = edge.end_3d - edge.start_3d;
+                let len_sq = dir.dot(dir);
+                if len_sq < tol * tol {
+                    Vec::new()
+                } else {
+                    split_pts_3d
+                        .iter()
+                        .filter_map(|&p| {
+                            let t = (p - edge.start_3d).dot(dir) / len_sq;
+                            let closest = edge.start_3d + dir * t;
+                            ((p - closest).length() < tol && t > tol && t < 1.0 - tol).then_some(t)
+                        })
+                        .collect()
+                }
+            }
+            EdgeCurve::NurbsCurve(_) => Vec::new(),
+        };
+        splits.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        splits.dedup_by(|a, b| (*a - *b).abs() < tol);
+        if splits.is_empty() {
+            result.push(edge);
+            continue;
+        }
+
+        let mut prev_3d = edge.start_3d;
+        let mut prev_uv = edge.start_uv;
+        let mut push_piece = |s3: Point3, e3: Point3, s_uv: Point2, e_uv: Point2| {
+            let pcurve =
+                compute_pcurve_on_surface(&edge.curve_3d, s3, e3, surface, &[], Some(frame));
+            result.push(OrientedPCurveEdge {
+                curve_3d: edge.curve_3d.clone(),
+                pcurve,
+                start_uv: s_uv,
+                end_uv: e_uv,
+                start_3d: s3,
+                end_3d: e3,
+                forward: edge.forward,
+                source_edge_idx: None,
+                pave_block_id: None,
+            });
+        };
+        for &t in &splits {
+            let s3 = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+            let s_uv = frame.project(s3);
+            push_piece(prev_3d, s3, prev_uv, s_uv);
+            prev_3d = s3;
+            prev_uv = s_uv;
+        }
+        push_piece(prev_3d, edge.end_3d, prev_uv, edge.end_uv);
+    }
+    result
 }
 
 /// Weave hole boundaries into the section arrangement of a planar face.
@@ -760,6 +1009,59 @@ pub fn split_face_2d(
         }
     }
 
+    // Split section edges where another section's endpoint lands on their
+    // interior (L/T junctions). Needs ≥ 2 distinct sections (one pair to cross
+    // another); runs after the partial-band u-unwrap so split UVs match the
+    // face's continuous window.
+    if all_edges.len() > n_boundary_edges + 2 {
+        split_sections_at_t_junctions(
+            &mut all_edges,
+            n_boundary_edges,
+            &surface,
+            if is_plane { Some(frame) } else { None },
+            &wire_pts,
+            tol.linear,
+        );
+    }
+
+    // Split BOUNDARY arc edges where a section endpoint lands strictly on their
+    // interior. A section clipped out to a convex rounded corner's TRUE arc (a
+    // notch corner straddling a wall's top edge) ends MID-ARC on the boundary;
+    // without splitting the arc there, the wire builder can't route through the
+    // junction and the section is pruned as a pendant. Plane faces only: their
+    // frame projection is periodicity-free, so the split UV is unambiguous (the
+    // periodic-cylinder boundary is handled by the section-side T-junction split
+    // above).
+    let mut n_boundary_edges = n_boundary_edges;
+    if is_plane && all_edges.len() > n_boundary_edges {
+        let mut section_endpoints: Vec<Point3> = Vec::new();
+        for e in &all_edges[n_boundary_edges..] {
+            for p in [e.start_3d, e.end_3d] {
+                if !section_endpoints
+                    .iter()
+                    .any(|q| (*q - p).length() < tol.linear)
+                {
+                    section_endpoints.push(p);
+                }
+            }
+        }
+        let boundary: Vec<OrientedPCurveEdge> = all_edges[..n_boundary_edges].to_vec();
+        let split_boundary = split_plane_boundary_arcs_at_points(
+            boundary,
+            &section_endpoints,
+            &surface,
+            frame,
+            tol.linear,
+        );
+        if split_boundary.len() != n_boundary_edges {
+            let sections_tail: Vec<OrientedPCurveEdge> = all_edges[n_boundary_edges..].to_vec();
+            n_boundary_edges = split_boundary.len();
+            all_edges.clear();
+            all_edges.extend(split_boundary);
+            all_edges.extend(sections_tail);
+        }
+    }
+
     // Drop pendant section edges that dangle into the face interior — left
     // in, the traversal walks out and back along them, spuriously
     // over-splitting the face (boundary edges are never removed, so the
@@ -896,6 +1198,48 @@ pub fn split_face_2d(
         let pts: Vec<Point2> = holes[0].iter().map(|e| e.start_uv).collect();
         let area = signed_area_2d(&pts);
         outers.push((holes.remove(0), area));
+    }
+
+    // A negative-area loop is only a true hole if it is geometrically NESTED
+    // inside an outer loop. When a plane face is split by a single section line
+    // into two side-by-side regions, the wire builder can hand back the second
+    // region wound CW (negative area) even though it is ADJACENT, not nested
+    // (e.g. the above-vs-below halves of a notch-straddle tool face split at the
+    // wall-top line). Detect that by probing a point strictly inside the
+    // candidate hole: if it lies in no outer's interior, the loop is a separate
+    // region — reverse it to CCW and promote it to an outer. A genuinely nested
+    // hole's probe lies inside its containing outer, so it is left alone.
+    if !use_structural_classification && !outers.is_empty() && !holes.is_empty() {
+        let outer_uv: Vec<Vec<Point2>> =
+            outers.iter().map(|(w, _)| sample_wire_loop_uv(w)).collect();
+        let mut promoted: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
+        holes.retain(|hole| {
+            let hole_pts = sample_wire_loop_uv(hole);
+            if hole_pts.len() < 3 {
+                return true;
+            }
+            let probe = super::classify_2d::sample_interior_point(&hole_pts);
+            let nested = outer_uv
+                .iter()
+                .any(|o| super::classify_2d::point_in_polygon_2d(probe, o));
+            if nested {
+                true
+            } else {
+                promoted.push(hole.clone());
+                false
+            }
+        });
+        for mut region in promoted {
+            region.reverse();
+            for edge in &mut region {
+                std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
+                std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
+                edge.forward = !edge.forward;
+            }
+            let pts: Vec<Point2> = sample_wire_loop_uv(&region);
+            let area = signed_area_2d(&pts).abs();
+            outers.push((region, area));
+        }
     }
 
     let mut sub_faces = Vec::new();
