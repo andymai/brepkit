@@ -4673,3 +4673,85 @@ fn baseplate_two_tongues_far_apart_resplit_is_watertight() {
     brepkit_topology::validation::validate_shell_closed(sh_b, &topo)
         .expect("tongue B fused into the A-split wall must stay watertight");
 }
+
+/// Count edges shared by exactly one face (free) and by more than two faces
+/// (over-shared), keyed by quantized endpoint pair — distinct sub-faces make
+/// their own `EdgeId`s, so an `EdgeId` count would miss the real sharing.
+fn quantized_edge_use(topo: &Topology, solid: SolidId) -> (usize, usize) {
+    use std::collections::HashMap;
+    type EdgeKey = (i64, i64, i64, i64, i64, i64);
+    let q = |x: f64| (x / 1e-5).round() as i64;
+    let key = |p: Point3| [q(p.x()), q(p.y()), q(p.z())];
+    let mut counts: HashMap<EdgeKey, usize> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                let a = key(topo.vertex(edge.start()).unwrap().point());
+                let b = key(topo.vertex(edge.end()).unwrap().point());
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                *counts
+                    .entry((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+    let free = counts.values().filter(|&&c| c == 1).count();
+    let over = counts.values().filter(|&&c| c > 2).count();
+    (free, over)
+}
+
+/// Regression for the gridfinity "wall cutout" (a U-notch opening at the wall
+/// top, with rounded corners whose radius exceeds the overshoot so the top
+/// corners STRADDLE the wall-top edge). The straddle triggered a cascade of
+/// analytic-trimming bugs that left the cut non-manifold, so the operations
+/// boolean fell back to a mesh result. The GFA cut must now be a watertight,
+/// genus-0, fully-analytic solid (every corner cylinder preserved).
+#[test]
+fn cut_wall_notch_straddling_top_edge_is_watertight() {
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::FRAC_PI_2;
+    let mut topo = Topology::new();
+    // Solid wall body: rounded-rect arc prism 21x21 r=3.75 z=0..30.
+    let body = make_rounded_rect_arc_prism(&mut topo, 21.0, 21.0, 3.75, 0.0, 30.0);
+    // Tool: a U-notch opening at the top. Built in XY (hw=14, hd=13, r=3,
+    // extrude 6), rotated -90 about X and translated to (0,17,18) so it
+    // straddles the +Y wall at y=21: tool y in [17,23], top corners z in
+    // [25,31] crossing the wall top z=30.
+    let tool = make_rounded_rect_arc_prism(&mut topo, 14.0, 13.0, 3.0, 0.0, 6.0);
+    crate::transform::transform_solid(&mut topo, tool, &Mat4::rotation_x(-FRAC_PI_2)).unwrap();
+    crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(0.0, 17.0, 18.0))
+        .unwrap();
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, body, tool)
+            .unwrap();
+
+    let (free, over) = quantized_edge_use(&topo, result);
+    assert_eq!(free, 0, "wall-cutout notch cut must have no free edges");
+    assert_eq!(
+        over, 0,
+        "wall-cutout notch cut must have no over-shared edges"
+    );
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, result).unwrap();
+    assert_eq!(
+        v as i64 - e as i64 + f as i64,
+        2,
+        "wall-cutout notch cut must be genus-0 (V-E+F=2)"
+    );
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "wall-cutout notch cut must be closed-manifold"
+    );
+    assert!(
+        !has_free_edges(&topo, result).unwrap(),
+        "wall-cutout notch cut must have no free edges"
+    );
+    assert_eq!(
+        count_cylinder_faces(&topo, result),
+        8,
+        "wall-cutout must stay analytic (4 body + 4 tool corner cylinders)"
+    );
+}
