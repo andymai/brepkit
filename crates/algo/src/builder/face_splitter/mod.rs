@@ -839,7 +839,51 @@ pub fn split_face_2d(
     // instead of signed area. Band loops (containing seam + section edges)
     // are outer wires. Circle-only self-loops are holes. Signed area on
     // periodic surfaces is unreliable because UV wraps around the period.
-    let use_structural_classification = u_periodic && !sections.is_empty();
+    //
+    // A PARTIAL analytic band (a non-periodic cylinder/cone quarter, e.g. a
+    // rounded-rect corner) split boundary-to-boundary by a section CHAIN
+    // produces two complementary bands that wind OPPOSITELY in UV (they share
+    // the chain with flipped orientation), so the signed-area rule calls the
+    // reversed one a hole and nests it inside the other. Both are genuine
+    // sub-faces. The opposite-winding signature distinguishes this from a
+    // genuinely nested band/hole (which winds the SAME way as its container,
+    // e.g. a single plane×corner-cylinder lip section whose two seam-bounded
+    // loops are both positive): only when two seam-carrying loops have
+    // OPPOSITE-sign effective areas is the negative one a flipped band rather
+    // than a hole. (An arc-only interior loop — no seam Line — is always a
+    // hole.) For periodic bands the existing seam-based structural rule still
+    // applies unconditionally.
+    let loop_eff_area = |wl: &[OrientedPCurveEdge]| -> f64 {
+        let pts = sample_wire_loop_uv_periodic(wl, u_per_opt, v_per_opt);
+        let raw = signed_area_2d(&pts);
+        if cw_loops { -raw } else { raw }
+    };
+    let has_seam_and_arc = |wl: &[OrientedPCurveEdge]| -> bool {
+        wl.iter().any(|e| matches!(e.curve_3d, EdgeCurve::Line))
+            && wl.iter().any(|e| !matches!(e.curve_3d, EdgeCurve::Line))
+    };
+    let partial_band_chain_split = !is_plane
+        && !u_periodic
+        && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+        && !sections.is_empty()
+        && {
+            // Require a positive AND a negative seam+arc loop (the flipped pair).
+            let mut has_pos = false;
+            let mut has_neg = false;
+            for wl in &loops {
+                if has_seam_and_arc(wl) {
+                    let a = loop_eff_area(wl);
+                    if a > 0.0 {
+                        has_pos = true;
+                    } else if a < 0.0 {
+                        has_neg = true;
+                    }
+                }
+            }
+            has_pos && has_neg
+        };
+    let use_structural_classification =
+        (u_periodic || partial_band_chain_split) && !sections.is_empty();
 
     for wire_loop in loops {
         if use_structural_classification {
@@ -1035,7 +1079,33 @@ pub fn split_face_2d(
 /// not inside any inner wire (hole), then evaluate it to 3D via the surface.
 #[allow(clippy::too_many_lines)]
 pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) -> Point3 {
-    let pts_2d = sample_wire_loop_uv(&sub_face.outer_wire);
+    // For a lateral analytic band (cylinder/cone), the section edges' pcurves
+    // can evaluate to a different 2pi window than the boundary edges' stored
+    // (already-unwrapped) UV — e.g. a rounded-rect corner band split by a
+    // faceted ramp, whose staircase arc pcurves land near u=pi while the seam
+    // Lines sit near u=3pi. The two windows differ by 2pi, so the assembled UV
+    // polygon self-crosses and `point_in_polygon_2d` mislabels the interior
+    // sample (it ends up on the wrong side of the section). Unwrapping the
+    // sampled points to one continuous u-window first makes the polygon simple
+    // again so the centroid/edge-walk interior point is geometrically valid.
+    // For a lateral analytic band (cylinder/cone), the section edges' pcurves
+    // can evaluate to a different 2pi window than the boundary edges' stored
+    // (already-unwrapped) UV — e.g. a rounded-rect corner band split by a
+    // faceted ramp, whose staircase arc pcurves land near u=pi while the seam
+    // Lines sit near u=3pi. The two windows differ by 2pi, so the assembled UV
+    // polygon self-crosses and `point_in_polygon_2d` mislabels the interior
+    // sample (it ends up on the wrong side of the section). Unwrapping the
+    // sampled points to one continuous u-window first makes the polygon simple
+    // again so the centroid/edge-walk interior point is geometrically valid.
+    let pts_2d = if matches!(
+        &sub_face.surface,
+        FaceSurface::Cone(_) | FaceSurface::Cylinder(_)
+    ) {
+        let (u_period, v_period) = super::pcurve_compute::surface_periods(&sub_face.surface);
+        sample_wire_loop_uv_periodic(&sub_face.outer_wire, u_period, v_period)
+    } else {
+        sample_wire_loop_uv(&sub_face.outer_wire)
+    };
     let mut interior_uv = sample_interior_point(&pts_2d);
 
     // Periodic lateral walls (cone/cylinder): the closed boundary circles

@@ -79,6 +79,17 @@ pub fn perform(
         .map(|(&fid, surf)| face_v_range(topo, fid, surf))
         .collect();
 
+    // Registry of endpoint vertices created for the EXACT faceted-ramp arcs
+    // (see `trim_ellipse_to_boundary_crossings`). Adjacent treads share a
+    // boundary line, so their arcs end at a bit-identical crossing point;
+    // snapping the second arc's endpoint to the first's vertex chains the arcs
+    // into one continuous split curve. Keyed by a fine quantization so only
+    // genuinely-coincident crossings (well under the linear tolerance) merge.
+    let mut exact_arc_vertices: std::collections::HashMap<
+        (i64, i64, i64),
+        brepkit_topology::vertex::VertexId,
+    > = std::collections::HashMap::new();
+
     for (idx_a, &fa) in faces_a.iter().enumerate() {
         let bbox_a = &bboxes_a[idx_a];
         let surf_a = &surfs_a[idx_a];
@@ -156,6 +167,34 @@ pub fn perform(
                 raw_curves
             };
 
+            // Exact faceted-ramp × cylinder/cone arc assembly. A thin planar
+            // tread meeting a corner cylinder yields a closed ellipse whose
+            // in-both arc is a sub-millimetre sliver: the 16-sample AABB
+            // pre-filter below and the uniform-t restriction both drop it (no
+            // sample lands in the band), so the cylinder never splits. When the
+            // pair is {planar tread} × {cylinder/cone}, instead trim the
+            // ellipse to the EXACT crossings of the tread's boundary lines with
+            // the surface — shared between adjacent treads, so the arcs chain.
+            // These exact arcs bypass the generic filters below.
+            let (exact_arcs, raw_curves): (Vec<RawCurve>, Vec<RawCurve>) = {
+                let ext_a = FaceExtent::new(topo, fa, surf_a, v_range_a, tol);
+                let ext_b = FaceExtent::new(topo, fb, surf_b, v_range_b, tol);
+                let mut exact = Vec::new();
+                let mut rest = Vec::new();
+                for raw in raw_curves {
+                    if let (Some(ea), Some(eb)) = (&ext_a, &ext_b)
+                        && let Some(arcs) = trim_ellipse_to_boundary_crossings(
+                            topo, fa, fb, surf_a, surf_b, &raw, ea, eb,
+                        )
+                    {
+                        exact.extend(arcs);
+                    } else {
+                        rest.push(raw);
+                    }
+                }
+                (exact, rest)
+            };
+
             // Raw curves come from UNTRIMMED surface-surface intersection, so
             // a curve can lie entirely beyond both faces' trimmed extents
             // (e.g. tangency curvelets where a cone grazes a narrower
@@ -195,6 +234,14 @@ pub fn perform(
             let raw_curves = restrict_curves_to_faces(
                 topo, fa, fb, surf_a, surf_b, v_range_a, v_range_b, raw_curves, tol,
             );
+
+            // Emit the EXACT faceted-ramp arcs with registry-aware endpoint
+            // resolution: each arc's endpoints are bit-identical to the shared
+            // boundary-line crossing of the adjacent tread's arc, so consult
+            // the registry (and pre-existing paves/boundary vertices) and snap.
+            for raw in &exact_arcs {
+                emit_exact_arc(topo, arena, fa, fb, raw, tol, &mut exact_arc_vertices);
+            }
 
             for raw in raw_curves {
                 let mut raw = raw;
@@ -319,6 +366,81 @@ pub fn perform(
     Ok(())
 }
 
+/// Quantize a point to a fine grid for the exact-arc vertex registry. The
+/// step (1e-9) is far below the linear tolerance, so only crossings that are
+/// numerically the same point (the same boundary-line × surface root computed
+/// from the same edge) collapse to one key.
+fn exact_arc_key(p: Point3) -> (i64, i64, i64) {
+    let s = 1.0e9;
+    #[allow(clippy::cast_possible_truncation)]
+    (
+        (p.x() * s).round() as i64,
+        (p.y() * s).round() as i64,
+        (p.z() * s).round() as i64,
+    )
+}
+
+/// Emit one EXACT faceted-ramp arc as an `IntersectionCurveDS` + edge + pave
+/// block. Endpoints resolve through the shared-crossing registry first so the
+/// adjacent tread's arc, which ends at the same boundary-line crossing, reuses
+/// the same vertex and the arcs chain into a continuous split curve.
+fn emit_exact_arc(
+    topo: &mut Topology,
+    arena: &mut GfaArena,
+    fa: FaceId,
+    fb: FaceId,
+    raw: &RawCurve,
+    tol: Tolerance,
+    registry: &mut std::collections::HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+) {
+    let resolve = |topo: &mut Topology,
+                   arena: &GfaArena,
+                   registry: &mut std::collections::HashMap<
+        (i64, i64, i64),
+        brepkit_topology::vertex::VertexId,
+    >,
+                   p: Point3|
+     -> brepkit_topology::vertex::VertexId {
+        let key = exact_arc_key(p);
+        if let Some(&vid) = registry.get(&key) {
+            return vid;
+        }
+        let vid = super::helpers::find_nearby_pave_vertex(topo, arena, p, tol)
+            .or_else(|| find_nearby_face_vertex(topo, fa, p, tol))
+            .or_else(|| find_nearby_face_vertex(topo, fb, p, tol))
+            .unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear)));
+        registry.insert(key, vid);
+        vid
+    };
+
+    let start_vid = resolve(topo, arena, registry, raw.p_start);
+    let end_vid = resolve(topo, arena, registry, raw.p_end);
+
+    let edge = Edge::new(start_vid, end_vid, raw.curve.clone());
+    let edge_id = topo.add_edge(edge);
+
+    let start_pave = Pave::new(start_vid, raw.t_range.0);
+    let end_pave = Pave::new(end_vid, raw.t_range.1);
+    let pb = PaveBlock::new(edge_id, start_pave, end_pave);
+    let pb_id = arena.pave_blocks.alloc(pb);
+
+    let curve_index = arena.curves.len();
+    arena.curves.push(IntersectionCurveDS {
+        curve: raw.curve.clone(),
+        face_a: fa,
+        face_b: fb,
+        bbox: raw.bbox,
+        pave_blocks: vec![pb_id],
+        t_range: raw.t_range,
+    });
+
+    arena.interference.ff.push(Interference::FF {
+        f1: fa,
+        f2: fb,
+        curve_index,
+    });
+}
+
 /// A face's trimmed extent, used to test whether a 3D point lies inside the
 /// face (so surface-surface intersection curves can be restricted to the
 /// region inside both faces — the reference's "true boundary" restriction).
@@ -332,12 +454,16 @@ enum FaceExtent {
         margin: f64,
     },
     /// Analytic lateral face (cylinder/cone/sphere/torus): bound by the
-    /// axial `v` parameter range of the face.
+    /// axial `v` parameter range of the face and, for a partial-arc patch
+    /// (e.g. a rounded-rect corner quarter-cylinder), the excluded angular
+    /// `u` gap so a point on the off-patch side of the full revolution is
+    /// rejected.
     Analytic {
         surface: FaceSurface,
         v0: f64,
         v1: f64,
         margin: f64,
+        u_gap: Option<(f64, f64)>,
     },
 }
 
@@ -400,26 +526,40 @@ impl FaceExtent {
                 .filter(|h| h.len() >= 3)
                 .collect();
             // Margin keeps boundary-coincident points (the shared cap) inside;
-            // scaled to the footprint so it stays small vs the stray extent.
+            // scaled to the SMALLER in-plane extent so a thin band (a scoop
+            // staircase tread is full-width but ~0.1 mm tall) keeps a tight
+            // margin instead of one scaled to the wide diagonal — a diagonal
+            // margin lets a section overshoot the thin band onto the cylinder
+            // seam, so the per-tread arcs never stop at the tread boundary.
             let bb = brepkit_math::aabb::Aabb3::from_points(
                 poly.iter()
                     .map(|p| brepkit_math::vec::Point3::new(p.x(), p.y(), 0.0)),
             );
-            let diag = (bb.max - bb.min).length();
+            let extent = bb.max - bb.min;
+            let smaller = extent.x().abs().min(extent.y().abs());
             Some(Self::Plane {
                 frame,
                 poly,
                 holes,
-                margin: (diag * 0.01).max(tol.linear),
+                margin: (smaller * 0.01).max(tol.linear),
             })
         } else {
             let (v0, v1) = v_range?;
             let margin = (v1 - v0).abs() * 0.01 + tol.linear;
+            // For a partial-arc lateral face (rounded-rect corner = a 90°
+            // quarter-cylinder), record the angular gap the face does NOT
+            // cover so `contains` rejects a point that projects onto the
+            // off-patch side of the full revolution. Without this, a
+            // near-tangent section curve "inside" the v-band but on the far
+            // half of the cylinder is wrongly kept, wrapping the trimmed arc
+            // onto the wrong side of the wedge.
+            let u_gap = face_circumferential_u_gap(topo, face_id, surface);
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
                 v1,
                 margin,
+                u_gap,
             })
         }
     }
@@ -450,11 +590,50 @@ impl FaceExtent {
                 v0,
                 v1,
                 margin,
-            } => surface
-                .project_point(p)
-                .is_none_or(|(_, v)| v >= *v0 - *margin && v <= *v1 + *margin),
+                u_gap,
+            } => surface.project_point(p).is_none_or(|(u, v)| {
+                let in_v = v >= *v0 - *margin && v <= *v1 + *margin;
+                let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
+                in_v && in_u
+            }),
         }
     }
+}
+
+/// Compute the excluded angular `u` gap of a cylinder/cone lateral face from
+/// its outer-wire boundary samples. Returns `None` for a full revolution (no
+/// gap) or non-cylindrical/conical surfaces.
+///
+/// `project_point` returns `(u, v)` where `u` is the circumferential angle,
+/// so the largest gap between sorted boundary `u`-samples is the arc the face
+/// does not cover (e.g. the 270° the rounded-rect corner quarter omits).
+fn face_circumferential_u_gap(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+) -> Option<(f64, f64)> {
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut u_samples = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        for i in 0..=16 {
+            #[allow(clippy::cast_precision_loss)]
+            let f = i as f64 / 16.0;
+            let t = t0 + (t1 - t0) * f;
+            let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
+            if let Some((u, _)) = surface.project_point(pt) {
+                u_samples.push(u);
+            }
+        }
+    }
+    crate::classifier::largest_u_gap(&u_samples)
 }
 
 /// Minimum distance from a 2D point to a closed polygon's edges.
@@ -576,6 +755,282 @@ fn restrict_curves_to_faces(
         out.push(raw);
     }
     out
+}
+
+/// Trim a closed `Ellipse` section (the intersection of a thin planar tread
+/// with a cylinder/cone lateral face) to its in-both arc(s) using the EXACT
+/// points where the planar face's straight boundary edges cross the analytic
+/// surface, rather than uniform-t sampling.
+///
+/// Returns `Some(arcs)` only when the pair is exactly {planar face with
+/// straight boundary edges} × {cylinder or cone}, the curve is a closed
+/// ellipse, and at least one in-both arc with a real angular span is found.
+/// Returns `None` for any other configuration so the caller falls back to the
+/// uniform-t restriction. The exact crossings are SHARED between treads that
+/// share a boundary line, so consecutive arcs chain through one vertex (the
+/// downstream `find_nearby_pave_vertex` snaps them at `tol.linear`).
+#[allow(clippy::too_many_arguments)]
+fn trim_ellipse_to_boundary_crossings(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    surf_a: &FaceSurface,
+    surf_b: &FaceSurface,
+    raw: &RawCurve,
+    ext_a: &FaceExtent,
+    ext_b: &FaceExtent,
+) -> Option<Vec<RawCurve>> {
+    use brepkit_math::curves::Ellipse3D;
+
+    let EdgeCurve::Ellipse(ellipse) = &raw.curve else {
+        return None;
+    };
+    // Must be a closed full ellipse (the raw plane×analytic section).
+    if (raw.p_start - raw.p_end).length() > 1e-7 {
+        return None;
+    }
+
+    // Identify the planar face and the analytic (cylinder/cone) face.
+    let (plane_face, plane_surf, analytic_face, analytic_surf) = match (surf_a, surf_b) {
+        (FaceSurface::Plane { .. }, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) => {
+            (fa, surf_a, fb, surf_b)
+        }
+        (FaceSurface::Cylinder(_) | FaceSurface::Cone(_), FaceSurface::Plane { .. }) => {
+            (fb, surf_b, fa, surf_a)
+        }
+        _ => return None,
+    };
+    let FaceSurface::Plane {
+        normal: plane_n,
+        d: plane_d,
+    } = plane_surf
+    else {
+        return None;
+    };
+
+    // Collect exact crossings of the planar face's straight boundary edges
+    // with the analytic surface. Each crossing is a point lying on BOTH the
+    // plane (it is a plane-boundary edge) and the analytic surface, hence on
+    // the section ellipse.
+    let face = topo.face(plane_face).ok()?;
+    let mut crossings: Vec<Point3> = Vec::new();
+    let push_crossing = |p: Point3, crossings: &mut Vec<Point3>| {
+        // Keep only points actually on the section ellipse (rejects a cone's
+        // far-nappe root or a seam-line crossing that misses the ellipse).
+        let foot = Ellipse3D::evaluate(ellipse, ellipse.project(p));
+        if (foot - p).length() > 1e-6 {
+            return;
+        }
+        // Dedup tolerance: the SAME geometric crossing reached two ways (an
+        // exact seam-line × plane intersection, and the line-cylinder quadratic
+        // root for a tread boundary that meets the seam) can disagree by a
+        // little over 1e-6 at these coordinates. A tighter threshold leaves
+        // both, spawning a near-degenerate sliver arc whose drifted endpoint
+        // then fails the downstream 1e-7 boundary split and dangles. Treads
+        // are ~1e-4 apart, so 1e-5 collapses the duplicate without merging
+        // genuinely-distinct crossings. Seam crossings are pushed first, so the
+        // exact-on-seam point is the one kept.
+        if !crossings.iter().any(|q| (*q - p).length() < 1e-5) {
+            crossings.push(p);
+        }
+    };
+    // Split at the analytic FACE's seam boundary FIRST: where the ellipse
+    // crosses a seam (the quarter-cylinder's straight u-boundary edge), the
+    // arc must terminate so it connects to that seam edge and the part beyond
+    // the seam (outside the partial face) is excluded. Each seam line lies in
+    // the cylinder surface at constant u; it crosses the tread plane at one
+    // point. Collected first so the EXACT-on-seam point wins the dedup over a
+    // tread-boundary crossing that coincides with the seam but carries ~1e-6
+    // of line-cylinder rounding (else the seam-boundary split, which uses the
+    // kernel's 1e-7 tolerance, misses it and the chain end dangles).
+    if let Ok(aface) = topo.face(analytic_face) {
+        for oe in topo.wire(aface.outer_wire()).ok()?.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                continue;
+            }
+            let Ok(sv) = topo.vertex(edge.start()) else {
+                continue;
+            };
+            let Ok(ev) = topo.vertex(edge.end()) else {
+                continue;
+            };
+            if let Some(p) = line_segment_plane_crossing(sv.point(), ev.point(), *plane_n, *plane_d)
+            {
+                push_crossing(p, &mut crossings);
+            }
+        }
+    }
+
+    for oe in topo.wire(face.outer_wire()).ok()?.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        if !matches!(edge.curve(), EdgeCurve::Line) {
+            // A non-straight boundary edge means this is not a faceted-ramp
+            // tread; bail to the generic path rather than guess.
+            return None;
+        }
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        for p in line_segment_surface_crossings(sp, ep, analytic_surf) {
+            push_crossing(p, &mut crossings);
+        }
+    }
+
+    // Need at least two crossings to bound an arc.
+    if crossings.len() < 2 {
+        return None;
+    }
+
+    // Map each crossing to its ellipse parameter, sort by angle.
+    let mut t_pts: Vec<(f64, Point3)> = crossings
+        .into_iter()
+        .map(|p| (ellipse.project(p).rem_euclid(std::f64::consts::TAU), p))
+        .collect();
+    t_pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Drop near-duplicate parameters (a crossing hit by two adjacent edges).
+    t_pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-9);
+    if t_pts.len() < 2 {
+        return None;
+    }
+
+    // Walk consecutive crossing pairs (including the wrap-around segment).
+    // Emit an arc for each interval whose midpoint lies inside BOTH faces.
+    let mut arcs = Vec::new();
+    let m = t_pts.len();
+    for i in 0..m {
+        let (t0, p0) = t_pts[i];
+        let next = (i + 1) % m;
+        let (mut t1, p1) = t_pts[next];
+        if t1 <= t0 {
+            t1 += std::f64::consts::TAU;
+        }
+        let t_mid = 0.5 * (t0 + t1);
+        let mid = Ellipse3D::evaluate(ellipse, t_mid);
+        if !(ext_a.contains(mid) && ext_b.contains(mid)) {
+            continue;
+        }
+        // Skip a degenerate sliver (the two crossings coincide angularly).
+        if (t1 - t0) < 1e-6 {
+            continue;
+        }
+        arcs.push(RawCurve {
+            curve: EdgeCurve::Ellipse(ellipse.clone()),
+            bbox: raw.bbox,
+            t_range: (t0, t1),
+            p_start: p0,
+            p_end: p1,
+        });
+    }
+
+    if arcs.is_empty() { None } else { Some(arcs) }
+}
+
+/// Crossing of a line SEGMENT `[sp, ep]` with the plane `normal·p = d`.
+/// Returns the point for the root parameter `s ∈ [0, 1]`, or `None` if the
+/// segment is parallel to the plane or crosses outside `[0, 1]`.
+fn line_segment_plane_crossing(sp: Point3, ep: Point3, normal: Vec3, d: f64) -> Option<Point3> {
+    let dir = ep - sp;
+    let denom = dir.dot(normal);
+    if denom.abs() < 1e-15 {
+        return None;
+    }
+    let sp_dot = sp.x() * normal.x() + sp.y() * normal.y() + sp.z() * normal.z();
+    let s = (d - sp_dot) / denom;
+    if !(-1e-9..=1.0 + 1e-9).contains(&s) {
+        return None;
+    }
+    Some(sp + dir * s.clamp(0.0, 1.0))
+}
+
+/// Exact crossings of a line SEGMENT `[sp, ep]` with an analytic surface
+/// (cylinder or cone lateral). Returns the 3D crossing points whose parameter
+/// lies within the segment. Other surface types return an empty vec (the
+/// caller treats "no crossings" as "fall back to uniform-t").
+fn line_segment_surface_crossings(sp: Point3, ep: Point3, surface: &FaceSurface) -> Vec<Point3> {
+    match surface {
+        FaceSurface::Cylinder(cyl) => line_segment_cylinder_crossings(sp, ep, cyl),
+        FaceSurface::Cone(cone) => line_segment_cone_crossings(sp, ep, cone),
+        _ => Vec::new(),
+    }
+}
+
+/// Solve the quadratic for where the segment `[sp, ep]` crosses an infinite
+/// cylinder of `radius` about `axis` through `origin`. Returns crossing points
+/// for roots `s ∈ [0, 1]`.
+fn line_segment_cylinder_crossings(
+    sp: Point3,
+    ep: Point3,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+) -> Vec<Point3> {
+    let axis = cyl.axis();
+    let o = cyl.origin();
+    let r = cyl.radius();
+    let d = ep - sp;
+    let w = sp - o;
+    // Component of each vector perpendicular to the axis.
+    let perp = |v: Vec3| -> Vec3 { v - axis * axis.dot(v) };
+    let dp = perp(d);
+    let wp = perp(w);
+    let a = dp.dot(dp);
+    let b = 2.0 * wp.dot(dp);
+    let c = wp.dot(wp) - r * r;
+    solve_segment_quadratic(a, b, c, sp, d)
+}
+
+/// Crossings of the segment `[sp, ep]` with an infinite cone. With the
+/// surface convention `P = apex + v(radial·cos a + axis·sin a)`, a point at
+/// perpendicular radial distance `ρ` and axial distance `t = axis·(P-apex)`
+/// lies on the cone when `ρ = t·cot(a)`, i.e. `ρ²·tan²(a) = t²`. Solved as a
+/// quadratic in the segment parameter `s`.
+fn line_segment_cone_crossings(
+    sp: Point3,
+    ep: Point3,
+    cone: &brepkit_math::surfaces::ConicalSurface,
+) -> Vec<Point3> {
+    let apex = cone.apex();
+    let axis = cone.axis();
+    let tan_a = cone.half_angle().tan();
+    let k = tan_a * tan_a;
+    let d = ep - sp;
+    let w = sp - apex;
+    let perp = |v: Vec3| -> Vec3 { v - axis * axis.dot(v) };
+    let dp = perp(d);
+    let wp = perp(w);
+    let da = axis.dot(d);
+    let wa = axis.dot(w);
+    // k·|perp(w + s d)|^2 = (axis·(w + s d))^2
+    let a = k * dp.dot(dp) - da * da;
+    let b = 2.0 * (k * wp.dot(dp) - da * wa);
+    let c = k * wp.dot(wp) - wa * wa;
+    solve_segment_quadratic(a, b, c, sp, d)
+}
+
+/// Solve `a s^2 + b s + c = 0` for `s ∈ [0, 1]` and return the 3D points
+/// `sp + s·d`. Handles the near-linear (`a ≈ 0`) and no-real-root cases.
+fn solve_segment_quadratic(a: f64, b: f64, c: f64, sp: Point3, d: Vec3) -> Vec<Point3> {
+    let mut pts = Vec::new();
+    let mut push_s = |s: f64| {
+        if (-1e-9..=1.0 + 1e-9).contains(&s) {
+            let sc = s.clamp(0.0, 1.0);
+            pts.push(sp + d * sc);
+        }
+    };
+    if a.abs() < 1e-15 {
+        if b.abs() >= 1e-15 {
+            push_s(-c / b);
+        }
+        return pts;
+    }
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 {
+        return pts;
+    }
+    let sq = disc.sqrt();
+    push_s((-b - sq) / (2.0 * a));
+    push_s((-b + sq) / (2.0 * a));
+    pts
 }
 
 /// Longest contiguous run of `true` in `inb` (samples `0..=N`). For a closed
