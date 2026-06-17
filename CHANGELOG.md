@@ -6,6 +6,7 @@
 ### Performance
 
 * **operations:** memoize boolean post-processing traversals + cut-fragmentation root-cause report ([#885](https://github.com/andymai/brepkit/issues/885)) ([85d2b03](https://github.com/andymai/brepkit/commit/85d2b03842d50c03e594a5ad9f818bb93973f07e))
+* **tessellate:** skip curvature floor for constant-curvature circular faces ([#886](https://github.com/andymai/brepkit/issues/886)) ([c3fa8a7](https://github.com/andymai/brepkit/commit/c3fa8a73e0595996c4463f836e5cc34a9beda9e4))
 
 ## [2.113.6](https://github.com/andymai/brepkit/compare/v2.113.5...v2.113.6) (2026-06-17)
 
