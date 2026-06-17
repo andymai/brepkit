@@ -53,43 +53,93 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
         }
     }
 
-    // Find overlapping pairs: O(n²) but n is typically small (< 100 leaf PBs)
+    // Find overlapping pairs. A naive scan is O(n²) over leaf PaveBlocks,
+    // which explodes on solids with many edges (a shelled, lip-fused bin can
+    // reach thousands of leaf blocks). Two blocks can only overlap if BOTH
+    // endpoints coincide within tolerance, so we spatially hash each block by
+    // the quantized cell of its (unordered) endpoint pair and only compare
+    // blocks that share a candidate cell — collapsing the scan to ~O(n).
     let mut overlap_map: HashMap<PaveBlockId, Vec<PaveBlockId>> = HashMap::new();
     let n = leaf_data.len();
 
+    // Cell size large enough that two endpoints within `tol.linear` of each
+    // other never straddle the gap between non-adjacent cells once we probe
+    // the immediate neighborhood. Quantizing the midpoint gives one key per
+    // block; matching blocks have midpoints within `tol.linear`, so probing
+    // the 3×3×3 neighbor cells of a block's midpoint covers every true match.
+    let cell = (tol.linear * 4.0).max(f64::MIN_POSITIVE);
+    let key = |p: brepkit_math::vec::Point3| -> (i64, i64, i64) {
+        (
+            (p.x() / cell).floor() as i64,
+            (p.y() / cell).floor() as i64,
+            (p.z() / cell).floor() as i64,
+        )
+    };
+    let midpoint = |a: brepkit_math::vec::Point3, b: brepkit_math::vec::Point3| {
+        brepkit_math::vec::Point3::new(
+            f64::midpoint(a.x(), b.x()),
+            f64::midpoint(a.y(), b.y()),
+            f64::midpoint(a.z(), b.z()),
+        )
+    };
+
+    // Bucket each leaf block by its midpoint cell.
+    let mut buckets: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    for (i, (_, _, start, end)) in leaf_data.iter().enumerate() {
+        buckets
+            .entry(key(midpoint(*start, *end)))
+            .or_default()
+            .push(i);
+    }
+
+    // For each block, gather candidate partners from its own cell plus the
+    // 3×3×3 neighborhood (each block lives in exactly one bucket, so a pair is
+    // visited once via `j > i`), and run the exact same fwd/rev endpoint +
+    // curve-compatibility test as the naive scan.
     for i in 0..n {
-        let (pb_i, edge_i, start_i, end_i) = &leaf_data[i];
-        for j in (i + 1)..n {
-            let (pb_j, edge_j, start_j, end_j) = &leaf_data[j];
+        let (pb_i, edge_i, start_i, end_i) = leaf_data[i];
+        let mid_i = midpoint(start_i, end_i);
+        let (kx, ky, kz) = key(mid_i);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(cands) = buckets.get(&(kx + dx, ky + dy, kz + dz)) else {
+                        continue;
+                    };
+                    for &j in cands {
+                        if j <= i {
+                            continue;
+                        }
+                        let (pb_j, edge_j, start_j, end_j) = leaf_data[j];
 
-            if edge_i == edge_j {
-                continue;
+                        if edge_i == edge_j {
+                            continue;
+                        }
+                        if arena.pb_to_cb.contains_key(&pb_i)
+                            && arena.pb_to_cb.get(&pb_i) == arena.pb_to_cb.get(&pb_j)
+                        {
+                            continue;
+                        }
+
+                        let fwd_match = (start_i - start_j).length() < tol.linear
+                            && (end_i - end_j).length() < tol.linear;
+                        let rev_match = (start_i - end_j).length() < tol.linear
+                            && (end_i - start_j).length() < tol.linear;
+                        if !fwd_match && !rev_match {
+                            continue;
+                        }
+
+                        let curve_i = topo.edge(edge_i)?.curve();
+                        let curve_j = topo.edge(edge_j)?.curve();
+                        if !curves_compatible(curve_i, curve_j, tol) {
+                            continue;
+                        }
+
+                        overlap_map.entry(pb_i).or_default().push(pb_j);
+                        overlap_map.entry(pb_j).or_default().push(pb_i);
+                    }
+                }
             }
-
-            if arena.pb_to_cb.contains_key(pb_i)
-                && arena.pb_to_cb.get(pb_i) == arena.pb_to_cb.get(pb_j)
-            {
-                continue;
-            }
-
-            // Check endpoint match (either same-direction or reversed)
-            let fwd_match = (*start_i - *start_j).length() < tol.linear
-                && (*end_i - *end_j).length() < tol.linear;
-            let rev_match = (*start_i - *end_j).length() < tol.linear
-                && (*end_i - *start_j).length() < tol.linear;
-
-            if !fwd_match && !rev_match {
-                continue;
-            }
-
-            let curve_i = topo.edge(*edge_i)?.curve();
-            let curve_j = topo.edge(*edge_j)?.curve();
-            if !curves_compatible(curve_i, curve_j, tol) {
-                continue;
-            }
-
-            overlap_map.entry(*pb_i).or_default().push(*pb_j);
-            overlap_map.entry(*pb_j).or_default().push(*pb_i);
         }
     }
 

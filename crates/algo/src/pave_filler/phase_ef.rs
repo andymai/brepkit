@@ -245,6 +245,14 @@ fn check_edge_face_pairs(
         containments.push(build_face_containment(topo, fid, tol)?);
     }
 
+    // Pre-expand each face's containment AABB by the linear tolerance so the
+    // broad-phase reject below is conservative (never skips a real crossing,
+    // which by definition lies inside the face's boundary region).
+    let face_aabbs: Vec<Aabb3> = containments
+        .iter()
+        .map(|c| c.bbox.expanded(tol.linear))
+        .collect();
+
     for &eid in edges {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
         let (curve, start_pos, end_pos, t0, t1) = {
@@ -255,8 +263,32 @@ fn check_edge_face_pairs(
             (edge.curve().clone(), sp, ep, t0, t1)
         };
 
+        // Broad-phase AABB for the edge, reused across all faces. The vast
+        // majority of (edge, face) pairs are spatially disjoint; testing each
+        // edge sample against every face surface (an iterative projection for
+        // curved faces) is the dominant cost in booleans on solids with many
+        // curved faces. Sampling the edge into an AABB once and rejecting
+        // disjoint faces collapses that quadratic to the pairs that actually
+        // overlap. Sampled densely enough that the inter-sample sagitta is
+        // negligible for the analytic edge curves used here.
+        let edge_aabb = {
+            let mut pts = Vec::with_capacity(N_SAMPLES + 1);
+            for i in 0..=N_SAMPLES {
+                let t = t0 + (t1 - t0) * (i as f64 / N_SAMPLES as f64);
+                pts.push(curve.evaluate_with_endpoints(t, start_pos, end_pos));
+            }
+            Aabb3::try_from_points(pts).map(|a| a.expanded(tol.linear))
+        };
+
         for (face_idx, &fid) in faces.iter().enumerate() {
             if face_boundary_edges[face_idx].contains(&eid) {
+                continue;
+            }
+
+            // Broad-phase: skip faces whose region cannot reach this edge.
+            if let Some(ea) = &edge_aabb
+                && !ea.intersects(face_aabbs[face_idx])
+            {
                 continue;
             }
 
