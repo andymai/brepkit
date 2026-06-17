@@ -4463,10 +4463,14 @@ fn baseplate_dovetail_tongue_fuse_is_watertight() {
 fn baseplate_dovetail_sequential_fuse_no_mesh_blowup() {
     let mut topo = Topology::new();
     let mut acc = dovetail_slab(&mut topo, 20.0, 60.0, 5.0);
-    let mut expected_vol = crate::measure::solid_volume(&topo, acc, 0.01).unwrap();
+    let mut prev_vol = crate::measure::solid_volume(&topo, acc, 0.01).unwrap();
+    // Each tongue is identical and sits clear of the others, so every fuse adds
+    // the same protruding volume. Capture the first step's increment and require
+    // the rest to match it: a mesh fallback or a re-split that drops the overlap
+    // sliver would change the increment (and the volume).
+    let mut per_tongue_increment: Option<f64> = None;
     for &y in &[10.0_f64, 20.0, 30.0, 40.0, 50.0] {
         let tongue = dovetail_tongue(&mut topo, 20.0, y, 5.0, 0.01, 1.0, 1.3);
-        let tongue_vol = crate::measure::solid_volume(&topo, tongue, 0.01).unwrap();
         acc = boolean(&mut topo, BooleanOp::Fuse, acc, tongue).unwrap();
         let sh = topo.shell(topo.solid(acc).unwrap().outer_shell()).unwrap();
         // A mesh fallback on a 20×60 slab would produce hundreds of triangulated
@@ -4476,17 +4480,22 @@ fn baseplate_dovetail_sequential_fuse_no_mesh_blowup() {
             "step y={y}: face count {} suggests a mesh fallback (the hang path)",
             sh.faces().len()
         );
-        // Volume grows by roughly the tongue's protruding portion (~99% of it;
-        // the 0.01 overlap is shared with the slab). A residual multi-fuse
-        // non-manifoldness can drift the measured volume by a few mm³, so this
-        // is a sanity band, not an exact equality (the per-tongue watertightness
-        // is asserted in `baseplate_dovetail_tongue_fuse_is_watertight`).
-        expected_vol += tongue_vol;
+        // Every step must stay a closed manifold. Fusing tongue N into a slab
+        // whose +X wall earlier tongues already split must re-split that face
+        // cleanly — the multi-tongue bug left ~20 free/over-shared edges here.
+        brepkit_topology::validation::validate_shell_closed(sh, &topo)
+            .unwrap_or_else(|e| panic!("step y={y}: result not watertight: {e:?}"));
         let vol = crate::measure::solid_volume(&topo, acc, 0.01).unwrap();
-        assert!(
-            (vol - expected_vol).abs() < 0.02 * expected_vol,
-            "step y={y}: fused vol {vol} far from expected ~{expected_vol}"
-        );
+        let increment = vol - prev_vol;
+        match per_tongue_increment {
+            None => per_tongue_increment = Some(increment),
+            Some(first) => assert!(
+                (increment - first).abs() < 1e-4,
+                "step y={y}: volume increment {increment} differs from the first tongue's \
+                 {first} — a re-split into an already-split wall changed the volume"
+            ),
+        }
+        prev_vol = vol;
     }
 }
 
@@ -4510,4 +4519,35 @@ fn extrude_down_solid_fuses_without_hole_misclassification() {
         brepkit_topology::validation::validate_shell_closed(sh, &topo)
             .unwrap_or_else(|e| panic!("({base_half},{tip_half}) not watertight: {e:?}"));
     }
+}
+
+/// Fusing a SECOND tongue onto a slab whose wall face a FIRST tongue already
+/// split must keep the result a closed manifold. The tongues are 40 mm apart so
+/// they never touch each other — the only shared face is the slab's +X wall,
+/// which tongue A has already fragmented into sub-faces. Re-splitting that
+/// already-split face is where the multi-tongue baseplate fuse went
+/// non-manifold (≈20 free/over-shared edges) and fell back to mesh boolean.
+#[test]
+fn baseplate_two_tongues_far_apart_resplit_is_watertight() {
+    let mut topo = Topology::new();
+    let slab = dovetail_slab(&mut topo, 20.0, 60.0, 5.0);
+
+    // Tongue A on a clean slab — must be watertight (baseline).
+    let tongue_a = dovetail_tongue(&mut topo, 20.0, 10.0, 5.0, 0.01, 1.0, 1.3);
+    let after_a = boolean(&mut topo, BooleanOp::Fuse, slab, tongue_a).unwrap();
+    let sh_a = topo
+        .shell(topo.solid(after_a).unwrap().outer_shell())
+        .unwrap();
+    brepkit_topology::validation::validate_shell_closed(sh_a, &topo)
+        .expect("tongue A on a clean slab must be watertight");
+
+    // Tongue B, 40 mm away, fused into the A-result. Attaches to the SAME +X
+    // wall that A already split.
+    let tongue_b = dovetail_tongue(&mut topo, 20.0, 50.0, 5.0, 0.01, 1.0, 1.3);
+    let after_b = boolean(&mut topo, BooleanOp::Fuse, after_a, tongue_b).unwrap();
+    let sh_b = topo
+        .shell(topo.solid(after_b).unwrap().outer_shell())
+        .unwrap();
+    brepkit_topology::validation::validate_shell_closed(sh_b, &topo)
+        .expect("tongue B fused into the A-split wall must stay watertight");
 }
