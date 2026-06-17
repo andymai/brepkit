@@ -1098,74 +1098,18 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // from an under-resolved outer-wire polygon can sit on the wrong side of a
     // thin annular ring even when it is not strictly inside a hole, so always
     // re-derive the interior point from the ring between outer and holes.
+    //
+    // A bounding-shape proxy must NOT be used for the hole test: a circle
+    // around the hole centroid wildly over-covers an elongated/rectangular
+    // hole (a cavity opening), flagging a legitimate thin-rim point as
+    // "inside" and then displacing it to the farthest corner — which on a
+    // multi-hole frame (two adjacent cavities sharing a divider) lands inside
+    // the OTHER hole and silently drops the whole frame face. The accurate
+    // `is_inside_any_hole` UV point-in-polygon test avoids that.
     if matches!(&sub_face.surface, FaceSurface::Plane { .. }) && !sub_face.inner_wires.is_empty() {
         interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
     } else if is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
         interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
-    }
-
-    // Secondary hole check: sample_wire_loop_uv for curved hole wires may
-    // produce an under-sampled polygon that misses containment. Cross-check
-    // using the hole's 3D boundary: if the interior 3D point is close to
-    // the centroid of any hole, it's likely inside and needs displacement.
-    if !sub_face.inner_wires.is_empty() {
-        let eval_3d = |uv: Point2| -> Option<Point3> {
-            if let Some(p) = sub_face.surface.evaluate(uv.x(), uv.y()) {
-                return Some(p);
-            }
-            if let FaceSurface::Plane { normal, .. } = &sub_face.surface {
-                if let Some(f) = frame {
-                    return Some(f.evaluate(uv.x(), uv.y()));
-                }
-                let wire_pts: Vec<Point3> =
-                    sub_face.outer_wire.iter().map(|e| e.start_3d).collect();
-                let f = PlaneFrame::from_plane_face(*normal, &wire_pts);
-                return Some(f.evaluate(uv.x(), uv.y()));
-            }
-            None
-        };
-
-        if let Some(test_3d) = eval_3d(interior_uv) {
-            for hole in &sub_face.inner_wires {
-                if hole.is_empty() {
-                    continue;
-                }
-                let hc: Point3 = {
-                    let sum = hole.iter().fold(Point3::new(0.0, 0.0, 0.0), |acc, e| {
-                        acc + (e.start_3d - Point3::new(0.0, 0.0, 0.0))
-                    });
-                    let n = hole.len() as f64;
-                    Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
-                };
-                let max_r = hole
-                    .iter()
-                    .map(|e| (e.start_3d - hc).length())
-                    .fold(0.0_f64, f64::max);
-
-                if (test_3d - hc).length() < max_r * 0.95 {
-                    // Interior point is inside the hole in 3D. Try outer wire
-                    // vertex that's farthest from the hole centroid.
-                    let best = sub_face
-                        .outer_wire
-                        .iter()
-                        .max_by(|a, b| {
-                            let da = (a.start_3d - hc).length();
-                            let db = (b.start_3d - hc).length();
-                            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                        .map(|e| e.start_uv);
-                    if let Some(uv) = best {
-                        // Nudge slightly toward the centroid so the point
-                        // is strictly interior, not on the boundary vertex.
-                        interior_uv = Point2::new(
-                            uv.x() * 0.95 + interior_uv.x() * 0.05,
-                            uv.y() * 0.95 + interior_uv.y() * 0.05,
-                        );
-                    }
-                    break;
-                }
-            }
-        }
     }
 
     // Evaluate back to 3D.
