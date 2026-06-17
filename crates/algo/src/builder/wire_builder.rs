@@ -433,13 +433,28 @@ fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64
 ///
 /// Returns a value in (0, 2pi].
 fn clockwise_angle(angle_in: f64, angle_out: f64) -> f64 {
+    // A candidate that continues straight ahead (angle_out ~= travel) must rank
+    // worst so the traversal hugs the rightmost real turn instead of running on
+    // through a collinear junction. At a T-junction the bar passes straight
+    // through (two collinear boundary edges meet the section stem), and `da`
+    // for that continuation collapses to rounding noise: the angles flow through
+    // `atan2`, subtraction, and `rem_euclid`, so the residual lands anywhere in
+    // ~[0, 1e-12] depending on the vertex coordinates. A 1e-14 cutoff caught it
+    // only by luck (the same tongue split correctly at y=9 with da=1.8e-15 but
+    // wove a zero-area slit at y=49 with da=1.7e-13). Treat anything within a
+    // small angular band of a straight continuation as a continuation. This is
+    // safe: at a 2-edge junction the lone continuation is still the min and gets
+    // taken regardless, and at a 3+-edge junction a numerically-collinear
+    // continuation should always lose to a genuine branch (that is exactly the
+    // face split the traversal exists to find).
+    const CONTINUATION_EPS: f64 = 1e-9;
     // Travel direction = opposite of incoming (which points backward).
     let travel = (angle_in + std::f64::consts::PI).rem_euclid(TAU);
     let da = (travel - angle_out).rem_euclid(TAU);
-    if da < 1e-14 {
-        TAU // Exact continuation -> maximum angle.
-    } else {
+    if (CONTINUATION_EPS..=TAU - CONTINUATION_EPS).contains(&da) {
         da
+    } else {
+        TAU // Straight continuation -> maximum angle (worst).
     }
 }
 
@@ -582,6 +597,64 @@ mod tests {
 
         let cw3 = clockwise_angle(PI, 0.0);
         assert!((cw3 - TAU).abs() < 1e-10, "cw3 = {cw3}");
+    }
+
+    /// A near-collinear continuation (incoming and candidate almost exactly
+    /// opposite, so `da` is rounding noise just above 0) must rank as a straight
+    /// continuation (TAU = worst), not a razor-thin rightmost turn. The
+    /// multi-tongue baseplate fuse wove a zero-area slit because this `da`
+    /// landed at 1.7e-13 at one tongue but 1.8e-15 at another, and only the
+    /// latter cleared the old 1e-14 cutoff.
+    #[test]
+    fn clockwise_angle_treats_near_collinear_as_continuation() {
+        // angle_out within rounding noise of the travel direction (angle_in+pi).
+        let angle_in = 1.374_674_651_606_426_8;
+        let angle_out = 4.516_267_305_196_049; // travel ends up ~1.7e-13 larger
+        let cw = clockwise_angle(angle_in, angle_out);
+        assert!(
+            (cw - TAU).abs() < 1e-10,
+            "near-collinear continuation must score TAU, got {cw}"
+        );
+    }
+
+    /// A convex quad whose bottom edge is split at an interior vertex by a
+    /// section stem rising to the top edge (a T-junction with a collinear bar)
+    /// must split into two loops, never one loop plus a degenerate slit. This is
+    /// the minimal 2D form of the tongue-cap split that the collinear-junction
+    /// rounding bug broke.
+    #[test]
+    fn t_junction_with_collinear_bar_splits_into_two() {
+        // Bottom edge runs straight from (0,0) to (10,0), split at (4,0). The
+        // section stem rises from (4,0) to (4,10) on the top edge.
+        let mut edges = vec![
+            make_line_edge(Point2::new(0.0, 0.0), Point2::new(4.0, 0.0)),
+            make_line_edge(Point2::new(4.0, 0.0), Point2::new(10.0, 0.0)),
+            make_line_edge(Point2::new(10.0, 0.0), Point2::new(10.0, 10.0)),
+            make_line_edge(Point2::new(10.0, 10.0), Point2::new(4.0, 10.0)),
+            make_line_edge(Point2::new(4.0, 10.0), Point2::new(0.0, 10.0)),
+            make_line_edge(Point2::new(0.0, 10.0), Point2::new(0.0, 0.0)),
+        ];
+        // Section stem, both orientations (one per adjacent sub-face).
+        edges.push(make_section_edge(
+            Point2::new(4.0, 0.0),
+            Point2::new(4.0, 10.0),
+            100,
+        ));
+        edges.push(make_section_edge(
+            Point2::new(4.0, 10.0),
+            Point2::new(4.0, 0.0),
+            100,
+        ));
+
+        let loops = build_wire_loops(&edges, 1e-7, false, false);
+        assert_eq!(loops.len(), 2, "T-junction must split into two loops");
+        for l in &loops {
+            assert!(
+                l.len() >= 3,
+                "no degenerate slit loop, got {} edges",
+                l.len()
+            );
+        }
     }
 
     #[test]
