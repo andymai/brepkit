@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.1](https://github.com/andymai/brepkit/compare/v2.114.0...v2.114.1) (2026-06-17)
+
+
+### Bug Fixes
+
+* **algo:** correct interior-point displacement for multi-hole frame faces ([#891](https://github.com/andymai/brepkit/issues/891)) ([22d64e0](https://github.com/andymai/brepkit/commit/22d64e015986d8b48a49a626f24a279d0623f20e))
+
 ## [2.114.0](https://github.com/andymai/brepkit/compare/v2.113.7...v2.114.0) (2026-06-17)
 
 
