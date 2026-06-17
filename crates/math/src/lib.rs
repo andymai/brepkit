@@ -84,6 +84,7 @@ pub mod nurbs;
 pub mod obb;
 pub mod plane;
 pub mod polygon2d;
+pub mod polygon_boolean;
 pub mod polygon_offset;
 pub mod predicates;
 pub mod quadrature;
