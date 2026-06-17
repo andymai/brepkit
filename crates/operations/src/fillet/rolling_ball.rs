@@ -914,12 +914,37 @@ pub fn fillet_rolling_ball(
                 // No target edges: pass through unchanged.
                 let verts = crate::boolean::face_polygon(topo, face_id)?;
                 let np_inner = extract_inner_wire_positions(topo, face)?;
-                all_specs.push(FaceSpec::Surface {
-                    vertices: verts,
-                    surface,
-                    reversed: false,
-                    inner_wires: np_inner,
-                });
+                // A cylindrical pass-through face whose boundary has angular
+                // (constant-v) arc edges — e.g. a rounded-corner wall — must be
+                // emitted as a CylindricalFace so the assembler rebuilds those
+                // boundaries as Circle arcs (and shares them with the adjacent
+                // planar caps). Emitting it as Surface degrades every boundary
+                // to a Line, flattening the rounded corner into a chord; the
+                // mating planar cap then carries the same chord, so a later
+                // fuse onto a solid with the true arc goes non-manifold at the
+                // corner. Full-circle (closed) cylinder walls keep the Surface
+                // path since their single closed edge has no angular endpoints.
+                let has_closed_edge = wire
+                    .edges()
+                    .iter()
+                    .any(|oe| topo.edge(oe.edge()).is_ok_and(|e| e.start() == e.end()));
+                if let FaceSurface::Cylinder(cyl) = &surface
+                    && !has_closed_edge
+                {
+                    all_specs.push(FaceSpec::CylindricalFace {
+                        vertices: verts,
+                        cylinder: cyl.clone(),
+                        reversed: false,
+                        inner_wires: np_inner,
+                    });
+                } else {
+                    all_specs.push(FaceSpec::Surface {
+                        vertices: verts,
+                        surface,
+                        reversed: false,
+                        inner_wires: np_inner,
+                    });
+                }
                 continue;
             }
 
@@ -1089,12 +1114,32 @@ pub fn fillet_rolling_ball(
             }
 
             let np_inner = extract_inner_wire_positions(topo, face)?;
-            all_specs.push(FaceSpec::Surface {
-                vertices: trimmed_verts,
-                surface,
-                reversed: false,
-                inner_wires: np_inner,
-            });
+            // As in the pass-through branch above, a trimmed cylindrical face
+            // keeps its non-target (constant-v) boundary as a true arc only if
+            // emitted as a CylindricalFace; otherwise the untouched far edge
+            // (e.g. the bottom of a rounded corner wall whose top was trimmed
+            // by the fillet) degrades to a Line and flattens the corner. Only
+            // applies when no boundary edge is a closed full circle.
+            let has_closed_edge = wire_edges
+                .iter()
+                .any(|oe| topo.edge(oe.edge()).is_ok_and(|e| e.start() == e.end()));
+            if let FaceSurface::Cylinder(cyl) = &surface
+                && !has_closed_edge
+            {
+                all_specs.push(FaceSpec::CylindricalFace {
+                    vertices: trimmed_verts,
+                    cylinder: cyl.clone(),
+                    reversed: false,
+                    inner_wires: np_inner,
+                });
+            } else {
+                all_specs.push(FaceSpec::Surface {
+                    vertices: trimmed_verts,
+                    surface,
+                    reversed: false,
+                    inner_wires: np_inner,
+                });
+            }
             continue;
         };
         let n = poly.positions.len();

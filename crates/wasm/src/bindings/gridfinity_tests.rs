@@ -1261,27 +1261,43 @@ fn gridfinity_d2_lip_ring_with_fillet() {
 
 /// D3: Shelled box + lip ring → fuse.
 ///
-/// Builds a hollow box (makeBox + shell) and fuses the D1 lip ring on top.
-/// Expected: valid solid, face count < 200.
+/// Builds a hollow rounded-rectangle box (matching the tool / D4) and fuses the
+/// D1 lip ring on top. Expected: analytic fuse, face count < 200.
+///
+/// The body was previously a sharp `makeBox`; the real tool (and D4) use a
+/// rounded-rect body whose corner radius matches the lip's outer corners, so
+/// the lip seats flush and the fuse stays analytic instead of falling back to
+/// the mesh boolean.
 #[test]
 fn gridfinity_d3_shelled_box_with_lip() {
     let mut k = BrepKernel::new();
 
-    // Build the shelled box body
-    // makeBox → get top face via direct API → shell
+    // Build the shelled rounded-rect box body (centered at origin).
+    let box_face = make_rounded_rect_face(&mut k, OUTER_DIM, OUTER_DIM, CORNER_R, 0.0);
     let r1 = k.execute_batch(&format!(
-        r#"[{{"op": "makeBox", "args": {{"width": {OUTER_DIM}, "height": {OUTER_DIM}, "depth": {WALL_HEIGHT}}}}}]"#
+        r#"[{{"op": "extrude", "args": {{"face": {box_face}, "dz": 1.0, "distance": {WALL_HEIGHT}}}}}]"#
     ));
     let p1 = parse_batch(&r1);
     assert_ok(&p1, 0);
+    let box_solid = p1[0]["ok"].as_u64().unwrap() as u32;
 
-    let faces = k.get_solid_faces(0).unwrap();
-    assert!(!faces.is_empty(), "box should have faces");
-    // Top face is typically face[1] for makeBox
-    let top_face = faces[1];
-
+    // Select the +Z top face by normal (positional indexing is unreliable for
+    // a rounded-rect extrude).
+    let top_face = k
+        .get_solid_faces(box_solid)
+        .unwrap()
+        .iter()
+        .copied()
+        .find(|&fh| {
+            k.resolve_face(fh)
+                .ok()
+                .and_then(|fid| k.topo.face(fid).ok())
+                .and_then(brepkit_topology::face::Face::effective_plane_normal)
+                .is_some_and(|n| n.z() > 0.5 * n.length())
+        })
+        .expect("extruded box should have a +Z top face");
     let r2 = k.execute_batch(&format!(
-        r#"[{{"op": "shell", "args": {{"solid": 0, "thickness": {WALL_THICKNESS}, "faces": [{top_face}]}}}}]"#
+        r#"[{{"op": "shell", "args": {{"solid": {box_solid}, "thickness": {WALL_THICKNESS}, "faces": [{top_face}]}}}}]"#
     ));
     let p2 = parse_batch(&r2);
     assert_ok(&p2, 0);
@@ -1314,10 +1330,10 @@ fn gridfinity_d3_shelled_box_with_lip() {
     assert_ok(&p5, 0);
     let lip_handle = p5[0]["ok"].as_u64().unwrap() as u32;
 
-    // Translate lip to top of box. The lip sections are centered at the
-    // origin, but `makeBox` spans [0,DIM] (corner at origin), so the lip must
-    // also be shifted to the box centre or it overlaps only one quadrant.
-    let mat = translate_matrix(OUTER_DIM / 2.0, OUTER_DIM / 2.0, WALL_HEIGHT);
+    // Translate lip to the top of the box. Both the lip sections and the
+    // rounded-rect body are centered at the origin, so only a Z shift is
+    // needed.
+    let mat = translate_matrix(0.0, 0.0, WALL_HEIGHT);
     let r6 = k.execute_batch(&format!(
         r#"[{{"op": "transform", "args": {{"solid": {lip_handle}, "matrix": {mat}}}}}]"#
     ));
@@ -1362,33 +1378,51 @@ fn gridfinity_d3_shelled_box_with_lip() {
 
 /// D5: Shelled box + FILLETED lip ring → fuse.
 ///
-/// Like D3 but with fillet on the lip ring before fuse.
-/// Tests whether the analytic boolean handles torus faces from fillet.
+/// Like D4 (rounded-rectangle body matching the tool), but with a fillet on the
+/// lip's peak rim before the fuse. Exercises the analytic boolean fusing a lip
+/// whose rounded corners carry a fillet-derived NURBS blend at the peak.
+///
+/// Earlier this test built the body with a sharp `makeBox` (the real tool uses
+/// a rounded-rect body, like D4) and filleted `edges[0]` — which happens to be
+/// a bottom-outer corner arc *at the fuse interface*, not the peak. Both made
+/// the fuse fall back to the mesh boolean. The body is now a rounded-rect (per
+/// `BOX_CORNER_RADIUS`) and the fillet targets a peak rim edge.
 #[test]
-#[ignore = "fillet is now watertight (post-fillet Euler=2, val=0, 0 boundary edges); \
-            the remaining blocker is the lip→body fuse falling back to mesh boolean \
-            (coincident box-top/lip-bottom contact, same path d3 takes) which yields \
-            >200 faces. That fuse is a separate GFA same-domain bug, not the fillet."]
 fn gridfinity_d5_box_with_filleted_lip() {
     let mut k = BrepKernel::new();
 
-    // Shelled box
+    // Step 1: rounded-rectangle box body (matches the tool / D4), then shell.
+    let box_face = make_rounded_rect_face(&mut k, OUTER_DIM, OUTER_DIM, CORNER_R, 0.0);
     let r1 = k.execute_batch(&format!(
-        r#"[{{"op": "makeBox", "args": {{"width": {OUTER_DIM}, "height": {OUTER_DIM}, "depth": {WALL_HEIGHT}}}}}]"#
+        r#"[{{"op": "extrude", "args": {{"face": {box_face}, "dz": 1.0, "distance": {WALL_HEIGHT}}}}}]"#
     ));
     let p1 = parse_batch(&r1);
     assert_ok(&p1, 0);
+    let box_solid = p1[0]["ok"].as_u64().unwrap() as u32;
 
-    let faces = k.get_solid_faces(0).unwrap();
-    let top_face = faces[1];
+    // Select the +Z top face (positional indexing is unreliable for a
+    // rounded-rect extrude — corner cylinders interleave the side faces).
+    let top_face = k
+        .get_solid_faces(box_solid)
+        .unwrap()
+        .iter()
+        .copied()
+        .find(|&fh| {
+            k.resolve_face(fh)
+                .ok()
+                .and_then(|fid| k.topo.face(fid).ok())
+                .and_then(brepkit_topology::face::Face::effective_plane_normal)
+                .is_some_and(|n| n.z() > 0.5 * n.length())
+        })
+        .expect("extruded box should have a +Z top face");
     let r2 = k.execute_batch(&format!(
-        r#"[{{"op": "shell", "args": {{"solid": 0, "thickness": {WALL_THICKNESS}, "faces": [{top_face}]}}}}]"#
+        r#"[{{"op": "shell", "args": {{"solid": {box_solid}, "thickness": {WALL_THICKNESS}, "faces": [{top_face}]}}}}]"#
     ));
     let p2 = parse_batch(&r2);
     assert_ok(&p2, 0);
     let box_handle = p2[0]["ok"].as_u64().unwrap() as u32;
 
-    // Lip ring
+    // Step 2: lip ring (loft outer, loft inner, cut) — same as D4.
     let outer_faces = make_outer_sections(&mut k);
     let inner_faces = make_inner_sections(&mut k);
 
@@ -1415,99 +1449,58 @@ fn gridfinity_d5_box_with_filleted_lip() {
     assert_ok(&p5, 0);
     let lip_handle = p5[0]["ok"].as_u64().unwrap() as u32;
 
-    // Pre-fillet diagnostic: verify the boolean cut produces a valid solid
+    // The cut must produce a valid (closed, genus-0) lip.
     let pre_lc = k.get_entity_counts(lip_handle).unwrap();
-    let pre_val = k.validate_solid(lip_handle).unwrap();
     let pre_euler = (pre_lc[2] as i64) - (pre_lc[1] as i64) + (pre_lc[0] as i64);
-    eprintln!(
-        "D5 lip before fillet: F={} E={} V={} euler={pre_euler} val={pre_val}",
-        pre_lc[0], pre_lc[1], pre_lc[2]
-    );
     assert!(
         pre_euler >= 2,
         "lip solid should have euler >= 2 before fillet, got {pre_euler}"
     );
 
-    // Fillet peak edges
+    // Step 3: fillet a PEAK rim edge (z ≈ Z_PEAK), as the tool does when
+    // TOP_FILLET > 0. Select by z-bound rather than `edges[0]`, which is a
+    // bottom-outer corner arc on the fuse interface.
     let r5b = k.execute_batch(&format!(
         r#"[{{"op": "solidEdges", "args": {{"solid": {lip_handle}}}}}]"#
     ));
     let p5b = parse_batch(&r5b);
     assert_ok(&p5b, 0);
-    let edges = p5b[0]["ok"].as_array().expect("edges");
-    let edge0 = edges[0].as_u64().unwrap();
+    let peak_edge = p5b[0]["ok"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .filter_map(serde_json::Value::as_u64)
+        .find(|&eh| {
+            k.resolve_edge(eh as u32)
+                .ok()
+                .and_then(|eid| k.topo.edge(eid).ok())
+                .is_some_and(|edge| {
+                    let z0 = k
+                        .topo
+                        .vertex(edge.start())
+                        .map(|v| v.point().z())
+                        .unwrap_or(f64::NAN);
+                    let z1 = k
+                        .topo
+                        .vertex(edge.end())
+                        .map(|v| v.point().z())
+                        .unwrap_or(f64::NAN);
+                    z0.min(z1) >= Z_PEAK - 1.0 && z0.max(z1) >= Z_PEAK - 0.01
+                })
+        })
+        .expect("lip should have a peak rim edge near Z_PEAK");
     let r5c = k.execute_batch(&format!(
-        r#"[{{"op": "fillet", "args": {{"solid": {lip_handle}, "radius": {TOP_FILLET}, "edges": [{edge0}]}}}}]"#
+        r#"[{{"op": "fillet", "args": {{"solid": {lip_handle}, "radius": {TOP_FILLET}, "edges": [{peak_edge}]}}}}]"#
     ));
     let p5c = parse_batch(&r5c);
-    let lip_final = if p5c[0].get("ok").is_some() {
-        p5c[0]["ok"].as_u64().unwrap() as u32
-    } else {
-        eprintln!("D5 fillet failed: {}", p5c[0]["error"]);
-        lip_handle
-    };
+    assert_ok(&p5c, 0);
+    let lip_final = p5c[0]["ok"].as_u64().unwrap() as u32;
 
+    // The filleted lip must remain a watertight, genus-0 solid (the fillet's
+    // arc-runout closure plus arc-preserving reassembly keep it closed).
     let lc = k.get_entity_counts(lip_final).unwrap();
     let lip_val = k.validate_solid(lip_final).unwrap();
     let lip_euler = (lc[2] as i64) - (lc[1] as i64) + (lc[0] as i64);
-    eprintln!(
-        "D5 lip after fillet: F={} E={} V={} euler={lip_euler} val={lip_val}",
-        lc[0], lc[1], lc[2]
-    );
-    {
-        let lip_id = k.resolve_solid(lip_final).unwrap();
-        if let Ok(report) = brepkit_operations::validate::validate_solid(&k.topo, lip_id) {
-            for issue in &report.issues {
-                if issue.severity == brepkit_operations::validate::Severity::Error {
-                    eprintln!("  D5 lip ERR: {}", issue.description);
-                }
-            }
-        }
-        // Dump boundary edges
-        let solid_data = k.topo.solid(lip_id).unwrap();
-        let shell = k.topo.shell(solid_data.outer_shell()).unwrap();
-        let mut efc = std::collections::HashMap::<usize, usize>::new();
-        for &fid in shell.faces() {
-            let face = k.topo.face(fid).unwrap();
-            let wire = k.topo.wire(face.outer_wire()).unwrap();
-            for oe in wire.edges() {
-                *efc.entry(oe.edge().index()).or_insert(0) += 1;
-            }
-        }
-        let bounds: Vec<usize> = efc
-            .iter()
-            .filter(|&(_, &c)| c == 1)
-            .map(|(&e, _)| e)
-            .collect();
-        eprintln!("  D5 lip boundary edges: {}", bounds.len());
-        for &eidx in bounds.iter().take(4) {
-            if let Some(eid) = k.topo.edge_id_from_index(eidx)
-                && let Ok(edge) = k.topo.edge(eid)
-            {
-                let s = k.topo.vertex(edge.start()).unwrap().point();
-                let e = k.topo.vertex(edge.end()).unwrap().point();
-                let curve = match edge.curve() {
-                    brepkit_topology::edge::EdgeCurve::Line => "line",
-                    brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
-                    _ => "other",
-                };
-                eprintln!(
-                    "    edge[{eidx}] {curve}: ({:.2},{:.2},{:.2})→({:.2},{:.2},{:.2})",
-                    s.x(),
-                    s.y(),
-                    s.z(),
-                    e.x(),
-                    e.y(),
-                    e.z()
-                );
-            }
-        }
-    }
-
-    // The boolean cut produces a manifold lip (val=0 before fillet) and the
-    // fillet now closes its arc-runout corners, so the filleted lip is itself a
-    // watertight closed shell (Euler=2, val=0, zero boundary edges). The fuse
-    // below is the remaining blocker (see the #[ignore] note).
     assert!(
         lip_val <= 2,
         "filleted lip should have <= 2 validation issues, got {lip_val}"
@@ -1517,7 +1510,7 @@ fn gridfinity_d5_box_with_filleted_lip() {
         "filleted lip Euler characteristic should be >= 2, got {lip_euler}"
     );
 
-    // Translate lip
+    // Step 4: translate lip onto the box top and fuse.
     let mat = translate_matrix(0.0, 0.0, WALL_HEIGHT);
     let r6 = k.execute_batch(&format!(
         r#"[{{"op": "transform", "args": {{"solid": {lip_final}, "matrix": {mat}}}}}]"#
@@ -1525,29 +1518,34 @@ fn gridfinity_d5_box_with_filleted_lip() {
     let p6 = parse_batch(&r6);
     assert_ok(&p6, 0);
 
-    let bc = k.get_entity_counts(box_handle).unwrap();
-    eprintln!("D5 before fuse: box F={}, lip F={}", bc[0], lc[0]);
-
-    // Fuse
     let r7 = k.execute_batch(&format!(
         r#"[{{"op": "fuse", "args": {{"solidA": {box_handle}, "solidB": {lip_final}}}}}]"#
     ));
     let p7 = parse_batch(&r7);
-    if p7[0].get("error").is_some() {
-        eprintln!("D5 fuse failed: {}", p7[0]["error"]);
-        return;
-    }
+    assert_ok(&p7, 0);
     let fused = p7[0]["ok"].as_u64().unwrap() as u32;
+
+    let r8 = k.execute_batch(&format!(
+        r#"[{{"op": "volume", "args": {{"solid": {fused}}}}}]"#
+    ));
+    let p8 = parse_batch(&r8);
+    let vol = ok_f64(&p8, 0);
     let fc = k.get_entity_counts(fused).unwrap();
     let euler = (fc[2] as i64) - (fc[1] as i64) + (fc[0] as i64);
     eprintln!(
-        "D5 result: F={}, E={}, V={}, euler={euler}",
+        "D5 result: F={}, E={}, V={}, euler={euler}, vol={vol:.1}",
         fc[0], fc[1], fc[2]
     );
+
+    // An analytic fuse keeps the face count low (a mesh fallback yields >200).
     assert!(
         fc[0] < 200,
-        "fused solid should have < 200 faces: got {}",
+        "fused solid should have < 200 faces (mesh fallback otherwise): got {}",
         fc[0]
+    );
+    assert!(
+        vol > 5000.0,
+        "fused volume should be > 5000 mm³: got {vol:.1}"
     );
 }
 
