@@ -1365,7 +1365,10 @@ fn gridfinity_d3_shelled_box_with_lip() {
 /// Like D3 but with fillet on the lip ring before fuse.
 /// Tests whether the analytic boolean handles torus faces from fillet.
 #[test]
-#[ignore = "boolean cut is now clean (Euler=2, val=0); fillet re-introduces boundary edges at cap planes — 3 validation issues vs <=2 asserted, post-fillet Euler=1"]
+#[ignore = "fillet is now watertight (post-fillet Euler=2, val=0, 0 boundary edges); \
+            the remaining blocker is the lip→body fuse falling back to mesh boolean \
+            (coincident box-top/lip-bottom contact, same path d3 takes) which yields \
+            >200 faces. That fuse is a separate GFA same-domain bug, not the fillet."]
 fn gridfinity_d5_box_with_filleted_lip() {
     let mut k = BrepKernel::new();
 
@@ -1501,11 +1504,10 @@ fn gridfinity_d5_box_with_filleted_lip() {
         }
     }
 
-    // The boolean cut now produces a manifold lip (val=0 before fillet).
-    // The fillet re-introduces boundary edges at cap planes (z=4.40, z=-1.20)
-    // because trimmed faces don't share edges with untouched cap faces —
-    // a separate fillet-level issue. Assert the fillet doesn't make things
-    // worse than the known 16 boundary edges (2 validation errors).
+    // The boolean cut produces a manifold lip (val=0 before fillet) and the
+    // fillet now closes its arc-runout corners, so the filleted lip is itself a
+    // watertight closed shell (Euler=2, val=0, zero boundary edges). The fuse
+    // below is the remaining blocker (see the #[ignore] note).
     assert!(
         lip_val <= 2,
         "filleted lip should have <= 2 validation issues, got {lip_val}"

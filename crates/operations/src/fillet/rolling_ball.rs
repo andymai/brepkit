@@ -822,6 +822,68 @@ pub fn fillet_rolling_ball(
     };
     log::debug!("fillet contact map: {} entries", fillet_contact_map.len());
 
+    // Arc-runout closure data. When a single arc fillet terminates tangent to a
+    // flat neighbour, its strip end cross-section straddles two planes (the two
+    // contact-face planes) and cannot be shared by either neighbour alone. The
+    // gap is a small planar triangle: the original corner C, the contact A on
+    // one fillet face, and the contact B on the other. Closing it requires both
+    // contact faces to keep C (so the triangle's two straight legs C→A and C→B
+    // are shared) plus the triangle facet itself (Phase 5e).
+    //
+    // Key: corner vertex index → (corner C, contact A on fa, fa, contact B on fb, fb).
+    #[allow(clippy::type_complexity)]
+    let arc_runout: HashMap<usize, (Point3, Point3, usize, Point3, usize)> = {
+        let mut map = HashMap::new();
+        for &edge_id in &filtered_edges {
+            // Only arcs run out tangent to a neighbour; straight fillets meet a
+            // perpendicular face whose plane already contains the strip end.
+            let Ok(edge) = topo.edge(edge_id) else {
+                continue;
+            };
+            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_)) {
+                continue;
+            }
+            let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+                continue;
+            };
+            if face_list.len() < 2 {
+                continue;
+            }
+            let (fa, fb) = (face_list[0], face_list[1]);
+            for vid in [edge.start(), edge.end()] {
+                let vi = vid.index();
+                // Exactly one filleted edge ends here (a true runout endpoint,
+                // not an interior chain junction handled by the corner patch).
+                if vertex_fillet_edges.get(&vi).map_or(0, Vec::len) != 1 {
+                    continue;
+                }
+                if g1_chain_vertices.contains(&vi) {
+                    continue;
+                }
+                let (Some(&ca), Some(&cb)) = (
+                    fillet_contact_map.get(&(vi, edge_id.index(), fa.index())),
+                    fillet_contact_map.get(&(vi, edge_id.index(), fb.index())),
+                ) else {
+                    continue;
+                };
+                let c = match topo.vertex(vid) {
+                    Ok(v) => v.point(),
+                    Err(_) => continue,
+                };
+                // Skip degenerate triangles (contacts coincident with the
+                // corner or each other).
+                if (ca - c).length() < tol.linear
+                    || (cb - c).length() < tol.linear
+                    || (ca - cb).length() < tol.linear
+                {
+                    continue;
+                }
+                map.insert(vi, (c, ca, fa.index(), cb, fb.index()));
+            }
+        }
+        map
+    };
+
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
 
@@ -1078,6 +1140,33 @@ pub fn fillet_rolling_ball(
                 // Side face: use the two unique Phase 4 fillet contacts,
                 // paired by proximity to boundary offsets.
                 (false, false, true) => {
+                    // Arc runout: this flat side face only touches the strip at
+                    // a single contact lying on its own plane (the tangent
+                    // point). Keep the corner and split the adjacent edge there
+                    // so the runout triangle's leg corner→contact is shared.
+                    let runout_contact = arc_runout.get(&vi).and_then(|&(_, ca, _, cb, _)| {
+                        [ca, cb].into_iter().find(|p| {
+                            (poly.normal.dot(Vec3::new(p.x(), p.y(), p.z())) - poly.d).abs()
+                                < tol.linear * 100.0
+                        })
+                    });
+                    if let Some(b) = runout_contact {
+                        // Orient: keep the corner on the side of the un-split
+                        // edge, place the contact on the edge it lies along.
+                        let on_next = (next_pos - pos)
+                            .normalize()
+                            .ok()
+                            .is_some_and(|dn| (b - pos).dot(dn) > 0.0);
+                        if on_next {
+                            new_verts.push(pos);
+                            new_verts.push(b);
+                        } else {
+                            new_verts.push(b);
+                            new_verts.push(pos);
+                        }
+                        continue;
+                    }
+
                     let mut unique_contacts: Vec<Point3> = Vec::new();
                     for (&(vi_k, _, _), &pt) in &fillet_contact_map {
                         if vi_k == vi {
@@ -1117,6 +1206,12 @@ pub fn fillet_rolling_ball(
                         let dir = (next_pos - pos).normalize()?;
                         new_verts.push(pos + dir * radius);
                     }
+                    // Arc runout: keep the original corner so the runout
+                    // triangle's leg (contact→corner, along the unfilleted edge)
+                    // is shared with this face (Phase 5e closes the strip end).
+                    if arc_runout.contains_key(&vi) {
+                        new_verts.push(pos);
+                    }
                     // The "after" edge is the unfilleted edge at this corner.
                     // If the filleted edge was set back here, preserve it.
                     if setback_map.contains_key(&(ei, vi))
@@ -1138,6 +1233,11 @@ pub fn fillet_rolling_ball(
                         let p = pos + dir * radius;
                         new_verts.push(p);
                         corner_preserved.entry(vi).or_insert(p);
+                    }
+                    // Arc runout: keep the original corner (before the contact)
+                    // so the runout triangle's leg is shared with this face.
+                    if arc_runout.contains_key(&vi) {
+                        new_verts.push(pos);
                     }
                     if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
                         new_verts.push(pt);
@@ -1952,6 +2052,52 @@ pub fn fillet_rolling_ball(
                 }
             }
         }
+    }
+
+    // Phase 5e: Close arc-runout strip ends with a planar triangle facet.
+    // At a single-arc runout the strip end cross-section (contact A → contact B)
+    // is joined to the original corner C via two legs (C→A on one fillet face,
+    // C→B on the other, both kept in Phase 3). The triangle A–C–B fills the gap.
+    for (&vi, &(c, ca, _fa, cb, _fb)) in &arc_runout {
+        // Outward direction: along the filleted arc's tangent at C, pointing
+        // away from the edge interior (out of the solid at the runout).
+        let outward = vertex_fillet_edges
+            .get(&vi)
+            .and_then(|edges| edges.first().copied())
+            .and_then(|eid| {
+                let edge = topo.edge(eid).ok()?;
+                let p_s = topo.vertex(edge.start()).ok()?.point();
+                let p_e = topo.vertex(edge.end()).ok()?.point();
+                let curve = edge.curve().clone();
+                let (t_self, sign) = if edge.start().index() == vi {
+                    (0.0, -1.0)
+                } else {
+                    (1.0, 1.0)
+                };
+                (sample_edge_tangent(&curve, p_s, p_e, t_self) * sign)
+                    .normalize()
+                    .ok()
+            });
+        let Some(outward) = outward else { continue };
+
+        // Order (C, A, B) so the facet normal agrees with `outward`.
+        let n = (ca - c).cross(cb - c);
+        let verts = if n.dot(outward) >= 0.0 {
+            vec![c, ca, cb]
+        } else {
+            vec![c, cb, ca]
+        };
+        let normal = match (verts[1] - verts[0]).cross(verts[2] - verts[0]).normalize() {
+            Ok(nn) => nn,
+            Err(_) => continue,
+        };
+        let d = dot_normal_point(normal, verts[0]);
+        all_specs.push(FaceSpec::Planar {
+            vertices: verts,
+            normal,
+            d,
+            inner_wires: vec![],
+        });
     }
 
     // Phase 6: Assemble the solid using mixed-surface assembly.  Each fillet
