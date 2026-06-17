@@ -532,7 +532,7 @@ pub fn boolean(
         let copy_a = crate::copy::copy_solid(topo, a)?;
         let copy_b = crate::copy::copy_solid(topo, b)?;
         let merged = crate::compound_ops::merge_disjoint_solids(topo, &[copy_a, copy_b])?;
-        log::info!("Fuse short-circuited via disjoint shell merge");
+        log::debug!("Fuse short-circuited via disjoint shell merge");
         return Ok(merged);
     }
 
