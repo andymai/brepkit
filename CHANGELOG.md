@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.113.7](https://github.com/andymai/brepkit/compare/v2.113.6...v2.113.7) (2026-06-17)
+
+
+### Performance
+
+* **operations:** memoize boolean post-processing traversals + cut-fragmentation root-cause report ([#885](https://github.com/andymai/brepkit/issues/885)) ([85d2b03](https://github.com/andymai/brepkit/commit/85d2b03842d50c03e594a5ad9f818bb93973f07e))
+
 ## [2.113.6](https://github.com/andymai/brepkit/compare/v2.113.5...v2.113.6) (2026-06-17)
 
 
