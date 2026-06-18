@@ -518,30 +518,54 @@ fn integrate_holes_plane(
     any_crossing.then_some(out)
 }
 
-/// Decompose a planar face into its minimal interior regions via a 2D
-/// straight-line arrangement.
+/// True when any wire loop revisits a UV vertex — the signature of a
+/// self-crossing trace from the angular wire builder, which the arrangement
+/// decomposition can replace with simple (non-self-intersecting) regions even
+/// when it produces FEWER loops. A simple closed loop visits each vertex once;
+/// a figure-eight or out-and-back revisits one.
 ///
-/// The angular wire builder ([`build_wire_loops`]) and the single-crossing
-/// helper ([`try_split_crossing_plane_face`]) under-partition a plane face cut
-/// by three or more line sections that form a partial grid (e.g. a notch side
-/// wall on a SHELLED body, crossed by the outer wall, the inner cavity wall, and
-/// the rim) — they hand back one self-crossing wire, which makes the shared
-/// section edge non-manifold and forces a mesh fallback.
-///
-/// This builds the full planar subdivision instead: every boundary and section
-/// segment is split at all mutual intersections, directed half-edges are traced
-/// into minimal faces by the leftmost-turn rule, and the unbounded outer face is
-/// dropped. Each interior region becomes a [`SplitSubFace`] whose 3D points come
-/// from the plane frame (UV↔3D is an exact bijection on a plane). Each
-/// arrangement sub-segment carries a unique `source_edge_idx` shared by its two
-/// directed uses, so `build_topology_face` welds the two adjacent regions along
-/// it into one shared edge.
-///
-/// Restricted to **all-line** inputs (boundary and sections): a planar face
-/// whose boundary or sections include arcs keeps the existing curved paths,
-/// A directed half-edge in the planar line arrangement traced by
-/// [`split_plane_face_by_line_arrangement`]. `seg_id` is the undirected
-/// sub-segment index, shared by both directions so adjacent regions weld.
+/// Detection is vertex-topological: it tests only the edges' endpoints
+/// (`start_uv`). That is exactly the failure mode this gate targets — the
+/// angular builder over-splits by walking out-and-back through a shared UV
+/// vertex (see `remove_pendant_sections`), so the bad trace always reuses a
+/// vertex. It deliberately does NOT detect a self-crossing that occurs only
+/// along an edge's interior (e.g. an arc whose curved path crosses another
+/// edge's chord in UV between their endpoints, with no shared vertex). No
+/// wire-builder trace produces such a crossing here, so testing arc interiors
+/// would add cost without changing any outcome.
+fn wire_loops_self_cross(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
+    let qscale = 1.0 / tol.max(1e-12);
+    let qkey = |p: brepkit_math::vec::Point2| -> (i64, i64) {
+        (
+            (p.x() * qscale).round() as i64,
+            (p.y() * qscale).round() as i64,
+        )
+    };
+    for wire in loops {
+        if wire.len() < 3 {
+            continue;
+        }
+        let mut seen: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
+        for e in wire {
+            if !seen.insert(qkey(e.start_uv)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Quantized UV vertex key in the planar arrangement.
+type UvKey = (i64, i64);
+
+/// An undirected arrangement sub-segment: its two vertex keys, the source input
+/// index, and whether it spans that whole input (so a whole arc can be emitted
+/// with its true geometry).
+type ArrSubEdge = (UvKey, UvKey, usize, bool);
+
+/// A directed half-edge in the planar arrangement traced by
+/// [`split_plane_face_by_arrangement`]. `seg_id` is the undirected sub-segment
+/// index, shared by both directions so adjacent regions weld.
 struct ArrHalfEdge {
     from: (i64, i64),
     to: (i64, i64),
@@ -550,10 +574,49 @@ struct ArrHalfEdge {
     angle: f64,
 }
 
-/// which the lip-cut tests rely on. Returns `None` when the arrangement could
-/// not be traced or yields no interior region.
+/// One input edge to the arrangement (a boundary edge or a section), carrying
+/// the true edge geometry (line or arc) plus its UV chord for the topological
+/// subdivision. Arcs are represented by their chord while building the
+/// arrangement (intersection, vertex merging, half-edge tracing all run on the
+/// chord), then emitted as the true arc when the sub-edge spans the whole input.
+struct ArrInput {
+    /// UV chord start.
+    a: Point2,
+    /// UV chord end.
+    b: Point2,
+    /// True edge geometry to emit (3D curve, pcurve, endpoints, pave block).
+    edge: OrientedPCurveEdge,
+    /// Whether this input is an arc (non-Line). Arcs are emitted exactly only
+    /// when un-split; if an arc would be split at an interior crossing the
+    /// arrangement bails so the existing curved paths handle it.
+    is_arc: bool,
+}
+
+/// Decompose a planar face into its minimal interior regions via a 2D
+/// arrangement of its boundary and section edges.
+///
+/// The angular wire builder ([`build_wire_loops`]) and the single-crossing
+/// helper ([`try_split_crossing_plane_face`]) mis-partition a plane face cut by
+/// three or more sections that form a partial grid (e.g. a notch side wall on a
+/// SHELLED body, or an outer wall carved by a U-notch with rounded corners that
+/// opens at the rim) — they hand back one self-crossing wire, which makes the
+/// shared section edge non-manifold and forces a mesh fallback.
+///
+/// This builds the full planar subdivision instead: every boundary and section
+/// edge (lines exactly, arcs via their chord) is split at all mutual
+/// intersections, directed half-edges are traced into minimal faces by the
+/// leftmost-turn rule, and the unbounded outer face is dropped. Each interior
+/// region becomes a [`SplitSubFace`]. Straight sub-edges get 3D from the plane
+/// frame (UV↔3D is an exact bijection on a plane); whole arc inputs are emitted
+/// with their true `Circle`/`Ellipse` geometry so corner roundings are preserved
+/// exactly.
+///
+/// Conservative on arcs: if an arc input would be split at an interior crossing
+/// (so its true geometry cannot be reproduced as one edge), the function returns
+/// `None` and the existing curved paths take over. Returns `None` when the
+/// arrangement could not be traced or yields no interior region.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn split_plane_face_by_line_arrangement(
+fn split_plane_face_by_arrangement(
     surface: &FaceSurface,
     boundary_edges: &[OrientedPCurveEdge],
     sections: &[SectionEdge],
@@ -566,39 +629,80 @@ fn split_plane_face_by_line_arrangement(
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::vec::Vec2;
 
-    // All inputs must be line segments — curved boundaries/sections are left to
-    // the existing paths.
-    if !boundary_edges
-        .iter()
-        .all(|e| matches!(e.curve_3d, EdgeCurve::Line))
-    {
-        return None;
-    }
-    if !sections
-        .iter()
-        .all(|s| matches!(s.curve_3d, EdgeCurve::Line))
-    {
-        return None;
-    }
-
-    // Collect undirected UV segments. Boundary edges already carry UV in this
-    // frame; project section endpoints into the same frame so both live in one
-    // coordinate system.
-    let mut segs: Vec<(Point2, Point2)> = Vec::new();
+    // Collect input edges (boundary + sections) with their true geometry. Each
+    // arc keeps its source curve; the arrangement subdivision uses the chord.
+    let mut inputs: Vec<ArrInput> = Vec::new();
     for e in boundary_edges {
-        segs.push((e.start_uv, e.end_uv));
+        let is_arc = !matches!(e.curve_3d, EdgeCurve::Line);
+        inputs.push(ArrInput {
+            a: e.start_uv,
+            b: e.end_uv,
+            edge: e.clone(),
+            is_arc,
+        });
     }
     for s in sections {
-        segs.push((frame.project(s.start), frame.project(s.end)));
+        let is_arc = !matches!(s.curve_3d, EdgeCurve::Line);
+        // UV endpoints for this face (rank A/B), falling back to projection.
+        let (su, eu) = match rank {
+            Rank::A => (s.start_uv_a, s.end_uv_a),
+            Rank::B => (s.start_uv_b, s.end_uv_b),
+        };
+        let su = su.unwrap_or_else(|| frame.project(s.start));
+        let eu = eu.unwrap_or_else(|| frame.project(s.end));
+        // pcurve on this face: prefer the section's stored pcurve for the rank.
+        let pcurve = match rank {
+            Rank::A => s.pcurve_a.clone(),
+            Rank::B => s.pcurve_b.clone(),
+        };
+        inputs.push(ArrInput {
+            a: su,
+            b: eu,
+            edge: OrientedPCurveEdge {
+                curve_3d: s.curve_3d.clone(),
+                pcurve,
+                start_uv: su,
+                end_uv: eu,
+                start_3d: s.start,
+                end_3d: s.end,
+                forward: true,
+                source_edge_idx: None,
+                pave_block_id: s.pave_block_id,
+            },
+            is_arc,
+        });
     }
-    // Drop degenerate (zero-length) segments.
-    segs.retain(|(a, b)| (*a - *b).length() > tol);
-    if segs.len() < 3 {
+    // Drop degenerate (zero-length) inputs.
+    inputs.retain(|i| (i.a - i.b).length() > tol);
+    if inputs.len() < 3 {
         return None;
     }
 
-    // Quantize UV points so coincident vertices merge. Use a grid an order of
-    // magnitude finer than the linear tolerance (UV on a plane is metric).
+    // Every arc must actually LIE in this face's plane. A straddle arc (a corner
+    // cylinder crossing the cap plane, whose endpoints/midpoint sit off the
+    // plane) projects to a meaningless chord — its true geometry cannot be a
+    // sub-edge of this planar arrangement. Bail so the existing curved paths
+    // handle those faces. Test via the frame round-trip: an in-plane point maps
+    // project→evaluate back to itself; an off-plane point does not.
+    let on_plane = |p: Point3| -> bool {
+        let uv = frame.project(p);
+        (frame.evaluate(uv.x(), uv.y()) - p).length() <= tol
+    };
+    for inp in &inputs {
+        if inp.is_arc {
+            let mid =
+                inp.edge
+                    .curve_3d
+                    .evaluate_with_endpoints(0.5, inp.edge.start_3d, inp.edge.end_3d);
+            if !on_plane(inp.edge.start_3d) || !on_plane(inp.edge.end_3d) || !on_plane(mid) {
+                return None;
+            }
+        }
+    }
+
+    // Quantize UV points so coincident vertices merge. The grid cell is the
+    // linear tolerance: a point maps to `round(p / tol)`, so two points within
+    // `tol` collapse to one key (UV on a plane is metric).
     let qscale = 1.0 / tol.max(1e-12);
     let qkey = |p: Point2| -> (i64, i64) {
         (
@@ -607,8 +711,8 @@ fn split_plane_face_by_line_arrangement(
         )
     };
 
-    // Split each segment at every intersection with every other segment, plus
-    // at any other segment's endpoint that lands on its interior. Collect the
+    // Split each chord at every intersection with every other chord, plus at
+    // any other chord's endpoint that lands on its interior. Collect the
     // resulting break parameters, then emit sub-segments between consecutive
     // breaks.
     let mut vert_pos: std::collections::HashMap<(i64, i64), Point2> =
@@ -620,26 +724,28 @@ fn split_plane_face_by_line_arrangement(
             k
         };
 
-    // Undirected sub-segments keyed by endpoint vertex pair.
-    let mut sub_edges: Vec<((i64, i64), (i64, i64))> = Vec::new();
-    for i in 0..segs.len() {
-        let (a0, a1) = segs[i];
+    // Undirected sub-segments keyed by endpoint vertex pair, each tagged with
+    // its source input index and whether it spans that whole input.
+    let mut sub_edges: Vec<ArrSubEdge> = Vec::new();
+    for i in 0..inputs.len() {
+        let (a0, a1) = (inputs[i].a, inputs[i].b);
         let d = a1 - a0;
         let len = d.length();
         if len < tol {
             continue;
         }
-        // Break parameters along this segment (t in [0,1]).
+        // Break parameters along this chord (t in [0,1]).
         let mut ts: Vec<f64> = vec![0.0, 1.0];
-        for (j, &(b0, b1)) in segs.iter().enumerate() {
+        for (j, other) in inputs.iter().enumerate() {
             if i == j {
                 continue;
             }
+            let (b0, b1) = (other.a, other.b);
             // Proper interior crossing.
             if let Some(t) = seg_cross_param(a0, a1, b0, b1) {
                 ts.push(t);
             }
-            // Other segment's endpoints landing on this segment's interior
+            // Other chord's endpoints landing on this chord's interior
             // (T-junctions where a section merely touches another).
             for bp in [b0, b1] {
                 let w = (bp - a0).dot(d) / (len * len);
@@ -653,7 +759,13 @@ fn split_plane_face_by_line_arrangement(
         }
         ts.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
         ts.dedup_by(|x, y| (*x - *y).abs() < 1e-6);
-        for w in ts.windows(2) {
+        // An arc whose chord is split at an interior crossing cannot be emitted
+        // as one true arc; bail and let the existing curved paths handle it.
+        if inputs[i].is_arc && ts.len() > 2 {
+            return None;
+        }
+        let n_breaks = ts.len();
+        for (wi, w) in ts.windows(2).enumerate() {
             let (ta, tb) = (w[0], w[1]);
             if tb - ta < 1e-6 {
                 continue;
@@ -662,19 +774,41 @@ fn split_plane_face_by_line_arrangement(
             let pb = a0 + d * tb;
             let ka = register(pa, &mut vert_pos);
             let kb = register(pb, &mut vert_pos);
+            // Whole = this is the only sub-segment of the input (no interior
+            // breaks): exactly one window spanning [0,1].
+            let whole = n_breaks == 2 && wi == 0;
             if ka != kb {
-                sub_edges.push((ka, kb));
+                sub_edges.push((ka, kb, i, whole));
             }
         }
     }
 
     // Deduplicate undirected sub-edges (the same physical edge can arise from
-    // two overlapping input segments).
-    sub_edges.sort_unstable();
-    sub_edges.dedup();
+    // two overlapping input chords). Keep one record per vertex pair, preferring
+    // a whole-arc source so the true arc geometry is emitted.
+    sub_edges.sort_by(|l, r| {
+        let lk = if l.0 <= l.1 { (l.0, l.1) } else { (l.1, l.0) };
+        let rk = if r.0 <= r.1 { (r.0, r.1) } else { (r.1, r.0) };
+        lk.cmp(&rk)
+            // Prefer arc-whole inputs first within a vertex-pair group.
+            .then_with(|| {
+                let la = inputs[l.2].is_arc && l.3;
+                let ra = inputs[r.2].is_arc && r.3;
+                ra.cmp(&la)
+            })
+    });
+    sub_edges.dedup_by(|a, b| {
+        let ak = if a.0 <= a.1 { (a.0, a.1) } else { (a.1, a.0) };
+        let bk = if b.0 <= b.1 { (b.0, b.1) } else { (b.1, b.0) };
+        ak == bk
+    });
     if sub_edges.is_empty() {
         return None;
     }
+    // Drop the per-edge source/whole tags into a parallel lookup keyed by seg_id
+    // so the half-edge trace (which only needs vertex pairs) stays unchanged.
+    let sub_edge_src: Vec<(usize, bool)> = sub_edges.iter().map(|&(_, _, i, w)| (i, w)).collect();
+    let sub_edges: Vec<(UvKey, UvKey)> = sub_edges.iter().map(|&(a, b, _, _)| (a, b)).collect();
 
     // Build the directed half-edge adjacency. Each undirected sub-edge id maps
     // to two directed half-edges; both carry that id so adjacent regions share
@@ -810,10 +944,45 @@ fn split_plane_face_by_line_arrangement(
     }
 
     // Build sub-faces. Map each half-edge to an OrientedPCurveEdge line in UV
-    // with 3D from the plane frame.
+    // with 3D from the plane frame. A whole arc input is emitted with its true
+    // curve geometry (oriented to match the requested direction).
     let mk_edge = |from: (i64, i64), to: (i64, i64), seg_id: usize| -> Option<OrientedPCurveEdge> {
         let su = vert_pos[&from];
         let eu = vert_pos[&to];
+        // Reconstruct a whole arc input exactly.
+        if let Some(&(input_idx, whole)) = sub_edge_src.get(seg_id) {
+            let inp = &inputs[input_idx];
+            if whole && inp.is_arc {
+                // Does the requested from->to match the input's a->b chord?
+                let forward = (inp.a - su).length() < (inp.b - su).length();
+                let base = &inp.edge;
+                return Some(if forward {
+                    base.clone()
+                } else {
+                    OrientedPCurveEdge {
+                        curve_3d: base.curve_3d.clone(),
+                        pcurve: base.pcurve.clone(),
+                        start_uv: base.end_uv,
+                        end_uv: base.start_uv,
+                        start_3d: base.end_3d,
+                        end_3d: base.start_3d,
+                        forward: !base.forward,
+                        // `None` (carried from `base`, where every input edge is
+                        // built with `source_edge_idx: None`): these arrangement
+                        // sub-faces are written straight to topology by
+                        // `build_topology_face`, which does NOT weld via
+                        // `source_edge_idx` (its `_shared_edge_cache` is unused).
+                        // Each sub-face creates its own edges; the two directed
+                        // uses of a shared interior edge carry identical 3D
+                        // endpoints, so `merge_duplicate_edges` (position-keyed,
+                        // post-build) unifies them. `source_edge_idx` is read only
+                        // by the angular wire builder, which this path bypasses.
+                        source_edge_idx: None,
+                        pave_block_id: base.pave_block_id,
+                    }
+                });
+            }
+        }
         let dir = eu - su;
         let len = dir.length();
         let direction = if len > 1e-12 {
@@ -1518,20 +1687,25 @@ pub fn split_face_2d(
     }
 
     // General planar arrangement fallback: a plane face cut by three or more
-    // line sections forming a partial grid (e.g. a notch side wall on a SHELLED
-    // body crossed by the outer wall, the inner cavity wall, and the rim) is not
+    // sections forming a partial grid (e.g. a notch side wall on a SHELLED body
+    // crossed by the outer wall, the inner cavity wall and the rim, or an outer
+    // wall carved by a U-notch with rounded corners opening at the rim) is not
     // covered by `try_split_crossing_plane_face` (2/4-section X/T/star only), and
-    // the angular wire builder hands back a single self-crossing loop. Decompose
-    // the full arrangement into minimal regions when it yields more than the
-    // wire builder did. All-line only; curved faces keep the existing paths.
+    // the angular wire builder hands back a self-crossing loop. Decompose the
+    // full arrangement into minimal regions when it yields more regions than the
+    // wire builder, OR when the wire builder's loops self-cross (the arrangement
+    // can replace a broken trace with simple regions even at an equal/lower
+    // count). Lines are exact; in-plane arcs (corner roundings) are preserved via
+    // their true geometry — `split_plane_face_by_arrangement` bails on off-plane
+    // straddle arcs so those faces keep the existing curved paths.
     if sections.len() >= 2
         && is_plane
         && !holes_integrated
         && let Some(ref boundary) = boundary_edges_backup
-        && let Some(result) = split_plane_face_by_line_arrangement(
+        && let Some(result) = split_plane_face_by_arrangement(
             &surface, boundary, sections, rank, reversed, face_id, frame, tol.linear,
         )
-        && result.len() > loops.len()
+        && (result.len() > loops.len() || wire_loops_self_cross(&loops, tol.linear))
     {
         return result;
     }
