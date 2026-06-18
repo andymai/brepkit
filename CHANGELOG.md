@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.7](https://github.com/andymai/brepkit/compare/v2.114.6...v2.114.7) (2026-06-18)
+
+
+### Bug Fixes
+
+* **algo:** trim coplanar sections to face boundaries + recognise flat NURBS (scoop fuse) ([#905](https://github.com/andymai/brepkit/issues/905)) ([b46141f](https://github.com/andymai/brepkit/commit/b46141f59b4b42792160c29f46c6ab46d2636527))
+
 ## [2.114.6](https://github.com/andymai/brepkit/compare/v2.114.5...v2.114.6) (2026-06-18)
 
 
