@@ -66,14 +66,15 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
         if len < 1e-15 {
             continue;
         }
-        // Inward normal depends on winding:
-        // CCW (positive area) -> (dy, -dx) rotated; CW -> the opposite.
+        // Inward normal depends on winding (left normal of the edge for a
+        // CCW loop): CCW (positive area) -> (-dy, dx); CW -> (dy, -dx).
         let inward = if area > 0.0 {
             Vec2::new(-edge_dir.y() / len, edge_dir.x() / len)
         } else {
             Vec2::new(edge_dir.y() / len, -edge_dir.x() / len)
         };
-        // First crossing of the inward ray with any non-adjacent boundary edge.
+        // First crossing of the inward ray with any other boundary edge
+        // (every edge except the current one `i`).
         let mut t_hit = f64::INFINITY;
         for k in 0..n {
             if k == i {
@@ -95,7 +96,14 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
             mid.x() + inward.x() * t_hit * 0.5,
             mid.y() + inward.y() * t_hit * 0.5,
         );
-        if point_in_polygon_2d(cand, loop_pts) && best.is_none_or(|(_, bt)| t_hit > bt) {
+        // Keep the longest interior chord; break exact ties by the candidate's
+        // lexicographic coordinates so the result is loop-rotation-invariant
+        // (the chosen start edge is HashMap-order-dependent upstream).
+        let better = best.is_none_or(|(bp, bt)| {
+            t_hit > bt + 1e-12
+                || ((t_hit - bt).abs() <= 1e-12 && (cand.x(), cand.y()) < (bp.x(), bp.y()))
+        });
+        if point_in_polygon_2d(cand, loop_pts) && better {
             best = Some((cand, t_hit));
         }
     }
