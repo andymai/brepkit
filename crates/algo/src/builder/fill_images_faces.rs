@@ -1700,7 +1700,26 @@ fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
                 continue;
             }
 
-            // Collinear and on the same line. Remove the shorter one.
+            // Collinear and on the same infinite line, but possibly DISJOINT:
+            // two notches on opposite walls cut the same rim along the same
+            // x = ±cut_hw line, yet their cut segments sit at opposite ends of
+            // the face and must both survive. Only treat the shorter section as
+            // a redundant subset when its span actually OVERLAPS the longer one
+            // (a coplanar inner-region edge nested in the full-face FF edge).
+            // Project both segments onto the shared line and compare intervals.
+            let proj = |p: Point3, origin: Point3| (p - origin).dot(dj_unit);
+            let (ia0, ia1) = (proj(si.start, sj.start), proj(si.end, sj.start));
+            let (ib0, ib1) = (proj(sj.start, sj.start), proj(sj.end, sj.start));
+            let (ia_lo, ia_hi) = (ia0.min(ia1), ia0.max(ia1));
+            let (ib_lo, ib_hi) = (ib0.min(ib1), ib0.max(ib1));
+            // Overlap length of the two 1D intervals; require a real (not just
+            // touching) overlap before either can be a subset of the other.
+            let overlap = ia_hi.min(ib_hi) - ia_lo.max(ib_lo);
+            if overlap <= tol {
+                continue;
+            }
+
+            // Overlapping collinear sections. Remove the shorter one.
             let len_i = (si.end - si.start).length();
             let len_j = (sj.end - sj.start).length();
             if len_i < len_j - tol {

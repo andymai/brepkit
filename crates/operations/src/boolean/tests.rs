@@ -4867,21 +4867,21 @@ fn cut_wall_notch_through_shelled_wall_is_watertight() {
 
 /// The real gridfinity "2×2 wall cutouts" bin cuts ALL FOUR walls at once: it
 /// fuses the four wall-cutout prisms (`merge_disjoint_solids`) and applies ONE
-/// boolean. With the four-shell tool, the rim (top annular face) is carved by
-/// four notch openings, and the angular wire builder emits a SPURIOUS extra
-/// loop re-tracing the notch opening on some walls (a notch whose sections reach
-/// the rim's outer boundary produces a second positive-area loop that re-adds
-/// the removed region) → those rim-bite edges go unshared.
+/// boolean. With the four-shell tool the rim (the shelled top annular face) is
+/// carved by several notch openings whose side cuts share a line across the
+/// face. Two bugs combined to make this intermittently mesh-fall-back. First,
+/// `dedup_collinear_sections` dropped a rim cut whenever it was collinear with
+/// (but disjoint from) a longer cut from the opposite wall — both notches share
+/// the `x = ±cut_hw` line — so the rim lost the sections it needed to carve
+/// cleanly. Second, `sample_interior_point` returned the first inward edge nudge
+/// that tested inside, which depends on the wire builder's per-process
+/// nondeterministic loop rotation; on a notched annular rim slice that picked a
+/// different pocket each run, flipping the sub-face's IN/OUT classification.
 ///
-/// OPEN: this `#[ignore]`d test pins the residual. The dimensions match
-/// `wallCutoutBuilder.ts` for a 2×2 no-lip bin (wallHeight 16, wall 1.2, hw
-/// 28.385, r 1.11, depth 3.4, top z=18). The single-wall path is clean
-/// (`cut_wall_notch_through_shelled_wall_is_watertight`). The planar-arrangement
-/// and arc-hole fixes bring the four-wall result from 18 free / 4 over down to 8
-/// free / 0 over (cylinders preserved), but the spurious-rim-loop asymmetry in
-/// the multi-shell-tool cut is a separate, deeper GFA issue.
+/// The dimensions match `wallCutoutBuilder.ts` for a 2×2 no-lip bin (wallHeight
+/// 16, wall 1.2, hw 28.385, r 1.11, depth 3.4, top z=18). The cut must now be
+/// watertight (free = over = 0) deterministically.
 #[test]
-#[ignore = "open: multi-shell wall-cutout tool leaves spurious rim-bite loops"]
 fn cut_2x2_wall_cutouts_four_walls_is_watertight() {
     use brepkit_math::mat::Mat4;
     use std::f64::consts::FRAC_PI_2;
