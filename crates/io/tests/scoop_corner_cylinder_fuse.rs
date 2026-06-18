@@ -1,18 +1,33 @@
 //! Regression test for the gridfinity scoop-fuse-into-compartmented-bin
-//! non-manifold (corner-cylinder half).
+//! non-manifold.
 //!
-//! A faceted concave scoop-ramp prism is fused into a no-lip compartmented
-//! bin. The scoop's sharp staircase pokes into the bin's rounded corner
-//! cylinders, so each tread plane meets a corner cylinder in a sub-millimetre
-//! ellipse arc. Those per-tread arcs must assemble into one continuous split
-//! curve so the cylinder splits into a lower band (engulfed by the scoop →
-//! dropped) and an upper band (faces the open cavity → kept). When the arcs do
-//! not chain, the cylinder stays whole, its interior sample lands inside the
-//! scoop, and it is dropped entirely → free edges → mesh-boolean fallback.
+//! A faceted concave scoop-ramp prism is fused into a no-lip compartmented bin
+//! (a box cut by two cavity prisms with rounded corners). The fuse goes
+//! non-manifold three ways:
 //!
-//! The bin walls are exported by STEP as B-splines; the native tool builds
-//! them as `Plane`+`Cylinder` via rounded-rect extrude, so `convert_to_elementary`
-//! recovers the faithful (plane-walled) geometry before the fuse.
+//! 1. The scoop's sharp staircase pokes into the bin's rounded corner cylinders,
+//!    so each tread plane meets a corner cylinder in a sub-millimetre ellipse
+//!    arc. Those per-tread arcs must assemble into one continuous split curve so
+//!    the cylinder splits into a lower band (engulfed by the scoop → dropped)
+//!    and an upper band (faces the open cavity → kept). When the arcs do not
+//!    chain, the cylinder stays whole, its interior sample lands inside the
+//!    scoop, and it is dropped entirely → free edges.
+//! 2. The compartmented bin's cavity walls are exported by STEP — and built by
+//!    the tool's rounded-rect extrude — as planar B-splines (NURBS). Their FF
+//!    intersections with the scoop's planes never enter the analytic
+//!    plane×plane path, so the coincident/abutting wall regions never
+//!    same-domain merge. They must be recognised as planes before the fuse.
+//! 3. The scoop's bottom face (z=0) is coincident with the bin's bottom cap; the
+//!    scoop's side faces cut footprint lines onto the rounded-rect cap, which the
+//!    wire builder traces as one self-crossing loop.
+//!
+//! The fixtures are the tool's literal operands (brepjs sketch+extrude geometry,
+//! exported via STEP), fused exactly as the tool fuses them: the compartmented
+//! bin is built by cutting `bin_box` with `cavity_0` then `cavity_1` (NO
+//! `convert_to_elementary` — the tool keeps the NURBS walls at fuse time), then
+//! the scoop ramp is fused into that bin. A native rounded-rect rebuild does not
+//! reproduce the exact prism/seam structure, so the regression is guarded with
+//! these.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -20,7 +35,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use brepkit_operations::boolean::{BooleanOp, boolean};
-use brepkit_operations::heal::convert_to_elementary;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceSurface;
@@ -71,14 +85,18 @@ fn edge_incidence(topo: &Topology, solid: SolidId) -> HashMap<(QPoint, QPoint), 
 #[test]
 fn scoop_fuse_corner_cylinders_are_watertight() {
     let mut topo = Topology::new();
-    let bin = read_one("scoop_comp_bin.step", &mut topo);
+    let bin_box = read_one("scoop_bin_box.step", &mut topo);
+    let cavity_0 = read_one("scoop_cavity_0.step", &mut topo);
+    let cavity_1 = read_one("scoop_cavity_1.step", &mut topo);
     let scoop = read_one("scoop_scoop_0.step", &mut topo);
 
-    // Recover the faithful plane-walled bin (STEP export turned the planar
-    // walls into B-splines; the corners stay analytic cylinders).
-    convert_to_elementary(&mut topo, bin, 1e-5).unwrap();
+    // Build the compartmented bin exactly as the tool does: cut the two cavities
+    // from the box. The cavity walls stay planar NURBS (the tool does NOT
+    // convert them to planes before the scoop fuse).
+    let comp_bin = boolean(&mut topo, BooleanOp::Cut, bin_box, cavity_0).unwrap();
+    let comp_bin = boolean(&mut topo, BooleanOp::Cut, comp_bin, cavity_1).unwrap();
 
-    let result = boolean(&mut topo, BooleanOp::Fuse, bin, scoop).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Fuse, comp_bin, scoop).unwrap();
 
     // Watertight: every edge bordered by exactly two faces.
     let counts = edge_incidence(&topo, result);
@@ -86,9 +104,9 @@ fn scoop_fuse_corner_cylinders_are_watertight() {
     let over = counts.values().filter(|&&c| c > 2).count();
     assert_eq!(
         free, 0,
-        "fuse result has {free} free edges (corner cylinders dropped)"
+        "scoop fuse result has {free} free edges (non-manifold)"
     );
-    assert_eq!(over, 0, "fuse result has {over} over-shared edges");
+    assert_eq!(over, 0, "scoop fuse result has {over} over-shared edges");
 
     // No mesh-boolean fallback: the GFA result must survive as analytic
     // geometry. The fallback tessellates everything to planes (hundreds of

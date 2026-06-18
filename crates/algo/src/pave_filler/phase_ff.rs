@@ -2471,14 +2471,21 @@ fn clip_line_to_face(topo: &Topology, face_id: FaceId, raw: &RawCurve) -> FaceCl
             (uv.x(), uv.y())
         })
         .collect();
-    // Cyrus-Beck is only correct for convex polygons. A non-convex outline
-    // would produce a wrong (over-trimmed) interval, so treat it as
-    // indeterminate and let the caller keep the raw curve.
-    if !polygon_is_convex(&poly) {
-        return FaceClip::Indeterminate;
-    }
     let s = frame.project(raw.p_start);
     let e = frame.project(raw.p_end);
+    // Cyrus-Beck is only correct for convex polygons. For a non-convex
+    // outline (e.g. a faceted scoop-ramp side face, whose profile is a
+    // staircase, or a notched cavity floor) use the general crossing-based
+    // clip so the section is still trimmed to the face's true extent. Leaving
+    // it untrimmed lets a perpendicular plane×plane section span the union of
+    // both faces' bounding boxes and cross a rounded-rect corner arc mid-edge,
+    // which forces the downstream planar arrangement to bail.
+    if !polygon_is_convex(&poly) {
+        return match clip_line_to_polygon_general((s.x(), s.y()), (e.x(), e.y()), &poly) {
+            Some(range) => FaceClip::Range(range),
+            None => FaceClip::Empty,
+        };
+    }
     match clip_line_to_polygon((s.x(), s.y()), (e.x(), e.y()), &poly) {
         Some(range) => FaceClip::Range(range),
         None => FaceClip::Empty,
@@ -2568,6 +2575,79 @@ fn clip_line_to_polygon(
     Some((t_min.max(0.0), t_max.min(1.0)))
 }
 
+/// Clip a line segment `start`→`end` to an arbitrary (possibly non-convex)
+/// simple polygon, returning the fractional `[t_min, t_max]` range that bounds
+/// the in-polygon portion(s), or `None` when the segment never enters the
+/// polygon.
+///
+/// The intersection of a line with a non-convex polygon can be several disjoint
+/// intervals; this returns their convex hull (first entry to last exit). That
+/// is exactly what section trimming needs — a conservative single span that no
+/// longer over-reaches past the face, while still covering every in-face part.
+/// Crossings are found at each polygon edge; the parametric midpoints between
+/// consecutive crossings are classified by a point-in-polygon test so that
+/// grazing/collinear touches do not spuriously open an interval.
+fn clip_line_to_polygon_general(
+    start: (f64, f64),
+    end: (f64, f64),
+    polygon: &[(f64, f64)],
+) -> Option<(f64, f64)> {
+    use brepkit_math::predicates::point_in_polygon;
+    use brepkit_math::vec::Point2;
+
+    let n = polygon.len();
+    if n < 3 {
+        return None;
+    }
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    if dx.hypot(dy) < 1e-12 {
+        return None;
+    }
+
+    // Collect t-parameters along the segment where it crosses a polygon edge.
+    let mut ts: Vec<f64> = vec![0.0, 1.0];
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (ax, ay) = polygon[i];
+        let (bx, by) = polygon[j];
+        let ex = bx - ax;
+        let ey = by - ay;
+        // Solve start + t*d = a + u*e for t (segment param) and u (edge param).
+        let denom = dx * ey - dy * ex;
+        if denom.abs() < 1e-15 {
+            continue; // parallel
+        }
+        let t = ((ax - start.0) * ey - (ay - start.1) * ex) / denom;
+        let u = ((ax - start.0) * dy - (ay - start.1) * dx) / denom;
+        if (-1e-9..=1.0 + 1e-9).contains(&u) {
+            ts.push(t.clamp(0.0, 1.0));
+        }
+    }
+    ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+
+    let poly_pts: Vec<Point2> = polygon.iter().map(|&(x, y)| Point2::new(x, y)).collect();
+    let mut lo = f64::MAX;
+    let mut hi = f64::MIN;
+    for w in ts.windows(2) {
+        let (ta, tb) = (w[0], w[1]);
+        if tb - ta < 1e-9 {
+            continue;
+        }
+        let tm = 0.5 * (ta + tb);
+        let mid = Point2::new(start.0 + dx * tm, start.1 + dy * tm);
+        if point_in_polygon(mid, &poly_pts) {
+            lo = lo.min(ta);
+            hi = hi.max(tb);
+        }
+    }
+    if hi - lo < 1e-6 {
+        return None;
+    }
+    Some((lo.max(0.0), hi.min(1.0)))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -2650,6 +2730,40 @@ mod tests {
         // A concave "arrowhead": the reflex vertex flips the turn sign.
         let poly = vec![(0.0, 0.0), (2.0, 1.0), (0.0, 2.0), (1.0, 1.0)];
         assert!(!polygon_is_convex(&poly));
+    }
+
+    #[test]
+    fn general_clip_trims_to_nonconvex_extent() {
+        // An L-shaped (non-convex) polygon: the staircase profile of a scoop
+        // side face. A horizontal section line spanning well past the polygon
+        // must be trimmed to the polygon's actual x-extent, not the line's full
+        // length — this is what stops a perpendicular plane×plane section from
+        // over-reaching across a rounded-rect corner arc.
+        // L: (0,0)-(2,0)-(2,1)-(1,1)-(1,2)-(0,2)
+        let poly = vec![
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (2.0, 1.0),
+            (1.0, 1.0),
+            (1.0, 2.0),
+            (0.0, 2.0),
+        ];
+        // Line at y=0.5 (in the wide lower arm): inside for x in [0,2].
+        let r = clip_line_to_polygon_general((-5.0, 0.5), (5.0, 0.5), &poly).unwrap();
+        let x0 = -5.0 + 10.0 * r.0;
+        let x1 = -5.0 + 10.0 * r.1;
+        assert!((x0 - 0.0).abs() < 1e-6, "x0={x0}");
+        assert!((x1 - 2.0).abs() < 1e-6, "x1={x1}");
+
+        // Line at y=1.5 (in the narrow upper arm): inside only for x in [0,1].
+        let r = clip_line_to_polygon_general((-5.0, 1.5), (5.0, 1.5), &poly).unwrap();
+        let x0 = -5.0 + 10.0 * r.0;
+        let x1 = -5.0 + 10.0 * r.1;
+        assert!((x0 - 0.0).abs() < 1e-6, "x0={x0}");
+        assert!((x1 - 1.0).abs() < 1e-6, "x1={x1}");
+
+        // A line entirely outside returns None.
+        assert!(clip_line_to_polygon_general((-5.0, 3.0), (5.0, 3.0), &poly).is_none());
     }
 
     fn hit_at(angle: f64) -> (f64, Point3) {

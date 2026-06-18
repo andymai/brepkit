@@ -238,23 +238,29 @@ fn process_coplanar_pair(
     let edges_a = face_boundary_edges_2d(topo, face_a, &frame)?;
     let edges_b = face_boundary_edges_2d(topo, face_b, &frame)?;
 
-    // For each boundary edge of face_b, check if it's inside face_a.
-    // Skip edges that already have a section curve from the regular FF phase
-    // at the same position (prevents duplicate section edges that create
-    // spurious inner wires in the face splitter).
+    // For each boundary edge of face_b, create a section for the part inside
+    // face_a. Clipping to face_a's polygon lands a straddling edge's endpoint
+    // exactly on the boundary, so a faceted chain (e.g. a scoop ramp leaving the
+    // cavity wall) reaches the wall edge and the wall partitions; a fully-inside
+    // edge is kept whole. Skip true shared-boundary edges (both endpoints on the
+    // same target edge) and edges already sectioned by the regular FF phase.
     for &(_, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_b {
-        if should_create_section_edge(p2d_start, p2d_end, &poly_a, &edges_a, tol.linear)
-            && !has_existing_section_at(arena, face_a, face_b, p3d_start, p3d_end, tol)
+        if !is_shared_boundary_edge(p2d_start, p2d_end, &edges_a, tol.linear)
+            && let Some((c_start, c_end)) =
+                clip_section_to_polygon(p2d_start, p2d_end, p3d_start, p3d_end, &poly_a, tol.linear)
+            && !has_existing_section_at(arena, face_a, face_b, c_start, c_end, tol)
         {
-            create_section_edge(topo, arena, face_a, face_b, p3d_start, p3d_end, tol)?;
+            create_section_edge(topo, arena, face_a, face_b, c_start, c_end, tol)?;
         }
     }
 
     for &(_, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_a {
-        if should_create_section_edge(p2d_start, p2d_end, &poly_b, &edges_b, tol.linear)
-            && !has_existing_section_at(arena, face_a, face_b, p3d_start, p3d_end, tol)
+        if !is_shared_boundary_edge(p2d_start, p2d_end, &edges_b, tol.linear)
+            && let Some((c_start, c_end)) =
+                clip_section_to_polygon(p2d_start, p2d_end, p3d_start, p3d_end, &poly_b, tol.linear)
+            && !has_existing_section_at(arena, face_a, face_b, c_start, c_end, tol)
         {
-            create_section_edge(topo, arena, face_a, face_b, p3d_start, p3d_end, tol)?;
+            create_section_edge(topo, arena, face_a, face_b, c_start, c_end, tol)?;
         }
     }
 
@@ -351,35 +357,103 @@ fn face_boundary_edges_2d(
     Ok(edges)
 }
 
-/// Determine whether a boundary edge should become a section edge in the
-/// target face.
-///
-/// An edge qualifies if its midpoint is inside the target polygon AND it is
-/// not a shared boundary edge (both endpoints on the target boundary).
-fn should_create_section_edge(
+/// True when a boundary edge is a shared boundary segment of the target face:
+/// both endpoints lie on the SAME target boundary edge (collinear with it).
+/// Such an edge is the faces' common boundary, not a dividing section. An edge
+/// whose endpoints sit on DIFFERENT target edges crosses the interior and is a
+/// genuine section.
+fn is_shared_boundary_edge(
     p2d_start: Point2,
     p2d_end: Point2,
-    target_polygon: &[Point2],
     target_edges: &[BoundaryEdge],
     tol: f64,
 ) -> bool {
-    // Skip only if both endpoints lie on the SAME target boundary edge.
-    // This identifies truly shared boundary edges (collinear with a target edge).
-    // Don't skip if endpoints are on DIFFERENT target edges — those are
-    // crossing edges that enter and exit the target boundary.
     let start_edge_idx = which_boundary_edge(p2d_start, target_edges, tol);
     let end_edge_idx = which_boundary_edge(p2d_end, target_edges, tol);
-    if let (Some(si), Some(ei)) = (start_edge_idx, end_edge_idx)
-        && si == ei
-    {
-        return false; // Both endpoints on the same target edge — shared boundary
+    matches!((start_edge_idx, end_edge_idx), (Some(si), Some(ei)) if si == ei)
+}
+
+/// Clip a coplanar section edge to the target face polygon, returning the
+/// 3D endpoints of the sub-segment that lies inside the polygon (or `None`
+/// when the whole segment is outside).
+///
+/// A face-b boundary edge that straddles the target boundary (one endpoint
+/// inside the wall, the other outside, e.g. a faceted scoop ramp leaving the
+/// cavity wall) would otherwise contribute a section that overshoots the wall
+/// or — if its midpoint falls outside — none at all, leaving the section chain
+/// dangling at an interior vertex so the wall never splits. Clipping at the
+/// boundary crossing lands the chain endpoint exactly on the wall edge, so the
+/// face partitions. A fully-inside edge is returned unchanged.
+fn clip_section_to_polygon(
+    p2d_start: Point2,
+    p2d_end: Point2,
+    p3d_start: Point3,
+    p3d_end: Point3,
+    polygon: &[Point2],
+    tol: f64,
+) -> Option<(Point3, Point3)> {
+    let inside = |p: Point2| point_in_polygon_2d(p, polygon);
+    let start_in = inside(p2d_start);
+    let end_in = inside(p2d_end);
+    if start_in && end_in {
+        return Some((p3d_start, p3d_end));
     }
 
-    let mid = Point2::new(
-        (p2d_start.x() + p2d_end.x()) * 0.5,
-        (p2d_start.y() + p2d_end.y()) * 0.5,
-    );
-    point_in_polygon_2d(mid, target_polygon)
+    // Parameter(s) along the segment where it crosses a polygon edge.
+    let d = Point2::new(p2d_end.x() - p2d_start.x(), p2d_end.y() - p2d_start.y());
+    let seg_len = d.x().hypot(d.y());
+    if seg_len < tol {
+        return None;
+    }
+    let mut ts: Vec<f64> = Vec::new();
+    let n = polygon.len();
+    for i in 0..n {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % n];
+        let e = Point2::new(b.x() - a.x(), b.y() - a.y());
+        let denom = d.x() * e.y() - d.y() * e.x();
+        if denom.abs() < 1e-15 {
+            continue;
+        }
+        let t = ((a.x() - p2d_start.x()) * e.y() - (a.y() - p2d_start.y()) * e.x()) / denom;
+        let u = ((a.x() - p2d_start.x()) * d.y() - (a.y() - p2d_start.y()) * d.x()) / denom;
+        if (-1e-9..=1.0 + 1e-9).contains(&t) && (-1e-9..=1.0 + 1e-9).contains(&u) {
+            ts.push(t.clamp(0.0, 1.0));
+        }
+    }
+    ts.push(0.0);
+    ts.push(1.0);
+    ts.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+
+    // Find the in-polygon sub-interval (mid-sample test) spanning the most.
+    let mut best: Option<(f64, f64)> = None;
+    for w in ts.windows(2) {
+        let (ta, tb) = (w[0], w[1]);
+        if tb - ta < 1e-9 {
+            continue;
+        }
+        let tm = 0.5 * (ta + tb);
+        let mid = Point2::new(p2d_start.x() + d.x() * tm, p2d_start.y() + d.y() * tm);
+        if inside(mid) {
+            best = Some(match best {
+                Some((lo, _)) => (lo, tb),
+                None => (ta, tb),
+            });
+        }
+    }
+    let (ta, tb) = best?;
+    if (tb - ta) * seg_len < tol {
+        return None;
+    }
+    let lerp = |t: f64| -> Point3 {
+        Point3::new(
+            p3d_start.x() + (p3d_end.x() - p3d_start.x()) * t,
+            p3d_start.y() + (p3d_end.y() - p3d_start.y()) * t,
+            p3d_start.z() + (p3d_end.z() - p3d_start.z()) * t,
+        )
+    };
+    Some((lerp(ta), lerp(tb)))
 }
 
 /// Create a section edge and register it in the GFA arena.

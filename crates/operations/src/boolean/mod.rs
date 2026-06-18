@@ -541,8 +541,31 @@ pub fn boolean(
         BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
         BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
     };
+    // Recognise flat NURBS walls/edges as analytic planes/lines so the engine's
+    // face-face intersections take the exact plane×plane path (the tool's
+    // rounded-rect extrude emits straight cavity walls as planar B-splines).
+    // Only an operand that actually carries flattenable NURBS is deep-copied
+    // and rewritten; operands without any (the common case — primitives and
+    // already-analytic solids) are passed through unchanged. This matters for
+    // correctness, not just speed: the engine's downstream ordering is keyed on
+    // entity ids, so needlessly deep-copying an operand (which renumbers its
+    // ids) can perturb volume-sensitive cut/fuse results.
+    let gfa_a = if solid_has_flattenable_nurbs(topo, a)? {
+        let copy_a = crate::copy::copy_solid(topo, a)?;
+        let _ = flatten_planar_nurbs_faces(topo, copy_a, tol.linear)?;
+        copy_a
+    } else {
+        a
+    };
+    let gfa_b = if solid_has_flattenable_nurbs(topo, b)? {
+        let copy_b = crate::copy::copy_solid(topo, b)?;
+        let _ = flatten_planar_nurbs_faces(topo, copy_b, tol.linear)?;
+        copy_b
+    } else {
+        b
+    };
     let gfa_start = timer_now();
-    match brepkit_algo::gfa::boolean(topo, algo_op, a, b) {
+    match brepkit_algo::gfa::boolean(topo, algo_op, gfa_a, gfa_b) {
         Ok(result) => {
             let result_faces = brepkit_topology::explorer::solid_faces(topo, result)
                 .map(|f| f.len())
@@ -2533,6 +2556,132 @@ fn shell_is_closed_manifold(
 fn has_free_edges(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
     let counts = solid_edge_use_counts(topo, solid)?;
     Ok(counts.values().any(|&c| c == 1))
+}
+
+/// Cheap read-only test for whether [`flatten_planar_nurbs_faces`] would change
+/// anything: does `solid` carry a planar NURBS face or a straight NURBS edge?
+/// Used to gate the deep-copy-and-flatten pre-pass so analytic operands are
+/// passed to the engine unchanged (a needless deep copy renumbers entity ids
+/// and can perturb the engine's id-keyed ordering on volume-sensitive cuts).
+fn solid_has_flattenable_nurbs(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<bool, crate::OperationsError> {
+    use brepkit_geometry::convert::{
+        RecognizedCurve, RecognizedSurface, recognize_curve, recognize_surface,
+    };
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::explorer::solid_faces;
+
+    let tol = brepkit_math::tolerance::Tolerance::new().linear;
+    let mut seen = std::collections::HashSet::new();
+    for fid in solid_faces(topo, solid)? {
+        let face = topo.face(fid)?;
+        if let FaceSurface::Nurbs(nurbs) = face.surface()
+            && matches!(
+                recognize_surface(nurbs, tol),
+                RecognizedSurface::Plane { .. }
+            )
+        {
+            return Ok(true);
+        }
+        for &wid in std::iter::once(&face.outer_wire()).chain(face.inner_wires()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let eid = oe.edge();
+                if !seen.insert(eid.index()) {
+                    continue;
+                }
+                if let EdgeCurve::NurbsCurve(nurbs) = topo.edge(eid)?.curve()
+                    && matches!(recognize_curve(nurbs, tol), RecognizedCurve::Line { .. })
+                {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Replace planar NURBS faces of `solid` with analytic `Plane` surfaces, and
+/// straight NURBS boundary edges with the `Line` variant.
+///
+/// A NURBS surface whose every control point lies within `tol` of a single
+/// plane is geometrically a plane; the tool's rounded-rect extrude emits the
+/// straight cavity walls as planar B-splines, and the boolean engine's
+/// face-face intersections only take the exact (same-domain) plane×plane path
+/// when both operands are `FaceSurface::Plane`. Recognising the flat walls as
+/// planes before the boolean lets coincident/abutting wall regions merge
+/// analytically instead of fragmenting through the NURBS surface-intersection
+/// path.
+///
+/// The same extrude also leaves the straight cavity-floor/wall boundary edges
+/// as NURBS curves. A planar-arrangement splitter treats every non-`Line` edge
+/// as an arc and bails when one is split mid-edge by a coplanar section, so a
+/// straight NURBS floor edge crossed by the scoop footprint forces the floor
+/// face to a self-crossing trace. Recognising those straight NURBS edges as
+/// `Line` lets the arrangement split them exactly.
+///
+/// Genuinely curved NURBS surfaces/edges (and all other analytic geometry) are
+/// left untouched. Returns the number of faces flattened.
+fn flatten_planar_nurbs_faces(
+    topo: &mut Topology,
+    solid: SolidId,
+    tol: f64,
+) -> Result<usize, crate::OperationsError> {
+    use brepkit_geometry::convert::{
+        RecognizedCurve, RecognizedSurface, recognize_curve, recognize_surface,
+    };
+    use brepkit_topology::edge::{EdgeCurve, EdgeId};
+    use brepkit_topology::explorer::solid_faces;
+
+    let face_ids = solid_faces(topo, solid)?;
+    // Snapshot the surfaces first (immutable borrow), then mutate.
+    let planar: Vec<(FaceId, Vec3, f64)> = face_ids
+        .iter()
+        .filter_map(|&fid| {
+            let face = topo.face(fid).ok()?;
+            let FaceSurface::Nurbs(nurbs) = face.surface() else {
+                return None;
+            };
+            match recognize_surface(nurbs, tol) {
+                RecognizedSurface::Plane { normal, d } => Some((fid, normal, d)),
+                _ => None,
+            }
+        })
+        .collect();
+    let count = planar.len();
+    for (fid, normal, d) in planar {
+        topo.face_mut(fid)?
+            .set_surface(FaceSurface::Plane { normal, d });
+    }
+
+    // Straighten NURBS edges that are geometrically lines.
+    let mut straight_edges: Vec<EdgeId> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for &fid in &face_ids {
+        let face = topo.face(fid)?;
+        for &wid in std::iter::once(&face.outer_wire()).chain(face.inner_wires()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let eid = oe.edge();
+                if !seen.insert(eid.index()) {
+                    continue;
+                }
+                let EdgeCurve::NurbsCurve(nurbs) = topo.edge(eid)?.curve() else {
+                    continue;
+                };
+                if matches!(recognize_curve(nurbs, tol), RecognizedCurve::Line { .. }) {
+                    straight_edges.push(eid);
+                }
+            }
+        }
+    }
+    for eid in straight_edges {
+        topo.edge_mut(eid)?.set_curve(EdgeCurve::Line);
+    }
+
+    Ok(count)
 }
 
 /// For each vertex position (quantized at tolerance), picks one canonical
