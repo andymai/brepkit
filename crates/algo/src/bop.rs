@@ -52,17 +52,23 @@ pub(crate) fn select_faces(
     let valid_sd_pairs: Vec<&SameDomainPair> = sd_pairs
         .iter()
         .filter(|p| {
+            // `representative` is always idx_a or idx_b, so its bound is
+            // implied — but check it explicitly since `apply_sd_selection`
+            // indexes `sub_faces` with it and an out-of-bounds value would
+            // panic.
             let a_ok = p.idx_a < sub_faces.len();
             let b_ok = p.idx_b < sub_faces.len();
-            if !a_ok || !b_ok {
+            let rep_ok = p.representative < sub_faces.len();
+            if !a_ok || !b_ok || !rep_ok {
                 log::warn!(
-                    "SD pair ({}, {}) has out-of-bounds index (len={}), skipping",
+                    "SD pair ({}, {}) rep {} has out-of-bounds index (len={}), skipping",
                     p.idx_a,
                     p.idx_b,
+                    p.representative,
                     sub_faces.len()
                 );
             }
-            a_ok && b_ok
+            a_ok && b_ok && rep_ok
         })
         .collect();
 
@@ -160,13 +166,16 @@ fn apply_sd_selection(
 
         if same_ori_needed == pair.same_orientation {
             // Orientations match what the operation needs:
-            // - Fuse + same-ori: keep A (representative)
-            // - Intersect + same-ori: keep A
+            // - Fuse + same-ori: keep the representative (the larger face for a
+            //   containment pair, A for a coextensive pair)
+            // - Intersect + same-ori: keep the representative
             // - Cut + opposite-ori: keep A only when the faces merely touch
             //   on the boundary; discard both when A overlaps B's interior
             if op == BooleanOp::Cut {
                 if is_touching {
-                    // Touching: A's face is on the exterior — keep it
+                    // Touching: A's face is on the exterior — keep it. Cut is
+                    // asymmetric (A is the minuend), so A is always the correct
+                    // exterior representative — no geometry-based pick needed.
                     selected.push(SelectedFace {
                         face_id: sf_a.face_id,
                         reversed: false,
@@ -178,10 +187,13 @@ fn apply_sd_selection(
             // Fuse/Intersect with matching orientation: a same-oriented
             // coincident pair always lies on the result's exterior (both
             // solids' material is on the same side of the shared plane), so
-            // keep exactly one representative. Genuinely-internal coincident
+            // keep exactly one representative. `pair.representative` is the
+            // larger (containing) face for a geometric-containment pair and
+            // `idx_a` for a coextensive pair, making the choice depend on
+            // geometry rather than operand order. Genuinely-internal coincident
             // faces have OPPOSITE orientation and fall into the else-branch.
             selected.push(SelectedFace {
-                face_id: sf_a.face_id,
+                face_id: sub_faces[pair.representative].face_id,
                 reversed: false,
             });
         } else {
@@ -273,6 +285,7 @@ mod tests {
             idx_b: 10,
             same_orientation: true,
             b_contained_in_a: false,
+            representative: 5,
         }];
         // Should not panic — out-of-bounds pairs are skipped
         let selected = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);

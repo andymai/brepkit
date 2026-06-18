@@ -37,6 +37,16 @@ pub struct SameDomainPair {
     /// For edge-set matched faces, both faces have identical boundaries,
     /// so this is always `false` (touching, not contained).
     pub b_contained_in_a: bool,
+    /// Sub-face index to keep when a Fuse/Intersect retains one representative
+    /// of this pair. For coextensive (edge-set) pairs this is `idx_a` — either
+    /// face spans the same domain, so keeping A matches historical behaviour.
+    /// For geometric-containment pairs the two faces have **different extent**
+    /// (one is contained inside the other), so the representative is the
+    /// larger (containing) face — chosen by geometry, not by which operand is
+    /// A vs B. Keeping the smaller face would leave the containing face's
+    /// surplus area uncovered (free edges), and which face is A flips with
+    /// operand order, so an A-only rule makes the result order-dependent.
+    pub representative: usize,
 }
 
 /// A within-rank duplicate sub-face: same edge set, same surface, same input
@@ -264,11 +274,30 @@ pub fn detect_same_domain<S: BuildHasher>(
                 let key = (idx_a.min(idx_b), idx_a.max(idx_b));
                 let same_orientation = pair_data.get(&key).copied().unwrap_or(true);
 
+                // Pick the Fuse/Intersect representative by geometry, not rank.
+                // Coextensive (edge-set) pairs share the same domain, so A is a
+                // fine representative (and matches historical behaviour). A
+                // geometric-containment pair has two faces of different extent;
+                // the larger (containing) face must be the representative so its
+                // surplus area stays covered. Which face is A flips with operand
+                // order, so deferring to area keeps the result order-independent.
+                let representative = if geometric_overlap {
+                    let area_a = planar_face_area(topo, sub_faces[idx_a].face_id);
+                    let area_b = planar_face_area(topo, sub_faces[idx_b].face_id);
+                    match (area_a, area_b) {
+                        (Some(aa), Some(ab)) if ab > aa => idx_b,
+                        _ => idx_a,
+                    }
+                } else {
+                    idx_a
+                };
+
                 pairs.push(SameDomainPair {
                     idx_a,
                     idx_b,
                     same_orientation,
                     b_contained_in_a: geometric_overlap,
+                    representative,
                 });
 
                 // The group may also contain additional same-rank members
@@ -594,6 +623,46 @@ fn planar_faces_overlap(
         }
     }
     false
+}
+
+/// Projected outer-wire area of a planar sub-face, in its own plane.
+///
+/// Returns `None` for non-planar faces or faces whose outer wire samples to
+/// fewer than three points. Used to pick the representative of a
+/// geometric-containment SD group: the largest-area face contains the others,
+/// so keeping it covers the whole shared domain regardless of operand order.
+fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
+    let face = topo.face(face_id).ok()?;
+    let FaceSurface::Plane { normal, .. } = *face.surface() else {
+        return None;
+    };
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut pts: Vec<brepkit_math::vec::Point3> = Vec::with_capacity(wire.edges().len() * 8);
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sv = topo.vertex(edge.start()).ok()?;
+        let ev = topo.vertex(edge.end()).ok()?;
+        let (sp, ep) = (sv.point(), ev.point());
+        // Sample each edge so arc boundaries contribute their true swept area,
+        // mirroring `planar_faces_overlap`'s shorter-arc sampling.
+        for k in 0..8usize {
+            #[allow(clippy::cast_precision_loss)]
+            let frac = k as f64 / 8.0;
+            let frac = if oe.is_forward() { frac } else { 1.0 - frac };
+            pts.push(super::pcurve_compute::evaluate_edge_at_t(
+                edge.curve(),
+                sp,
+                ep,
+                frac,
+            ));
+        }
+    }
+    if pts.len() < 3 {
+        return None;
+    }
+    let frame = super::plane_frame::PlaneFrame::from_plane_face(normal, &pts);
+    let poly: Vec<_> = pts.iter().map(|&p| frame.project(p)).collect();
+    Some(super::classify_2d::signed_area_2d(&poly).abs())
 }
 
 /// Quantize a 3D point to integer grid coordinates.
