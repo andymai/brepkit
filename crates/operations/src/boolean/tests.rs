@@ -4799,3 +4799,105 @@ fn cut_wide_wall_notch_preserves_body_corner_cylinders() {
         "wide wall-cutout must keep all corner cylinders analytic (no mesh fallback)"
     );
 }
+
+/// Build a gridfinity-style wall-cutout TOOL: a rounded-rect (`cut_hw` half
+/// width, `total_hh` half height in the plane that becomes Z) extruded `depth`
+/// through the wall, opening at `top_z`, centred on the wall plane at `wall_y`.
+///
+/// The 2D rect is built in XY then rotated -90 about X so it sits in XZ extruded
+/// along +Y; centring on `wall_y` makes the extrude span `[wall_y - depth/2,
+/// wall_y + depth/2]` so a thin wall is cut clean through (matching the
+/// gridfinity builder, which centres the cutout on the wall).
+fn make_wall_notch_tool(
+    topo: &mut Topology,
+    cut_hw: f64,
+    total_hh: f64,
+    r: f64,
+    depth: f64,
+    wall_y: f64,
+    top_z: f64,
+) -> SolidId {
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::FRAC_PI_2;
+    let tool = make_rounded_rect_arc_prism(topo, cut_hw, total_hh, r, 0.0, depth);
+    crate::transform::transform_solid(topo, tool, &Mat4::rotation_x(-FRAC_PI_2)).unwrap();
+    let z_center = top_z - total_hh;
+    crate::transform::transform_solid(
+        topo,
+        tool,
+        &Mat4::translation(0.0, wall_y - depth / 2.0, z_center),
+    )
+    .unwrap();
+    tool
+}
+
+/// Regression for the real gridfinity "2×2 wall cutouts" geometry through a
+/// SOLID wall: a wide, shallow U-notch whose rounded corners are SMALL relative
+/// to the overshoot (auto corner radius ≈ 1.485 mm for the real bin), so they do
+/// NOT straddle the wall top. The tool is centred on the wall and pokes through
+/// it (the gridfinity builder centres the cutout on the wall plane). The cut
+/// must be watertight and stay analytic (the body's four corner cylinders plus
+/// the notch's two bottom corner cylinders).
+#[test]
+fn cut_wall_notch_through_solid_wall_is_watertight() {
+    let mut topo = Topology::new();
+    let body = make_rounded_rect_arc_prism(&mut topo, 21.0, 21.0, 3.75, 0.0, 30.0);
+    // Shallow notch: top at z=32 (overshoot 2 above the wall top z=30), corner
+    // r=1.485 (arc centre z=30.515 > 30 => no straddle), depth 3.4 centred on
+    // the +Y wall at y=21 so it cuts through.
+    let tool = make_wall_notch_tool(&mut topo, 14.0, 5.95, 1.485, 3.4, 21.0, 32.0);
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, body, tool)
+            .unwrap();
+    let (free, over) = quantized_edge_use(&topo, result);
+    assert_eq!(free, 0, "through-wall notch cut must have no free edges");
+    assert_eq!(
+        over, 0,
+        "through-wall notch cut must have no over-shared edges"
+    );
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "through-wall notch cut must be closed-manifold"
+    );
+    assert_eq!(
+        count_cylinder_faces(&topo, result),
+        6,
+        "through-wall notch must stay analytic (4 body + 2 notch corner cylinders)"
+    );
+}
+
+/// OPEN BLOCKER (2026-06-18): the real gridfinity "2×2 wall cutouts" bin
+/// mesh-falls-back because the body is SHELLED (a thin 1.2 mm wall) and the
+/// U-notch opens at the wall top, cutting through the top RIM. The notch's side
+/// wall (the tool's `x = ±cut_hw` plane) is then crossed by the outer wall
+/// plane, the inner cavity wall plane, AND the rim plane; the 2D face splitter
+/// produces a single self-crossing wire for that side face instead of clean
+/// sub-faces, yielding non-manifold (3-use) edges at the notch-side / thin-wall
+/// / rim junction → mesh fallback. The SOLID-wall variant
+/// (`cut_wall_notch_through_solid_wall_is_watertight`) is clean, so the trigger
+/// is specifically the shelled thin wall plus the top-opening through the rim.
+/// (The earlier "top-corner straddle" hypothesis is a red herring for the real
+/// bin: its auto corner radius is ~1.485 mm, well under the 2 mm overshoot, so
+/// no corner straddles the wall top, and the wide tool's sides stay inside the
+/// flat wall, never reaching the body's corner cylinders.)
+#[test]
+#[ignore = "open blocker: shelled thin-wall notch opening at the rim is non-manifold"]
+fn cut_wall_notch_through_shelled_wall_is_watertight() {
+    let mut topo = Topology::new();
+    let body = make_rounded_rect_arc_prism(&mut topo, 21.0, 21.0, 3.75, 0.0, 30.0);
+    let top = find_top_face(&topo, body);
+    let cup = crate::shell_op::shell(&mut topo, body, 1.2, &[top]).unwrap();
+    let tool = make_wall_notch_tool(&mut topo, 14.0, 5.95, 1.485, 3.4, 21.0, 32.0);
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, cup, tool)
+            .unwrap();
+    let (free, over) = quantized_edge_use(&topo, result);
+    assert_eq!(
+        free, 0,
+        "shelled through-wall notch cut must have no free edges"
+    );
+    assert_eq!(
+        over, 0,
+        "shelled through-wall notch cut must have no over-shared edges"
+    );
+}
