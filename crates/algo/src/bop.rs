@@ -11,7 +11,9 @@
 //!   discard the other.
 //! - **Cut** (`isSameOriNeeded = false`): keep the differently-oriented
 //!   face (B, reversed). Discard A's overlapping sub-face.
-//! - **Intersect** (`isSameOriNeeded = true`): keep the same-oriented face (A).
+//! - **Intersect** (`isSameOriNeeded = true`): keep the same-oriented face.
+//!   For a geometric-containment pair this is the smaller (contained) face,
+//!   whose footprint is bounded by the interior of both solids.
 
 use std::collections::HashSet;
 
@@ -166,9 +168,10 @@ fn apply_sd_selection(
 
         if same_ori_needed == pair.same_orientation {
             // Orientations match what the operation needs:
-            // - Fuse + same-ori: keep the representative (the larger face for a
-            //   containment pair, A for a coextensive pair)
-            // - Intersect + same-ori: keep the representative
+            // - Fuse + same-ori: keep the larger (containing) face for a
+            //   containment pair, A for a coextensive pair
+            // - Intersect + same-ori: keep the smaller (contained) face for a
+            //   containment pair, A for a coextensive pair
             // - Cut + opposite-ori: keep A only when the faces merely touch
             //   on the boundary; discard both when A overlaps B's interior
             if op == BooleanOp::Cut {
@@ -187,13 +190,33 @@ fn apply_sd_selection(
             // Fuse/Intersect with matching orientation: a same-oriented
             // coincident pair always lies on the result's exterior (both
             // solids' material is on the same side of the shared plane), so
-            // keep exactly one representative. `pair.representative` is the
-            // larger (containing) face for a geometric-containment pair and
-            // `idx_a` for a coextensive pair, making the choice depend on
-            // geometry rather than operand order. Genuinely-internal coincident
-            // faces have OPPOSITE orientation and fall into the else-branch.
+            // keep exactly one face. Genuinely-internal coincident faces have
+            // OPPOSITE orientation and fall into the else-branch.
+            //
+            // Which face is correct depends on the operation when the pair is a
+            // geometric-containment pair (the two faces have different extent):
+            //  - Fuse keeps the LARGER (containing) face — it covers the whole
+            //    union boundary on the shared plane. `pair.representative` is
+            //    that larger face (picked by area, so order-independent).
+            //  - Intersect keeps the SMALLER face — the intersection footprint
+            //    on the shared plane is bounded by the interior of BOTH solids,
+            //    i.e. the contained face. Keeping the larger face would include
+            //    area outside one operand and can leave the shell non-manifold.
+            // For coextensive pairs both faces span the same domain, so larger
+            // and smaller coincide and either choice is order-independent.
+            let keep = if op == BooleanOp::Intersect {
+                // The smaller face is the endpoint that is NOT the
+                // (area-larger) representative.
+                if pair.representative == pair.idx_a {
+                    pair.idx_b
+                } else {
+                    pair.idx_a
+                }
+            } else {
+                pair.representative
+            };
             selected.push(SelectedFace {
-                face_id: sub_faces[pair.representative].face_id,
+                face_id: sub_faces[keep].face_id,
                 reversed: false,
             });
         } else {
@@ -334,6 +357,81 @@ mod tests {
         ];
         let selected = select_faces(&sub_faces, BooleanOp::Intersect, &[], &[]);
         assert_eq!(selected.len(), 2, "Intersect keeps only Inside faces");
+    }
+
+    /// A same-oriented geometric-containment SD pair: idx_a is the larger
+    /// (containing) face, idx_b the smaller (contained) face. `representative`
+    /// is the larger face (area-based pick). Fuse must keep the larger face so
+    /// the full union boundary is covered; Intersect must keep the SMALLER
+    /// face, whose footprint is bounded by the interior of both solids.
+    #[test]
+    fn sd_containment_pair_fuse_larger_intersect_smaller() {
+        let mut topo = Topology::new();
+        // idx 0 = A (larger / representative), idx 1 = B (smaller). Both On so
+        // they only enter the result via SD selection, not the truth table.
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::On),
+            make_sub_face(&mut topo, Rank::B, FaceClass::On),
+        ];
+        let larger = sub_faces[0].face_id;
+        let smaller = sub_faces[1].face_id;
+        let sd_pairs = vec![SameDomainPair {
+            idx_a: 0,
+            idx_b: 1,
+            same_orientation: true,
+            b_contained_in_a: true,
+            representative: 0,
+        }];
+
+        let fused = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);
+        assert_eq!(fused.len(), 1, "Fuse keeps exactly one face of the SD pair");
+        assert_eq!(
+            fused[0].face_id, larger,
+            "Fuse keeps the larger (containing) face"
+        );
+
+        let intersected = select_faces(&sub_faces, BooleanOp::Intersect, &sd_pairs, &[]);
+        assert_eq!(
+            intersected.len(),
+            1,
+            "Intersect keeps exactly one face of the SD pair"
+        );
+        assert_eq!(
+            intersected[0].face_id, smaller,
+            "Intersect keeps the smaller (contained) face"
+        );
+    }
+
+    /// The smaller-for-Intersect pick is independent of which operand is A:
+    /// swap so idx_a is the smaller face and `representative` (the larger) is
+    /// idx_b. Intersect must still keep the smaller face (idx_a here).
+    #[test]
+    fn sd_containment_intersect_smaller_when_representative_is_b() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::On),
+            make_sub_face(&mut topo, Rank::B, FaceClass::On),
+        ];
+        let smaller = sub_faces[0].face_id;
+        let larger = sub_faces[1].face_id;
+        let sd_pairs = vec![SameDomainPair {
+            idx_a: 0,
+            idx_b: 1,
+            same_orientation: true,
+            b_contained_in_a: true,
+            representative: 1,
+        }];
+
+        let fused = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].face_id, larger, "Fuse keeps the larger face");
+
+        let intersected = select_faces(&sub_faces, BooleanOp::Intersect, &sd_pairs, &[]);
+        assert_eq!(intersected.len(), 1);
+        assert_eq!(
+            intersected[0].face_id, smaller,
+            "Intersect keeps the smaller face regardless of which operand it is"
+        );
     }
 
     #[test]

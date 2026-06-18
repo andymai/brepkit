@@ -37,15 +37,23 @@ pub struct SameDomainPair {
     /// For edge-set matched faces, both faces have identical boundaries,
     /// so this is always `false` (touching, not contained).
     pub b_contained_in_a: bool,
-    /// Sub-face index to keep when a Fuse/Intersect retains one representative
-    /// of this pair. For coextensive (edge-set) pairs this is `idx_a` — either
-    /// face spans the same domain, so keeping A matches historical behaviour.
-    /// For geometric-containment pairs the two faces have **different extent**
-    /// (one is contained inside the other), so the representative is the
-    /// larger (containing) face — chosen by geometry, not by which operand is
-    /// A vs B. Keeping the smaller face would leave the containing face's
-    /// surplus area uncovered (free edges), and which face is A flips with
-    /// operand order, so an A-only rule makes the result order-dependent.
+    /// Sub-face index of the **larger** face of this pair by projected outer-
+    /// wire area (see [`planar_face_area`]), used to keep representative
+    /// selection order-independent.
+    ///
+    /// For coextensive (edge-set) pairs both faces span the same domain, so
+    /// area ties and this is `idx_a` — matching historical behaviour. For a
+    /// geometric-overlap pair (`b_contained_in_a == true`) the two faces have
+    /// **different extent**, so the larger is chosen by area rather than by
+    /// which operand is A; `idx_a` flips with operand order, so an A-only rule
+    /// would make the result order-dependent.
+    ///
+    /// "Larger" — not "containing": a geometric-overlap pair may be strict
+    /// containment OR partial overlap (`planar_faces_overlap` accepts both), so
+    /// neither face necessarily contains the other. The consumer
+    /// ([`crate::bop::select_faces`]) keeps this face for Fuse (it covers the
+    /// most boundary) and the *other* (smaller) face for Intersect (whose
+    /// footprint is bounded by both solids).
     pub representative: usize,
 }
 
@@ -75,6 +83,13 @@ pub struct SameDomainResult {
     /// before classification).
     pub within_rank_dups: Vec<WithinRankDuplicate>,
 }
+
+/// Number of points sampled along each outer-wire edge when building the
+/// projected polygon for the coplanar containment / overlap / area tests.
+/// Defined once so [`planar_faces_overlap`] and [`planar_face_area`] keep the
+/// same density — an arc boundary must sample to the same polygon in both, or
+/// the area-based representative pick could disagree with the overlap test.
+const SD_EDGE_SAMPLES: usize = 8;
 
 /// Quantized 3D grid position — collision-free vertex identity.
 type QVert = (i64, i64, i64);
@@ -274,12 +289,13 @@ pub fn detect_same_domain<S: BuildHasher>(
                 let key = (idx_a.min(idx_b), idx_a.max(idx_b));
                 let same_orientation = pair_data.get(&key).copied().unwrap_or(true);
 
-                // Pick the Fuse/Intersect representative by geometry, not rank.
-                // Coextensive (edge-set) pairs share the same domain, so A is a
-                // fine representative (and matches historical behaviour). A
-                // geometric-containment pair has two faces of different extent;
-                // the larger (containing) face must be the representative so its
-                // surplus area stays covered. Which face is A flips with operand
+                // Record the LARGER face (by projected area) as the
+                // representative, so the choice is geometry-based not rank-based.
+                // Coextensive (edge-set) pairs share the same domain (area ties),
+                // so A is a fine representative and matches historical behaviour.
+                // A geometric-overlap pair has two faces of different extent;
+                // tagging the larger lets the BOP selector keep it for Fuse and
+                // the smaller for Intersect. Which face is A flips with operand
                 // order, so deferring to area keeps the result order-independent.
                 let representative = if geometric_overlap {
                     let area_a = planar_face_area(topo, sub_faces[idx_a].face_id);
@@ -447,7 +463,7 @@ fn planar_faces_overlap(
     // containment test silently treats the hole as absent — letting a
     // coincident coplanar face be wrongly cancelled through the hole.
     let wire_points = |wire_id: brepkit_topology::wire::WireId| -> Vec<brepkit_math::vec::Point3> {
-        let samples_per_edge: usize = 8;
+        let samples_per_edge: usize = SD_EDGE_SAMPLES;
         let mut pts = Vec::new();
         let Ok(wire) = topo.wire(wire_id) else {
             return pts;
@@ -625,19 +641,27 @@ fn planar_faces_overlap(
     false
 }
 
-/// Projected outer-wire area of a planar sub-face, in its own plane.
+/// Approximate projected outer-wire area of a planar sub-face, in its own
+/// plane.
 ///
 /// Returns `None` for non-planar faces or faces whose outer wire samples to
-/// fewer than three points. Used to pick the representative of a
-/// geometric-containment SD group: the largest-area face contains the others,
-/// so keeping it covers the whole shared domain regardless of operand order.
+/// fewer than three points. The area is an approximation: each edge is sampled
+/// at [`SD_EDGE_SAMPLES`] points (so arc boundaries contribute their swept
+/// area, matching [`planar_faces_overlap`]), then the projected polygon's
+/// signed area is taken — a finer arc is under-counted by the chord polygon.
+///
+/// Used only to order the two faces of a geometric-overlap SD pair (see
+/// [`SameDomainPair::representative`]). The two faces always share a plane, so
+/// the same under-counting applies to both and their relative order is stable;
+/// the absolute area is never compared against a tolerance.
 fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
     let face = topo.face(face_id).ok()?;
     let FaceSurface::Plane { normal, .. } = *face.surface() else {
         return None;
     };
     let wire = topo.wire(face.outer_wire()).ok()?;
-    let mut pts: Vec<brepkit_math::vec::Point3> = Vec::with_capacity(wire.edges().len() * 8);
+    let mut pts: Vec<brepkit_math::vec::Point3> =
+        Vec::with_capacity(wire.edges().len() * SD_EDGE_SAMPLES);
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         let sv = topo.vertex(edge.start()).ok()?;
@@ -645,9 +669,9 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
         let (sp, ep) = (sv.point(), ev.point());
         // Sample each edge so arc boundaries contribute their true swept area,
         // mirroring `planar_faces_overlap`'s shorter-arc sampling.
-        for k in 0..8usize {
+        for k in 0..SD_EDGE_SAMPLES {
             #[allow(clippy::cast_precision_loss)]
-            let frac = k as f64 / 8.0;
+            let frac = k as f64 / SD_EDGE_SAMPLES as f64;
             let frac = if oe.is_forward() { frac } else { 1.0 - frac };
             pts.push(super::pcurve_compute::evaluate_edge_at_t(
                 edge.curve(),
