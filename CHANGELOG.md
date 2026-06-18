@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.8](https://github.com/andymai/brepkit/compare/v2.114.7...v2.114.8) (2026-06-18)
+
+
+### Bug Fixes
+
+* **algo:** order-independent coincident-face selection in fuse ([#907](https://github.com/andymai/brepkit/issues/907)) ([c638c26](https://github.com/andymai/brepkit/commit/c638c262b857d783fd22f7ba89de47fab8724d9e))
+
 ## [2.114.7](https://github.com/andymai/brepkit/compare/v2.114.6...v2.114.7) (2026-06-18)
 
 
