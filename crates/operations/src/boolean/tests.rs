@@ -4673,3 +4673,255 @@ fn baseplate_two_tongues_far_apart_resplit_is_watertight() {
     brepkit_topology::validation::validate_shell_closed(sh_b, &topo)
         .expect("tongue B fused into the A-split wall must stay watertight");
 }
+
+/// Count edges shared by exactly one face (free) and by more than two faces
+/// (over-shared), keyed by quantized endpoint pair — distinct sub-faces make
+/// their own `EdgeId`s, so an `EdgeId` count would miss the real sharing.
+fn quantized_edge_use(topo: &Topology, solid: SolidId) -> (usize, usize) {
+    use std::collections::HashMap;
+    type EdgeKey = (i64, i64, i64, i64, i64, i64);
+    let q = |x: f64| (x / 1e-5).round() as i64;
+    let key = |p: Point3| [q(p.x()), q(p.y()), q(p.z())];
+    let mut counts: HashMap<EdgeKey, usize> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                let a = key(topo.vertex(edge.start()).unwrap().point());
+                let b = key(topo.vertex(edge.end()).unwrap().point());
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                *counts
+                    .entry((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+    let free = counts.values().filter(|&&c| c == 1).count();
+    let over = counts.values().filter(|&&c| c > 2).count();
+    (free, over)
+}
+
+/// Regression for the gridfinity "wall cutout" (a U-notch opening at the wall
+/// top, with rounded corners whose radius exceeds the overshoot so the top
+/// corners STRADDLE the wall-top edge). The straddle triggered a cascade of
+/// analytic-trimming bugs that left the cut non-manifold, so the operations
+/// boolean fell back to a mesh result. The GFA cut must now be a watertight,
+/// genus-0, fully-analytic solid (every corner cylinder preserved).
+#[test]
+fn cut_wall_notch_straddling_top_edge_is_watertight() {
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::FRAC_PI_2;
+    let mut topo = Topology::new();
+    // Solid wall body: rounded-rect arc prism 21x21 r=3.75 z=0..30.
+    let body = make_rounded_rect_arc_prism(&mut topo, 21.0, 21.0, 3.75, 0.0, 30.0);
+    // Tool: a U-notch opening at the top. Built in XY (hw=14, hd=13, r=3,
+    // extrude 6), rotated -90 about X and translated to (0,17,18) so it
+    // straddles the +Y wall at y=21: tool y in [17,23], top corners z in
+    // [25,31] crossing the wall top z=30.
+    let tool = make_rounded_rect_arc_prism(&mut topo, 14.0, 13.0, 3.0, 0.0, 6.0);
+    crate::transform::transform_solid(&mut topo, tool, &Mat4::rotation_x(-FRAC_PI_2)).unwrap();
+    crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(0.0, 17.0, 18.0))
+        .unwrap();
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, body, tool)
+            .unwrap();
+
+    let (free, over) = quantized_edge_use(&topo, result);
+    assert_eq!(free, 0, "wall-cutout notch cut must have no free edges");
+    assert_eq!(
+        over, 0,
+        "wall-cutout notch cut must have no over-shared edges"
+    );
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, result).unwrap();
+    assert_eq!(
+        v as i64 - e as i64 + f as i64,
+        2,
+        "wall-cutout notch cut must be genus-0 (V-E+F=2)"
+    );
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "wall-cutout notch cut must be closed-manifold"
+    );
+    assert!(
+        !has_free_edges(&topo, result).unwrap(),
+        "wall-cutout notch cut must have no free edges"
+    );
+    assert_eq!(
+        count_cylinder_faces(&topo, result),
+        8,
+        "wall-cutout must stay analytic (4 body + 4 tool corner cylinders)"
+    );
+}
+
+/// Build a gridfinity-style wall-cutout TOOL: a rounded-rect (`cut_hw` half
+/// width, `total_hh` half height in the plane that becomes Z) extruded `depth`
+/// through the wall, opening at `top_z`, centred on the wall plane at `wall_y`.
+///
+/// The 2D rect is built in XY then rotated -90 about X so it sits in XZ extruded
+/// along +Y; centring on `wall_y` makes the extrude span `[wall_y - depth/2,
+/// wall_y + depth/2]` so a thin wall is cut clean through (matching the
+/// gridfinity builder, which centres the cutout on the wall).
+fn make_wall_notch_tool(
+    topo: &mut Topology,
+    cut_hw: f64,
+    total_hh: f64,
+    r: f64,
+    depth: f64,
+    wall_y: f64,
+    top_z: f64,
+) -> SolidId {
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::FRAC_PI_2;
+    let tool = make_rounded_rect_arc_prism(topo, cut_hw, total_hh, r, 0.0, depth);
+    crate::transform::transform_solid(topo, tool, &Mat4::rotation_x(-FRAC_PI_2)).unwrap();
+    let z_center = top_z - total_hh;
+    crate::transform::transform_solid(
+        topo,
+        tool,
+        &Mat4::translation(0.0, wall_y - depth / 2.0, z_center),
+    )
+    .unwrap();
+    tool
+}
+
+/// Regression for the real gridfinity "2×2 wall cutouts" geometry through a
+/// SOLID wall: a wide, shallow U-notch whose rounded corners are SMALL relative
+/// to the overshoot (auto corner radius ≈ 1.485 mm for the real bin), so they do
+/// NOT straddle the wall top. The tool is centred on the wall and pokes through
+/// it (the gridfinity builder centres the cutout on the wall plane). The cut
+/// must be watertight and stay analytic (the body's four corner cylinders plus
+/// the notch's two bottom corner cylinders).
+#[test]
+fn cut_wall_notch_through_solid_wall_is_watertight() {
+    let mut topo = Topology::new();
+    let body = make_rounded_rect_arc_prism(&mut topo, 21.0, 21.0, 3.75, 0.0, 30.0);
+    // Shallow notch: top at z=32 (overshoot 2 above the wall top z=30), corner
+    // r=1.485 (arc centre z=30.515 > 30 => no straddle), depth 3.4 centred on
+    // the +Y wall at y=21 so it cuts through.
+    let tool = make_wall_notch_tool(&mut topo, 14.0, 5.95, 1.485, 3.4, 21.0, 32.0);
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, body, tool)
+            .unwrap();
+    let (free, over) = quantized_edge_use(&topo, result);
+    assert_eq!(free, 0, "through-wall notch cut must have no free edges");
+    assert_eq!(
+        over, 0,
+        "through-wall notch cut must have no over-shared edges"
+    );
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "through-wall notch cut must be closed-manifold"
+    );
+    assert_eq!(
+        count_cylinder_faces(&topo, result),
+        6,
+        "through-wall notch must stay analytic (4 body + 2 notch corner cylinders)"
+    );
+}
+
+/// The real gridfinity "2×2 wall cutouts" geometry: the body is SHELLED (a thin
+/// 1.2 mm wall) and the U-notch opens at the wall top, cutting through the top
+/// RIM. The notch's side wall (the tool's `x = ±cut_hw` plane) is then crossed
+/// by the outer wall plane, the inner cavity wall plane, AND the rim plane —
+/// three line sections forming a partial grid that the angular wire builder and
+/// the 2/4-section crossing helper could not partition (they handed back one
+/// self-crossing wire → non-manifold 3-use edges → mesh fallback). The planar
+/// straight-line arrangement decomposition now splits that side wall into clean
+/// minimal regions, and `integrate_holes_plane` carves the bite the notch takes
+/// out of the (arc-cornered) rim, so the shelled cut is watertight and stays
+/// analytic — matching the clean SOLID-wall variant
+/// (`cut_wall_notch_through_solid_wall_is_watertight`).
+#[test]
+fn cut_wall_notch_through_shelled_wall_is_watertight() {
+    let mut topo = Topology::new();
+    let body = make_rounded_rect_arc_prism(&mut topo, 21.0, 21.0, 3.75, 0.0, 30.0);
+    let top = find_top_face(&topo, body);
+    let cup = crate::shell_op::shell(&mut topo, body, 1.2, &[top]).unwrap();
+    let tool = make_wall_notch_tool(&mut topo, 14.0, 5.95, 1.485, 3.4, 21.0, 32.0);
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, cup, tool)
+            .unwrap();
+    let (free, over) = quantized_edge_use(&topo, result);
+    assert_eq!(
+        free, 0,
+        "shelled through-wall notch cut must have no free edges"
+    );
+    assert_eq!(
+        over, 0,
+        "shelled through-wall notch cut must have no over-shared edges"
+    );
+    assert!(
+        !has_free_edges(&topo, result).unwrap(),
+        "shelled through-wall notch cut must have no free edges (per-edge)"
+    );
+    // The notch's two bottom corner cylinders stay analytic (no mesh fallback);
+    // the body's own corner cylinders survive the cut too.
+    assert!(
+        count_cylinder_faces(&topo, result) >= 2,
+        "shelled through-wall notch must stay analytic (notch corner cylinders preserved)"
+    );
+}
+
+/// The real gridfinity "2×2 wall cutouts" bin cuts ALL FOUR walls at once: it
+/// fuses the four wall-cutout prisms (`merge_disjoint_solids`) and applies ONE
+/// boolean. With the four-shell tool, the rim (top annular face) is carved by
+/// four notch openings, and the angular wire builder emits a SPURIOUS extra
+/// loop re-tracing the notch opening on some walls (a notch whose sections reach
+/// the rim's outer boundary produces a second positive-area loop that re-adds
+/// the removed region) → those rim-bite edges go unshared.
+///
+/// OPEN: this `#[ignore]`d test pins the residual. The dimensions match
+/// `wallCutoutBuilder.ts` for a 2×2 no-lip bin (wallHeight 16, wall 1.2, hw
+/// 28.385, r 1.11, depth 3.4, top z=18). The single-wall path is clean
+/// (`cut_wall_notch_through_shelled_wall_is_watertight`). The planar-arrangement
+/// and arc-hole fixes bring the four-wall result from 18 free / 4 over down to 8
+/// free / 0 over (cylinders preserved), but the spurious-rim-loop asymmetry in
+/// the multi-shell-tool cut is a separate, deeper GFA issue.
+#[test]
+#[ignore = "open: multi-shell wall-cutout tool leaves spurious rim-bite loops"]
+fn cut_2x2_wall_cutouts_four_walls_is_watertight() {
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::FRAC_PI_2;
+    let mut topo = Topology::new();
+    let hw = 41.75;
+    let body = make_rounded_rect_arc_prism(&mut topo, hw, hw, 3.75, 0.0, 16.0);
+    let top = find_top_face(&topo, body);
+    let cup = crate::shell_op::shell(&mut topo, body, 1.2, &[top]).unwrap();
+    let (cut_hw, total_hh, r, depth, z_center) = (28.385, 4.7, 1.11, 3.4, 18.0 - 4.7);
+    let mut tools = Vec::new();
+    for (rotz, wall) in [(false, -hw), (false, hw), (true, -hw), (true, hw)] {
+        let t = make_rounded_rect_arc_prism(&mut topo, cut_hw, total_hh, r, 0.0, depth);
+        crate::transform::transform_solid(&mut topo, t, &Mat4::rotation_x(-FRAC_PI_2)).unwrap();
+        let off = depth / 2.0 * wall.signum();
+        if rotz {
+            crate::transform::transform_solid(&mut topo, t, &Mat4::rotation_z(FRAC_PI_2)).unwrap();
+            crate::transform::transform_solid(
+                &mut topo,
+                t,
+                &Mat4::translation(wall - off, 0.0, z_center),
+            )
+            .unwrap();
+        } else {
+            crate::transform::transform_solid(
+                &mut topo,
+                t,
+                &Mat4::translation(0.0, wall - off, z_center),
+            )
+            .unwrap();
+        }
+        tools.push(t);
+    }
+    let merged = crate::compound_ops::merge_disjoint_solids(&mut topo, &tools).unwrap();
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, cup, merged)
+            .unwrap();
+    let (free, over) = quantized_edge_use(&topo, result);
+    assert_eq!(free, 0, "four-wall cutout cut must have no free edges");
+    assert_eq!(
+        over, 0,
+        "four-wall cutout cut must have no over-shared edges"
+    );
+}

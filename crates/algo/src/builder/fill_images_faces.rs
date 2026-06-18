@@ -1009,8 +1009,12 @@ fn rebuild_face_with_cb_edges(
 enum SectionSource {
     /// Complete intersection curve — use the curve's geometry, not individual PBs.
     Curve(usize),
-    /// Individual PaveBlock — for IN edges.
-    PaveBlock(PaveBlockId),
+    /// Individual PaveBlock. The optional face is the OPPOSING FF face that the
+    /// same intersection line bounds; a Line section is clipped to it as well as
+    /// to this face, so a wide face (e.g. a box cap) does not extend the section
+    /// past where the narrow opposing face (e.g. a notch tool's front) actually
+    /// is. `None` for IN edges from EF, which have no single opposing face.
+    PaveBlock(PaveBlockId, Option<FaceId>),
 }
 
 /// Tolerance on `|t_range| - 2π` for treating a circle edge as a full circle.
@@ -1111,10 +1115,10 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
             for &pb_id in &curve.pave_blocks {
                 map.entry(curve.face_a)
                     .or_default()
-                    .push(SectionSource::PaveBlock(pb_id));
+                    .push(SectionSource::PaveBlock(pb_id, Some(curve.face_b)));
                 map.entry(curve.face_b)
                     .or_default()
-                    .push(SectionSource::PaveBlock(pb_id));
+                    .push(SectionSource::PaveBlock(pb_id, Some(curve.face_a)));
             }
         } else {
             // Feed the complete curve — critical for closed curves (circles).
@@ -1161,7 +1165,7 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
             }
             map.entry(face_id)
                 .or_default()
-                .push(SectionSource::PaveBlock(pb_id));
+                .push(SectionSource::PaveBlock(pb_id, None));
         }
     }
     map
@@ -1399,7 +1403,7 @@ fn build_section_edges(
                     pave_block_id: None,
                 });
             }
-            SectionSource::PaveBlock(pb_id) => {
+            SectionSource::PaveBlock(pb_id, opposing_face) => {
                 // Individual PaveBlock edge — use the old Line2D pcurve approach.
                 // This preserves the existing behavior for Line section edges
                 // that the face splitter already handles correctly.
@@ -1429,9 +1433,22 @@ fn build_section_edges(
 
                 let (start, end) =
                     if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                        match clip_line_to_face_boundary(topo, face_id, raw_start, raw_end, tol) {
+                        let clipped = match clip_line_to_face_boundary(
+                            topo, face_id, raw_start, raw_end, tol,
+                        ) {
                             Some(pair) => pair,
                             None => continue,
+                        };
+                        // Also clip to the OPPOSING FF face so a wide face does
+                        // not extend the section past the narrower face's
+                        // boundary (the intersection of the two clips). Only
+                        // tightens; if the opposing face does not bound the line
+                        // here, keep this face's clip.
+                        match opposing_face.and_then(|of| {
+                            clip_line_to_face_boundary(topo, of, clipped.0, clipped.1, tol)
+                        }) {
+                            Some(both) => both,
+                            None => clipped,
                         }
                     } else {
                         (raw_start, raw_end)
@@ -1707,6 +1724,64 @@ fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
     }
 }
 
+/// Intersect a section line with a curved boundary edge's TRUE geometry,
+/// keeping only crossings that fall on the actual arc span (between the edge's
+/// start/end vertices, on the side through its midpoint) — not the full circle.
+///
+/// Returns the 3D crossing points (with the edge's angle, unused by callers).
+fn arc_segment_crossings(
+    curve: &EdgeCurve,
+    edge_start: Point3,
+    edge_end: Point3,
+    line_start: Point3,
+    line_end: Point3,
+    tol: f64,
+) -> Vec<(Point3, f64)> {
+    let circle = match curve {
+        EdgeCurve::Circle(c) => c,
+        // Only circular arcs are handled here. Ellipse arcs are not produced on
+        // the corner-straddle path, and lines/NURBS sections have no true-arc
+        // geometry — all fall back to the chord (handled by the line-line
+        // crossing in the caller).
+        EdgeCurve::Ellipse(_) | EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return Vec::new(),
+    };
+    let hits = circle.intersect_segment(line_start, line_end, tol);
+    if hits.is_empty() {
+        return hits;
+    }
+    // Angular interval of the arc edge: from start angle to end angle on the
+    // side that passes through the edge's geometric midpoint.
+    let a_start = circle.project(edge_start);
+    let a_end = circle.project(edge_end);
+    let mid = super::pcurve_compute::evaluate_edge_at_t(curve, edge_start, edge_end, 0.5);
+    let a_mid = circle.project(mid);
+    // Normalize so the test is "is `a` between a_start and a_end the short/long
+    // way that contains a_mid". Use unsigned angular distances on the circle.
+    let ang_dist = |x: f64, y: f64| -> f64 {
+        let d = (x - y).abs() % std::f64::consts::TAU;
+        d.min(std::f64::consts::TAU - d)
+    };
+    let span = ang_dist(a_start, a_end);
+    // `a` is on the arc iff dist(start,a)+dist(a,end) ≈ the arc span that
+    // contains the midpoint. Validate the midpoint satisfies this first so a
+    // degenerate (near-full) circle doesn't admit everything.
+    let on_arc = |a: f64| -> bool {
+        let dsa = ang_dist(a_start, a);
+        let dae = ang_dist(a, a_end);
+        (dsa + dae - span).abs() < 1e-6 || (dsa + dae) <= span + 1e-6
+    };
+    if !on_arc(a_mid) {
+        // Edge is the COMPLEMENT (major) arc; flip the test.
+        let major = |a: f64| -> bool {
+            let dsa = ang_dist(a_start, a);
+            let dae = ang_dist(a, a_end);
+            (dsa + dae) > span + 1e-9
+        };
+        return hits.into_iter().filter(|(_, t)| major(*t)).collect();
+    }
+    hits.into_iter().filter(|(_, t)| on_arc(*t)).collect()
+}
+
 /// Clip a 3D line segment to a face's boundary polygon.
 ///
 /// Collects the outer wire vertices as line segments, then finds where
@@ -1723,14 +1798,28 @@ fn clip_line_to_face_boundary(
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
 
-    // Collect boundary edges as line segments (vertex positions in traversal order)
+    // Collect boundary edges as line segments (vertex positions in traversal
+    // order); for curved edges keep the geometry so the section line can be
+    // clipped to the TRUE arc rather than its chord.
     let edges = wire.edges();
     let mut boundary_segments: Vec<(Point3, Point3)> = Vec::with_capacity(edges.len());
+    let mut boundary_arcs: Vec<Option<(EdgeCurve, Point3, Point3)>> =
+        Vec::with_capacity(edges.len());
     for oe in edges {
         let edge = topo.edge(oe.edge()).ok()?;
         let sp = topo.vertex(oe.oriented_start(edge)).ok()?.point();
         let ep = topo.vertex(oe.oriented_end(edge)).ok()?.point();
         boundary_segments.push((sp, ep));
+        match edge.curve() {
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                boundary_arcs.push(Some((edge.curve().clone(), sp, ep)));
+            }
+            // A straight edge already equals its chord, and a NURBS boundary edge
+            // has no analytic arc to clip against, so neither contributes a
+            // beyond-the-chord crossing; the chord segment in
+            // `boundary_segments` covers them.
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => boundary_arcs.push(None),
+        }
     }
 
     let line_dir = line_end - line_start;
@@ -1743,7 +1832,22 @@ fn clip_line_to_face_boundary(
     // The section line is: P(t) = line_start + t * line_dir, t in [0, 1].
     let mut crossings: Vec<f64> = Vec::new();
 
-    for (seg_start, seg_end) in &boundary_segments {
+    for (seg_idx, (seg_start, seg_end)) in boundary_segments.iter().enumerate() {
+        // For a curved boundary edge, also record the crossing with the TRUE
+        // arc geometry. A convex rounded corner bulges OUTWARD past its chord,
+        // so the arc crossing extends the section to where it actually exits
+        // the face (e.g. a notch corner that straddles a wall's top edge clips
+        // to x=±13.236, not the chord's x=±12). The crossings are merged below;
+        // the outermost pair is taken, so adding the arc crossing never drops a
+        // chord crossing the existing cases rely on — it only reaches farther
+        // out when the arc genuinely does. Arcs the line misses contribute
+        // nothing (the lip-cut sections that graze a corner chord keep working).
+        if let Some((curve, asp, aep)) = &boundary_arcs[seg_idx] {
+            for (p, _) in arc_segment_crossings(curve, *asp, *aep, line_start, line_end, tol) {
+                let t = (p - line_start).dot(line_dir) / (line_len * line_len);
+                crossings.push(t);
+            }
+        }
         let seg_dir = *seg_end - *seg_start;
         let seg_len = seg_dir.length();
 

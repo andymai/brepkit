@@ -722,6 +722,25 @@ fn compute_raw_curves(
             plane_plane_intersection(*na, *da, *nb, *db, bbox_a, bbox_b)
         }
 
+        (FaceSurface::Plane { normal, d }, FaceSurface::Cylinder(cyl))
+            if normal.dot(cyl.axis()).abs() < 1e-9 =>
+        {
+            // Plane parallel to the cylinder axis: the intersection is 0 or 2
+            // straight lines along the axis (not a circle/ellipse). The exact
+            // analytic path samples the base circle and only keeps points
+            // that happen to land on the plane, so it returns nothing for a
+            // plane that grazes the lateral surface (e.g. a wall's top edge
+            // plane cutting a rounded notch corner). Solve the two contact
+            // angles directly and emit axis-parallel lines, bbox-trimmed.
+            plane_cylinder_parallel_lines(*normal, *d, cyl, bbox_a, bbox_b)
+        }
+
+        (FaceSurface::Cylinder(cyl), FaceSurface::Plane { normal, d })
+            if normal.dot(cyl.axis()).abs() < 1e-9 =>
+        {
+            plane_cylinder_parallel_lines(*normal, *d, cyl, bbox_a, bbox_b)
+        }
+
         (FaceSurface::Plane { normal, d }, other) if other.as_analytic().is_some() => {
             if let Some(analytic) = other.as_analytic() {
                 plane_analytic_intersection(*normal, *d, &analytic)
@@ -1010,6 +1029,81 @@ fn plane_analytic_intersection(
     Ok(results)
 }
 
+/// Intersect a plane parallel to a cylinder's axis with the cylinder.
+///
+/// When the plane normal is perpendicular to the cylinder axis the contact is
+/// 0 or 2 straight lines running along the axis (not a circle/ellipse). Solve
+/// the contact angle(s) `u` from `r·(cos u·(n·X) + sin u·(n·Y)) = d − n·O` and
+/// emit each as an axis-parallel `Line` raw curve, with its parameter range
+/// trimmed to the two faces' combined AABBs (mirrors `plane_plane_intersection`).
+///
+/// Returns `Result` to match the other `compute_raw_curves` arms (uniform
+/// dispatch); it never actually fails.
+#[allow(clippy::unnecessary_wraps)]
+fn plane_cylinder_parallel_lines(
+    normal: Vec3,
+    d: f64,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
+) -> Result<Vec<RawCurve>, AlgoError> {
+    let axis = cyl.axis();
+    let r = cyl.radius();
+    let origin = cyl.origin();
+    let x = cyl.x_axis();
+    let y = cyl.y_axis();
+
+    // n·P(u,v) = n·O + v·(n·axis) + r·(cos u·(n·X) + sin u·(n·Y)); n·axis ≈ 0.
+    let a = normal.dot(x);
+    let b = normal.dot(y);
+    let n_dot_o = normal.x() * origin.x() + normal.y() * origin.y() + normal.z() * origin.z();
+    let amp = a.hypot(b);
+    if amp < 1e-12 {
+        return Ok(Vec::new());
+    }
+    // R·cos(u − φ) = C, φ = atan2(b, a), C = (d − n·O) / r.
+    let c = (d - n_dot_o) / r;
+    let ratio = c / amp;
+    // |ratio| > 1: the plane misses the cylinder; |ratio| ≈ 1: tangent (single
+    // grazing line that never splits a face — skip).
+    if ratio.abs() > 1.0 - 1e-9 {
+        return Ok(Vec::new());
+    }
+    let phi = b.atan2(a);
+    let delta = ratio.clamp(-1.0, 1.0).acos();
+    let dir = {
+        let len = axis.length();
+        if len < 1e-12 {
+            return Ok(Vec::new());
+        }
+        axis * (1.0 / len)
+    };
+
+    let mut results = Vec::new();
+    for u in [phi + delta, phi - delta] {
+        // A point on the contact line at v = 0.
+        let base = cyl.evaluate(u, 0.0);
+        let t_range = trim_t_range_to_aabb(base, dir, bbox_a, bbox_b);
+        if (t_range.1 - t_range.0).abs() < 1e-9 {
+            continue;
+        }
+        let p0 = base + dir * t_range.0;
+        let p1 = base + dir * t_range.1;
+        let bbox = Aabb3 {
+            min: Point3::new(p0.x().min(p1.x()), p0.y().min(p1.y()), p0.z().min(p1.z())),
+            max: Point3::new(p0.x().max(p1.x()), p0.y().max(p1.y()), p0.z().max(p1.z())),
+        };
+        results.push(RawCurve {
+            curve: EdgeCurve::Line,
+            bbox,
+            t_range,
+            p_start: p0,
+            p_end: p1,
+        });
+    }
+    Ok(results)
+}
+
 /// Analytic-analytic surface intersection using marching.
 fn analytic_analytic_intersection(
     a: &analytic_intersection::AnalyticSurface<'_>,
@@ -1288,6 +1382,51 @@ fn closed_circle_crosses_face_boundaries(
 /// only the non-plane face's crossings are used — those surfaces keep
 /// full closed section circles for the periodic band splitter, and
 /// their seam-line hit must not combine with plane-boundary hits.
+/// Whether a closed section circle crosses any LINE boundary edge of a plane
+/// face at a point interior to that edge (not at a shared endpoint).
+///
+/// Used to distinguish a prism-corner section arc that exits a plane face's
+/// boundary (e.g. a notch corner straddling a wall's top edge) from a
+/// periodic-band section circle that stays inside the plane face.
+fn circle_exits_plane_boundary(
+    topo: &Topology,
+    plane_face: FaceId,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> bool {
+    let Ok(face) = topo.face(plane_face) else {
+        return false;
+    };
+    let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    for wid in wires {
+        let Ok(wire) = topo.wire(wid) else {
+            continue;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                continue;
+            }
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (sp, ep) = (sv.point(), ev.point());
+            for (p, _) in circle.intersect_segment(sp, ep, tol.linear) {
+                let at_endpoint =
+                    (p - sp).length() < tol.linear * 10.0 || (p - ep).length() < tol.linear * 10.0;
+                if !at_endpoint {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn closed_circle_boundary_crossings(
     topo: &Topology,
     face_a: FaceId,
@@ -1341,8 +1480,33 @@ fn closed_circle_boundary_crossings(
         vec![face_a, face_b]
     } else {
         match (is_plane(&surf_a), is_plane(&surf_b)) {
-            (true, false) => vec![face_b],
-            (false, true) => vec![face_a],
+            // Plane x lateral-analytic (cylinder/cone): the analytic face's
+            // boundary alone splits a section circle that stays inside the
+            // plane face (the periodic band case — its seam-line hits drive
+            // the band splitter). But when the circle is a prism CORNER
+            // arc that crosses the plane face's own boundary (e.g. a
+            // rounded-rect notch whose top corner straddles a wall's top
+            // edge), the analytic boundary splits it only at the corner's
+            // angular limits, leaving an arc that bulges past the plane
+            // boundary — `emit_split_circle_arcs` then rejects it by its
+            // midpoint and the corner section is lost. Add the plane face's
+            // crossings too, but only when the circle genuinely exits the
+            // plane boundary, so the in-plane band case is unaffected (it
+            // yields no plane-boundary hits).
+            (true, false) => {
+                if circle_exits_plane_boundary(topo, face_a, circle, tol) {
+                    vec![face_a, face_b]
+                } else {
+                    vec![face_b]
+                }
+            }
+            (false, true) => {
+                if circle_exits_plane_boundary(topo, face_b, circle, tol) {
+                    vec![face_a, face_b]
+                } else {
+                    vec![face_a]
+                }
+            }
             _ => vec![face_a, face_b],
         }
     };
