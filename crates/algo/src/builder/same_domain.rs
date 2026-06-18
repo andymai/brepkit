@@ -806,7 +806,11 @@ fn project_points_through_surface(
                 .iter()
                 .map(|&(_, v)| v)
                 .fold(f64::NEG_INFINITY, f64::max);
-            c.radius_at(0.5 * (v_min + v_max))
+            // `radius_at` is signed: it returns a negative value when the
+            // cone's axis points apex→base and the patch sits on the negative
+            // side. Only the magnitude scales θ into arc length (the
+            // tessellation path takes `.abs()` for the same reason).
+            c.radius_at(0.5 * (v_min + v_max)).abs()
         }
         _ => return None,
     };
@@ -826,6 +830,10 @@ fn project_points_through_surface(
 /// θ values form a continuous arc once seam-wrapping is removed.
 fn unwrap_angles(samples: &[(f64, f64)]) -> Vec<(f64, f64)> {
     use std::f64::consts::TAU;
+    debug_assert!(
+        !samples.is_empty(),
+        "unwrap_angles requires at least one sample (callers guard len >= 3)"
+    );
     let mut out = Vec::with_capacity(samples.len());
     let mut prev = samples[0].0;
     out.push(samples[0]);
@@ -917,7 +925,6 @@ fn analytic_faces_overlap(
     let mut best_shift = 0.0_f64;
     let mut best_overlap = f64::NEG_INFINITY;
     for k in -1..=1 {
-        #[allow(clippy::cast_precision_loss)]
         let shift = f64::from(k) * TAU;
         let lo = (j_lo + shift).max(i_lo);
         let hi = (j_hi + shift).min(i_hi);

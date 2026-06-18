@@ -1426,10 +1426,28 @@ fn split_arc_edges_at_collinear_vertices(
         if (ep - sp).length() < snap {
             continue;
         }
+        // `snap` is a LINEAR tolerance (model units); the span / branch tests
+        // below are in the curve's ANGULAR domain (radians). Convert via the
+        // curve's radius scale (arc length ≈ radius·angle) so the angular guard
+        // is metrically equivalent to `snap`. A degenerate near-zero radius has
+        // no meaningful interior to split, so leave the edge whole.
+        //
+        // Only arcs reach here (the collection loop filters on `is_arc`); the
+        // non-arc arms are unreachable but kept explicit per the exhaustive-
+        // match convention so a future curve variant can't be silently skipped.
+        let radius_scale = match &curve {
+            EdgeCurve::Circle(c) => c.radius(),
+            EdgeCurve::Ellipse(e) => e.semi_major(),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+        };
+        if radius_scale < snap {
+            continue;
+        }
+        let angular_eps = snap / radius_scale;
         // The arc's CCW angular span [a0, a1] with a1 > a0.
         let (a0, a1) = curve.domain_with_endpoints(sp, ep);
         let span = a1 - a0;
-        if span < snap {
+        if span < angular_eps {
             continue;
         }
 
@@ -1447,9 +1465,11 @@ fn split_arc_edges_at_collinear_vertices(
             if (on - p).length() > snap {
                 continue;
             }
-            // Bring the angle strictly inside the trimmed span [a0, a1].
+            // Bring the angle strictly inside the trimmed span [a0, a1]. The
+            // margin is angular (radians), so use `angular_eps`, not the linear
+            // `snap`.
             let a_branch = a0 + (a - a0).rem_euclid(std::f64::consts::TAU);
-            if !(a0 + snap..=a1 - snap).contains(&a_branch) {
+            if !(a0 + angular_eps..=a1 - angular_eps).contains(&a_branch) {
                 continue;
             }
             cuts.push((a_branch, vid));
