@@ -523,6 +523,16 @@ fn integrate_holes_plane(
 /// decomposition can replace with simple (non-self-intersecting) regions even
 /// when it produces FEWER loops. A simple closed loop visits each vertex once;
 /// a figure-eight or out-and-back revisits one.
+///
+/// Detection is vertex-topological: it tests only the edges' endpoints
+/// (`start_uv`). That is exactly the failure mode this gate targets — the
+/// angular builder over-splits by walking out-and-back through a shared UV
+/// vertex (see `remove_pendant_sections`), so the bad trace always reuses a
+/// vertex. It deliberately does NOT detect a self-crossing that occurs only
+/// along an edge's interior (e.g. an arc whose curved path crosses another
+/// edge's chord in UV between their endpoints, with no shared vertex). No
+/// wire-builder trace produces such a crossing here, so testing arc interiors
+/// would add cost without changing any outcome.
 fn wire_loops_self_cross(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
     let qscale = 1.0 / tol.max(1e-12);
     let qkey = |p: brepkit_math::vec::Point2| -> (i64, i64) {
@@ -690,8 +700,9 @@ fn split_plane_face_by_arrangement(
         }
     }
 
-    // Quantize UV points so coincident vertices merge. Use a grid an order of
-    // magnitude finer than the linear tolerance (UV on a plane is metric).
+    // Quantize UV points so coincident vertices merge. The grid cell is the
+    // linear tolerance: a point maps to `round(p / tol)`, so two points within
+    // `tol` collapse to one key (UV on a plane is metric).
     let qscale = 1.0 / tol.max(1e-12);
     let qkey = |p: Point2| -> (i64, i64) {
         (
@@ -956,6 +967,16 @@ fn split_plane_face_by_arrangement(
                         start_3d: base.end_3d,
                         end_3d: base.start_3d,
                         forward: !base.forward,
+                        // `None` (carried from `base`, where every input edge is
+                        // built with `source_edge_idx: None`): these arrangement
+                        // sub-faces are written straight to topology by
+                        // `build_topology_face`, which does NOT weld via
+                        // `source_edge_idx` (its `_shared_edge_cache` is unused).
+                        // Each sub-face creates its own edges; the two directed
+                        // uses of a shared interior edge carry identical 3D
+                        // endpoints, so `merge_duplicate_edges` (position-keyed,
+                        // post-build) unifies them. `source_edge_idx` is read only
+                        // by the angular wire builder, which this path bypasses.
                         source_edge_idx: None,
                         pave_block_id: base.pave_block_id,
                     }
