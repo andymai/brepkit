@@ -38,40 +38,100 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
         return centroid;
     }
 
+    // Edge-midpoint fallback for non-convex loops. For every boundary edge,
+    // cast a ray inward from its midpoint and take the midpoint of the resulting
+    // interior chord (the segment from the edge to the first opposite boundary
+    // crossing). Keep the candidate with the LONGEST such chord — the deepest,
+    // most robustly-interior point.
+    //
+    // Returning the *deepest* candidate rather than the *first* valid one is
+    // what makes this rotation-invariant: the wire builder emits each loop with
+    // a per-process nondeterministic starting edge (the rim boundary wire's
+    // rotation tracks hash order), so a first-match scan picks a different edge
+    // — and on a non-convex slice (a notched annular rim) a different pocket —
+    // each run, flipping the sub-face's IN/OUT classification and producing an
+    // intermittent mesh fallback. The longest-chord midpoint depends only on
+    // the loop's geometry, not its starting index, and lands far from every
+    // boundary so the downstream point-in-solid test is stable.
     let area = signed_area_2d(loop_pts);
-    for i in 0..loop_pts.len() {
-        let j = (i + 1) % loop_pts.len();
-        let mid = Point2::new(
-            (loop_pts[i].x() + loop_pts[j].x()) * 0.5,
-            (loop_pts[i].y() + loop_pts[j].y()) * 0.5,
-        );
-        let edge_dir = Vec2::new(
-            loop_pts[j].x() - loop_pts[i].x(),
-            loop_pts[j].y() - loop_pts[i].y(),
-        );
+    let n = loop_pts.len();
+    let mut best: Option<(Point2, f64)> = None;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let a = loop_pts[i];
+        let b = loop_pts[j];
+        let mid = Point2::new((a.x() + b.x()) * 0.5, (a.y() + b.y()) * 0.5);
+        let edge_dir = Vec2::new(b.x() - a.x(), b.y() - a.y());
         let len = edge_dir.length();
         if len < 1e-15 {
             continue;
         }
-        // Inward normal depends on winding:
-        // CCW (positive area) -> rotate edge 90 deg CW -> (dy, -dx)
-        // CW (negative area) -> rotate edge 90 deg CCW -> (-dy, dx)
+        // Inward normal depends on winding (left normal of the edge for a
+        // CCW loop): CCW (positive area) -> (-dy, dx); CW -> (dy, -dx).
         let inward = if area > 0.0 {
-            Vec2::new(-edge_dir.y(), edge_dir.x())
+            Vec2::new(-edge_dir.y() / len, edge_dir.x() / len)
         } else {
-            Vec2::new(edge_dir.y(), -edge_dir.x())
+            Vec2::new(edge_dir.y() / len, -edge_dir.x() / len)
         };
-        let nudge = 1e-4;
-        let candidate = Point2::new(
-            mid.x() + inward.x() / len * nudge,
-            mid.y() + inward.y() / len * nudge,
-        );
-        if point_in_polygon_2d(candidate, loop_pts) {
-            return candidate;
+        // First crossing of the inward ray with any other boundary edge
+        // (every edge except the current one `i`).
+        let mut t_hit = f64::INFINITY;
+        for k in 0..n {
+            if k == i {
+                continue;
+            }
+            let c = loop_pts[k];
+            let d = loop_pts[(k + 1) % n];
+            if let Some(t) = ray_segment_param(mid, inward, c, d)
+                && t > 1e-9
+                && t < t_hit
+            {
+                t_hit = t;
+            }
         }
+        if !t_hit.is_finite() {
+            continue;
+        }
+        let cand = Point2::new(
+            mid.x() + inward.x() * t_hit * 0.5,
+            mid.y() + inward.y() * t_hit * 0.5,
+        );
+        // Keep the longest interior chord; break exact ties by the candidate's
+        // lexicographic coordinates so the result is loop-rotation-invariant
+        // (the chosen start edge is HashMap-order-dependent upstream).
+        let better = best.is_none_or(|(bp, bt)| {
+            t_hit > bt + 1e-12
+                || ((t_hit - bt).abs() <= 1e-12 && (cand.x(), cand.y()) < (bp.x(), bp.y()))
+        });
+        if point_in_polygon_2d(cand, loop_pts) && better {
+            best = Some((cand, t_hit));
+        }
+    }
+    if let Some((pt, _)) = best {
+        return pt;
     }
     // All edge midpoints failed -- return centroid as last resort.
     centroid
+}
+
+/// Parameter `t >= 0` at which the ray `origin + t*dir` first crosses segment
+/// `[s0, s1]`, or `None` if it does not. `dir` is assumed unit-length; `t` is a
+/// world-space distance along the ray.
+fn ray_segment_param(origin: Point2, dir: Vec2, s0: Point2, s1: Point2) -> Option<f64> {
+    let e = Vec2::new(s1.x() - s0.x(), s1.y() - s0.y());
+    let denom = dir.x() * e.y() - dir.y() * e.x();
+    if denom.abs() < 1e-15 {
+        return None; // parallel
+    }
+    let diff = Vec2::new(s0.x() - origin.x(), s0.y() - origin.y());
+    // t along the ray, u along the segment.
+    let t = (diff.x() * e.y() - diff.y() * e.x()) / denom;
+    let u = (diff.x() * dir.y() - diff.y() * dir.x()) / denom;
+    if t >= 0.0 && (0.0..=1.0).contains(&u) {
+        Some(t)
+    } else {
+        None
+    }
 }
 
 /// Scale-aware boundary tolerance for a 2D loop: a small fraction of the
