@@ -136,3 +136,18 @@ fn gridfinity_stacking_lip_fuse_is_watertight() {
 fn gridfinity_stacking_lip_fuse_2x1_is_watertight() {
     assert_lip_fuse_clean("lipfuse_2x1_body.step", "lipfuse_2x1_lip.step");
 }
+
+/// The 3×3 bin variant. Distinct, deeper failure from the 2×2/2×1: the body's
+/// rounded corners arrive split into two angular EIGHTH-cylinders at the 45°
+/// diagonal seam, while the lip foot's corners are whole QUARTERS. At each
+/// coincident corner column the two operands carry the SAME coaxial cylinder
+/// with MISMATCHED segmentation, so the edge-set same-domain hash never pairs
+/// them and the body's redundant interior eighths survive → open shell → mesh
+/// fallback (231 all-planar facets, curved == 0). Fixed by the coaxial
+/// cylinder/cone same-domain overlap pass (parameter-space (θ, axial) overlap),
+/// the curved-rim arc-split, and skipping the planar-arrangement splitter on
+/// holed faces so the flush lip-bottom annulus keeps its hole.
+#[test]
+fn gridfinity_stacking_lip_fuse_3x3_is_watertight() {
+    assert_lip_fuse_clean("lipfuse_3x3_body.step", "lipfuse_3x3_lip.step");
+}

@@ -1698,9 +1698,20 @@ pub fn split_face_2d(
     // count). Lines are exact; in-plane arcs (corner roundings) are preserved via
     // their true geometry — `split_plane_face_by_arrangement` bails on off-plane
     // straddle arcs so those faces keep the existing curved paths.
+    //
+    // Skip when the face has un-integrated original holes: the arrangement
+    // builds purely from the OUTER boundary + sections and never sees an inner
+    // wire, so on a holed face (e.g. the lip-bottom annulus of the 3×3
+    // stacking-lip fuse, whose corner arcs make the LOOPS trace self-cross) it
+    // would decompose the annulus into hole-less disk regions and triple-share
+    // the perimeter. Those faces fall through to the LOOPS path below, which
+    // carries the holes correctly. (`holes_integrated` covers the case where
+    // the holes WERE folded into the section set; this covers the case where
+    // they were not.)
     if sections.len() >= 2
         && is_plane
         && !holes_integrated
+        && original_inner_wires.is_empty()
         && let Some(ref boundary) = boundary_edges_backup
         && let Some(result) = split_plane_face_by_arrangement(
             &surface, boundary, sections, rank, reversed, face_id, frame, tol.linear,
