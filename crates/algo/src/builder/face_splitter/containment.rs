@@ -1,13 +1,49 @@
 //! Point containment tests for UV-space hole detection.
 
+use brepkit_math::curves2d::Curve2D;
 use brepkit_math::vec::Point2;
 
 use super::super::split_types::OrientedPCurveEdge;
 use super::sampling::sample_wire_loop_uv;
 
+/// Build a UV polygon for a hole wire from its edges' endpoint UVs (chords),
+/// not from `sample_wire_loop_uv`. The pcurve of a projected arc edge can be a
+/// `Nurbs2D` whose parameter domain traces a path inconsistent with its stored
+/// `start_uv`/`end_uv` (the pcurve was fitted in a different frame), so sampling
+/// it yields a self-crossing garbage polygon. The stored endpoint UVs ARE
+/// correct and chain edge-to-edge, so the chord polygon faithfully approximates
+/// the hole for a point-in-polygon containment test (a rounded-rect's corner
+/// arcs are clipped to chords, well away from any interior test point).
+fn hole_chord_polygon(hole: &[OrientedPCurveEdge]) -> Vec<Point2> {
+    let mut pts: Vec<Point2> = Vec::with_capacity(hole.len() + 1);
+    for e in hole {
+        pts.push(e.start_uv);
+        // Densify a curved edge with its midpoint so a large corner arc keeps a
+        // closer-to-true hull than a single chord. Cheap and robust: just adds
+        // the arc's stored midpoint endpoint when present, otherwise the chord
+        // midpoint. Either way it stays inside the true arc, never outside.
+        if !matches!(e.pcurve, Curve2D::Line(_)) {
+            pts.push(Point2::new(
+                0.5 * (e.start_uv.x() + e.end_uv.x()),
+                0.5 * (e.start_uv.y() + e.end_uv.y()),
+            ));
+        }
+    }
+    pts
+}
+
 /// Check if a UV point is inside any of the inner wire (hole) polygons.
 pub(super) fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveEdge>]) -> bool {
     for hole in inner_wires {
+        // Prefer the chord polygon (endpoint-derived). Fall back to the sampled
+        // polygon only when the hole degenerates to < 3 endpoints.
+        let chord = hole_chord_polygon(hole);
+        if chord.len() >= 3 {
+            if super::super::classify_2d::point_in_polygon_2d(*pt, &chord) {
+                return true;
+            }
+            continue;
+        }
         let hole_pts = sample_wire_loop_uv(hole);
         if hole_pts.len() >= 3 && super::super::classify_2d::point_in_polygon_2d(*pt, &hole_pts) {
             return true;
