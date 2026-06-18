@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.6](https://github.com/andymai/brepkit/compare/v2.114.5...v2.114.6) (2026-06-18)
+
+
+### Bug Fixes
+
+* **algo:** arc-aware planar arrangement for rounded U-notch wall cuts ([#903](https://github.com/andymai/brepkit/issues/903)) ([94aa1b7](https://github.com/andymai/brepkit/commit/94aa1b7dddcc4e02fd9feed65df2a67d210182ea))
+
 ## [2.114.5](https://github.com/andymai/brepkit/compare/v2.114.4...v2.114.5) (2026-06-18)
 
 
