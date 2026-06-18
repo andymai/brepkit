@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.5](https://github.com/andymai/brepkit/compare/v2.114.4...v2.114.5) (2026-06-18)
+
+
+### Bug Fixes
+
+* **algo:** deterministic interior-point classification + collinear-disjoint section dedup ([#901](https://github.com/andymai/brepkit/issues/901)) ([1607637](https://github.com/andymai/brepkit/commit/160763784037408a388b353bf91e9f204ee696da))
+
 ## [2.114.4](https://github.com/andymai/brepkit/compare/v2.114.3...v2.114.4) (2026-06-18)
 
 
