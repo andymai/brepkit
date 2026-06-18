@@ -1441,13 +1441,33 @@ fn build_section_edges(
                         };
                         // Also clip to the OPPOSING FF face so a wide face does
                         // not extend the section past the narrower face's
-                        // boundary (the intersection of the two clips). Only
-                        // tightens; if the opposing face does not bound the line
-                        // here, keep this face's clip.
+                        // boundary (the intersection of the two clips). Adopt an
+                        // opposing-clip endpoint ONLY where it genuinely tightens
+                        // (moves by > tol); a flush/coincident opposing face
+                        // re-derives the SAME endpoint from its own geometry with
+                        // sub-tolerance float noise (e.g. -38 vs -38 + 1.4e-14),
+                        // and snapping the section to that noisy value shifts it
+                        // off the shared corner vertex this face's clip landed on
+                        // exactly — the wire then fails to close and the assembler
+                        // classifies every shell as a hole (the stacking-lip fuse
+                        // regression). Per-endpoint so a real one-sided tightening
+                        // still applies while the untouched end stays exact.
                         match opposing_face.and_then(|of| {
                             clip_line_to_face_boundary(topo, of, clipped.0, clipped.1, tol)
                         }) {
-                            Some(both) => both,
+                            Some(both) => {
+                                let start = if (both.0 - clipped.0).length() > tol {
+                                    both.0
+                                } else {
+                                    clipped.0
+                                };
+                                let end = if (both.1 - clipped.1).length() > tol {
+                                    both.1
+                                } else {
+                                    clipped.1
+                                };
+                                (start, end)
+                            }
                             None => clipped,
                         }
                     } else {
