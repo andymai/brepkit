@@ -4755,3 +4755,47 @@ fn cut_wall_notch_straddling_top_edge_is_watertight() {
         "wall-cutout must stay analytic (4 body + 4 tool corner cylinders)"
     );
 }
+
+/// Regression for the WIDE gridfinity wall cutout: the tool's width is a large
+/// percentage of the wall span, so the tool's side planes cross the BODY's own
+/// rounded corner cylinders. The tool corner cylinders then intersect the body
+/// corner cylinders (two cylinders with perpendicular axes, meeting in a small
+/// arc bounded by tangent points). That arc must be carved into the body corner
+/// cylinders WITHOUT losing them to a mesh fallback. A coarse full-revolution
+/// cylinder-cylinder curve with a spurious closure used to wander off-surface
+/// and corrupt the split, dropping the two affected corner cylinders.
+///
+/// The wide notch's TOP corner (where the tool's top corner cylinders straddle
+/// the wall-top plane AND cross the body corner cylinders) is a deeper
+/// multi-face junction that is not yet fully watertight; this test pins the
+/// achieved invariant: both body corner cylinders survive analytically (the cut
+/// stays analytic, 8 corner cylinders), proving the perpendicular
+/// cylinder-cylinder intersection is no longer corrupting the split.
+#[test]
+fn cut_wide_wall_notch_preserves_body_corner_cylinders() {
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::FRAC_PI_2;
+    let mut topo = Topology::new();
+    let body = make_rounded_rect_arc_prism(&mut topo, 21.0, 21.0, 3.75, 0.0, 30.0);
+    // Wide tool: hw=18 so the tool's side planes (x = +/-18) cross the body's
+    // corner cylinders (centered at +/-17.25, radius 3.75, spanning x in
+    // [13.5, 21]). hd=13, r=3, extruded 6, rotated and placed to straddle the
+    // +Y wall the same way as `cut_wall_notch_straddling_top_edge_is_watertight`.
+    let tool = make_rounded_rect_arc_prism(&mut topo, 18.0, 13.0, 3.0, 0.0, 6.0);
+    crate::transform::transform_solid(&mut topo, tool, &Mat4::rotation_x(-FRAC_PI_2)).unwrap();
+    crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(0.0, 17.0, 18.0))
+        .unwrap();
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, body, tool)
+            .unwrap();
+
+    // The four body corner cylinders and the four tool corner cylinders must all
+    // remain analytic. Before the perpendicular cylinder-cylinder fix the two
+    // body corner cylinders crossed by the wide tool were dropped (cyl == 6).
+    assert_eq!(
+        count_cylinder_faces(&topo, result),
+        8,
+        "wide wall-cutout must keep all corner cylinders analytic (no mesh fallback)"
+    );
+}

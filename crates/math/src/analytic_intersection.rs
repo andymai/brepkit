@@ -1309,66 +1309,59 @@ fn algebraic_cylinder_cylinder(
         }
     }
 
-    // Sample u from 0 to 2π on cylinder 1. Offset by half a step to avoid
-    // landing exactly on crossing points where disc=0 and both curves coincide.
-    // This ensures the two algebraic branches have distinct sample endpoints,
-    // so the face splitter's wire builder doesn't face 4-way junction ambiguity.
-    let n_samples = 128;
-    let mut curve_plus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
-    let mut curve_minus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
-    let u_offset = TAU / (n_samples as f64 * 2.0); // half a step
-
-    // Sample n_samples DISTINCT points (no duplicate at closure).
-    // After the loop, explicitly close each curve by copying the first point.
-    #[allow(clippy::cast_precision_loss)]
-    for i in 0..n_samples {
-        let u = u_offset + TAU * i as f64 / n_samples as f64;
+    // The intersection of two non-parallel cylinders is, per angle `u` on
+    // cylinder 1, the roots of a quadratic in cylinder 1's axial coordinate
+    // `v`. The discriminant is non-negative only where cylinder 1's ring at
+    // `u` actually reaches cylinder 2 (a `disc(u) >= 0` band). Where the band
+    // covers the whole circle the two roots trace two separate closed loops;
+    // where it covers only an arc the two roots MEET at the band edges
+    // (`disc = 0`, a tangent point) and bound a single closed lens.
+    //
+    // `disc(u)` for a unit-step solve at `u`:
+    let disc_at = |u: f64| -> (f64, f64, f64) {
         let (sin_u, cos_u) = u.sin_cos();
-
-        // Radial point on c1 at angle u, height v=0:
-        // q = c1.origin + r1*(cos(u)*x1 + sin(u)*y1) - c2.origin
         let qx = o1.x() + r1 * (cos_u * x1.x() + sin_u * y1.x()) - o2.x();
         let qy = o1.y() + r1 * (cos_u * x1.y() + sin_u * y1.y()) - o2.y();
         let qz = o1.z() + r1 * (cos_u * x1.z() + sin_u * y1.z()) - o2.z();
-
         let q_dot_a1 = qx * a1.x() + qy * a1.y() + qz * a1.z();
         let q_dot_a2 = qx * a2.x() + qy * a2.y() + qz * a2.z();
         let q_sq = qx * qx + qy * qy + qz * qz;
-
         let b_coeff = 2.0 * (q_dot_a1 - alpha * q_dot_a2);
         let c_coeff = q_sq - q_dot_a2 * q_dot_a2 - r2 * r2;
-
         let disc = b_coeff * b_coeff - 4.0 * a_coeff * c_coeff;
-        // Clamp tiny negative discriminant (floating-point noise near tangent
-        // crossing points where disc → 0) to avoid gaps in the sample set.
-        if disc < -Tolerance::new().linear {
-            continue;
-        }
-
+        (disc, b_coeff, c_coeff)
+    };
+    let roots_at = |u: f64| -> (f64, f64) {
+        let (disc, b_coeff, _) = disc_at(u);
         let sqrt_disc = disc.max(0.0).sqrt();
-        let v_plus = (-b_coeff + sqrt_disc) / (2.0 * a_coeff);
-        let v_minus = (-b_coeff - sqrt_disc) / (2.0 * a_coeff);
+        (
+            (-b_coeff + sqrt_disc) / (2.0 * a_coeff),
+            (-b_coeff - sqrt_disc) / (2.0 * a_coeff),
+        )
+    };
+    // Exact `v` at a tangent (`disc = 0`): the double root `-b / 2a`.
+    let tangent_v = |u: f64| -> f64 {
+        let (_, b_coeff, _) = disc_at(u);
+        -b_coeff / (2.0 * a_coeff)
+    };
 
-        curve_plus.push(c1.evaluate(u, v_plus));
-        curve_minus.push(c1.evaluate(u, v_minus));
-    }
+    // Scan resolution for locating the in-band run(s). Band edges are refined
+    // to the exact `disc = 0` angle by bisection afterwards, so this only needs
+    // to be fine enough to not miss a narrow band.
+    let n_samples = 64usize;
+    #[allow(clippy::cast_precision_loss)]
+    let u_of = |i: usize| TAU * i as f64 / n_samples as f64;
+    let tol_disc = Tolerance::new().linear;
+    let inb = |u: f64| disc_at(u).0 >= -tol_disc;
 
-    // Explicitly close each curve by copying the first point (exact match
-    // avoids near-zero chord length in NURBS interpolation).
-    if !curve_plus.is_empty() {
-        curve_plus.push(curve_plus[0]);
-    }
-    if !curve_minus.is_empty() {
-        curve_minus.push(curve_minus[0]);
-    }
+    // Classify: is every sample in-band (full revolution) or only some?
+    let all_in = (0..n_samples).all(|i| inb(u_of(i)));
 
     let mut curves = Vec::new();
-
-    for pts in [&curve_plus, &curve_minus] {
+    let push_curve = |curves: &mut Vec<IntersectionCurve>, pts: &[Point3]| {
         if pts.len() < 4 {
-            continue;
+            return;
         }
-
         let ipts: Vec<IntersectionPoint> = pts
             .iter()
             .map(|&p| {
@@ -1381,7 +1374,6 @@ fn algebraic_cylinder_cylinder(
                 }
             })
             .collect();
-
         let degree = 3.min(pts.len() - 1);
         if let Ok(curve) = interpolate(pts, degree) {
             curves.push(IntersectionCurve {
@@ -1389,6 +1381,130 @@ fn algebraic_cylinder_cylinder(
                 points: ipts,
             });
         }
+    };
+
+    if all_in {
+        // Full revolution: two separate closed loops (the classic two-oval
+        // crossing). Sample each branch over the whole circle.
+        let mut curve_plus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
+        let mut curve_minus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
+        for i in 0..n_samples {
+            let u = u_of(i);
+            let (v_plus, v_minus) = roots_at(u);
+            curve_plus.push(c1.evaluate(u, v_plus));
+            curve_minus.push(c1.evaluate(u, v_minus));
+        }
+        if let Some(&p0) = curve_plus.first() {
+            curve_plus.push(p0);
+        }
+        if let Some(&p0) = curve_minus.first() {
+            curve_minus.push(p0);
+        }
+        push_curve(&mut curves, &curve_plus);
+        push_curve(&mut curves, &curve_minus);
+        return Ok(Some(curves));
+    }
+
+    // Partial: find the contiguous in-band runs (circular), each bounded by a
+    // pair of tangent points where the two roots meet. Refine each band edge
+    // to the exact `disc = 0` angle so the lens closes precisely on the tangent
+    // point (which, when a third surface passes through it, is the exact triple
+    // point the downstream split must weld to).
+    let refine_edge = |u_in: f64, u_out: f64| -> f64 {
+        // Bisect the angle between an in-band sample and an out-of-band sample
+        // to the disc=0 crossing.
+        let (mut a, mut b) = (u_out, u_in); // a: out, b: in
+        for _ in 0..40 {
+            let m = 0.5 * (a + b);
+            if inb(m) {
+                b = m;
+            } else {
+                a = m;
+            }
+        }
+        b
+    };
+
+    // Walk the circular sample sequence and collect (start_idx, end_idx) of
+    // each maximal in-band run. A run that wraps the seam is stitched.
+    let band_state: Vec<bool> = (0..n_samples).map(|i| inb(u_of(i))).collect();
+    let mut bands: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0usize;
+    while i < n_samples {
+        if band_state[i] {
+            let start = i;
+            let mut j = i;
+            while j + 1 < n_samples && band_state[j + 1] {
+                j += 1;
+            }
+            bands.push((start, j));
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+    // Stitch a band that touches both ends of the array (wraps the seam).
+    if bands.len() >= 2 {
+        let first = bands[0];
+        let last = bands[bands.len() - 1];
+        if first.0 == 0 && last.1 == n_samples - 1 {
+            bands.pop();
+            bands[0] = (last.0, first.1 + n_samples); // end index wraps past n_samples
+        }
+    }
+
+    for (start, end) in bands {
+        // Tangent angles at the two band edges (exact disc=0). The edge just
+        // before `start` and just after `end` are out-of-band samples.
+        let u_start_in = u_of(start % n_samples);
+        let u_before = u_of((start + n_samples - 1) % n_samples);
+        let u_end_in = u_of(end % n_samples);
+        let u_after = u_of((end + 1) % n_samples);
+        let u_lo = refine_edge(u_start_in, u_before);
+        let mut u_hi = refine_edge(u_end_in, u_after);
+        // Keep the band monotone increasing for sampling (handle seam wrap).
+        if u_hi < u_lo {
+            u_hi += TAU;
+        }
+        let v_lo = tangent_v(u_lo);
+        let v_hi = tangent_v(u_hi);
+
+        // Build one closed lens: forward along the minus root from the lo
+        // tangent to the hi tangent, then back along the plus root. Both roots
+        // coincide at the tangents, so the lens closes smoothly.
+        //
+        // Near a tangent `v ~ v* - C*sqrt(u* - u)`, so the curve doubles back
+        // sharply in `u`; uniform-`u` samples are sparse there and the NURBS
+        // interpolant overshoots, leaving the trimmed endpoint a few hundredths
+        // off the exact tangent (which must weld to the line/arc sharing that
+        // triple point). Cluster samples toward both tangent ends with a cosine
+        // remap so the turn is well resolved and the interpolant stays on the
+        // exact intersection.
+        let band_samples = end.saturating_sub(start) + 1;
+        let dense = (band_samples * 2).clamp(12, 48);
+        #[allow(clippy::cast_precision_loss)]
+        let clustered_u = |k: usize, n: usize| -> f64 {
+            let s = k as f64 / n as f64;
+            // Dense at s=0 and s=1.
+            let f = 0.5 * (1.0 - (std::f64::consts::PI * s).cos());
+            u_lo + (u_hi - u_lo) * f
+        };
+        let mut pts: Vec<Point3> = Vec::with_capacity(dense * 2 + 2);
+        pts.push(c1.evaluate(u_lo, v_lo));
+        for k in 1..dense {
+            let u = clustered_u(k, dense);
+            let (_, v_minus) = roots_at(u);
+            pts.push(c1.evaluate(u, v_minus));
+        }
+        pts.push(c1.evaluate(u_hi, v_hi));
+        for k in 1..dense {
+            let u = clustered_u(dense - k, dense);
+            let (v_plus, _) = roots_at(u);
+            pts.push(c1.evaluate(u, v_plus));
+        }
+        // Close the lens exactly at the lo tangent.
+        pts.push(c1.evaluate(u_lo, v_lo));
+        push_curve(&mut curves, &pts);
     }
 
     Ok(Some(curves))
@@ -2006,5 +2122,80 @@ mod tests {
         .unwrap();
 
         assert!(curves.is_empty(), "disjoint cylinders should not intersect");
+    }
+
+    /// Every sample of a cylinder-cylinder intersection curve must lie on BOTH
+    /// cylinders. The `interpolate` step can overshoot, so test the sampled
+    /// `points` (which are the exact algebraic solutions).
+    fn assert_on_both_cylinders(
+        curves: &[IntersectionCurve],
+        c1: &CylindricalSurface,
+        c2: &CylindricalSurface,
+        ctx: &str,
+    ) {
+        let dev = |p: Point3, c: &CylindricalSurface| {
+            let to = p - c.origin();
+            let along = to.dot(c.axis());
+            let radial = (to - c.axis() * along).length();
+            (radial - c.radius()).abs()
+        };
+        for curve in curves {
+            for ip in &curve.points {
+                assert!(
+                    dev(ip.point, c1) < 1e-6,
+                    "{ctx}: point {:?} off c1 by {}",
+                    ip.point,
+                    dev(ip.point, c1)
+                );
+                assert!(
+                    dev(ip.point, c2) < 1e-6,
+                    "{ctx}: point {:?} off c2 by {}",
+                    ip.point,
+                    dev(ip.point, c2)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn perpendicular_cylinders_full_overlap() {
+        // A thin cylinder (axis Y, r=1) passing fully through a fat one
+        // (axis Z, r=2): two closed intersection loops, all points on both.
+        let cz = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+            .unwrap();
+        let cy = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 1.0)
+            .unwrap();
+        let curves = algebraic_cylinder_cylinder(&cz, &cy).unwrap().unwrap();
+        assert!(
+            !curves.is_empty(),
+            "fully-crossing cylinders must intersect"
+        );
+        assert_on_both_cylinders(&curves, &cz, &cy, "full overlap");
+    }
+
+    #[test]
+    fn perpendicular_cylinders_partial_overlap_tangent_endpoints() {
+        // The gridfinity wide-wall-cutout configuration: a body corner cylinder
+        // (axis Z, r=3.75) and a tool corner cylinder (axis Y, r=3) whose
+        // circular footprints only partially overlap. The intersection lives in
+        // a band; its endpoints are the exact tangent (discriminant-zero)
+        // points. Every sample must lie on both cylinders -- a coarse
+        // full-revolution sample with a spurious chord closure used to wander
+        // off-surface here, corrupting the downstream face split.
+        let body = CylindricalSurface::new(
+            Point3::new(-17.25, 17.25, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.75,
+        )
+        .unwrap();
+        let tool =
+            CylindricalSurface::new(Point3::new(-15.0, 17.0, 8.0), Vec3::new(0.0, 1.0, 0.0), 3.0)
+                .unwrap();
+        let curves = algebraic_cylinder_cylinder(&body, &tool).unwrap().unwrap();
+        assert!(
+            !curves.is_empty(),
+            "partially-overlapping cylinders must still intersect"
+        );
+        assert_on_both_cylinders(&curves, &body, &tool, "partial overlap");
     }
 }

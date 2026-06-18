@@ -332,11 +332,20 @@ enum FaceExtent {
         margin: f64,
     },
     /// Analytic lateral face (cylinder/cone/sphere/torus): bound by the
-    /// axial `v` parameter range of the face.
+    /// axial `v` parameter range of the face, and (when the face is a
+    /// partial sweep, not a full revolution) by its angular `u` arc.
     Analytic {
         surface: FaceSurface,
         v0: f64,
         v1: f64,
+        /// When `Some((u_lo, u_hi))`, the face covers the angular arc from
+        /// `u_lo` (in `[0, 2π)`) sweeping CCW to `u_hi` (`u_hi` may exceed
+        /// `2π` when the arc crosses the `u = 0` seam). `None` means the
+        /// face is a full revolution (no angular bound). The arc is widened
+        /// by `u_margin` on each end so boundary-coincident points count as
+        /// inside.
+        u_arc: Option<(f64, f64)>,
+        u_margin: f64,
         margin: f64,
     },
 }
@@ -415,16 +424,27 @@ impl FaceExtent {
         } else {
             let (v0, v1) = v_range?;
             let margin = (v1 - v0).abs() * 0.01 + tol.linear;
+            let (u_arc, u_margin) = face_u_arc(topo, face_id, surface);
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
                 v1,
+                u_arc,
+                u_margin,
                 margin,
             })
         }
     }
 
     fn contains(&self, p: Point3) -> bool {
+        self.contains_with_margin(p, 1.0)
+    }
+
+    /// As [`Self::contains`] but scaling the boundary margins by `margin_scale`
+    /// (`1.0` = the default tolerant test; `0.0` = a strict on-the-boundary
+    /// test). The strict test is used to refine a trimmed endpoint exactly onto
+    /// a face boundary after the tolerant test has located the run.
+    fn contains_with_margin(&self, p: Point3, margin_scale: f64) -> bool {
         match self {
             Self::Plane {
                 frame,
@@ -432,9 +452,10 @@ impl FaceExtent {
                 holes,
                 margin,
             } => {
+                let m = *margin * margin_scale;
                 let uv = frame.project(p);
                 let in_outer = crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
-                    || point_to_polygon_dist(uv, poly) <= *margin;
+                    || point_to_polygon_dist(uv, poly) <= m;
                 if !in_outer {
                     return false;
                 }
@@ -442,19 +463,128 @@ impl FaceExtent {
                 // is not on the trimmed face.
                 !holes.iter().any(|h| {
                     crate::builder::classify_2d::point_in_polygon_2d(uv, h)
-                        && point_to_polygon_dist(uv, h) > *margin
+                        && point_to_polygon_dist(uv, h) > m
                 })
             }
             Self::Analytic {
                 surface,
                 v0,
                 v1,
+                u_arc,
+                u_margin,
                 margin,
-            } => surface
-                .project_point(p)
-                .is_none_or(|(_, v)| v >= *v0 - *margin && v <= *v1 + *margin),
+            } => surface.project_point(p).is_none_or(|(u, v)| {
+                let m = *margin * margin_scale;
+                let um = *u_margin * margin_scale;
+                let v_ok = v >= *v0 - m && v <= *v1 + m;
+                let u_ok = u_arc.is_none_or(|(lo, hi)| u_in_arc(u, lo, hi, um));
+                v_ok && u_ok
+            }),
         }
     }
+}
+
+/// Whether angular parameter `u` (in `[0, 2π)`) lies within the CCW arc from
+/// `lo` to `hi` (where `hi` may exceed `2π` when the arc crosses the seam),
+/// widened by `margin` on each end. Tests both `u` and `u + 2π` so a point on
+/// the far side of the seam is matched against a wrap-around arc.
+fn u_in_arc(u: f64, lo: f64, hi: f64, margin: f64) -> bool {
+    let tau = std::f64::consts::TAU;
+    let in_band = |x: f64| x >= lo - margin && x <= hi + margin;
+    in_band(u) || in_band(u + tau)
+}
+
+/// Angular `u` arc of an analytic lateral face (cylinder/cone), derived from
+/// its boundary. Returns `(Some((u_lo, u_hi)), margin)` for a partial sweep,
+/// or `(None, _)` for a full revolution (or a non-cylinder/cone surface, or a
+/// boundary that can't be read) so the caller applies no angular bound.
+///
+/// The boundary `u` samples lie on the periodic circle; the face occupies
+/// everything EXCEPT the single largest angular gap between consecutive
+/// samples. `u_lo`/`u_hi` bracket the occupied arc (`u_hi` may exceed `2π`
+/// when the arc wraps the `u = 0` seam). If the largest gap is small (the
+/// boundary spans nearly the full circle) the face is treated as a full
+/// revolution and no bound is returned.
+fn face_u_arc(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+) -> (Option<(f64, f64)>, f64) {
+    // Only cylinders and cones have a meaningful single angular sweep that a
+    // full-revolution intersection curve can overshoot. Spheres/tori have two
+    // periodic params; leave them unbounded (conservative).
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return (None, 0.0);
+    }
+    let Ok(face) = topo.face(face_id) else {
+        return (None, 0.0);
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return (None, 0.0);
+    };
+    let tau = std::f64::consts::TAU;
+    let mut us: Vec<f64> = Vec::new();
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            return (None, 0.0);
+        };
+        let Ok(sp) = topo.vertex(edge.start()) else {
+            return (None, 0.0);
+        };
+        let Ok(ep) = topo.vertex(edge.end()) else {
+            return (None, 0.0);
+        };
+        let (sp, ep) = (sp.point(), ep.point());
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        // Sample each edge (curved edges trace through u) to capture the arc
+        // the boundary covers, including a generatrix that pins one u and an
+        // arc edge that sweeps a u-range.
+        for i in 0..=8 {
+            #[allow(clippy::cast_precision_loss)]
+            let f = i as f64 / 8.0;
+            let t = t0 + (t1 - t0) * f;
+            let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
+            if let Some((u, _)) = surface.project_point(pt) {
+                us.push(u.rem_euclid(tau));
+            }
+        }
+    }
+    if us.len() < 2 {
+        return (None, 0.0);
+    }
+    us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Largest angular gap between consecutive samples (circularly). The
+    // occupied arc is the complement of that gap.
+    let mut gap_max = 0.0;
+    let mut gap_idx = 0usize;
+    for i in 0..us.len() {
+        let next = if i + 1 < us.len() {
+            us[i + 1]
+        } else {
+            us[0] + tau
+        };
+        let gap = next - us[i];
+        if gap > gap_max {
+            gap_max = gap;
+            gap_idx = i;
+        }
+    }
+    // A boundary covering nearly the whole circle (gap below ~5°) is a full
+    // revolution; don't bound it (a seam-only split would otherwise reject the
+    // far half of a genuine full-circle rim).
+    if gap_max < 5.0_f64.to_radians() {
+        return (None, 0.0);
+    }
+    // Occupied arc starts just past the gap and wraps to just before it.
+    let u_lo = us[(gap_idx + 1) % us.len()];
+    let mut u_hi = us[gap_idx];
+    if u_hi < u_lo {
+        u_hi += tau;
+    }
+    // Widen by 1% of the arc (min ~0.5°) so boundary-coincident curve endpoints
+    // and seam-adjacent samples count as inside.
+    let margin = ((u_hi - u_lo) * 0.01).max(0.5_f64.to_radians());
+    (Some((u_lo, u_hi)), margin)
 }
 
 /// Minimum distance from a 2D point to a closed polygon's edges.
@@ -508,7 +638,12 @@ fn restrict_curves_to_faces(
         return raw_curves;
     };
 
-    const N: usize = 24;
+    // A fine sample count: a near-full-revolution curve from the algebraic
+    // cylinder-cylinder path can have its true in-both arc span only a few
+    // percent of the parameter range (a wide tool side crossing a body's own
+    // corner cylinder), so a coarse sweep snaps the trim endpoints far off the
+    // real boundary and the trimmed section fails to meet its neighbours.
+    const N: usize = 96;
     let mut out = Vec::with_capacity(raw_curves.len());
     for raw in raw_curves {
         // Lines are clipped downstream by `clip_line_to_face`; only the
@@ -518,23 +653,37 @@ fn restrict_curves_to_faces(
             out.push(raw);
             continue;
         }
-        let pt = |i: usize| -> Point3 {
-            #[allow(clippy::cast_precision_loss)]
-            let f = i as f64 / N as f64;
-            let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+        let span = raw.t_range.1 - raw.t_range.0;
+        // Map a (possibly wrap-around, frac > 1) fractional index to a curve
+        // parameter and evaluate. For a closed curve the parameterization is
+        // periodic, so frac > 1 wraps past the seam.
+        let pt_at = |frac: f64| -> Point3 {
+            let t = raw.t_range.0 + span * frac;
             raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
         };
-        let inb: Vec<bool> = (0..=N)
+        #[allow(clippy::cast_precision_loss)]
+        let pt = |i: usize| -> Point3 { pt_at(i as f64 / N as f64) };
+        let mut inb: Vec<bool> = (0..=N)
             .map(|i| {
                 let p = pt(i);
                 ext_a.contains(p) && ext_b.contains(p)
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let closed = (raw.p_start - raw.p_end).length() < 1e-7;
+        // Bridge a 1-2 sample out-gap that is flanked by in-both samples on
+        // both sides. Two perpendicular cylinders meet in a lens whose two
+        // halves join at a tangent point; right at the tangent the curve grazes
+        // a face boundary, so the mutual-extent test can flicker "out" for a
+        // sample or two. Bridging keeps the lens's in-both arc a single run
+        // through the tangent instead of being split into two stubs that fail
+        // to meet the line/arc sharing that tangent triple point. Only short
+        // gaps are bridged; a genuine out-region (the curve leaving the shared
+        // region entirely) is many samples wide and survives.
+        bridge_short_gaps(&mut inb, closed, 2);
         // Longest contiguous in-both run. A closed curve (sample N coincides
         // with sample 0) may have its in-both arc wrap across the seam, so the
         // search extends past N for closed curves (`b1` may exceed N, mapped
         // back via the curve's periodic parameterization).
-        let closed = (raw.p_start - raw.p_end).length() < 1e-7;
         let (b0, b1) = longest_inboth_run(&inb, closed);
         // An in-both run spanning fewer than two segments (b1-b0 < 2, i.e. at
         // most two consecutive in-both samples) is a tangency/grazing point —
@@ -550,32 +699,178 @@ fn restrict_curves_to_faces(
         // inner tapered wall meeting an outer corner (the gridfinity lip
         // knife-edge) survives as a degenerate loop and over-connects the rim.
         // Trim it to its in-both arc so it becomes an open edge the splitter
-        // can place. Circles are left whole (seam adoption handles them); open
-        // curves are left whole (the splitter clips them).
+        // can place. Circles are left whole (seam adoption + the splitter's own
+        // circle trimming handle them); open curves are left whole (the
+        // splitter clips them).
         if closed && b1 - b0 < N && !matches!(raw.curve, EdgeCurve::Circle(_)) {
+            // Refine each endpoint to the true in/out transition: the boundary
+            // lies between the last out-sample and the first in-sample. Bisect
+            // the fractional index there so the trimmed arc meets its neighbour
+            // sections precisely instead of snapping to a coarse sample step.
             #[allow(clippy::cast_precision_loss)]
-            let frac = |i: usize| i as f64 / N as f64;
-            let span = raw.t_range.1 - raw.t_range.0;
-            let t0 = raw.t_range.0 + span * frac(b0);
-            let t1 = raw.t_range.0 + span * frac(b1);
-            let p0 = raw
-                .curve
-                .evaluate_with_endpoints(t0, raw.p_start, raw.p_end);
-            let p1 = raw
-                .curve
-                .evaluate_with_endpoints(t1, raw.p_start, raw.p_end);
-            out.push(RawCurve {
-                curve: raw.curve,
-                bbox: raw.bbox,
-                t_range: (t0, t1),
-                p_start: p0,
-                p_end: p1,
-            });
+            let n_f = N as f64;
+            // Refine with a STRICT (zero-margin) extent test so the endpoint
+            // lands exactly on the geometric face boundary, not a margin-width
+            // past it. The margin is needed to robustly classify the run (keep
+            // grazing/boundary-coincident points in) but over-extends the cut;
+            // at the boundary a cylinder-cylinder arc meets the tangent triple
+            // point, which must weld to the line/arc sharing it. The strict
+            // boundary lies inside the tolerant run, so bracket each end between
+            // a definitely-out sample (just past the tolerant run) and the run's
+            // midpoint (definitely strict-in).
+            let inb_at = |frac: f64| {
+                let p = pt_at(frac);
+                ext_a.contains_with_margin(p, 0.0) && ext_b.contains_with_margin(p, 0.0)
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let mid = (b0 as f64 + b1 as f64) * 0.5 / n_f;
+            // Lower end: out at (b0-1), in at the run midpoint.
+            #[allow(clippy::cast_precision_loss)]
+            let f0 = refine_boundary_frac((b0 as f64 - 1.0) / n_f, mid, &inb_at);
+            // Upper end: out at (b1+1), in at the run midpoint.
+            #[allow(clippy::cast_precision_loss)]
+            let f1 = refine_boundary_frac((b1 as f64 + 1.0) / n_f, mid, &inb_at);
+            let p0 = pt_at(f0);
+            let p1 = pt_at(f1);
+            // Extract the actual trimmed sub-curve. For a NURBS the section
+            // downstream samples via `domain_with_endpoints`, which returns the
+            // FULL domain for a NurbsCurve and ignores trimmed `t_range` — so
+            // keeping the whole curve with moved endpoints would make the
+            // splitter trace the entire (closed) lens and project a degenerate
+            // pcurve. Cut the NURBS to [t0, t1] so its own domain spans only the
+            // in-both arc. (Non-wrapping arcs only; a seam-wrapping trim keeps
+            // the whole curve, which the trim's `b1 > N` case already avoids.)
+            let trimmed = trim_raw_curve(&raw, f0, f1, p0, p1);
+            out.push(trimmed);
             continue;
         }
         out.push(raw);
     }
     out
+}
+
+/// Build the trimmed `RawCurve` covering fractional range `[f0, f1]` of `raw`.
+/// For a `NurbsCurve` the actual sub-curve is extracted (so its own domain
+/// spans only the kept arc); other curve types keep the same geometry with the
+/// endpoints moved to `p0`/`p1` (their `domain_with_endpoints` honours the
+/// endpoints). `f0`/`f1` are fractions of the curve's parameter `span`.
+fn trim_raw_curve(raw: &RawCurve, f0: f64, f1: f64, p0: Point3, p1: Point3) -> RawCurve {
+    let span = raw.t_range.1 - raw.t_range.0;
+    let t0 = raw.t_range.0 + span * f0;
+    let t1 = raw.t_range.0 + span * f1;
+    if let EdgeCurve::NurbsCurve(curve) = &raw.curve {
+        // Re-fit the kept arc as a fresh NURBS whose own domain [0,1] spans only
+        // [f0, f1]. The section is stored as a NurbsCurve, and downstream
+        // sampling uses `domain_with_endpoints`, which returns a NurbsCurve's
+        // FULL domain and ignores a trimmed `t_range` — so keeping the whole
+        // (closed lens) curve with moved endpoints makes the splitter trace the
+        // entire loop and project a degenerate pcurve. Sampling+interpolation
+        // (rather than knot-split) is robust to the interpolated lens's knot
+        // structure.
+        let lo = f0.min(f1);
+        let hi = f0.max(f1);
+        if hi - lo > 1e-6 {
+            let m = 48usize;
+            let mut samples = Vec::with_capacity(m + 1);
+            for i in 0..=m {
+                #[allow(clippy::cast_precision_loss)]
+                let f = lo + (hi - lo) * i as f64 / m as f64;
+                let t = raw.t_range.0 + span * f;
+                samples.push(curve.evaluate(t));
+            }
+            if let Ok(mid) = brepkit_math::nurbs::fitting::interpolate(&samples, 3) {
+                let bbox = nurbs_curve_bbox(&mid);
+                let dom = mid.domain();
+                let p_start = ParametricCurve::evaluate(&mid, dom.0);
+                let p_end = ParametricCurve::evaluate(&mid, dom.1);
+                return RawCurve {
+                    curve: EdgeCurve::NurbsCurve(mid),
+                    bbox,
+                    t_range: dom,
+                    p_start,
+                    p_end,
+                };
+            }
+        }
+    }
+    RawCurve {
+        curve: raw.curve.clone(),
+        bbox: raw.bbox,
+        t_range: (t0, t1),
+        p_start: p0,
+        p_end: p1,
+    }
+}
+
+/// Flip short runs of `false` (length `<= max_gap`) to `true` when flanked by
+/// `true` on both sides. For a closed sample set (`inb[N] == inb[0]`) the ends
+/// are treated circularly. Used to bridge a tangent-point flicker in the
+/// in-both classification of a cylinder-cylinder lens curve.
+fn bridge_short_gaps(inb: &mut [bool], closed: bool, max_gap: usize) {
+    let n = inb.len();
+    if n < 3 {
+        return;
+    }
+    // Distinct sample count (for a closed curve the last duplicates the first).
+    let m = if closed { n - 1 } else { n };
+    if m < 3 {
+        return;
+    }
+    let at = |i: usize| inb[i % m];
+    let mut to_set: Vec<usize> = Vec::new();
+    let mut i = 0usize;
+    // Walk up to 2*m to catch a gap straddling the seam on a closed curve.
+    let limit = if closed { 2 * m } else { m };
+    while i < limit {
+        if at(i) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut len = 0usize;
+        while i < limit && !at(i) {
+            len += 1;
+            i += 1;
+        }
+        // Flanked by in-both on both sides and short enough.
+        let prev_in = start > 0 && at(start - 1);
+        let next_in = i < 2 * m && at(i);
+        if len <= max_gap && prev_in && next_in {
+            for k in start..start + len {
+                to_set.push(k % m);
+            }
+        }
+    }
+    for k in to_set {
+        inb[k] = true;
+        if closed && k == 0 {
+            inb[n - 1] = true;
+        }
+    }
+}
+
+/// Bisect the fractional curve parameter between `out_frac` (known outside the
+/// mutual extent) and `in_frac` (known inside) to find the in/out boundary.
+/// Returns a fraction just inside the in-both region (within ~1e-4 of the true
+/// transition). `is_in(frac)` reports whether the curve point at `frac` is in
+/// both faces.
+fn refine_boundary_frac(out_frac: f64, in_frac: f64, is_in: &impl Fn(f64) -> bool) -> f64 {
+    let mut lo = out_frac; // outside
+    let mut hi = in_frac; // inside
+    // Guard against a mislabelled bracket (e.g. a sub-sample island): if the
+    // nominal "out" sample is actually in, there is nothing to refine.
+    if is_in(lo) {
+        return lo;
+    }
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if is_in(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
 }
 
 /// Longest contiguous run of `true` in `inb` (samples `0..=N`). For a closed
