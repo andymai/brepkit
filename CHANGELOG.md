@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.10](https://github.com/andymai/brepkit/compare/v2.114.9...v2.114.10) (2026-06-18)
+
+
+### Bug Fixes
+
+* **algo:** drop redundant hole-retrace + degenerate arc sections (non-square lip fuse) ([#911](https://github.com/andymai/brepkit/issues/911)) ([0a2f25a](https://github.com/andymai/brepkit/commit/0a2f25a60d60be90e0ab03269157258b50b8f0db))
+
 ## [2.114.9](https://github.com/andymai/brepkit/compare/v2.114.8...v2.114.9) (2026-06-18)
 
 
