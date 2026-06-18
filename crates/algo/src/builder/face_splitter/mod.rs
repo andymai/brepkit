@@ -2023,15 +2023,6 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // sample (it ends up on the wrong side of the section). Unwrapping the
     // sampled points to one continuous u-window first makes the polygon simple
     // again so the centroid/edge-walk interior point is geometrically valid.
-    // For a lateral analytic band (cylinder/cone), the section edges' pcurves
-    // can evaluate to a different 2pi window than the boundary edges' stored
-    // (already-unwrapped) UV — e.g. a rounded-rect corner band split by a
-    // faceted ramp, whose staircase arc pcurves land near u=pi while the seam
-    // Lines sit near u=3pi. The two windows differ by 2pi, so the assembled UV
-    // polygon self-crosses and `point_in_polygon_2d` mislabels the interior
-    // sample (it ends up on the wrong side of the section). Unwrapping the
-    // sampled points to one continuous u-window first makes the polygon simple
-    // again so the centroid/edge-walk interior point is geometrically valid.
     let pts_2d = if matches!(
         &sub_face.surface,
         FaceSurface::Cone(_) | FaceSurface::Cylinder(_)

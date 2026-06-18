@@ -550,14 +550,14 @@ pub fn boolean(
     // correctness, not just speed: the engine's downstream ordering is keyed on
     // entity ids, so needlessly deep-copying an operand (which renumbers its
     // ids) can perturb volume-sensitive cut/fuse results.
-    let gfa_a = if solid_has_flattenable_nurbs(topo, a)? {
+    let gfa_a = if solid_has_flattenable_nurbs(topo, a, tol.linear)? {
         let copy_a = crate::copy::copy_solid(topo, a)?;
         let _ = flatten_planar_nurbs_faces(topo, copy_a, tol.linear)?;
         copy_a
     } else {
         a
     };
-    let gfa_b = if solid_has_flattenable_nurbs(topo, b)? {
+    let gfa_b = if solid_has_flattenable_nurbs(topo, b, tol.linear)? {
         let copy_b = crate::copy::copy_solid(topo, b)?;
         let _ = flatten_planar_nurbs_faces(topo, copy_b, tol.linear)?;
         copy_b
@@ -2563,9 +2563,15 @@ fn has_free_edges(topo: &Topology, solid: SolidId) -> Result<bool, crate::Operat
 /// Used to gate the deep-copy-and-flatten pre-pass so analytic operands are
 /// passed to the engine unchanged (a needless deep copy renumbers entity ids
 /// and can perturb the engine's id-keyed ordering on volume-sensitive cuts).
+///
+/// `tol` must match the linear tolerance passed to [`flatten_planar_nurbs_faces`]
+/// so the gate and the pass agree: a looser default here could report "nothing
+/// to flatten" while the pass (run at the operation tolerance) would in fact
+/// rewrite geometry, reintroducing the NURBS-vs-plane fragmentation.
 fn solid_has_flattenable_nurbs(
     topo: &Topology,
     solid: SolidId,
+    tol: f64,
 ) -> Result<bool, crate::OperationsError> {
     use brepkit_geometry::convert::{
         RecognizedCurve, RecognizedSurface, recognize_curve, recognize_surface,
@@ -2573,7 +2579,6 @@ fn solid_has_flattenable_nurbs(
     use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::explorer::solid_faces;
 
-    let tol = brepkit_math::tolerance::Tolerance::new().linear;
     let mut seen = std::collections::HashSet::new();
     for fid in solid_faces(topo, solid)? {
         let face = topo.face(fid)?;

@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeId;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
@@ -82,6 +83,37 @@ fn edge_incidence(topo: &Topology, solid: SolidId) -> HashMap<(QPoint, QPoint), 
     counts
 }
 
+/// Count how many faces each *topological* edge (by `EdgeId`, per shell)
+/// borders. Keying by id — not by quantized geometry — is the stronger
+/// manifold witness: it fails when two geometrically coincident but
+/// topologically distinct edges leave a real crack (the quantized-endpoint
+/// key would merge those into one and hide it). A watertight GFA result shares
+/// each non-seam boundary via a single `EdgeId` used by exactly two faces,
+/// which is the same invariant the boolean engine enforces internally
+/// (`is_closed_manifold`). Walks inner (cavity) shells too — each shell is an
+/// independent closed surface, so edges are pooled per shell.
+fn topological_edge_use_per_shell(topo: &Topology, solid: SolidId) -> Vec<HashMap<EdgeId, usize>> {
+    let s = topo.solid(solid).unwrap();
+    std::iter::once(s.outer_shell())
+        .chain(s.inner_shells().iter().copied())
+        .map(|shell_id| {
+            let mut counts: HashMap<EdgeId, usize> = HashMap::new();
+            for &fid in topo.shell(shell_id).unwrap().faces() {
+                let face = topo.face(fid).unwrap();
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    let wire = topo.wire(wid).unwrap();
+                    for oe in wire.edges() {
+                        *counts.entry(oe.edge()).or_insert(0) += 1;
+                    }
+                }
+            }
+            counts
+        })
+        .collect()
+}
+
 #[test]
 fn scoop_fuse_corner_cylinders_are_watertight() {
     let mut topo = Topology::new();
@@ -98,7 +130,8 @@ fn scoop_fuse_corner_cylinders_are_watertight() {
 
     let result = boolean(&mut topo, BooleanOp::Fuse, comp_bin, scoop).unwrap();
 
-    // Watertight: every edge bordered by exactly two faces.
+    // Watertight (geometric witness): every edge bordered by exactly two faces,
+    // keyed by quantized endpoints so distinct ids on a shared curve still match.
     let counts = edge_incidence(&topo, result);
     let free = counts.values().filter(|&&c| c == 1).count();
     let over = counts.values().filter(|&&c| c > 2).count();
@@ -107,6 +140,28 @@ fn scoop_fuse_corner_cylinders_are_watertight() {
         "scoop fuse result has {free} free edges (non-manifold)"
     );
     assert_eq!(over, 0, "scoop fuse result has {over} over-shared edges");
+
+    // Watertight (topological witness): every boundary edge is one shared
+    // `EdgeId` used by exactly two faces within its shell. Stronger than the
+    // geometric count — it cannot hide a crack where two coincident-but-distinct
+    // edges share a quantized key. This is the invariant the boolean engine
+    // itself gates on (`is_closed_manifold`).
+    for (shell_idx, counts) in topological_edge_use_per_shell(&topo, result)
+        .iter()
+        .enumerate()
+    {
+        let free_ids = counts.values().filter(|&&c| c == 1).count();
+        let over_ids = counts.values().filter(|&&c| c > 2).count();
+        assert_eq!(
+            free_ids, 0,
+            "scoop fuse shell {shell_idx} has {free_ids} topologically free edges \
+             (distinct EdgeId used by only one face)"
+        );
+        assert_eq!(
+            over_ids, 0,
+            "scoop fuse shell {shell_idx} has {over_ids} topologically over-shared edges"
+        );
+    }
 
     // No mesh-boolean fallback: the GFA result must survive as analytic
     // geometry. The fallback tessellates everything to planes (hundreds of
