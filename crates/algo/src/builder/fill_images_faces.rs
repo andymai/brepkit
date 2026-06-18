@@ -1739,9 +1739,11 @@ fn arc_segment_crossings(
 ) -> Vec<(Point3, f64)> {
     let circle = match curve {
         EdgeCurve::Circle(c) => c,
-        // Ellipse arcs are not produced on the corner-straddle path; fall back
-        // to the chord for them (handled by the line-line crossing).
-        _ => return Vec::new(),
+        // Only circular arcs are handled here. Ellipse arcs are not produced on
+        // the corner-straddle path, and lines/NURBS sections have no true-arc
+        // geometry — all fall back to the chord (handled by the line-line
+        // crossing in the caller).
+        EdgeCurve::Ellipse(_) | EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return Vec::new(),
     };
     let hits = circle.intersect_segment(line_start, line_end, tol);
     if hits.is_empty() {
@@ -1812,7 +1814,11 @@ fn clip_line_to_face_boundary(
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
                 boundary_arcs.push(Some((edge.curve().clone(), sp, ep)));
             }
-            _ => boundary_arcs.push(None),
+            // A straight edge already equals its chord, and a NURBS boundary edge
+            // has no analytic arc to clip against, so neither contributes a
+            // beyond-the-chord crossing; the chord segment in
+            // `boundary_segments` covers them.
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => boundary_arcs.push(None),
         }
     }
 

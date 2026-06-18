@@ -18,10 +18,12 @@ fn hole_chord_polygon(hole: &[OrientedPCurveEdge]) -> Vec<Point2> {
     let mut pts: Vec<Point2> = Vec::with_capacity(hole.len() + 1);
     for e in hole {
         pts.push(e.start_uv);
-        // Densify a curved edge with its midpoint so a large corner arc keeps a
-        // closer-to-true hull than a single chord. Cheap and robust: just adds
-        // the arc's stored midpoint endpoint when present, otherwise the chord
-        // midpoint. Either way it stays inside the true arc, never outside.
+        // Densify a curved edge with its chord midpoint so a large corner arc
+        // keeps a closer-to-true hull than a single chord. The chord midpoint
+        // lies on the concave side of the arc, so it stays inside the true arc,
+        // never outside — the conservative direction for a hole-containment
+        // polygon (a point judged inside this under-approximation is genuinely
+        // inside the hole).
         if !matches!(e.pcurve, Curve2D::Line(_)) {
             pts.push(Point2::new(
                 0.5 * (e.start_uv.x() + e.end_uv.x()),

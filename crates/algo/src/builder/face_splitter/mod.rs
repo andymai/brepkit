@@ -131,7 +131,12 @@ fn split_sections_at_t_junctions(
         let splits = match &edge.curve_3d {
             EdgeCurve::Circle(circle) => find_splits_on_circle(circle, &edge, &endpoints, tol),
             EdgeCurve::Ellipse(ellipse) => find_splits_on_ellipse(ellipse, &edge, &endpoints, tol),
-            _ => find_splits_on_line(&edge, &endpoints, tol),
+            // Lines split on the chord; a NURBS section (rare here) has no
+            // specialized splitter, so the chord-based line search is the
+            // closest available approximation.
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                find_splits_on_line(&edge, &endpoints, tol)
+            }
         };
         if splits.is_empty() {
             // Keep the original source id so an unsplit pair stays paired.
@@ -230,7 +235,9 @@ fn split_plane_boundary_arcs_at_points(
         let (circle_proj, on_curve): (f64, Point3) = match curve {
             EdgeCurve::Circle(c) => (c.project(p), c.evaluate(c.project(p))),
             EdgeCurve::Ellipse(e) => (e.project(p), e.evaluate(e.project(p))),
-            _ => return None,
+            // Only arc edges have a circle/ellipse parameter; a line or NURBS
+            // edge is never split by this arc-only path.
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
         };
         if (p - on_curve).length() > tol {
             return None;
@@ -238,7 +245,7 @@ fn split_plane_boundary_arcs_at_points(
         let (a0, a_end) = match curve {
             EdgeCurve::Circle(c) => (c.project(start), c.project(end)),
             EdgeCurve::Ellipse(e) => (e.project(start), e.project(end)),
-            _ => return None,
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
         };
         let span = super::pcurve_compute::shorter_arc_delta(a_end - a0);
         if span.abs() < 1e-12 {
@@ -333,9 +340,10 @@ fn integrate_holes_plane(
     // Sections must be all-Line. Hole (inner-wire) edges may be arcs: a curved
     // cavity (rounded-rect opening) has Circle corner edges, but a notch only
     // ever crosses the cavity's STRAIGHT walls, never its corner arcs. Arc hole
-    // edges are preserved unchanged when uncrossed; a section crossing an arc
-    // hole edge bails to None (the chord lerp would flatten a kept arc into a
-    // chord and free-edge against the cavity cylinder).
+    // edges are preserved unchanged when uncrossed; if a section crosses an arc
+    // hole edge's CHORD (the conservative UV test used below, not the true arc)
+    // the whole pass bails to None (the chord lerp would flatten a kept arc into
+    // a chord and free-edge against the cavity cylinder).
     if sections
         .iter()
         .any(|s| !matches!(s.curve_3d, EdgeCurve::Line))
