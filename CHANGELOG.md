@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.9](https://github.com/andymai/brepkit/compare/v2.114.8...v2.114.9) (2026-06-18)
+
+
+### Bug Fixes
+
+* **algo:** keep exact section endpoints on flush-face FF clip (stacking-lip fuse) ([#909](https://github.com/andymai/brepkit/issues/909)) ([766af79](https://github.com/andymai/brepkit/commit/766af79d9142ad2e21c6f16072b409d9e1f7618f))
+
 ## [2.114.8](https://github.com/andymai/brepkit/compare/v2.114.7...v2.114.8) (2026-06-18)
 
 
