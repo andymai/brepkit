@@ -43,9 +43,18 @@ fn read_one(name: &str, topo: &mut Topology) -> SolidId {
 
 /// Count boundary edges used once (free) and more than twice (over-shared),
 /// keyed by quantized orientation-independent endpoint pair.
+///
+/// Quantized at 1e-6 (not the coarser 1e-5 the wall-cut guard uses): the brepjs
+/// lip loft/cut leaves sub-micron (~1e-6) corner arcs at the lip's top rim in
+/// BOTH the 2×2 and 2×1 operands — legitimately retained (above the kernel's
+/// 1e-7 degenerate threshold) and manifold, but a 1e-5 grid merges two of the
+/// 2×1's neighbouring corners into one degenerate self-key and reports a false
+/// over-share. A real over-share (a 3-face edge) coincides exactly post-merge,
+/// so it still registers at this finer resolution; only the sub-micron input
+/// noise is separated.
 fn edge_use(topo: &Topology, solid: SolidId) -> (usize, usize) {
     type QPoint = (i64, i64, i64);
-    let scale = 1.0e5;
+    let scale = 1.0e6;
     let q = |p: brepkit_math::vec::Point3| -> QPoint {
         (
             (p.x() * scale).round() as i64,
@@ -80,11 +89,10 @@ fn curved_face_count(topo: &Topology, solid: SolidId) -> usize {
         .count()
 }
 
-#[test]
-fn gridfinity_stacking_lip_fuse_is_watertight() {
+fn assert_lip_fuse_clean(body_step: &str, lip_step: &str) {
     let mut topo = Topology::new();
-    let body = read_one("lipfuse_body.step", &mut topo);
-    let lip = read_one("lipfuse_lip.step", &mut topo);
+    let body = read_one(body_step, &mut topo);
+    let lip = read_one(lip_step, &mut topo);
 
     let result = boolean(&mut topo, BooleanOp::Fuse, body, lip).unwrap();
 
@@ -110,4 +118,21 @@ fn gridfinity_stacking_lip_fuse_is_watertight() {
         curved_face_count(&topo, result) >= 24,
         "stacking-lip fuse must stay analytic (corner cylinders + lip cones preserved)"
     );
+}
+
+#[test]
+fn gridfinity_stacking_lip_fuse_is_watertight() {
+    assert_lip_fuse_clean("lipfuse_body.step", "lipfuse_lip.step");
+}
+
+/// The 2×1 (non-square) bin variant. #899 regressed this case differently from
+/// the square 2×2: the FF intersection re-traced the lip's bottom-annulus
+/// opening ring (a degenerate hole re-trace) and emitted zero-span arc remnants
+/// on the depth walls, so the assembler wove a zero-area annulus and an
+/// out-and-back spur → "all shells classified as holes", and the mesh fallback
+/// then failed "empty wire", silently dropping the lip. (1×2 is the 2×1 rotated
+/// 90°, geometrically identical; one fixture guards both.)
+#[test]
+fn gridfinity_stacking_lip_fuse_2x1_is_watertight() {
+    assert_lip_fuse_clean("lipfuse_2x1_body.step", "lipfuse_2x1_lip.step");
 }
