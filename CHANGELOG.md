@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.4](https://github.com/andymai/brepkit/compare/v2.114.3...v2.114.4) (2026-06-18)
+
+
+### Bug Fixes
+
+* **algo:** split shelled-wall notch side faces via planar arrangement ([#899](https://github.com/andymai/brepkit/issues/899)) ([59c055e](https://github.com/andymai/brepkit/commit/59c055e1234297029e951d0950612da9e15ae27e))
+
 ## [2.114.3](https://github.com/andymai/brepkit/compare/v2.114.2...v2.114.3) (2026-06-17)
 
 
