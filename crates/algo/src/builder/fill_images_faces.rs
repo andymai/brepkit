@@ -1217,6 +1217,12 @@ fn pb_strictly_inside_circle(
     in_plane.length() < circle.radius() - SEAM_ON_CIRCLE_TOL
 }
 
+/// Parametric span below which a chord-collapsed arc section is treated as
+/// degenerate: ~2 orders above the observed remnant span (~5e-8) and ~6 below a
+/// quarter-arc (π/2), so it rejects a coincident-fuse arc remnant while
+/// preserving a genuine full circle (span ~2π).
+const DEGENERATE_ARC_SPAN: f64 = 1e-6;
+
 /// Convert section sources to `SectionEdge` entries.
 ///
 /// For intersection curves, uses the complete curve geometry (not individual
@@ -1507,7 +1513,7 @@ fn build_section_edges(
                     && (end - start).length() < tol * 100.0
                 {
                     let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-                    if (t1 - t0).abs() < 1e-6 {
+                    if (t1 - t0).abs() < DEGENERATE_ARC_SPAN {
                         continue;
                     }
                 }
@@ -1767,14 +1773,15 @@ fn point_on_edge(
     match curve {
         EdgeCurve::Line => point_to_segment_dist_3d(p, start, end) < tol,
         EdgeCurve::Circle(c) => {
-            // p must lie in the circle's plane and at radius r.
+            // True 3D distance from p to the circle is the hypotenuse of the
+            // off-plane and radial errors; checking the two independently
+            // (each < tol) would admit a point up to √2·tol off the curve and
+            // could drop a non-redundant section.
             let radial = p - c.center();
             let off_plane = radial.dot(c.normal());
-            if off_plane.abs() > tol {
-                return false;
-            }
             let in_plane = radial - c.normal() * off_plane;
-            if (in_plane.length() - c.radius()).abs() > tol {
+            let radial_err = in_plane.length() - c.radius();
+            if off_plane.hypot(radial_err) > tol {
                 return false;
             }
             // p is on the full circle; confirm its angle lies within the arc
@@ -1813,7 +1820,9 @@ fn arc_param_contains(a: f64, a0: f64, a1: f64, start: Point3, end: Point3) -> b
     let span = (a1 - a0).rem_euclid(TAU);
     let span = if span < 1e-12 { TAU } else { span };
     let rel = (a - a0).rem_euclid(TAU);
-    // A small epsilon at both ends keeps endpoints inclusive.
+    // `rel` is the CCW offset from the start, so the start (rel == 0) is
+    // inherently inclusive; the `+ 1e-6` keeps the end inclusive against
+    // round-off (a point just past the start wraps to rel ≈ TAU and stays out).
     rel <= span + 1e-6
 }
 
