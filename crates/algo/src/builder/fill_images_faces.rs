@@ -1217,6 +1217,12 @@ fn pb_strictly_inside_circle(
     in_plane.length() < circle.radius() - SEAM_ON_CIRCLE_TOL
 }
 
+/// Parametric span below which a chord-collapsed arc section is treated as
+/// degenerate: ~2 orders above the observed remnant span (~5e-8) and ~6 below a
+/// quarter-arc (π/2), so it rejects a coincident-fuse arc remnant while
+/// preserving a genuine full circle (span ~2π).
+const DEGENERATE_ARC_SPAN: f64 = 1e-6;
+
 /// Convert section sources to `SectionEdge` entries.
 ///
 /// For intersection curves, uses the complete curve geometry (not individual
@@ -1295,6 +1301,20 @@ fn build_section_edges(
                 if closed_curve_coincides_with_boundary(topo, face_id, &curve_ds.curve, tol)
                     && circle_inside_face(topo, partner, &curve_ds.curve, tol)
                 {
+                    continue;
+                }
+
+                // An OPEN arc section that re-traces one of this face's EXISTING
+                // inner-wire (hole) edges adds no interior split — the hole is
+                // already present. Threading it makes the planar arrangement weave
+                // a zero-area annulus (a sub-face whose outer wire equals its inner
+                // wire), over-sharing every ring edge and inverting the assembled
+                // shell — the 2×1/1×2 stacking-lip fuse failure, where the lip's
+                // bottom annulus sits flush on the body's top and the FF
+                // intersection re-traces the annulus's own opening ring. Sample the
+                // section by its own parametric range (precise arc direction) and
+                // drop it when every interior sample lies on an inner-wire edge.
+                if section_on_existing_hole(topo, face_id, &sample_curve_interior(curve_ds), tol) {
                     continue;
                 }
 
@@ -1473,6 +1493,30 @@ fn build_section_edges(
                     } else {
                         (raw_start, raw_end)
                     };
+
+                // Skip a degenerate curved section: a Circle/Ellipse PaveBlock
+                // fragment whose arc has collapsed to a point (3D chord below
+                // tolerance AND a near-zero parametric span). A coincident-edge
+                // fuse can split a rounded corner's arc so that one fragment
+                // carries the whole quarter-arc and its twin is a ~1e-7-long
+                // remnant; the remnant has no boundary to contribute, but
+                // threading it into the face wire makes the builder weave an
+                // out-and-back spur (the over-shared depth-wall edge of the
+                // 2×1/1×2 stacking-lip fuse). The Line path already rejects
+                // zero-length sections inside `clip_line_to_face_boundary`; this
+                // guards the curved path, which uses the raw endpoints unclipped.
+                // The span test preserves a genuine full circle (coincident
+                // endpoints but a ~2π span); the chord test uses the
+                // weld-scale band (100·tol) because the remnant's endpoints are
+                // the same near-coincident vertices the assembler later welds.
+                if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                    && (end - start).length() < tol * 100.0
+                {
+                    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                    if (t1 - t0).abs() < DEGENERATE_ARC_SPAN {
+                        continue;
+                    }
+                }
 
                 // Project start/end to UV using surface projection (original approach).
                 let start_uv = face.surface().project_point(start);
@@ -1655,6 +1699,154 @@ fn closed_curve_coincides_with_boundary(
         }
     }
     false
+}
+
+/// Whether a section sampled as `section_pts` (3D points along its interior)
+/// lies entirely on one of `face`'s own boundary edges — i.e. it is a redundant
+/// self-hole intersection that does not partition the face interior.
+///
+/// A section that rides one of the face's existing INNER-wire (hole) edges is
+/// redundant: the hole boundary is already present, so re-tracing it adds no new
+/// region. Threading it makes the planar arrangement weave a zero-area annulus
+/// (a sub-face whose outer wire equals its inner wire), which over-shares every
+/// ring edge and inverts the assembled shell — the 2×1/1×2 stacking-lip fuse
+/// failure, where the lip's bottom annulus sits flush on the body's top and the
+/// FF intersection re-traces the annulus's own opening ring.
+///
+/// Only INNER wires are tested, never the outer wire. A section that lies on an
+/// outer boundary edge may still be a NECESSARY shared edge with the neighbour
+/// face across that boundary (e.g. a lip's bottom plane crossing a shelled cup's
+/// cavity-wall corner cylinder, where the contact arc rides the cylinder's own
+/// bottom rim but must remain to seam the two solids). The Line path's
+/// `clip_line_to_face_boundary` already drops a section lying on a single
+/// outer-boundary segment; this only adds the inner-wire (hole) case for arcs.
+fn section_on_existing_hole(
+    topo: &Topology,
+    face_id: FaceId,
+    section_pts: &[Point3],
+    tol: f64,
+) -> bool {
+    if section_pts.is_empty() {
+        return false;
+    }
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let inner = face.inner_wires();
+    if inner.is_empty() {
+        return false;
+    }
+    'sample: for p in section_pts {
+        for &wid in inner {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                    continue;
+                };
+                let (bs, be) = (sv.point(), ev.point());
+                if point_on_edge(edge.curve(), bs, be, *p, tol) {
+                    continue 'sample;
+                }
+            }
+        }
+        // This sample is off every inner-wire edge → the section is not a pure
+        // hole re-trace → keep it (it may split the interior or seam a neighbour).
+        return false;
+    }
+    true
+}
+
+/// Whether `p` lies on the edge's true geometry within `tol` (perpendicular
+/// distance for a Line; in-plane + radial distance with an arc-span containment
+/// test for a Circle/Ellipse). NURBS edges are not boundary candidates here.
+fn point_on_edge(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    start: Point3,
+    end: Point3,
+    p: Point3,
+    tol: f64,
+) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+    match curve {
+        EdgeCurve::Line => point_to_segment_dist_3d(p, start, end) < tol,
+        EdgeCurve::Circle(c) => {
+            // True 3D distance from p to the circle is the hypotenuse of the
+            // off-plane and radial errors; checking the two independently
+            // (each < tol) would admit a point up to √2·tol off the curve and
+            // could drop a non-redundant section.
+            let radial = p - c.center();
+            let off_plane = radial.dot(c.normal());
+            let in_plane = radial - c.normal() * off_plane;
+            let radial_err = in_plane.length() - c.radius();
+            if off_plane.hypot(radial_err) > tol {
+                return false;
+            }
+            // p is on the full circle; confirm its angle lies within the arc
+            // span [t0, t1] derived from the edge's endpoints. `c.project`
+            // returns the angle in the circle's frame; compare via the same
+            // CCW-delta convention `domain_with_endpoints` uses.
+            arc_param_contains(c.project(p), c.project(start), c.project(end), start, end)
+        }
+        EdgeCurve::Ellipse(e) => {
+            let radial = p - e.center();
+            let off_plane = radial.dot(e.normal());
+            if off_plane.abs() > tol {
+                return false;
+            }
+            // On-ellipse test: the evaluated point at p's projected angle must
+            // match p (the ellipse radius varies with angle, so a fixed-radius
+            // test does not apply).
+            let ang = e.project(p);
+            if (e.evaluate(ang) - p).length() > tol {
+                return false;
+            }
+            arc_param_contains(ang, e.project(start), e.project(end), start, end)
+        }
+        EdgeCurve::NurbsCurve(_) => false,
+    }
+}
+
+/// Whether angle `a` lies within the CCW arc span from `a0` to `a1`, matching
+/// the convention `EdgeCurve::domain_with_endpoints` uses (a closed full circle
+/// when the endpoints coincide). Angles are in radians in the curve's frame.
+fn arc_param_contains(a: f64, a0: f64, a1: f64, start: Point3, end: Point3) -> bool {
+    use std::f64::consts::TAU;
+    if (start - end).length() < 1e-9 {
+        return true; // full closed circle/ellipse
+    }
+    let span = (a1 - a0).rem_euclid(TAU);
+    let span = if span < 1e-12 { TAU } else { span };
+    let rel = (a - a0).rem_euclid(TAU);
+    // `rel` is the CCW offset from the start, so the start (rel == 0) is
+    // inherently inclusive; the `+ 1e-6` keeps the end inclusive against
+    // round-off (a point just past the start wraps to rel ≈ TAU and stays out).
+    rel <= span + 1e-6
+}
+
+/// Sample interior 3D points along an intersection curve using its OWN
+/// parametric range (`curve_ds.t_range`). The endpoints are excluded — they
+/// always coincide with the face boundary where the section meets it; only the
+/// interior reveals whether the section enters the face material or rides a
+/// boundary edge. Used by [`section_on_existing_hole`].
+fn sample_curve_interior(curve_ds: &crate::ds::IntersectionCurveDS) -> Vec<Point3> {
+    use brepkit_math::vec::Point3;
+    const SAMPLES: usize = 9;
+    let (t0, t1) = curve_ds.t_range;
+    let dummy = Point3::new(0.0, 0.0, 0.0);
+    let mut pts = Vec::with_capacity(SAMPLES - 1);
+    for k in 1..SAMPLES {
+        #[allow(clippy::cast_precision_loss)]
+        let frac = k as f64 / SAMPLES as f64;
+        pts.push(
+            curve_ds
+                .curve
+                .evaluate_with_endpoints((t1 - t0).mul_add(frac, t0), dummy, dummy),
+        );
+    }
+    pts
 }
 
 /// Find the overall 3D start/end points of an intersection curve
