@@ -10,6 +10,7 @@ use crate::vec::{Point2, Vec2};
 ///
 /// Parameterized as `P(t) = origin + t * direction`.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Line2D {
     origin: Point2,
     direction: Vec2,
@@ -77,6 +78,7 @@ impl Line2D {
 /// Parameterized as `P(t) = center + radius * (cos(t), sin(t))`.
 /// `t` ranges from 0 to 2π for a full circle.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Circle2D {
     center: Point2,
     radius: f64,
@@ -141,6 +143,7 @@ impl Circle2D {
 /// Parameterized as `P(t) = center + a*cos(t)*u + b*sin(t)*v`
 /// where `u = (cos(rotation), sin(rotation))` and `v = (-sin(rotation), cos(rotation))`.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ellipse2D {
     center: Point2,
     semi_major: f64,
@@ -248,6 +251,7 @@ impl Ellipse2D {
 /// This is the 2D analogue of `NurbsCurve`, used as pcurves
 /// in the surface parameter space.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NurbsCurve2D {
     degree: usize,
     knots: Vec<f64>,
@@ -419,6 +423,7 @@ impl NurbsCurve2D {
 
 /// Unified enum for 2D curve types used as pcurves.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Curve2D {
     /// A straight line in parameter space.
     Line(Line2D),

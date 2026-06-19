@@ -14,6 +14,7 @@ use crate::vec::{Point3, Vec3};
 /// Parameterized as `P(u, v) = origin + radius*(cos(u)*x_axis + sin(u)*y_axis) + v*axis`
 /// where `u ∈ [0, 2π)` and `v ∈ (-∞, +∞)`.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CylindricalSurface {
     origin: Point3,
     axis: Vec3,
@@ -198,6 +199,7 @@ impl CylindricalSurface {
 /// Parameterized as `P(u, v) = apex + v*(cos(half_angle)*(cos(u)*x_axis + sin(u)*y_axis) + sin(half_angle)*axis)`
 /// where `u ∈ [0, 2π)` and `v ∈ [0, +∞)`.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConicalSurface {
     apex: Point3,
     axis: Vec3,
@@ -382,6 +384,7 @@ impl ConicalSurface {
 /// Parameterized as `P(u, v) = center + radius*(cos(v)*cos(u)*x + cos(v)*sin(u)*y + sin(v)*z)`
 /// where `u ∈ [0, 2π)` (longitude) and `v ∈ [-π/2, π/2]` (latitude).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SphericalSurface {
     center: Point3,
     radius: f64,
@@ -534,6 +537,7 @@ impl SphericalSurface {
 /// where `R` is the major radius, `r` is the minor radius,
 /// `u ∈ [0, 2π)` (around the tube) and `v ∈ [0, 2π)` (around the cross-section).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ToroidalSurface {
     center: Point3,
     major_radius: f64,

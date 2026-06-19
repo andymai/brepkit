@@ -8,10 +8,12 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
-brepkit-math.workspace = true
+brepkit-math = {workspace = true, features = ["serde"]}
 brepkit-operations.workspace = true
 brepkit-topology.workspace = true
 quick-xml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 zip.workspace = true
 

@@ -283,4 +283,38 @@ impl BrepKernel {
         let solid_ids = brepkit_io::iges::reader::read_iges(text, self.topo_mut())?;
         Ok(solid_ids.iter().map(|id| solid_id_to_u32(*id)).collect())
     }
+
+    // ── Arena debug serialization ─────────────────────────────────
+
+    /// Serialize a solid's complete in-memory topology sub-arena to bytes.
+    ///
+    /// Captures every vertex, edge, wire, face, shell reachable from the
+    /// solid with byte-exact f64 values (no geometry re-derivation or
+    /// tolerance normalization). Unlike STEP/IGES export, this preserves the
+    /// kernel's exact in-memory state — intended for capturing live operands
+    /// and replaying them in a native Rust harness to reproduce
+    /// sub-ULP-sensitive boolean behavior.
+    ///
+    /// Returns a `Uint8Array` consumable by `brepkit_io::arena_io::deserialize_solid`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or serialization fails.
+    #[wasm_bindgen(js_name = "serializeSolid")]
+    pub fn serialize_solid(&self, solid: u32) -> Result<Vec<u8>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let bytes = brepkit_io::arena_io::serialize_solid(&self.topo, solid_id)?;
+        Ok(bytes)
+    }
+
+    /// Reconstruct a solid from a buffer produced by [`Self::serialize_solid`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buffer is malformed or reconstruction fails.
+    #[wasm_bindgen(js_name = "deserializeSolid")]
+    pub fn deserialize_solid(&mut self, data: &[u8]) -> Result<u32, JsError> {
+        let solid_id = brepkit_io::arena_io::deserialize_solid(data, self.topo_mut())?;
+        Ok(solid_id_to_u32(solid_id))
+    }
 }

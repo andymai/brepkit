@@ -89,6 +89,7 @@ impl Line3D {
 /// where `u` and `v` form an orthonormal basis in the circle plane.
 /// `t` ranges from 0 to 2π for a full circle.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Circle3D {
     center: Point3,
     normal: Vec3,
@@ -376,6 +377,7 @@ impl Circle3D {
 ///
 /// Parameterized as `P(t) = center + a*cos(t)*u + b*sin(t)*v`.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ellipse3D {
     center: Point3,
     normal: Vec3,

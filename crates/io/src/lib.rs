@@ -5,6 +5,7 @@
 //! This is layer L3, depending on `brepkit-math`, `brepkit-topology`,
 //! and `brepkit-operations`.
 
+pub mod arena_io;
 pub mod gltf;
 pub mod iges;
 pub mod obj;
