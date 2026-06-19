@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.12](https://github.com/andymai/brepkit/compare/v2.114.11...v2.114.12) (2026-06-19)
+
+
+### Bug Fixes
+
+* **algo:** drop zero-span degenerate curve sections + arena-serialization tooling (3×3 lip fuse) ([#915](https://github.com/andymai/brepkit/issues/915)) ([db470de](https://github.com/andymai/brepkit/commit/db470de8280191557b10c7b563d9eb438cc3fd67))
+
 ## [2.114.11](https://github.com/andymai/brepkit/compare/v2.114.10...v2.114.11) (2026-06-19)
 
 
