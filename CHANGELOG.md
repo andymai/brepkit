@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.14](https://github.com/andymai/brepkit/compare/v2.114.13...v2.114.14) (2026-06-19)
+
+
+### Bug Fixes
+
+* **algo:** base EF containment margin on curved boundary edges only ([#919](https://github.com/andymai/brepkit/issues/919)) ([8ae47cc](https://github.com/andymai/brepkit/commit/8ae47cc007914e60fb8c47abfe62622788364ca8))
+
 ## [2.114.13](https://github.com/andymai/brepkit/compare/v2.114.12...v2.114.13) (2026-06-19)
 
 
