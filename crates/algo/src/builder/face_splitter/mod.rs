@@ -339,6 +339,8 @@ fn integrate_holes_plane(
     sections: &[SectionEdge],
     inner_wires: &[Vec<OrientedPCurveEdge>],
     frame: &PlaneFrame,
+    surface: &FaceSurface,
+    wire_pts: &[Point3],
     base_src: usize,
 ) -> Option<Vec<OrientedPCurveEdge>> {
     // Line sections are split at hole crossings (the in-hole sub-segment is air,
@@ -531,15 +533,34 @@ fn integrate_holes_plane(
                 return None;
             }
         }
-        // An arc whose chord midpoint lies inside a hole is entirely over the
-        // cavity (air) — drop it; it contributes no material boundary.
-        let mid = Point2::new(0.5 * (s0.x() + s1.x()), 0.5 * (s0.y() + s1.y()));
+        // An arc whose geometric midpoint (its bulge — not just the chord
+        // midpoint) lies inside a hole is entirely over the cavity (air) — drop
+        // it. Sampling the arc itself catches an arc that bows into a hole while
+        // its endpoints and chord sit clear of it.
+        let (ad0, ad1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+        let mid = frame.project(s.curve_3d.evaluate_with_endpoints(
+            ad0 + 0.5 * (ad1 - ad0),
+            s.start,
+            s.end,
+        ));
         if hole_polys
             .iter()
             .any(|poly| super::classify_2d::point_in_polygon_2d(mid, poly))
         {
             continue;
         }
+        // Recompute the arc's pcurve in THIS face's frame (a plane face: project
+        // the 3D arc into `frame`). The stored `pcurve_a` may have been fitted in
+        // a different plane frame or on the opposing face, which would disconnect
+        // the arc in this UV space — mirror the main section path's plane refit.
+        let arc_pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+            &s.curve_3d,
+            s.start,
+            s.end,
+            surface,
+            wire_pts,
+            Some(frame),
+        );
         let pcurve_uv = |p: Point3| frame.project(p);
         let src = next_src;
         next_src += 1;
@@ -547,7 +568,7 @@ fn integrate_holes_plane(
         let eu = pcurve_uv(s.end);
         out.push(OrientedPCurveEdge {
             curve_3d: s.curve_3d.clone(),
-            pcurve: s.pcurve_a.clone(),
+            pcurve: arc_pcurve.clone(),
             start_uv: su,
             end_uv: eu,
             start_3d: s.start,
@@ -558,7 +579,7 @@ fn integrate_holes_plane(
         });
         out.push(OrientedPCurveEdge {
             curve_3d: s.curve_3d.clone(),
-            pcurve: s.pcurve_a.clone(),
+            pcurve: arc_pcurve,
             start_uv: eu,
             end_uv: su,
             start_3d: s.end,
@@ -1710,9 +1731,16 @@ pub fn split_face_2d(
     // wire builder traces the true material region. When this applies, the
     // original holes are consumed here and not attached whole below.
     let holes_integrated = if is_plane && !original_inner_wires.is_empty() {
-        integrate_holes_plane(sections, &original_inner_wires, frame, 1_000_000)
-            .map(|extra| all_edges.extend(extra))
-            .is_some()
+        integrate_holes_plane(
+            sections,
+            &original_inner_wires,
+            frame,
+            &surface,
+            &wire_pts,
+            1_000_000,
+        )
+        .map(|extra| all_edges.extend(extra))
+        .is_some()
     } else {
         false
     };

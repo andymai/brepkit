@@ -186,9 +186,12 @@ fn lip_fuse_onto_compartmented_body_resolves_divider_cross() {
     // spurs (8 short z=23→z≈23.3 stubs at the divider-arm junctions), which the
     // production sew/spur-removal pass heals (see the production guard below).
     // This is independent of the divider-cross reconciliation this guard tracks.
-    assert_eq!(
-        free, 8,
-        "raw GFA leaves only the 8 pre-existing lip-inner-wall spur stubs \
+    // `<= 8` (not `== 8`) so this survives the separate spur-removal follow-up:
+    // the meaningful invariant is that the 14 divider-cross edges are gone and no
+    // NEW free edges appear; the 8 pre-existing lip spurs are an upper bound.
+    assert!(
+        free <= 8,
+        "raw GFA must leave at most the 8 pre-existing lip-inner-wall spur stubs \
          (the 14 divider-cross edges are resolved); got {free}"
     );
 }
