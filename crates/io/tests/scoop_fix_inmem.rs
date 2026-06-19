@@ -102,3 +102,44 @@ fn gridfinity_lip_fuse_3x3_inmem_is_watertight() {
         "in-memory 3×3 lip fuse must stay analytic (corner cylinders + lip cones preserved); got {curved} curved"
     );
 }
+
+/// 2×2 compartments+scoop: `Fuse(compartmented bin, 4 polyline scoops)`.
+///
+/// The captured operands are the gridfinity tool's exact in-memory bin (8 corner
+/// cylinders) and pre-fused scoop ramp (4 all-planar scoop volumes, one per
+/// compartment). The rounded-rect bin floor has CIRCLE corner arcs; the four
+/// scoop bases are coplanar with it. Before the fix the floor sub-face split
+/// produced a self-crossing wire (two touching scoop bases stitched into a
+/// figure-8) because the planar-arrangement fallback bailed: a scoop-base
+/// section LINE crosses a convex corner arc's straight CHORD ~1 mm clear of the
+/// outward-bulging arc, registering a phantom break that subdivided an uncrossed
+/// arc. The result fell back to a 135-facet all-planar mesh with free edges.
+#[test]
+fn gridfinity_compartments_scoop_fuse_2x2_inmem_is_watertight() {
+    let mut topo = Topology::new();
+    let bin = load_inmem("compscoop2x2_inmem_bin.bin", &mut topo);
+    let scoop = load_inmem("compscoop2x2_inmem_scoop.bin", &mut topo);
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, bin, scoop).unwrap();
+
+    let (free, over) = edge_use(&topo, result);
+    let faces = solid_faces(&topo, result).unwrap().len();
+    let curved = curved_face_count(&topo, result);
+
+    assert_eq!(
+        free, 0,
+        "in-memory 2×2 compartments+scoop fuse must be watertight (no free edges); got {faces} faces, {curved} curved"
+    );
+    assert_eq!(
+        over, 0,
+        "in-memory 2×2 compartments+scoop fuse must be manifold (no over-shared edges)"
+    );
+    assert!(
+        faces < 130,
+        "expected a compact analytic result, got {faces} faces (mesh fallback?)"
+    );
+    assert!(
+        curved >= 8,
+        "in-memory 2×2 compartments+scoop fuse must keep the 8 bin corner cylinders; got {curved} curved"
+    );
+}

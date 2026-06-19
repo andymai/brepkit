@@ -45,6 +45,10 @@ use special_cases::{
 /// section edge when testing whether it lies entirely inside an existing hole.
 const HOLE_PROBE_SAMPLES: usize = 8;
 
+/// Number of samples (plus one) walked along an arrangement arc input when
+/// deciding whether a chord-crossing break point actually lies on the arc.
+const ARR_ARC_SAMPLES: usize = 32;
+
 /// Parameter `t` in `(0,1)` along segment `a0->a1` where it crosses segment
 /// `b0->b1` in 2D, for a crossing strictly interior to `a` and within (or at
 /// the ends of) `b`. `None` if parallel or out of range.
@@ -724,6 +728,29 @@ fn split_plane_face_by_arrangement(
             k
         };
 
+    // True when a UV point lies on input `idx`'s actual arc geometry (within
+    // `tol`). A break parameter is computed against an arc's straight CHORD, so
+    // a section that crosses the chord can still miss the real arc — most
+    // commonly a section in the face interior crossing a convex BOUNDARY corner
+    // arc's chord while passing well clear of the outward-bulging arc itself
+    // (gridfinity scoop bases vs. the rounded-rect floor corners). Registering
+    // that phantom break would subdivide an uncrossed arc and trip the
+    // `is_arc && ts.len() > 2` bail, collapsing the whole arrangement back to
+    // the self-crossing angular trace. Sampling the arc and rejecting breaks
+    // farther than `tol` from it keeps the arc a single sub-edge.
+    let chord_break_on_arc = |idx: usize, uv: Point2| -> bool {
+        let e = &inputs[idx].edge;
+        (0..=ARR_ARC_SAMPLES)
+            .map(|k| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = k as f64 / ARR_ARC_SAMPLES as f64;
+                let p3 = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
+                (frame.project(p3) - uv).length()
+            })
+            .fold(f64::MAX, f64::min)
+            <= tol
+    };
+
     // Undirected sub-segments keyed by endpoint vertex pair, each tagged with
     // its source input index and whether it spans that whole input.
     let mut sub_edges: Vec<ArrSubEdge> = Vec::new();
@@ -734,6 +761,7 @@ fn split_plane_face_by_arrangement(
         if len < tol {
             continue;
         }
+        let i_is_arc = inputs[i].is_arc;
         // Break parameters along this chord (t in [0,1]).
         let mut ts: Vec<f64> = vec![0.0, 1.0];
         for (j, other) in inputs.iter().enumerate() {
@@ -741,8 +769,11 @@ fn split_plane_face_by_arrangement(
                 continue;
             }
             let (b0, b1) = (other.a, other.b);
-            // Proper interior crossing.
-            if let Some(t) = seg_cross_param(a0, a1, b0, b1) {
+            // Proper interior crossing. For an arc input, only honour the break
+            // when the crossing point is on the real arc (not just its chord).
+            if let Some(t) = seg_cross_param(a0, a1, b0, b1)
+                && (!i_is_arc || chord_break_on_arc(i, a0 + d * t))
+            {
                 ts.push(t);
             }
             // Other chord's endpoints landing on this chord's interior
@@ -751,7 +782,7 @@ fn split_plane_face_by_arrangement(
                 let w = (bp - a0).dot(d) / (len * len);
                 if w > 1e-6 && w < 1.0 - 1e-6 {
                     let on = a0 + d * w;
-                    if (on - bp).length() < tol {
+                    if (on - bp).length() < tol && (!i_is_arc || chord_break_on_arc(i, on)) {
                         ts.push(w);
                     }
                 }
