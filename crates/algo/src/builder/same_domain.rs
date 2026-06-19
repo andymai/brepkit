@@ -38,8 +38,9 @@ pub struct SameDomainPair {
     /// so this is always `false` (touching, not contained).
     pub b_contained_in_a: bool,
     /// Sub-face index of the **larger** face of this pair by projected outer-
-    /// wire area (see [`planar_face_area`]), used to keep representative
-    /// selection order-independent.
+    /// wire area (see [`repr_face_area`] — planar faces in their plane,
+    /// cylinder/cone faces in `(arc-length, axial)` space), used to keep
+    /// representative selection order-independent.
     ///
     /// For coextensive (edge-set) pairs both faces span the same domain, so
     /// area ties and this is `idx_a` — matching historical behaviour. For a
@@ -49,8 +50,9 @@ pub struct SameDomainPair {
     /// would make the result order-dependent.
     ///
     /// "Larger" — not "containing": a geometric-overlap pair may be strict
-    /// containment OR partial overlap (`planar_faces_overlap` accepts both), so
-    /// neither face necessarily contains the other. The consumer
+    /// containment OR partial overlap ([`planar_faces_overlap`] and
+    /// [`analytic_faces_overlap`] both accept either), so neither face
+    /// necessarily contains the other. The consumer
     /// ([`crate::bop::select_faces`]) keeps this face for Fuse (it covers the
     /// most boundary) and the *other* (smaller) face for Intersect (whose
     /// footprint is bounded by both solids).
@@ -241,6 +243,45 @@ pub fn detect_same_domain<S: BuildHasher>(
         }
     }
 
+    // Step 3c: geometric-overlap pass for coaxial cylinder/cone faces.
+    // Edge-set hashing pairs faces only when their boundaries coincide
+    // exactly. Two operands can carry the SAME coincident curved wall with
+    // MISMATCHED segmentation — e.g. a body whose rounded corner arrives split
+    // into two angular eighth-cylinders against a lip whose corner is one
+    // quarter-cylinder (gridfinity 3×3 stacking-lip fuse). The eighths and the
+    // quarter share an identical infinite cylinder over an overlapping band but
+    // no edge, so Step 1 misses them and the redundant interior pieces survive,
+    // leaving the shell open. Test overlap in the surface's (arc-length, axial)
+    // parameter space; the BOP selector then keeps the larger patch for Fuse /
+    // the smaller for Intersect, exactly as for the planar geometric-overlap
+    // pairs above.
+    {
+        let mut analytic_indices: Vec<usize> = Vec::new();
+        for (idx, surf) in surfaces.iter().enumerate() {
+            if matches!(surf, Some(FaceSurface::Cylinder(_) | FaceSurface::Cone(_))) {
+                analytic_indices.push(idx);
+            }
+        }
+        for (mi, &i) in analytic_indices.iter().enumerate() {
+            for &j in &analytic_indices[mi + 1..] {
+                let same_dir = match (surfaces[i], surfaces[j]) {
+                    (Some(si), Some(sj)) => surfaces_same_domain(si, sj, tol),
+                    _ => None,
+                };
+                let Some(same_dir) = same_dir else { continue };
+                if uf.find(i) == uf.find(j) {
+                    continue; // already grouped (e.g. identical edge sets)
+                }
+                if analytic_faces_overlap(topo, sub_faces, i, j, tol) {
+                    uf.union(i, j);
+                    let key = (i.min(j), i.max(j));
+                    pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
+                    geometric_overlap_groups.insert(uf.find(i));
+                }
+            }
+        }
+    }
+
     // Collect all roots that participate in pairs (O(m) not O(n*m)).
     let mut active_roots: HashSet<usize> = HashSet::new();
     for &(a, b) in pair_data.keys() {
@@ -298,8 +339,8 @@ pub fn detect_same_domain<S: BuildHasher>(
                 // the smaller for Intersect. Which face is A flips with operand
                 // order, so deferring to area keeps the result order-independent.
                 let representative = if geometric_overlap {
-                    let area_a = planar_face_area(topo, sub_faces[idx_a].face_id);
-                    let area_b = planar_face_area(topo, sub_faces[idx_b].face_id);
+                    let area_a = repr_face_area(topo, sub_faces[idx_a].face_id);
+                    let area_b = repr_face_area(topo, sub_faces[idx_b].face_id);
                     match (area_a, area_b) {
                         (Some(aa), Some(ab)) if ab > aa => idx_b,
                         _ => idx_a,
@@ -687,6 +728,315 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
     let frame = super::plane_frame::PlaneFrame::from_plane_face(normal, &pts);
     let poly: Vec<_> = pts.iter().map(|&p| frame.project(p)).collect();
     Some(super::classify_2d::signed_area_2d(&poly).abs())
+}
+
+/// Sample a cylinder/cone sub-face's outer wire into 3D points, [`SD_EDGE_SAMPLES`]
+/// per edge.
+///
+/// Returns `None` for non-(cylinder/cone) faces or wires that sample to fewer
+/// than three points. Mirrors [`planar_faces_overlap`]'s shorter-arc edge
+/// sampling so arc boundaries contribute their true swept extent. The raw 3D
+/// points (not parameters) are returned so [`analytic_faces_overlap`] can
+/// project BOTH faces through a single shared reference surface — projecting
+/// each face through its own surface would reference the axial coordinate to a
+/// different origin and falsely align disjoint z-bands.
+fn wire_points_3d(topo: &Topology, face_id: FaceId) -> Option<Vec<brepkit_math::vec::Point3>> {
+    let face = topo.face(face_id).ok()?;
+    if !matches!(
+        face.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+    ) {
+        return None;
+    }
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut pts = Vec::with_capacity(wire.edges().len() * SD_EDGE_SAMPLES);
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sv = topo.vertex(edge.start()).ok()?;
+        let ev = topo.vertex(edge.end()).ok()?;
+        let (sp, ep) = (sv.point(), ev.point());
+        for k in 0..SD_EDGE_SAMPLES {
+            #[allow(clippy::cast_precision_loss)]
+            let frac = k as f64 / SD_EDGE_SAMPLES as f64;
+            let frac = if oe.is_forward() { frac } else { 1.0 - frac };
+            pts.push(super::pcurve_compute::evaluate_edge_at_t(
+                edge.curve(),
+                sp,
+                ep,
+                frac,
+            ));
+        }
+    }
+    if pts.len() < 3 {
+        return None;
+    }
+    Some(pts)
+}
+
+/// Project 3D points into the `(θ, axial)` parameter space of `surface`
+/// (cylinder or cone), returning the `(θ, axial)` samples and the arc-length
+/// scale radius.
+///
+/// `θ` is the raw angular parameter (radians, not yet seam-unwrapped); `axial`
+/// is `v` along the surface's own axis from its origin/apex. Because both faces
+/// of a candidate pair are projected through the SAME `surface`, the axial
+/// reference is shared and the parameter spaces are directly comparable. The
+/// returned `radius` scales `θ` into arc length so the 2D tests operate in mm;
+/// for a cone it is the radius at the samples' mid-axial coordinate.
+fn project_points_through_surface(
+    surface: &FaceSurface,
+    pts: &[brepkit_math::vec::Point3],
+) -> Option<(Vec<(f64, f64)>, f64)> {
+    let samples: Vec<(f64, f64)> = match surface {
+        FaceSurface::Cylinder(c) => pts.iter().map(|&p| c.project_point(p)).collect(),
+        FaceSurface::Cone(c) => pts.iter().map(|&p| c.project_point(p)).collect(),
+        _ => return None,
+    };
+    if samples.len() < 3 {
+        return None;
+    }
+    let radius = match surface {
+        FaceSurface::Cylinder(c) => c.radius(),
+        FaceSurface::Cone(c) => {
+            let v_min = samples
+                .iter()
+                .map(|&(_, v)| v)
+                .fold(f64::INFINITY, f64::min);
+            let v_max = samples
+                .iter()
+                .map(|&(_, v)| v)
+                .fold(f64::NEG_INFINITY, f64::max);
+            // `radius_at` is signed: it returns a negative value when the
+            // cone's axis points apex→base and the patch sits on the negative
+            // side. Only the magnitude scales θ into arc length (the
+            // tessellation path takes `.abs()` for the same reason).
+            c.radius_at(0.5 * (v_min + v_max)).abs()
+        }
+        _ => return None,
+    };
+    // A degenerate (apex-touching) cone band has ~zero radius; the arc-length
+    // scaling would collapse θ and make the 2D test meaningless.
+    if radius <= 0.0 {
+        return None;
+    }
+    Some((samples, radius))
+}
+
+/// Unwrap a sequence of raw angular samples (each in `[0, 2π)`) into a
+/// continuous run by adding the multiple of `2π` to each successive sample that
+/// minimizes the step from its predecessor.
+///
+/// A trimmed cylinder/cone patch spans less than a full turn, so its boundary
+/// θ values form a continuous arc once seam-wrapping is removed.
+fn unwrap_angles(samples: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    use std::f64::consts::TAU;
+    debug_assert!(
+        !samples.is_empty(),
+        "unwrap_angles requires at least one sample (callers guard len >= 3)"
+    );
+    let mut out = Vec::with_capacity(samples.len());
+    let mut prev = samples[0].0;
+    out.push(samples[0]);
+    for &(u, axial) in &samples[1..] {
+        // Add the integer multiple of 2π that brings `u` closest to `prev`
+        // (i.e. the step into [-π, π]).
+        let uu = u - ((u - prev) / TAU).round() * TAU;
+        out.push((uu, axial));
+        prev = uu;
+    }
+    out
+}
+
+/// Test whether two cylinder/cone sub-faces on the **same** coaxial surface
+/// have overlapping trimmed patches in `(arc-length, axial)` parameter space.
+///
+/// The caller must have already confirmed the two faces share an infinite
+/// surface (via [`surfaces_same_domain`]) — that guarantees a `(θ, axial)`
+/// pair maps to the *same* 3D point on both, so a genuine parameter-space
+/// overlap is a genuine 3D overlap, with one exception this function guards:
+/// the angular seam. Each face's boundary is unwrapped into a continuous θ-arc,
+/// then face `j`'s arc is shifted by the multiple of `2π` that maximizes its
+/// 1D overlap with face `i`'s arc. Because `P(θ, ·) = P(θ + 2π, ·)` on the
+/// surface, that shift is an identity in 3D; it only selects which periodic
+/// representative to compare, so two patches on *opposite* sides (no genuine
+/// overlap) yield no positive overlap under any shift and are not paired.
+///
+/// θ is scaled by the surface radius (the patch's mid-axial radius for a cone)
+/// so both axes are in mm; the 2D containment / overlap-area tests then mirror
+/// [`planar_faces_overlap`] exactly, including its area-fraction guard against
+/// pairing faces that merely share a boundary segment.
+fn analytic_faces_overlap(
+    topo: &Topology,
+    sub_faces: &[SubFace],
+    i: usize,
+    j: usize,
+    tol: Tolerance,
+) -> bool {
+    use std::f64::consts::TAU;
+
+    // Project BOTH faces through face i's surface so the axial coordinate and
+    // angular origin share one reference frame. The two faces are coaxial with
+    // equal radius (the caller's `surfaces_same_domain` guard), so each face's
+    // 3D wire points lie on face i's surface too; projecting them through it is
+    // exact. Projecting each face through its OWN surface would reference the
+    // axial v to a different origin (e.g. a body cylinder at z=0 vs a lip
+    // cylinder at z=13.3) and falsely overlap disjoint z-bands.
+    let Ok(ref_surface) = topo.face(sub_faces[i].face_id).map(|f| f.surface().clone()) else {
+        return false;
+    };
+    let Some(pts_i) = wire_points_3d(topo, sub_faces[i].face_id) else {
+        return false;
+    };
+    let Some(pts_j) = wire_points_3d(topo, sub_faces[j].face_id) else {
+        return false;
+    };
+    let Some((samples_i, radius_i)) = project_points_through_surface(&ref_surface, &pts_i) else {
+        return false;
+    };
+    let Some((samples_j, _radius_j)) = project_points_through_surface(&ref_surface, &pts_j) else {
+        return false;
+    };
+
+    let unwrapped_i = unwrap_angles(&samples_i);
+    let unwrapped_j = unwrap_angles(&samples_j);
+
+    let theta_span = |pts: &[(f64, f64)]| -> (f64, f64) {
+        let lo = pts.iter().map(|&(u, _)| u).fold(f64::INFINITY, f64::min);
+        let hi = pts
+            .iter()
+            .map(|&(u, _)| u)
+            .fold(f64::NEG_INFINITY, f64::max);
+        (lo, hi)
+    };
+    let (i_lo, i_hi) = theta_span(&unwrapped_i);
+    let (j_lo, j_hi) = theta_span(&unwrapped_j);
+
+    // A patch spanning (near) a full turn is a closed/seam surface, not the
+    // partial corner patches this pass targets; comparing it parametrically is
+    // ambiguous, so bail and let edge-set matching handle it.
+    if (i_hi - i_lo) >= TAU - tol.angular || (j_hi - j_lo) >= TAU - tol.angular {
+        return false;
+    }
+
+    // Shift j's θ-branch by the k·2π that maximizes 1D interval overlap with i.
+    // Real trimmed patches span < 2π, so the physically-correct alignment is the
+    // one with the largest overlap; when no genuine overlap exists every shift
+    // gives a non-positive overlap and the 2D test below sees disjoint polygons.
+    let mut best_shift = 0.0_f64;
+    let mut best_overlap = f64::NEG_INFINITY;
+    for k in -1..=1 {
+        let shift = f64::from(k) * TAU;
+        let lo = (j_lo + shift).max(i_lo);
+        let hi = (j_hi + shift).min(i_hi);
+        let overlap = hi - lo;
+        if overlap > best_overlap {
+            best_overlap = overlap;
+            best_shift = shift;
+        }
+    }
+
+    // Scale θ to arc length (mm) using the (shared) reference radius so the two
+    // polygons are metrically consistent.
+    let scale = radius_i;
+    let to_2d = |&(u, axial): &(f64, f64), shift: f64| {
+        brepkit_math::vec::Point2::new((u + shift) * scale, axial)
+    };
+    let poly_i: Vec<_> = unwrapped_i.iter().map(|s| to_2d(s, 0.0)).collect();
+    let poly_j: Vec<_> = unwrapped_j.iter().map(|s| to_2d(s, best_shift)).collect();
+    if poly_i.len() < 3 || poly_j.len() < 3 {
+        return false;
+    }
+
+    let p_i = super::classify_2d::sample_interior_point(&poly_i);
+    let p_j = super::classify_2d::sample_interior_point(&poly_j);
+
+    let all_inside_strict =
+        |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
+            verts
+                .iter()
+                .all(|&v| super::classify_2d::point_in_polygon_2d(v, poly))
+        };
+    let all_inside_tol =
+        |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
+            let boundary_eps = super::classify_2d::boundary_eps(poly);
+            verts.iter().all(|&v| {
+                super::classify_2d::point_in_polygon_2d(v, poly)
+                    || super::classify_2d::distance_to_polygon_boundary(v, poly) <= boundary_eps
+            })
+        };
+
+    let ip_i_in_j = super::classify_2d::point_in_polygon_2d(p_i, &poly_j);
+    let ip_j_in_i = super::classify_2d::point_in_polygon_2d(p_j, &poly_i);
+    let outlines_coincide = ip_i_in_j && ip_j_in_i;
+    let all_inside =
+        |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
+            all_inside_strict(verts, poly) || (outlines_coincide && all_inside_tol(verts, poly))
+        };
+
+    // i contained in j, or j contained in i — the eighth-in-quarter case.
+    if ip_i_in_j && all_inside(&poly_i, &poly_j) {
+        return true;
+    }
+    if ip_j_in_i && all_inside(&poly_j, &poly_i) {
+        return true;
+    }
+
+    // Partial overlap by intersection area (mirrors the planar path). Faces
+    // that merely tile side-by-side share only a boundary segment (zero
+    // intersection area) and are not paired; a genuine shared band covers a
+    // meaningful fraction of the smaller patch.
+    let inter = brepkit_math::polygon_boolean::polygon_boolean(
+        &poly_i,
+        &poly_j,
+        brepkit_math::polygon_boolean::BooleanOp::Intersection,
+        tol.linear,
+    );
+    let overlap_area = inter.area().abs();
+    let area_i = super::classify_2d::signed_area_2d(&poly_i).abs();
+    let area_j = super::classify_2d::signed_area_2d(&poly_j).abs();
+    let smaller = area_i.min(area_j);
+    smaller > tol.linear_sq() && overlap_area > smaller * 0.5
+}
+
+/// Approximate `(arc-length, axial)` parameter-space area of a cylinder/cone
+/// sub-face's outer wire.
+///
+/// Returns `None` for non-(cylinder/cone) faces or wires that sample to fewer
+/// than three points. Used only to order the two faces of a coaxial
+/// geometric-overlap SD pair (see [`SameDomainPair::representative`]); both
+/// faces share the surface so the same arc-length scaling applies to each and
+/// their relative order is stable. The absolute area is never compared against
+/// a tolerance.
+fn analytic_face_param_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
+    let face = topo.face(face_id).ok()?;
+    let surface = face.surface().clone();
+    let pts = wire_points_3d(topo, face_id)?;
+    let (samples, radius) = project_points_through_surface(&surface, &pts)?;
+    let unwrapped = unwrap_angles(&samples);
+    let poly: Vec<_> = unwrapped
+        .iter()
+        .map(|&(u, axial)| brepkit_math::vec::Point2::new(u * radius, axial))
+        .collect();
+    if poly.len() < 3 {
+        return None;
+    }
+    Some(super::classify_2d::signed_area_2d(&poly).abs())
+}
+
+/// Outer-wire area used to pick the larger face of a geometric-overlap SD pair,
+/// dispatched by surface type: planar area in the face plane, or
+/// (arc-length, axial) parameter-space area for cylinder/cone faces.
+///
+/// Areas are only ever compared between the two faces of one pair, which share
+/// a surface, so the (possibly different) projection per surface type is never
+/// compared across surfaces.
+fn repr_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
+    let face = topo.face(face_id).ok()?;
+    match face.surface() {
+        FaceSurface::Plane { .. } => planar_face_area(topo, face_id),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => analytic_face_param_area(topo, face_id),
+        _ => None,
+    }
 }
 
 /// Quantize a 3D point to integer grid coordinates.

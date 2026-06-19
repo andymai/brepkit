@@ -607,3 +607,424 @@ fn union_find_basic_groups() {
     uf.union(1, 3);
     assert_eq!(uf.find(0), uf.find(3));
 }
+
+/// Build an angular patch of an axis-aligned (Z-axis) cylinder centred at
+/// `(cx, cy)` with radius `r`, spanning angle `[u0, u1]` and height `[z0, z1]`.
+/// The wire is two line seams (at u0 and u1) and two circular arcs (at z0, z1).
+#[allow(clippy::too_many_arguments)]
+fn cylinder_patch(
+    topo: &mut Topology,
+    cx: f64,
+    cy: f64,
+    r: f64,
+    u0: f64,
+    u1: f64,
+    z0: f64,
+    z1: f64,
+    rank: Rank,
+) -> SubFace {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let center = Point3::new(cx, cy, 0.0);
+    let axis = Vec3::new(0.0, 0.0, 1.0);
+    let pt = |u: f64, z: f64| Point3::new(cx + r * u.cos(), cy + r * u.sin(), z);
+
+    let v00 = topo.add_vertex(Vertex::new(pt(u0, z0), 1e-7));
+    let v10 = topo.add_vertex(Vertex::new(pt(u1, z0), 1e-7));
+    let v11 = topo.add_vertex(Vertex::new(pt(u1, z1), 1e-7));
+    let v01 = topo.add_vertex(Vertex::new(pt(u0, z1), 1e-7));
+
+    let circ_bot = Circle3D::new(Point3::new(cx, cy, z0), axis, r).unwrap();
+    let circ_top = Circle3D::new(Point3::new(cx, cy, z1), axis, r).unwrap();
+
+    // bottom arc v00 -> v10, right seam v10 -> v11, top arc v11 -> v01, left seam v01 -> v00
+    let e_bot = topo.add_edge(Edge::new(v00, v10, EdgeCurve::Circle(circ_bot)));
+    let e_right = topo.add_edge(Edge::new(v10, v11, EdgeCurve::Line));
+    let e_top = topo.add_edge(Edge::new(v11, v01, EdgeCurve::Circle(circ_top)));
+    let e_left = topo.add_edge(Edge::new(v01, v00, EdgeCurve::Line));
+
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_bot, true),
+            OrientedEdge::new(e_right, true),
+            OrientedEdge::new(e_top, true),
+            OrientedEdge::new(e_left, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let surf = CylindricalSurface::new(center, axis, r).unwrap();
+    let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(surf)));
+
+    // Interior sample at the patch's parametric centre.
+    let um = 0.5 * (u0 + u1);
+    let zm = 0.5 * (z0 + z1);
+    SubFace {
+        face_id,
+        classification: FaceClass::Unknown,
+        rank,
+        interior_point: Some(pt(um, zm)),
+    }
+}
+
+/// Build an angular patch of an axis-aligned (Z-axis) cone with `apex` at
+/// `(0, 0, apex_z)`, given `half_angle`, spanning `[u0, u1]` over heights
+/// `[z0, z1]` ABOVE the apex. The bottom/top rims are circles at the cone's
+/// radius for each height.
+#[allow(clippy::too_many_arguments)]
+fn cone_patch(
+    topo: &mut Topology,
+    apex_z: f64,
+    half_angle: f64,
+    u0: f64,
+    u1: f64,
+    z0: f64,
+    z1: f64,
+    rank: Rank,
+) -> SubFace {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::ConicalSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let apex = Point3::new(0.0, 0.0, apex_z);
+    let axis = Vec3::new(0.0, 0.0, 1.0);
+    // Radius at height z above the apex: z * tan(half_angle) is wrong for this
+    // parameterization; here radius = (axial distance) * cos(a)/sin(a) where the
+    // axial distance from apex is (z - apex_z). cos/sin = cot(a).
+    let cot = half_angle.cos() / half_angle.sin();
+    let radius_at_z = |z: f64| (z - apex_z) * cot;
+    let pt = |u: f64, z: f64| {
+        let r = radius_at_z(z);
+        Point3::new(r * u.cos(), r * u.sin(), z)
+    };
+
+    let v00 = topo.add_vertex(Vertex::new(pt(u0, z0), 1e-7));
+    let v10 = topo.add_vertex(Vertex::new(pt(u1, z0), 1e-7));
+    let v11 = topo.add_vertex(Vertex::new(pt(u1, z1), 1e-7));
+    let v01 = topo.add_vertex(Vertex::new(pt(u0, z1), 1e-7));
+
+    let circ_bot = Circle3D::new(Point3::new(0.0, 0.0, z0), axis, radius_at_z(z0)).unwrap();
+    let circ_top = Circle3D::new(Point3::new(0.0, 0.0, z1), axis, radius_at_z(z1)).unwrap();
+
+    let e_bot = topo.add_edge(Edge::new(v00, v10, EdgeCurve::Circle(circ_bot)));
+    let e_right = topo.add_edge(Edge::new(v10, v11, EdgeCurve::Line));
+    let e_top = topo.add_edge(Edge::new(v11, v01, EdgeCurve::Circle(circ_top)));
+    let e_left = topo.add_edge(Edge::new(v01, v00, EdgeCurve::Line));
+
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_bot, true),
+            OrientedEdge::new(e_right, true),
+            OrientedEdge::new(e_top, true),
+            OrientedEdge::new(e_left, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let surf = ConicalSurface::new(apex, axis, half_angle).unwrap();
+    let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Cone(surf)));
+
+    let um = 0.5 * (u0 + u1);
+    let zm = 0.5 * (z0 + z1);
+    SubFace {
+        face_id,
+        classification: FaceClass::Unknown,
+        rank,
+        interior_point: Some(pt(um, zm)),
+    }
+}
+
+/// Two coaxial cone patches with the same apex and half-angle, an EIGHTH
+/// contained in a QUARTER over the same height band, pair as a cross-rank SD
+/// overlap (the cone analogue of the cylinder corner case) and keep the larger
+/// quarter as the representative.
+#[test]
+fn coaxial_cone_eighth_in_quarter_pairs() {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    let half_angle = std::f64::consts::FRAC_PI_6; // 30°
+    // Eighth and quarter on the same cone, same height band z in [2, 4].
+    let eighth = cone_patch(
+        &mut topo,
+        0.0,
+        half_angle,
+        0.0,
+        FRAC_PI_4,
+        2.0,
+        4.0,
+        Rank::A,
+    );
+    let quarter = cone_patch(
+        &mut topo,
+        0.0,
+        half_angle,
+        0.0,
+        FRAC_PI_2,
+        2.0,
+        4.0,
+        Rank::B,
+    );
+    let sub_faces = vec![eighth, quarter];
+
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+    assert_eq!(
+        result.pairs.len(),
+        1,
+        "coaxial cone eighth-in-quarter must form one cross-rank SD pair"
+    );
+    assert!(result.pairs[0].b_contained_in_a);
+    assert_eq!(
+        result.pairs[0].representative, 1,
+        "the larger quarter cone patch must be the representative"
+    );
+}
+
+/// Two coaxial cone patches on disjoint height bands must NOT pair (the cone
+/// analogue of the stacked-cylinder guard).
+#[test]
+fn coaxial_cone_disjoint_z_bands_do_not_pair() {
+    use std::f64::consts::FRAC_PI_2;
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    let half_angle = std::f64::consts::FRAC_PI_6;
+    let lower = cone_patch(
+        &mut topo,
+        0.0,
+        half_angle,
+        0.0,
+        FRAC_PI_2,
+        2.0,
+        4.0,
+        Rank::A,
+    );
+    let upper = cone_patch(
+        &mut topo,
+        0.0,
+        half_angle,
+        0.0,
+        FRAC_PI_2,
+        4.0,
+        6.0,
+        Rank::B,
+    );
+    let sub_faces = vec![lower, upper];
+
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+    assert!(
+        result.pairs.is_empty() && result.within_rank_dups.is_empty(),
+        "stacked cone patches on disjoint bands must not pair (got {} pairs)",
+        result.pairs.len()
+    );
+}
+
+/// Two coaxial same-radius cylinder patches that overlap in (θ, z) — a body's
+/// angular EIGHTH contained in a lip's QUARTER over the same height band — are
+/// paired as a cross-rank same-domain overlap, with the larger (quarter) kept
+/// as the representative. This is the 3×3 stacking-lip corner case: the GFA
+/// builder splits both operands at the shared rim (z = 16 here) so the body's
+/// upper eighth and the lip's lower quarter share the SAME z-band, making the
+/// eighth's (θ, z) rectangle a strict subset of the quarter's.
+#[test]
+fn coaxial_cylinder_eighth_in_quarter_pairs() {
+    use std::f64::consts::FRAC_PI_4;
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    // Body upper eighth: u in [0, π/4], z in [13.3, 16].
+    let eighth = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        0.0,
+        FRAC_PI_4,
+        13.3,
+        16.0,
+        Rank::A,
+    );
+    // Lip lower quarter: u in [0, π/2], z in [13.3, 16] (same band, wider arc).
+    let quarter = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        0.0,
+        2.0 * FRAC_PI_4,
+        13.3,
+        16.0,
+        Rank::B,
+    );
+    let sub_faces = vec![eighth, quarter];
+
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+    assert_eq!(
+        result.pairs.len(),
+        1,
+        "coaxial eighth-in-quarter must form one cross-rank SD pair"
+    );
+    let p = &result.pairs[0];
+    assert!(
+        p.b_contained_in_a,
+        "an overlap (not edge-set) pair must be flagged as a containment/overlap"
+    );
+    // The quarter (idx 1, rank B) is larger and must be the representative.
+    assert_eq!(
+        p.representative, 1,
+        "the larger quarter patch must be the kept representative"
+    );
+}
+
+/// A genuine PARTIAL overlap where the patches are offset in BOTH θ and z, so
+/// their shared region is a small fraction of either, must NOT pair — the same
+/// area-fraction guard the planar path uses against pairing faces that merely
+/// abut along a sliver.
+#[test]
+fn coaxial_cylinder_thin_partial_overlap_does_not_pair() {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_8};
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    // Patch A: u in [0, π/4], z in [13.3, 16].
+    let a = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        0.0,
+        FRAC_PI_4,
+        13.3,
+        16.0,
+        Rank::A,
+    );
+    // Patch B: u in [π/8, π/8+π/2], z in [14.85, 17.55] — offset in both axes,
+    // so the shared region u∈[π/8,π/4] × z∈[14.85,16] is ~20% of A.
+    let b = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        FRAC_PI_8,
+        FRAC_PI_8 + FRAC_PI_2,
+        14.85,
+        17.55,
+        Rank::B,
+    );
+    let sub_faces = vec![a, b];
+
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+    assert!(
+        result.pairs.is_empty(),
+        "a thin partial overlap (< 50% of the smaller patch) must not pair (got {} pairs)",
+        result.pairs.len()
+    );
+}
+
+/// Two coaxial same-radius cylinder patches on DISJOINT height bands (stacked,
+/// touching only at one ring) must NOT be paired — they share a parametric
+/// projection only at the touching z, not a 2D area. Guards the axial-reference
+/// mis-pairing the (θ, axial) projection must avoid.
+#[test]
+fn coaxial_cylinder_disjoint_z_bands_do_not_pair() {
+    use std::f64::consts::FRAC_PI_2;
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    // Lower patch z in [0, 10] and upper patch z in [10, 20], same angular span.
+    let lower = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        0.0,
+        FRAC_PI_2,
+        0.0,
+        10.0,
+        Rank::A,
+    );
+    let upper = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        0.0,
+        FRAC_PI_2,
+        10.0,
+        20.0,
+        Rank::B,
+    );
+    let sub_faces = vec![lower, upper];
+
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+    assert!(
+        result.pairs.is_empty() && result.within_rank_dups.is_empty(),
+        "stacked patches on disjoint z-bands must not be same-domain (got {} pairs)",
+        result.pairs.len()
+    );
+}
+
+/// Two coaxial same-radius cylinder patches on OPPOSITE angular sides over the
+/// same height band must NOT be paired — disjoint in θ, so no genuine 3D
+/// overlap. Guards against the seam-wraparound shift aligning opposite sides.
+#[test]
+fn coaxial_cylinder_opposite_sides_do_not_pair() {
+    use std::f64::consts::{FRAC_PI_4, PI};
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    // +X side: u in [0, π/4]; opposite (−X) side: u in [π, π + π/4].
+    let near = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        0.0,
+        FRAC_PI_4,
+        0.0,
+        10.0,
+        Rank::A,
+    );
+    let far = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        PI,
+        PI + FRAC_PI_4,
+        0.0,
+        10.0,
+        Rank::B,
+    );
+    let sub_faces = vec![near, far];
+
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+    assert!(
+        result.pairs.is_empty(),
+        "opposite-side patches must not be same-domain (got {} pairs)",
+        result.pairs.len()
+    );
+}

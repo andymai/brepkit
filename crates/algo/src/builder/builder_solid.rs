@@ -92,6 +92,12 @@ pub fn build_solid(topo: &mut Topology, selected: &[SelectedFace]) -> Result<Sol
     // partitions so the merge below can unify them.
     split_edges_at_collinear_vertices(topo, &mut face_ids)?;
 
+    // Step 0a2: The same refinement for curved (Circle/Ellipse) rims. A
+    // coincident rounded corner can arrive split at a seam vertex on one
+    // operand but whole on the other; splitting each arc at the global vertex
+    // set lets the merge below unify the shared rim.
+    split_arc_edges_at_collinear_vertices(topo, &mut face_ids)?;
+
     // Step 0b: Merge duplicate edges across selected faces.
     // Faces from different input solids may have separate edge entities for the
     // same geometric boundary. Merge them by quantized endpoint position so that
@@ -1354,6 +1360,235 @@ fn split_edges_at_collinear_vertices(
     log::debug!("split_edges_at_collinear_vertices: split {split_count} edges");
 
     Ok(())
+}
+
+/// Split Circle/Ellipse arc edges at interior vertices that lie ON the arc.
+///
+/// The arc analogue of [`split_edges_at_collinear_vertices`]. Two operands can
+/// partition the same coincident curved rim differently: one solid's rounded
+/// corner arrives as a single quarter-arc, the other's as two eighth-arcs
+/// meeting at a 45° seam vertex (the gridfinity 3×3 stacking-lip fuse, where
+/// the body corner is split at the diagonal seam but the lip corner is whole).
+/// Refining each arc against the global vertex set so both sides carry the same
+/// intermediate vertices lets [`merge_duplicate_edges`] unify the shared rim and
+/// closes the otherwise-free corner boundary.
+///
+/// A child arc reuses its parent's `EdgeCurve::Circle`/`Ellipse` geometry with
+/// the new endpoints; the edge's trimmed span is derived from its endpoints
+/// (see [`brepkit_topology::edge::EdgeCurve::domain_with_endpoints`]), so no
+/// geometry needs re-fitting. Full (closed) circles are skipped — they have no
+/// interior to split and re-anchoring them is the section builder's job.
+fn split_arc_edges_at_collinear_vertices(
+    topo: &mut Topology,
+    face_ids: &mut [FaceId],
+) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+    use brepkit_topology::vertex::VertexId;
+
+    let tol = MERGE_TOL;
+    let snap = tol * 10.0;
+
+    // Canonical vertex per quantized position, and unique arc edges.
+    let mut vert_at: HashMap<QPos, (VertexId, Point3)> = HashMap::new();
+    // (edge, start_v, end_v, start_p, end_p, curve)
+    let mut arc_edges: Vec<(EdgeId, VertexId, VertexId, Point3, Point3, EdgeCurve)> = Vec::new();
+    let mut seen_edges: HashSet<EdgeId> = HashSet::new();
+
+    for &fid in face_ids.iter() {
+        let face = topo.face(fid)?;
+        let wids: Vec<WireId> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wid in wids {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (sv, ev) = (edge.start(), edge.end());
+                let sp = topo.vertex(sv)?.point();
+                let ep = topo.vertex(ev)?.point();
+                vert_at.entry(quantize_point(sp, tol)).or_insert((sv, sp));
+                vert_at.entry(quantize_point(ep, tol)).or_insert((ev, ep));
+                let is_arc = matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
+                if is_arc && seen_edges.insert(oe.edge()) {
+                    arc_edges.push((oe.edge(), sv, ev, sp, ep, edge.curve().clone()));
+                }
+            }
+        }
+    }
+
+    // Deterministic order for sub-edge allocation.
+    arc_edges.sort_by_key(|(eid, ..)| eid.index());
+
+    let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
+    for (eid, sv, ev, sp, ep, curve) in arc_edges {
+        // Skip closed (full) arcs: start ≈ end means the whole circle/ellipse,
+        // which has no proper interior to cut and is handled elsewhere.
+        if (ep - sp).length() < snap {
+            continue;
+        }
+        // `snap` is a LINEAR tolerance (model units); the span / branch tests
+        // below are in the curve's ANGULAR domain (radians). Convert via the
+        // curve's radius scale (arc length ≈ radius·angle) so the angular guard
+        // is metrically equivalent to `snap`. A degenerate near-zero radius has
+        // no meaningful interior to split, so leave the edge whole.
+        //
+        // Only arcs reach here (the collection loop filters on `is_arc`); the
+        // non-arc arms are unreachable but kept explicit per the exhaustive-
+        // match convention so a future curve variant can't be silently skipped.
+        let radius_scale = match &curve {
+            EdgeCurve::Circle(c) => c.radius(),
+            EdgeCurve::Ellipse(e) => e.semi_major(),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+        };
+        if radius_scale < snap {
+            continue;
+        }
+        let angular_eps = snap / radius_scale;
+        // The arc's CCW angular span [a0, a1] with a1 > a0.
+        let (a0, a1) = curve.domain_with_endpoints(sp, ep);
+        let span = a1 - a0;
+        if span < angular_eps {
+            continue;
+        }
+
+        let mut cuts: Vec<(f64, VertexId)> = Vec::new();
+        for &(vid, p) in vert_at.values() {
+            // Skip the arc's own endpoints.
+            if (p - sp).length() < snap || (p - ep).length() < snap {
+                continue;
+            }
+            // The vertex must lie ON the arc: evaluating the curve at the
+            // vertex's projected angle must reproduce the vertex position.
+            // `evaluate_with_endpoints` takes the angle directly for arcs.
+            let a = project_angle_on_curve(&curve, p);
+            let on = curve.evaluate_with_endpoints(a, sp, ep);
+            if (on - p).length() > snap {
+                continue;
+            }
+            // Bring the angle strictly inside the trimmed span [a0, a1]. The
+            // margin is angular (radians), so use `angular_eps`, not the linear
+            // `snap`.
+            let a_branch = a0 + (a - a0).rem_euclid(std::f64::consts::TAU);
+            if !(a0 + angular_eps..=a1 - angular_eps).contains(&a_branch) {
+                continue;
+            }
+            cuts.push((a_branch, vid));
+        }
+        if cuts.is_empty() {
+            continue;
+        }
+        // Total order: angle then vertex index (the `vert_at` HashMap iteration
+        // is nondeterministic without the tiebreak).
+        cuts.sort_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then_with(|| a.1.index().cmp(&b.1.index()))
+        });
+        cuts.dedup_by_key(|(_, vid)| *vid);
+
+        let mut chain: Vec<VertexId> = Vec::with_capacity(cuts.len() + 2);
+        chain.push(sv);
+        chain.extend(cuts.iter().map(|&(_, vid)| vid));
+        chain.push(ev);
+        let mut subs = Vec::with_capacity(chain.len() - 1);
+        for w in chain.windows(2) {
+            // Children share the parent arc's geometry; their endpoints define
+            // the sub-arc span.
+            let sub_eid = topo.add_edge(Edge::new(w[0], w[1], curve.clone()));
+            subs.push(OrientedEdge::new(sub_eid, true));
+        }
+        replacements.insert(eid, subs);
+    }
+
+    if replacements.is_empty() {
+        return Ok(());
+    }
+    let split_count = replacements.len();
+
+    // Rebuild faces whose wires reference a split arc.
+    for fid in face_ids.iter_mut() {
+        let (surface, is_reversed, outer_oes, inner_oes_list) = {
+            let face = topo.face(*fid)?;
+            let surface = face.surface().clone();
+            let is_reversed = face.is_reversed();
+            let outer_oes: Vec<(EdgeId, bool)> = topo
+                .wire(face.outer_wire())?
+                .edges()
+                .iter()
+                .map(|oe| (oe.edge(), oe.is_forward()))
+                .collect();
+            let mut inner_oes_list = Vec::new();
+            for &iw in face.inner_wires() {
+                inner_oes_list.push(
+                    topo.wire(iw)?
+                        .edges()
+                        .iter()
+                        .map(|oe| (oe.edge(), oe.is_forward()))
+                        .collect::<Vec<(EdgeId, bool)>>(),
+                );
+            }
+            (surface, is_reversed, outer_oes, inner_oes_list)
+        };
+
+        let touched = outer_oes
+            .iter()
+            .chain(inner_oes_list.iter().flatten())
+            .any(|(eid, _)| replacements.contains_key(eid));
+        if !touched {
+            continue;
+        }
+
+        let expand = |oes: &[(EdgeId, bool)]| -> Vec<OrientedEdge> {
+            let mut out = Vec::with_capacity(oes.len());
+            for &(eid, fwd) in oes {
+                if let Some(subs) = replacements.get(&eid) {
+                    if fwd {
+                        out.extend(subs.iter().copied());
+                    } else {
+                        out.extend(
+                            subs.iter()
+                                .rev()
+                                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward())),
+                        );
+                    }
+                } else {
+                    out.push(OrientedEdge::new(eid, fwd));
+                }
+            }
+            out
+        };
+
+        let Ok(new_outer) = brepkit_topology::wire::Wire::new(expand(&outer_oes), true) else {
+            continue;
+        };
+        let new_outer_id = topo.add_wire(new_outer);
+        let mut new_inner_ids = Vec::new();
+        for inner_oes in &inner_oes_list {
+            if let Ok(w) = brepkit_topology::wire::Wire::new(expand(inner_oes), true) {
+                new_inner_ids.push(topo.add_wire(w));
+            }
+        }
+
+        let mut new_face = Face::new(new_outer_id, new_inner_ids, surface);
+        if is_reversed {
+            new_face.set_reversed(true);
+        }
+        *fid = topo.add_face(new_face);
+    }
+
+    log::debug!("split_arc_edges_at_collinear_vertices: split {split_count} arcs");
+
+    Ok(())
+}
+
+/// Project a point onto a Circle/Ellipse `EdgeCurve`, returning the angle
+/// parameter; returns `0.0` for non-arc curves (never called on them).
+fn project_angle_on_curve(curve: &brepkit_topology::edge::EdgeCurve, p: Point3) -> f64 {
+    use brepkit_topology::edge::EdgeCurve;
+    match curve {
+        EdgeCurve::Circle(c) => c.project(p),
+        EdgeCurve::Ellipse(e) => e.project(p),
+        _ => 0.0,
+    }
 }
 
 /// Merge duplicate edges across selected faces by quantized endpoint position.
