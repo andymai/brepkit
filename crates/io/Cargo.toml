@@ -18,6 +18,7 @@ thiserror.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+brepkit-algo.workspace = true
 brepkit-topology = {workspace = true, features = ["test-utils"]}
 proptest.workspace = true
 
