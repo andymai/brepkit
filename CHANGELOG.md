@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.15](https://github.com/andymai/brepkit/compare/v2.114.14...v2.114.15) (2026-06-19)
+
+
+### Bug Fixes
+
+* **algo:** split holed planar cap whose cut bridges material between holes ([#921](https://github.com/andymai/brepkit/issues/921)) ([09455d0](https://github.com/andymai/brepkit/commit/09455d0b3c338e5ea3a9116aa8d6463301acca40))
+
 ## [2.114.14](https://github.com/andymai/brepkit/compare/v2.114.13...v2.114.14) (2026-06-19)
 
 
