@@ -135,6 +135,13 @@ fn build_face_containment(
         let start_pos = topo.vertex(edge.start())?.point();
         let end_pos = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+        // Only curved edges contribute to the sagitta margin: a straight Line
+        // edge's sampled chords coincide with the edge exactly (zero sagitta),
+        // so it must not inflate `max_chord`. Basing the margin on a long
+        // straight edge would over-extend a thin face's boundary band (a
+        // 123mm-wide × 1mm-tall ramp strip got a 1.9mm margin, admitting EF
+        // crossings well outside it — the 3×3 scoop+label lip-corner fallback).
+        let is_curved = !matches!(edge.curve(), EdgeCurve::Line);
         let n = N_BOUNDARY_SAMPLES;
         // Sample inclusive of the edge's end vertex (0..=n) so the closing
         // segment of a closed wire reaches the true endpoint; consecutive
@@ -148,7 +155,9 @@ fn build_face_containment(
                 if (pt - p).length() <= tol.linear {
                     continue;
                 }
-                max_chord = max_chord.max((pt - p).length());
+                if is_curved {
+                    max_chord = max_chord.max((pt - p).length());
+                }
             }
             prev = Some(pt);
             outer_points.push(pt);
