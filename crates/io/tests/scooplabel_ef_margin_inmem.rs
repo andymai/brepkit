@@ -29,7 +29,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use brepkit_algo::bop::BooleanOp;
@@ -37,6 +37,7 @@ use brepkit_algo::gfa;
 use brepkit_io::arena_io::deserialize_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
+use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::wire::OrientedEdge;
 
@@ -62,7 +63,11 @@ fn over_shared_edges(topo: &Topology, solid: SolidId) -> usize {
             (p.z() * scale).round() as i64,
         )
     };
-    let mut counts: HashMap<(QPoint, QPoint), usize> = HashMap::new();
+    // Track the distinct faces incident to each quantized edge key (not raw
+    // wire occurrences): an edge that appears in a single face's outer+inner
+    // wire must not read as over-shared. A manifold edge is incident to exactly
+    // two faces; >2 distinct faces is the non-manifold over-share we guard against.
+    let mut faces_per_edge: HashMap<(QPoint, QPoint), HashSet<FaceId>> = HashMap::new();
     for fid in solid_faces(topo, solid).unwrap() {
         let face = topo.face(fid).unwrap();
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
@@ -71,11 +76,14 @@ fn over_shared_edges(topo: &Topology, solid: SolidId) -> usize {
                 let a = q(topo.vertex(e.start()).unwrap().point());
                 let b = q(topo.vertex(e.end()).unwrap().point());
                 let key = if a <= b { (a, b) } else { (b, a) };
-                *counts.entry(key).or_insert(0) += 1;
+                faces_per_edge.entry(key).or_default().insert(fid);
             }
         }
     }
-    counts.values().filter(|&&c| c > 2).count()
+    faces_per_edge
+        .values()
+        .filter(|faces| faces.len() > 2)
+        .count()
 }
 
 /// Count faces whose outer wire is a pure out-and-back spur (collapses to
