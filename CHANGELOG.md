@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.11](https://github.com/andymai/brepkit/compare/v2.114.10...v2.114.11) (2026-06-19)
+
+
+### Bug Fixes
+
+* **algo:** coaxial cylinder/cone same-domain overlap (3×3 lip fuse + mismatched segmentation) ([#913](https://github.com/andymai/brepkit/issues/913)) ([e1a0e56](https://github.com/andymai/brepkit/commit/e1a0e56d7ddba07dc1262d17a8774001847c0070))
+
 ## [2.114.10](https://github.com/andymai/brepkit/compare/v2.114.9...v2.114.10) (2026-06-18)
 
 
