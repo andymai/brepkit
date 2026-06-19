@@ -341,19 +341,16 @@ fn integrate_holes_plane(
     frame: &PlaneFrame,
     base_src: usize,
 ) -> Option<Vec<OrientedPCurveEdge>> {
-    // Sections must be all-Line. Hole (inner-wire) edges may be arcs: a curved
-    // cavity (rounded-rect opening) has Circle corner edges, but a notch only
-    // ever crosses the cavity's STRAIGHT walls, never its corner arcs. Arc hole
-    // edges are preserved unchanged when uncrossed; if a section crosses an arc
-    // hole edge's CHORD (the conservative UV test used below, not the true arc)
-    // the whole pass bails to None (the chord lerp would flatten a kept arc into
-    // a chord and free-edge against the cavity cylinder).
-    if sections
+    // Line sections are split at hole crossings (the in-hole sub-segment is air,
+    // dropped). Arc sections cannot be chord-trimmed here, so they are carried
+    // through whole — valid only when an arc lies clear of every hole (a corner
+    // arc on the OUTER boundary ring, well outside the inset cavity openings, in
+    // the divider-lip fuse). If an arc would cross a hole's straight wall its
+    // true geometry cannot be reproduced as one sub-edge, so the whole pass
+    // bails to None and the caller's other paths handle the face.
+    let (line_sections, arc_sections): (Vec<&SectionEdge>, Vec<&SectionEdge>) = sections
         .iter()
-        .any(|s| !matches!(s.curve_3d, EdgeCurve::Line))
-    {
-        return None;
-    }
+        .partition(|s| matches!(s.curve_3d, EdgeCurve::Line));
 
     // Chord polygon per hole (arc edges contribute their start endpoint, which
     // is the right fidelity for the "is this section sub-segment inside the
@@ -413,8 +410,8 @@ fn integrate_holes_plane(
     let mut any_crossing = false;
     let mut next_src = base_src;
 
-    // Sections: split at hole crossings, drop the in-hole sub-segments.
-    for s in sections {
+    // Line sections: split at hole crossings, drop the in-hole sub-segments.
+    for s in &line_sections {
         let s0 = frame.project(s.start);
         let s1 = frame.project(s.end);
         let mut ts: Vec<f64> = vec![0.0, 1.0];
@@ -461,7 +458,9 @@ fn integrate_holes_plane(
     }
 
     // Hole edges: split at section crossings, keep their stored orientation.
-    let sec_uv: Vec<(Point2, Point2)> = sections
+    // Only Line sections split hole edges; arc sections are carried through
+    // whole and (per the bail below) never cross a hole.
+    let sec_uv: Vec<(Point2, Point2)> = line_sections
         .iter()
         .map(|s| (frame.project(s.start), frame.project(s.end)))
         .collect();
@@ -517,6 +516,57 @@ fn integrate_holes_plane(
             }
         }
         out.push(arc.clone());
+    }
+
+    // Arc sections: carried through whole as a forward/reverse pair (one shared
+    // source id so `build_topology_face` welds the two sub-face uses to one
+    // edge). An arc section that crosses a hole's straight wall (chord test)
+    // cannot be reproduced as one sub-edge, so bail — the divider-lip case has
+    // its corner arcs on the OUTER ring, clear of the inset cavity openings.
+    for s in &arc_sections {
+        let s0 = frame.project(s.start);
+        let s1 = frame.project(s.end);
+        for (b0, b1, _, _) in &hole_segs {
+            if seg_cross_param(s0, s1, *b0, *b1).is_some() {
+                return None;
+            }
+        }
+        // An arc whose chord midpoint lies inside a hole is entirely over the
+        // cavity (air) — drop it; it contributes no material boundary.
+        let mid = Point2::new(0.5 * (s0.x() + s1.x()), 0.5 * (s0.y() + s1.y()));
+        if hole_polys
+            .iter()
+            .any(|poly| super::classify_2d::point_in_polygon_2d(mid, poly))
+        {
+            continue;
+        }
+        let pcurve_uv = |p: Point3| frame.project(p);
+        let src = next_src;
+        next_src += 1;
+        let su = pcurve_uv(s.start);
+        let eu = pcurve_uv(s.end);
+        out.push(OrientedPCurveEdge {
+            curve_3d: s.curve_3d.clone(),
+            pcurve: s.pcurve_a.clone(),
+            start_uv: su,
+            end_uv: eu,
+            start_3d: s.start,
+            end_3d: s.end,
+            forward: true,
+            source_edge_idx: Some(src),
+            pave_block_id: s.pave_block_id,
+        });
+        out.push(OrientedPCurveEdge {
+            curve_3d: s.curve_3d.clone(),
+            pcurve: s.pcurve_a.clone(),
+            start_uv: eu,
+            end_uv: su,
+            start_3d: s.end,
+            end_3d: s.start,
+            forward: false,
+            source_edge_idx: Some(src),
+            pave_block_id: s.pave_block_id,
+        });
     }
 
     any_crossing.then_some(out)
@@ -630,9 +680,6 @@ fn split_plane_face_by_arrangement(
     frame: &PlaneFrame,
     tol: f64,
 ) -> Option<Vec<SplitSubFace>> {
-    use brepkit_math::curves2d::{Curve2D, Line2D};
-    use brepkit_math::vec::Vec2;
-
     // Collect input edges (boundary + sections) with their true geometry. Each
     // arc keeps its source curve; the arrangement subdivision uses the chord.
     let mut inputs: Vec<ArrInput> = Vec::new();
@@ -676,6 +723,102 @@ fn split_plane_face_by_arrangement(
             is_arc,
         });
     }
+    // Section-only entry point: keep the historical max-area drop + flat
+    // emission (these faces have no integrated holes).
+    arrangement_regions_from_inputs(
+        surface,
+        inputs,
+        rank,
+        reversed,
+        face_id,
+        frame,
+        tol,
+        false,
+        &[],
+    )
+}
+
+/// Holed-plane variant of [`split_plane_face_by_arrangement`]. The caller has
+/// already woven the hole boundaries into a single combined edge list (via
+/// [`integrate_holes_plane`]: sections trimmed at hole crossings, hole edges
+/// split at section crossings), so the full planar subdivision is just that
+/// list. Treat every edge as an arrangement input and decompose into minimal
+/// regions. Unlike the section-based entry point, this path produces sub-faces
+/// whose holes are already integral to the trace (no separate inner-wire
+/// distribution), so it correctly partitions a holed cap whose cut also crosses
+/// the holes — the divider-lip fuse onto a compartmented body, where the
+/// stacking lip's footprint edge cuts each divider arm between the compartment
+/// openings. The angular wire builder mis-traces that arrangement into one
+/// region; this returns the true under-lip ring + exposed divider-cross regions.
+///
+/// Inputs may contain both orientations of a shared edge (the integrate output
+/// emits forward/reverse pairs); the arrangement's undirected sub-edge dedup
+/// collapses them. Returns `None` on the same conditions as the section path.
+#[allow(clippy::too_many_arguments)]
+fn arrangement_regions_from_combined(
+    surface: &FaceSurface,
+    combined_edges: &[OrientedPCurveEdge],
+    inner_wires: &[Vec<OrientedPCurveEdge>],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    frame: &PlaneFrame,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    // The even-odd nesting pass resolves the nested overlapping faces (a holed
+    // cap whose holes/sections form a component separate from the outer
+    // boundary) and drops the air regions that fill the original holes.
+    let inputs: Vec<ArrInput> = combined_edges
+        .iter()
+        .map(|e| ArrInput {
+            a: e.start_uv,
+            b: e.end_uv,
+            edge: e.clone(),
+            is_arc: !matches!(e.curve_3d, EdgeCurve::Line),
+        })
+        .collect();
+    arrangement_regions_from_inputs(
+        surface,
+        inputs,
+        rank,
+        reversed,
+        face_id,
+        frame,
+        tol,
+        true,
+        inner_wires,
+    )
+}
+
+/// Decompose a planar arrangement (already-collected [`ArrInput`] edges) into
+/// its minimal interior regions. Shared by [`split_plane_face_by_arrangement`]
+/// (boundary + sections) and [`arrangement_regions_from_combined`] (a holed
+/// face's pre-woven edge list).
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn arrangement_regions_from_inputs(
+    surface: &FaceSurface,
+    mut inputs: Vec<ArrInput>,
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    frame: &PlaneFrame,
+    tol: f64,
+    // When true, resolve overlapping nested minimal faces (a holed cap whose
+    // holes/sections form a component separate from the outer-boundary loop)
+    // via even-odd containment nesting: depth-even faces are solid regions
+    // emitted with their direct-child faces as holes, depth-odd faces are holes,
+    // and solid regions filling an `original_holes` opening are dropped (air).
+    // False keeps the historical "drop only the max-area face, emit each as a
+    // flat outer wire" behaviour for the section-only entry point.
+    even_odd_nesting: bool,
+    // The face's ORIGINAL holes (compartment openings) in this face's frame.
+    // Used by the even-odd path to drop solid regions that fill an opening.
+    // Empty for the section-only entry point.
+    original_holes: &[Vec<OrientedPCurveEdge>],
+) -> Option<Vec<SplitSubFace>> {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::Vec2;
+
     // Drop degenerate (zero-length) inputs.
     inputs.retain(|i| (i.a - i.b).length() > tol);
     if inputs.len() < 3 {
@@ -970,6 +1113,7 @@ fn split_plane_face_by_arrangement(
             .partial_cmp(&face_area(&faces[b]).abs())
             .unwrap_or(std::cmp::Ordering::Equal)
     })?;
+
     let interior: Vec<&Vec<usize>> = faces
         .iter()
         .enumerate()
@@ -1045,18 +1189,14 @@ fn split_plane_face_by_arrangement(
         })
     };
 
-    let mut result = Vec::new();
-    for face in interior {
-        // Orient the region CCW in UV (positive signed area) so it is a valid
-        // outer wire. The trace can hand back either winding depending on the
-        // boundary's winding; reverse the half-edge order and each edge's
-        // direction when negative.
-        let ccw: Vec<usize> = if face_area(face) < 0.0 {
+    // Build a CCW wire (valid outer-wire winding) from a traced face.
+    let build_ccw_wire = |face: &[usize]| -> Option<Vec<OrientedPCurveEdge>> {
+        let reverse_each = face_area(face) < 0.0;
+        let ccw: Vec<usize> = if reverse_each {
             face.iter().rev().copied().collect()
         } else {
-            face.clone()
+            face.to_vec()
         };
-        let reverse_each = face_area(face) < 0.0;
         let mut wire = Vec::with_capacity(ccw.len());
         for &h in &ccw {
             let he = &halfs[h];
@@ -1067,6 +1207,122 @@ fn split_plane_face_by_arrangement(
             };
             wire.push(mk_edge(from, to, he.seg_id)?);
         }
+        Some(wire)
+    };
+    // UV polygon (chord points) of a traced face, for containment tests.
+    let face_poly = |face: &[usize]| -> Vec<Point2> {
+        face.iter().map(|&h| vert_pos[&halfs[h].from]).collect()
+    };
+
+    if even_odd_nesting {
+        // Even-odd nesting (holed-cap path). Minimal-face tracing of a
+        // disconnected arrangement (a holed cap whose holes/sections form an
+        // inner component separate from the outer boundary loop) yields nested
+        // faces that OVERLAP: the outer-boundary disk covers the whole face, an
+        // inner-component disk covers its sub-region, and the true regions sit
+        // inside those. Resolve by containment depth: depth-even faces are solid
+        // regions, depth-odd faces are holes in their container. Emit each solid
+        // face with its DIRECT-child (depth+1) faces as inner wires, so a solid
+        // disk that contains an inner disk becomes the correct annulus (e.g. the
+        // ±41.75 cap perimeter ring around the ±40.55 inner-wall opening). Drop
+        // any solid region whose interior lies in an original hole (air).
+        let polys: Vec<Vec<Point2>> = interior.iter().map(|f| face_poly(f)).collect();
+        let probes: Vec<Point2> = polys.iter().map(|p| sample_interior_point(p)).collect();
+        let areas: Vec<f64> = polys.iter().map(|p| signed_area_2d(p).abs()).collect();
+        // `outer` contains `inner` when EVERY one of inner's polygon vertices
+        // lies inside (or on) outer's polygon AND outer is strictly larger.
+        // A probe-only test is symmetric for the concentric disks that
+        // disconnected components produce (both the ±41.75 and ±40.55 disks hold
+        // the centre), so it can't order their nesting; the all-vertices +
+        // larger-area test is asymmetric and orders them correctly.
+        let contains = |outer: usize, inner: usize| -> bool {
+            if outer == inner || areas[outer] <= areas[inner] {
+                return false;
+            }
+            let op = &polys[outer];
+            let eps = super::classify_2d::boundary_eps(op);
+            polys[inner].iter().all(|&v| {
+                super::classify_2d::point_in_polygon_2d(v, op)
+                    || super::classify_2d::distance_to_polygon_boundary(v, op) <= eps
+            })
+        };
+        let depth: Vec<usize> = (0..interior.len())
+            .map(|i| (0..interior.len()).filter(|&j| contains(j, i)).count())
+            .collect();
+        // Direct parent = the deepest container (max depth among containers).
+        let direct_parent = |i: usize| -> Option<usize> {
+            (0..interior.len())
+                .filter(|&j| contains(j, i))
+                .max_by_key(|&j| depth[j])
+        };
+        let hole_polys: Vec<Vec<Point2>> = original_holes
+            .iter()
+            .map(|w| sample_wire_loop_uv(w))
+            .filter(|p| p.len() >= 3)
+            .collect();
+
+        let mut result = Vec::new();
+        for i in 0..interior.len() {
+            if !depth[i].is_multiple_of(2) {
+                continue; // odd depth = hole in its container, not a solid region
+            }
+            // Drop a solid region that fills an original hole (air, not material).
+            if hole_polys
+                .iter()
+                .any(|poly| super::classify_2d::point_in_polygon_2d(probes[i], poly))
+            {
+                continue;
+            }
+            let Some(outer_wire) = build_ccw_wire(interior[i]) else {
+                continue;
+            };
+            // Direct children (depth+1, parented to i) become inner wires (the
+            // holes of this solid region). A child that is itself an original
+            // hole still bounds this region, so include it regardless.
+            let mut inner = Vec::new();
+            for j in 0..interior.len() {
+                if depth[j] == depth[i] + 1 && direct_parent(j) == Some(i) {
+                    // Inner wires must wind opposite the outer (CW); build_ccw
+                    // gives CCW, so reverse.
+                    if let Some(mut w) = build_ccw_wire(interior[j]) {
+                        w.reverse();
+                        for e in &mut w {
+                            std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+                            std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+                            e.forward = !e.forward;
+                        }
+                        inner.push(w);
+                    }
+                }
+            }
+            // The region can be annular/non-convex; the classifier seed must lie
+            // in the material, i.e. inside the outer polygon but OUTSIDE every
+            // inner-wire (child) hole. `sample_interior_point` on the outer alone
+            // can land in a child hole (e.g. a perimeter ring's centre sits in
+            // its inner-wall opening), which would misclassify the region.
+            let seed_uv = if inner.is_empty() {
+                probes[i]
+            } else {
+                find_point_outside_holes(&polys[i], &inner)
+            };
+            result.push(SplitSubFace {
+                surface: surface.clone(),
+                outer_wire,
+                inner_wires: inner,
+                reversed,
+                parent: face_id,
+                rank,
+                precomputed_interior: Some(frame.evaluate(seed_uv.x(), seed_uv.y())),
+            });
+        }
+        return (!result.is_empty()).then_some(result);
+    }
+
+    let mut result = Vec::new();
+    for face in interior {
+        let Some(wire) = build_ccw_wire(face) else {
+            continue;
+        };
         result.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: wire,
@@ -1704,6 +1960,35 @@ pub fn split_face_2d(
                 }
             }
         }
+    }
+
+    // Holes-integrated planar arrangement. When `integrate_holes_plane` wove the
+    // hole boundaries into `all_edges`, that list is a complete planar
+    // subdivision (boundary + trimmed sections + split hole edges). With TWO OR
+    // MORE original holes the cut can bridge across the material between them —
+    // the divider-lip fuse onto a compartmented body, where the lip footprint
+    // cuts each divider arm between the compartment openings — and the angular
+    // wire builder fragments that into wrong loops (the under-lip ring and the
+    // exposed divider cross get wound together). The even-odd arrangement
+    // decomposition resolves the nesting correctly there. A SINGLE-hole holed
+    // cap (the shelled wall-cutout rim, one cavity opening) is already
+    // partitioned cleanly by the wire builder and the arrangement's nesting can
+    // pick a worse decomposition, so restrict this path to the multi-hole case.
+    if holes_integrated
+        && is_plane
+        && original_inner_wires.len() >= 2
+        && let Some(result) = arrangement_regions_from_combined(
+            &surface,
+            &all_edges,
+            &original_inner_wires,
+            rank,
+            reversed,
+            face_id,
+            frame,
+            tol.linear,
+        )
+    {
+        return result;
     }
 
     // Geometric crossing/T-junction split. The wire builder under-partitions

@@ -27,10 +27,22 @@
 //! shells with NO interior dividers. Here the failure is specifically the
 //! interior divider-wall-top ↔ lip-bottom reconciliation.
 //!
-//! This guard documents the CURRENT (broken) behavior: the raw GFA fuse is
-//! non-manifold (free edges present) and the production fuse mesh-falls-back
-//! (all-planar, no analytic surfaces). When the divider/lip reconciliation is
-//! fixed, both assertions flip — update them then.
+//! ## Fixed
+//!
+//! The body-top split now extracts the exposed divider cross. A holed planar
+//! cap (the z=23 body top, with the four compartment openings as holes) cut by
+//! the lip-footprint sections that bridge across the divider material between
+//! those holes is decomposed via even-odd hole nesting on the woven planar
+//! arrangement (`integrate_holes_plane` + `arrangement_regions_from_combined`),
+//! so the under-lip ring classifies Inside (dropped) and the divider cross
+//! classifies Outside (kept). The 14 free divider-wall-top edges are gone; the
+//! production fuse is watertight and fully analytic again.
+//!
+//! The raw GFA fuse still leaves 8 free edges — short stubs (z=23 → z≈23.3) at
+//! the four divider-arm/lip-inner-wall junctions, an out-and-back spur in the
+//! LIP inner-wall faces that predates and is independent of the divider-cross
+//! reconciliation (it is present on the plain shelled-cup lip too) and is
+//! healed by the production sew/spur-removal pass.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -92,8 +104,51 @@ fn free_edge_count(topo: &Topology, solid: SolidId) -> usize {
     faces_per_edge.values().filter(|f| f.len() == 1).count()
 }
 
+/// Count of free edges lying wholly at z=23 with both endpoints inside the lip
+/// footprint (±39.25) — the interior divider-cross top edges (the former
+/// 14-free-edge set this fix targets), excluding the lip-wall spur stubs that
+/// climb to z≈23.3.
+fn divider_cross_free_count(topo: &Topology, solid: SolidId) -> usize {
+    type QPoint = (i64, i64, i64);
+    let scale = 1.0e6;
+    let q = |p: brepkit_math::vec::Point3| -> QPoint {
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+    let mut faces_per_edge: HashMap<(QPoint, QPoint), HashSet<FaceId>> = HashMap::new();
+    for fid in solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                let e = topo.edge(oe.edge()).unwrap();
+                let a = q(topo.vertex(e.start()).unwrap().point());
+                let b = q(topo.vertex(e.end()).unwrap().point());
+                let key = if a <= b { (a, b) } else { (b, a) };
+                faces_per_edge.entry(key).or_default().insert(fid);
+            }
+        }
+    }
+    let q23 = (23.0 * scale).round() as i64;
+    let foot = (39.25 * scale).round() as i64;
+    faces_per_edge
+        .iter()
+        .filter(|(key, faces)| {
+            faces.len() == 1
+                && key.0.2 == q23
+                && key.1.2 == q23
+                && key.0.0.abs() <= foot
+                && key.1.0.abs() <= foot
+                && key.0.1.abs() <= foot
+                && key.1.1.abs() <= foot
+        })
+        .count()
+}
+
 #[test]
-fn lip_fuse_onto_compartmented_body_is_currently_non_manifold() {
+fn lip_fuse_onto_compartmented_body_resolves_divider_cross() {
     let mut topo = Topology::new();
     let body = load("lipfuse_cavity2x2_inmem_body.bin", &mut topo);
     let lip = load("lipfuse_cavity2x2_inmem_lip.bin", &mut topo);
@@ -117,20 +172,29 @@ fn lip_fuse_onto_compartmented_body_is_currently_non_manifold() {
     let result = gfa::boolean(&mut topo, RawOp::Fuse, body, lip).unwrap();
     let free = free_edge_count(&topo, result);
 
-    // DOCUMENTED BUG: the raw GFA fuse leaves the interior divider-wall top
-    // edges unreconciled against the lip-bottom annulus → free boundary.
-    // When fixed this must drop to 0; flip the assertion then.
-    assert!(
-        free > 0,
-        "EXPECTED-FAIL guard: lip fuse onto a compartmented body is currently \
-         non-manifold ({free} free edges). If this is now 0, the \
-         divider-wall/lip reconciliation was fixed — flip this assertion to \
-         assert_eq!(free, 0)."
+    // The 14 free divider-wall-top LINE edges at z=23 are gone: no free edge
+    // remains in the interior divider cross (every edge with both endpoints at
+    // z=23 and inside the lip footprint ±39.25 is now shared by two faces).
+    assert_eq!(
+        divider_cross_free_count(&topo, result),
+        0,
+        "the interior divider cross at z=23 must be watertight (was 14 free \
+         LINE edges before the holed-cap split fix)"
+    );
+
+    // The raw GFA still carries the pre-existing LIP-inner-wall out-and-back
+    // spurs (8 short z=23→z≈23.3 stubs at the divider-arm junctions), which the
+    // production sew/spur-removal pass heals (see the production guard below).
+    // This is independent of the divider-cross reconciliation this guard tracks.
+    assert_eq!(
+        free, 8,
+        "raw GFA leaves only the 8 pre-existing lip-inner-wall spur stubs \
+         (the 14 divider-cross edges are resolved); got {free}"
     );
 }
 
 #[test]
-fn lip_fuse_onto_compartmented_body_production_falls_back_to_mesh() {
+fn lip_fuse_onto_compartmented_body_is_watertight_and_analytic() {
     let mut topo = Topology::new();
     let body = load("lipfuse_cavity2x2_inmem_body.bin", &mut topo);
     let lip = load("lipfuse_cavity2x2_inmem_lip.bin", &mut topo);
@@ -138,14 +202,31 @@ fn lip_fuse_onto_compartmented_body_production_falls_back_to_mesh() {
     let result = prod_boolean(&mut topo, ProdOp::Fuse, body, lip).unwrap();
     let faces = solid_faces(&topo, result).unwrap().len();
     let curved = curved_count(&topo, result);
+    let free = free_edge_count(&topo, result);
 
-    // DOCUMENTED BUG: the open shell trips the production mesh fallback, which
-    // re-tessellates to a high all-planar facet count (analytic surfaces lost).
+    // The production fuse is now watertight and fully analytic (no mesh
+    // fallback): the body's corner/divider cylinders and the lip's cone/cylinder
+    // band survive, and the open-shell collapse to a ~228-facet all-planar mesh
+    // is gone. The production sew closes the 8 raw lip-inner-wall spur stubs.
+    assert_eq!(
+        free, 0,
+        "production lip fuse must be watertight, got {free} free"
+    );
     assert!(
-        faces > 150 && curved == 0,
-        "EXPECTED-FAIL guard: production lip fuse onto a compartmented body \
-         currently mesh-falls-back (got {faces} faces, {curved} curved). When \
-         the fuse is fixed this becomes a compact analytic result \
-         (faces < 120, curved >= 32) — update the assertion then."
+        curved >= 32,
+        "production lip fuse must stay analytic (>=32 curved faces), got {curved}"
+    );
+    assert!(
+        faces <= 130,
+        "production lip fuse must be a compact analytic result, got {faces} faces"
+    );
+
+    // Volume sanity: a stacking-lip fuse onto the compartmented bin body is a
+    // solid in the low-2e4 mm^3 range (the mesh fallback collapsed it to ~2.9e3
+    // when the shell went open). Guard a sane positive, non-collapsed volume.
+    let vol = brepkit_operations::measure::solid_volume(&topo, result, 1.0e-7).unwrap();
+    assert!(
+        (20_000.0..30_000.0).contains(&vol),
+        "production fuse volume {vol} out of the expected ~2.4e4 mm^3 range"
     );
 }
