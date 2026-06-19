@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.13](https://github.com/andymai/brepkit/compare/v2.114.12...v2.114.13) (2026-06-19)
+
+
+### Bug Fixes
+
+* **algo:** keep convex boundary arcs whole in plane arrangement (2×2 compartments+scoop fuse) ([#917](https://github.com/andymai/brepkit/issues/917)) ([47259d9](https://github.com/andymai/brepkit/commit/47259d90539afd5b6d0431dd4df8a2309b283d3f))
+
 ## [2.114.12](https://github.com/andymai/brepkit/compare/v2.114.11...v2.114.12) (2026-06-19)
 
 
