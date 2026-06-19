@@ -740,11 +740,17 @@ fn split_plane_face_by_arrangement(
     // farther than `tol` from it keeps the arc a single sub-edge.
     let chord_break_on_arc = |idx: usize, uv: Point2| -> bool {
         let e = &inputs[idx].edge;
+        // `evaluate_with_endpoints` takes the curve's NATIVE parameter (radians
+        // for Circle/Ellipse, knot value for NURBS), not a normalised [0,1].
+        // Sample across the trimmed domain so the probe points lie on the real arc.
+        let (d0, d1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
         (0..=ARR_ARC_SAMPLES)
             .map(|k| {
                 #[allow(clippy::cast_precision_loss)]
-                let t = k as f64 / ARR_ARC_SAMPLES as f64;
-                let p3 = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
+                let f = k as f64 / ARR_ARC_SAMPLES as f64;
+                let p3 =
+                    e.curve_3d
+                        .evaluate_with_endpoints(d0 + (d1 - d0) * f, e.start_3d, e.end_3d);
                 (frame.project(p3) - uv).length()
             })
             .fold(f64::MAX, f64::min)
