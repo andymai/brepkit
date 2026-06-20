@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.17](https://github.com/andymai/brepkit/compare/v2.114.16...v2.114.17) (2026-06-20)
+
+
+### Performance
+
+* **algo:** spatial-hash the builder's O(N²) collinear-split + same-domain passes ([#926](https://github.com/andymai/brepkit/issues/926)) ([5b48f0f](https://github.com/andymai/brepkit/commit/5b48f0f48fb343e5952a6ded13ffcbbbdb584124))
+
 ## [2.114.16](https://github.com/andymai/brepkit/compare/v2.114.15...v2.114.16) (2026-06-20)
 
 
