@@ -997,6 +997,59 @@ fn extrude_half_circle_reversed_edge_volume() {
     );
 }
 
+#[test]
+fn extrude_half_disc_reversed_nurbs_edge_volume() {
+    use brepkit_math::nurbs::fitting::interpolate;
+    use brepkit_math::vec::{Point3, Vec3};
+
+    // Upper half-disc whose arc boundary is a NURBS (interpolated semicircle),
+    // used REVERSED in the wire. Guards the NURBS arm of `reverse_edge_curve`:
+    // a reversed NURBS edge would otherwise leave the translated top edge's
+    // endpoints inconsistent with its curve (the swept side then degenerates).
+    let mut topo = Topology::new();
+    let tol = Tolerance::new();
+    let r = 5.0_f64;
+    let cx = 5.0_f64;
+    // Upper semicircle (0,0) -> (5,5) -> (10,0): angle PI down to 0.
+    let n_pts = 24;
+    let pts: Vec<Point3> = (0..=n_pts)
+        .map(|i| {
+            let angle = std::f64::consts::PI * (1.0 - f64::from(i) / f64::from(n_pts));
+            Point3::new(cx + r * angle.cos(), r * angle.sin(), 0.0)
+        })
+        .collect();
+    let nurbs = interpolate(&pts, 3).unwrap();
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, 0.0), tol.linear));
+    // arc stored (0,0)->(10,0) bulging +y; used reversed so the loop walks
+    // (10,0)->(5,5)->(0,0)->(10,0): the upper half-disc wound CCW.
+    let arc = topo.add_edge(Edge::new(v0, v1, EdgeCurve::NurbsCurve(nurbs)));
+    let line = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![OrientedEdge::new(arc, false), OrientedEdge::new(line, true)],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    // NURBS interpolation of the semicircle carries a small fitting error, so
+    // allow 2% (the bug otherwise degenerates the solid, not a 2% shift).
+    let expected = 0.5 * std::f64::consts::PI * r * r;
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let vol = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 0.02,
+        "reversed-edge half-disc (NURBS) volume {vol:.4} != {expected:.4}"
+    );
+}
+
 /// Regression for #869: extruding an `EdgeCurve::Ellipse` arc must build the
 /// ruled side surface from the edge's TRIMMED arc, not the full ellipse, so
 /// the solid volume matches the half-ellipse swept area (not the full ellipse).
