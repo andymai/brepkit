@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.0](https://github.com/andymai/brepkit/compare/v2.114.20...v2.115.0) (2026-06-20)
+
+
+### Features
+
+* **wasm:** add fuseAll binding (batched balanced fuse + disjoint-merge) ([#934](https://github.com/andymai/brepkit/issues/934)) ([33c2cfc](https://github.com/andymai/brepkit/commit/33c2cfc0982a4f00f169c238df70b7e06ca9ff7f))
+
 ## [2.114.20](https://github.com/andymai/brepkit/compare/v2.114.19...v2.114.20) (2026-06-20)
 
 
