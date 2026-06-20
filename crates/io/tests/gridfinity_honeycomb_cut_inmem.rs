@@ -161,14 +161,46 @@ fn honeycomb_cut_no_longer_throws() {
 }
 
 #[test]
+fn honeycomb_cut_pcut0_is_watertight_and_analytic() {
+    // WIN: the full-footprint honeycomb cutter `pcut0` (whose outer wall is
+    // coincident with the body's ±41.75 outer wall) now produces a WATERTIGHT,
+    // analytic result. Previously its z=23 cap dropped one rounded-corner cell
+    // (free=8, an open shell) because `dedup_collinear_sections` mistook two
+    // ADJACENT PaveBlock fragments of the corner divider wall — meeting end-to-
+    // end at a junction whose shared vertex carried ~1e-3 of float noise — for a
+    // subset/superset pair and deleted the shorter fragment. The cap's corner
+    // cell then had a gap in its boundary and the planar arrangement absorbed it
+    // into a giant overlapping region (dropped at assembly), leaving the cell's
+    // walls free.
+    //
+    // The fix requires a real CONTAINMENT (the overlap spans almost the whole
+    // shorter segment), not a noisy touching overlap, before dropping a section
+    // as a redundant subset — so both adjacent fragments survive and the cell
+    // closes. This is the cascade root: a watertight `pcut0` keeps the production
+    // `operations::boolean` from rejecting the result and mesh-falling-back to an
+    // all-planar body, which then exploded the cost of every subsequent
+    // honeycomb cut.
+    let mut topo = Topology::new();
+    let body = build_wallcut_body(&mut topo);
+    let p = load("a2hcomb_pcut0.bin", &mut topo);
+    let r = gfa::boolean(&mut topo, BooleanOp::Cut, body, p).unwrap();
+    let (free, over) = edge_health(&topo, r);
+    assert_eq!(free, 0, "pcut0 must be watertight (got free={free})");
+    assert_eq!(over, 0, "pcut0 must be manifold (got over-shared={over})");
+    assert!(
+        curved_count(&topo, r) > 0,
+        "pcut0 must stay analytic (corner cylinders/cones preserved), not mesh fallback"
+    );
+}
+
+#[test]
 fn honeycomb_cut_residual_documented() {
-    // DOCUMENTED RESIDUAL: the honeycomb pattern cuts return Ok but leave an
-    // OPEN shell (free edges) — the cap's correct partition introduces vertices
-    // its neighbour analytic faces don't yet share (a cross-face partition-
-    // consistency gap). These free-edge counts pin the current state; a future
-    // cross-face-reconciliation fix should drive them to 0.
+    // DOCUMENTED RESIDUAL: `pcut1..3` (the lip-/NURBS-walled honeycomb cutters)
+    // still return Ok but leave some free edges (an open shell) from a SEPARATE,
+    // pre-existing cause — free edges spread across many z-levels through the
+    // stacking-lip cones and the NURBS honeycomb walls, unrelated to the z=23 cap
+    // dedup fixed for `pcut0`. These ceilings pin the current state.
     let residual_free: &[(&str, usize)] = &[
-        ("a2hcomb_pcut0.bin", 8),
         ("a2hcomb_pcut1.bin", 52),
         ("a2hcomb_pcut2.bin", 35),
         ("a2hcomb_pcut3.bin", 15),
@@ -182,8 +214,7 @@ fn honeycomb_cut_residual_documented() {
         // Upper bound, not exact: `edge_health` quantizes raw 3-D coords, so a
         // last-ULP position difference (e.g. a different FPU on a cross-compiled
         // target) could nudge the count. The qualitative invariant (all cuts
-        // return Ok + manifold) is asserted by `honeycomb_cut_no_longer_throws`;
-        // a cross-face-reconciliation fix should drive these toward 0.
+        // return Ok + manifold) is asserted by `honeycomb_cut_no_longer_throws`.
         assert!(
             free <= expect_free,
             "RESIDUAL: honeycomb {tool} free-edge count {free} exceeds the documented \
