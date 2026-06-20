@@ -675,9 +675,18 @@ fn greedy_outer_loops_nested(loops: &[Vec<OrientedPCurveEdge>], cw_loops: bool) 
     // boundary tolerance).
     let poly_contains = |outer: &[Point2], inner: &[Point2]| -> bool {
         let eps = super::classify_2d::boundary_eps(outer);
-        inner.iter().all(|&v| {
-            super::classify_2d::point_in_polygon_2d(v, outer)
-                || super::classify_2d::distance_to_polygon_boundary(v, outer) <= eps
+        let inside = |p: Point2| {
+            super::classify_2d::point_in_polygon_2d(p, outer)
+                || super::classify_2d::distance_to_polygon_boundary(p, outer) <= eps
+        };
+        // Test each vertex AND each edge midpoint. For a concave `outer`, an
+        // `inner` edge can exit and re-enter with both endpoints inside, so
+        // vertex-only sampling would spuriously report containment.
+        (0..inner.len()).all(|k| {
+            let v = inner[k];
+            let next = inner[(k + 1) % inner.len()];
+            let mid = Point2::new(0.5 * (v.x() + next.x()), 0.5 * (v.y() + next.y()));
+            inside(v) && inside(mid)
         })
     };
     for i in 0..outers.len() {

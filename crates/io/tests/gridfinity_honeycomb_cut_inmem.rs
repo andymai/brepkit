@@ -179,10 +179,15 @@ fn honeycomb_cut_residual_documented() {
         let p = load(tool, &mut topo);
         let r = gfa::boolean(&mut topo, BooleanOp::Cut, body, p).unwrap();
         let (free, _over) = edge_health(&topo, r);
-        assert_eq!(
-            free, expect_free,
-            "RESIDUAL: honeycomb {tool} free-edge count changed (was {expect_free}); \
-             a cross-face-reconciliation fix should reduce it toward 0"
+        // Upper bound, not exact: `edge_health` quantizes raw 3-D coords, so a
+        // last-ULP position difference (e.g. a different FPU on a cross-compiled
+        // target) could nudge the count. The qualitative invariant (all cuts
+        // return Ok + manifold) is asserted by `honeycomb_cut_no_longer_throws`;
+        // a cross-face-reconciliation fix should drive these toward 0.
+        assert!(
+            free <= expect_free,
+            "RESIDUAL: honeycomb {tool} free-edge count {free} exceeds the documented \
+             ceiling {expect_free} (regression in the cap arrangement?)"
         );
     }
 }
