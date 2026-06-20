@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.1](https://github.com/andymai/brepkit/compare/v2.115.0...v2.115.1) (2026-06-20)
+
+
+### Bug Fixes
+
+* **math:** bounded oblique plane-cone conic (was unbounded both-nappe sweep) ([#936](https://github.com/andymai/brepkit/issues/936)) ([f1efd8e](https://github.com/andymai/brepkit/commit/f1efd8e3d849ae78f989fc168c869e45dd110ee6))
+
 ## [2.115.0](https://github.com/andymai/brepkit/compare/v2.114.20...v2.115.0) (2026-06-20)
 
 
