@@ -900,12 +900,59 @@ fn nurbs_arc_extrude_volume() {
     );
 }
 
+/// Extruding a two-edge profile of one circular arc plus a closing diameter
+/// (a half-disk) must orient the cylindrical side face outward, so the swept
+/// volume matches the half-disk × height. This shares the winding-detection
+/// path with the half-ellipse case (#869): a two-vertex loop whose endpoints
+/// alone give zero signed area.
 #[test]
-#[ignore = "known bug #869: extruding an EdgeCurve::Ellipse builds a ruled \
-            NURBS side surface from the FULL ellipse (ellipse_to_nurbs ignores \
-            the edge trim), so solid volume over-counts (81.09 vs 65.45). The \
-            planar cap area is correct; only the swept side surface is wrong. \
-            Fix lives in extrude::side_face_surface (Ellipse arm)."]
+fn extrude_half_circle_face_volume() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::{Point3, Vec3};
+
+    let mut topo = Topology::new();
+    let tol = Tolerance::new();
+    let r = 5.0_f64;
+    // Half-circle arc (0,0) -> (5,5) apex -> (10,0), center (5,0,0), bulging +y.
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, 0.0), tol.linear));
+    let circle = Circle3D::with_axes(
+        Point3::new(5.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        r,
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let arc = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Circle(circle)));
+    let line = topo.add_edge(Edge::new(v1, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![OrientedEdge::new(arc, true), OrientedEdge::new(line, true)],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let expected = 0.5 * std::f64::consts::PI * r * r;
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let vol = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 0.01,
+        "extruded half-circle volume {vol:.4} != {expected:.4}"
+    );
+}
+
+/// Regression for #869: extruding an `EdgeCurve::Ellipse` arc must build the
+/// ruled side surface from the edge's TRIMMED arc, not the full ellipse, so
+/// the solid volume matches the half-ellipse swept area (not the full ellipse).
+#[test]
 fn extrude_half_ellipse_face_volume() {
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_topology::builder::make_ellipse_arc;
@@ -958,7 +1005,12 @@ fn extrude_half_ellipse_face_volume() {
         "half-ellipse cap area {face_area:.4} != {expected:.4}"
     );
     let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
-    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+    // The swept ellipse-arc side surface is geometrically exact (the rational
+    // quadratic ellipse arc is the affine image of a circle arc), so the only
+    // residual is tessellation discretization of the curved side; a fine
+    // deflection converges the divergence-theorem volume to the true 65.45.
+    // (Before the fix the full ellipse was swept, giving 81.09.)
+    let vol = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
     assert!(
         (vol - expected).abs() / expected < 0.01,
         "extruded half-ellipse volume {vol:.4} != {expected:.4}"

@@ -222,6 +222,43 @@ pub fn split_closed_edge(
     Ok(edge_ids)
 }
 
+/// Sample points along a wire's oriented edges for winding detection.
+///
+/// Walking only the wire vertices is unreliable for wires with fewer than
+/// three distinct vertices — notably a two-edge loop of one curved arc plus
+/// one closing line (a half-ellipse or half-circle), whose two endpoints are
+/// collinear and give the Newell normal zero signed area. Sampling the
+/// interior of each curved edge (via its trimmed domain) yields a
+/// non-degenerate polygon that captures the true winding, so the side-face
+/// outward-normal heuristic in [`side_face_surface`] orients correctly.
+fn winding_sample_points(
+    topo: &Topology,
+    oriented: &[OrientedEdge],
+) -> Result<Vec<Point3>, crate::OperationsError> {
+    let mut pts = Vec::with_capacity(oriented.len() * 3);
+    for oe in oriented {
+        let edge = topo.edge(oe.edge())?;
+        let p_start = topo.vertex(edge.start())?.point();
+        let p_end = topo.vertex(edge.end())?.point();
+        let curve = edge.curve();
+        // Sample fractions along the natural edge direction. Reverse them
+        // when the edge is traversed backward so the polygon is walked in
+        // wire order. Lines add only their endpoint; curved edges add
+        // interior samples so the arc's bulge contributes signed area.
+        let fracs: &[f64] = match curve {
+            EdgeCurve::Line => &[0.0],
+            _ => &[0.0, 0.25, 0.5, 0.75],
+        };
+        let (d0, d1) = curve.domain_with_endpoints(p_start, p_end);
+        for &f in fracs {
+            let f = if oe.is_forward() { f } else { 1.0 - f };
+            let t = d0 + (d1 - d0) * f;
+            pts.push(curve.evaluate_with_endpoints(t, p_start, p_end));
+        }
+    }
+    Ok(pts)
+}
+
 /// Extract vertices, create offset (top) vertices and edges for a wire.
 ///
 /// Returns: `(input_verts, input_positions, input_oriented, input_edge_ids,
@@ -435,9 +472,16 @@ fn side_face_surface(
             Ok((FaceSurface::Nurbs(surface), reversed))
         }
         EdgeCurve::Ellipse(ell) => {
-            // Delegate to heal's exact rational ellipse converter.
+            // Build the swept side from the edge's TRIMMED arc, not the full
+            // ellipse. `ellipse_to_nurbs(full)` ignores the edge's start/end
+            // trim, so a ruled surface over it sweeps the whole ellipse and
+            // over-counts volume (#869). Recover the arc's angular domain from
+            // the edge endpoints and build the rational-quadratic NURBS over
+            // just that span (geometry's arc converter is exact at the arc
+            // endpoints, so the side and planar cap share the boundary).
+            let (t_start, t_end) = curve.domain_with_endpoints(p0, p1);
             let nc =
-                brepkit_heal::construct::convert_curve::ellipse_to_nurbs(ell).map_err(|e| {
+                brepkit_geometry::convert::ellipse_to_nurbs(ell, t_start, t_end).map_err(|e| {
                     crate::OperationsError::InvalidInput {
                         reason: format!("ellipse_to_nurbs failed: {e}"),
                     }
@@ -592,8 +636,11 @@ pub fn extrude(
 
     // Detect CW-wound outer wire (e.g. from brepjs polygon approximations).
     // CW winding makes `edge_dir.cross(offset)` point inward instead of outward;
-    // the side-face surface builder uses this to flip side normals.
-    let outer_is_cw = crate::winding::is_cw_winding(&input_positions, &offset);
+    // the side-face surface builder uses this to flip side normals. Sample
+    // along the edges (not just vertices) so a two-edge arc+line loop, whose
+    // two endpoints alone give zero signed area, still winds correctly.
+    let outer_winding_pts = winding_sample_points(topo, &input_oriented)?;
+    let outer_is_cw = crate::winding::is_cw_winding(&outer_winding_pts, &offset);
 
     // Orient the cap-deriving normal by the extrusion direction, NOT the wire
     // winding. The two caps are at the input plane F and the swept plane F+offset;
