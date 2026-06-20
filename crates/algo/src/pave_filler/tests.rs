@@ -805,7 +805,7 @@ fn trace_builder_overlapping_box_fuse() {
     for (i, pair) in sd_pairs.iter().enumerate() {
         eprintln!(
             "  SD[{i}]: A={} B={} same_ori={} contained={}",
-            pair.idx_a, pair.idx_b, pair.same_orientation, pair.b_contained_in_a
+            pair.idx_a, pair.idx_b, pair.same_orientation, pair.geometric_overlap
         );
     }
 
@@ -1060,7 +1060,7 @@ fn trace_builder_z_axis_overlap() {
     for (i, pair) in sd_pairs.iter().enumerate() {
         eprintln!(
             "  SD[{i}]: A={} B={} same_ori={} contained={}",
-            pair.idx_a, pair.idx_b, pair.same_orientation, pair.b_contained_in_a
+            pair.idx_a, pair.idx_b, pair.same_orientation, pair.geometric_overlap
         );
     }
 

@@ -33,10 +33,14 @@ pub struct SameDomainPair {
     /// `true` if the effective oriented normals (surface normal combined
     /// with face reversal) point the same direction, `false` if opposite.
     pub same_orientation: bool,
-    /// `true` if B's face is fully contained within A's boundary.
-    /// For edge-set matched faces, both faces have identical boundaries,
-    /// so this is always `false` (touching, not contained).
-    pub b_contained_in_a: bool,
+    /// `true` if this is a geometric-overlap pair — one face is contained in
+    /// or partially over the other, so the two faces differ in extent. For
+    /// edge-set matched (coextensive) faces both boundaries coincide, so this
+    /// is `false`. Detection signal observed by tests; the BOP selector orders
+    /// the pair via [`Self::representative`] (the larger face) rather than
+    /// reading this flag directly.
+    #[allow(dead_code)]
+    pub geometric_overlap: bool,
     /// Sub-face index of the **larger** face of this pair by projected outer-
     /// wire area (see [`repr_face_area`] — planar faces in their plane,
     /// cylinder/cone faces in `(arc-length, axial)` space), used to keep
@@ -44,7 +48,7 @@ pub struct SameDomainPair {
     ///
     /// For coextensive (edge-set) pairs both faces span the same domain, so
     /// area ties and this is `idx_a` — matching historical behaviour. For a
-    /// geometric-overlap pair (`b_contained_in_a == true`) the two faces have
+    /// geometric-overlap pair (`geometric_overlap == true`) the two faces have
     /// **different extent**, so the larger is chosen by area rather than by
     /// which operand is A; `idx_a` flips with operand order, so an A-only rule
     /// would make the result order-dependent.
@@ -169,8 +173,10 @@ pub fn detect_same_domain<S: BuildHasher>(
     let mut pair_data: HashMap<(usize, usize), bool> = HashMap::new(); // (min,max) → same_orientation
     // Tracks pairs unioned by the geometric containment pass (Step 3b).
     // Cross-rank groups containing such pairs are "overlapping" same-domain
-    // faces, not "touching" — `b_contained_in_a` must be true for them so
-    // `apply_sd_selection` cancels both faces under Cut instead of keeping A.
+    // faces (one face contained in / partially over the other) rather than
+    // exactly coextensive. `geometric_overlap` records this so the BOP selector
+    // can pick the larger face for Fuse and the smaller for Intersect; the two
+    // faces always differ in extent for these pairs.
     let mut geometric_overlap_groups: HashSet<usize> = HashSet::new();
 
     for members in groups.values() {
@@ -319,9 +325,10 @@ pub fn detect_same_domain<S: BuildHasher>(
 
         // True if any pair in this group was unioned by the geometric
         // containment pass. Cross-rank groups flagged here have actual
-        // interior overlap (one face fully contained in another), not just
-        // a shared boundary — `apply_sd_selection` needs `b_contained_in_a`
-        // to be true so Cut cancels both faces instead of keeping A.
+        // interior overlap (one face contained in / partially over another),
+        // not just a shared boundary, so the two faces differ in extent. The
+        // BOP selector uses this to keep the larger face for Fuse and the
+        // smaller for Intersect (see `representative` below).
         let geometric_overlap = geometric_overlap_groups.contains(root);
 
         match (repr_a, repr_b) {
@@ -353,7 +360,7 @@ pub fn detect_same_domain<S: BuildHasher>(
                     idx_a,
                     idx_b,
                     same_orientation,
-                    b_contained_in_a: geometric_overlap,
+                    geometric_overlap,
                     representative,
                 });
 
