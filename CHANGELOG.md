@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.20](https://github.com/andymai/brepkit/compare/v2.114.19...v2.114.20) (2026-06-20)
+
+
+### Bug Fixes
+
+* **operations:** reverse periodic-curve parameterization for reversed extrude edges ([#932](https://github.com/andymai/brepkit/issues/932)) ([cf4935e](https://github.com/andymai/brepkit/commit/cf4935ec40dd443e7b035d37786afb52e215ec1f))
+
 ## [2.114.19](https://github.com/andymai/brepkit/compare/v2.114.18...v2.114.19) (2026-06-20)
 
 
