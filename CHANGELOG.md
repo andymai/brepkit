@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.16](https://github.com/andymai/brepkit/compare/v2.114.15...v2.114.16) (2026-06-20)
+
+
+### Bug Fixes
+
+* **algo:** keep minuend wall for opposite-oriented coincident Cut pair ([#923](https://github.com/andymai/brepkit/issues/923)) ([57fd0b5](https://github.com/andymai/brepkit/commit/57fd0b5cc168966abeb35ed58501a8c6e9974b09))
+
 ## [2.114.15](https://github.com/andymai/brepkit/compare/v2.114.14...v2.114.15) (2026-06-19)
 
 
