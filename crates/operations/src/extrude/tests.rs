@@ -1016,3 +1016,68 @@ fn extrude_half_ellipse_face_volume() {
         "extruded half-ellipse volume {vol:.4} != {expected:.4}"
     );
 }
+
+#[test]
+#[ignore = "reversed periodic-edge extrude: the translated TOP edge (extrude.rs:357) \
+is built with wire-order vertices but a stored-order-parameterized curve, so a reversed \
+ellipse/circle arc samples the complementary sub-arc on the top boundary (vol 98.33 vs \
+65.45). side_face_surface already derives its domain from stored endpoints; the residual \
+top-edge fix is tracked separately (needs a curve-reversal primitive or a top-edge/side-wire \
+orientation rework)."]
+fn extrude_half_ellipse_reversed_edge_volume() {
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::builder::make_ellipse_arc;
+
+    // Same upper-half-ellipse region as `extrude_half_ellipse_face_volume`, but
+    // the arc is traversed REVERSED in the wire. The arc edge's stored start/end
+    // then disagree with wire-traversal order. `side_face_surface` derives its
+    // domain from the stored endpoints (correct), but the translated top edge
+    // still mismatches — see the #[ignore] note above.
+    let mut topo = Topology::new();
+    let center = Point3::new(5.0, 0.0, 0.0);
+    let axis = Vec3::new(0.0, 0.0, -1.0);
+    let ref_dir = Vec3::new(0.0, 1.0, 0.0);
+    let start = Point3::new(0.0, 0.0, 0.0);
+    let end = Point3::new(10.0, 0.0, 0.0);
+    // Up half-ellipse arc, stored (0,0) -> (5,8.333) -> (10,0).
+    let arc = make_ellipse_arc(
+        &mut topo,
+        center,
+        axis,
+        8.333_333_333_333_334,
+        5.0,
+        ref_dir,
+        start,
+        end,
+        1e-7,
+    )
+    .unwrap();
+    let (v0, v1) = {
+        let e = topo.edge(arc).unwrap();
+        (e.start(), e.end())
+    };
+    // Closing diameter line (0,0) -> (10,0); the arc is used reversed, so the
+    // loop walks (10,0) -> (5,8.333) -> (0,0) -> (10,0): the upper region wound CW.
+    let line = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![OrientedEdge::new(arc, false), OrientedEdge::new(line, true)],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let expected = 0.5 * std::f64::consts::PI * 8.333_333_333_333_334 * 5.0;
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let vol = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 0.01,
+        "reversed-edge half-ellipse volume {vol:.4} != {expected:.4}"
+    );
+}

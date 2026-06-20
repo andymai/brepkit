@@ -390,6 +390,11 @@ fn side_face_surface(
     curve: &EdgeCurve,
     p0: Point3,
     p1: Point3,
+    // The edge's STORED start/end (its natural orientation), used to pick the
+    // arc span. `p0`/`p1` are wire-traversal order and may be swapped (reversed
+    // edge), which would select the complementary arc for ellipses/circles.
+    curve_start: Point3,
+    curve_end: Point3,
     offset: Vec3,
     outer_is_cw: bool,
 ) -> Result<(FaceSurface, bool), crate::OperationsError> {
@@ -479,7 +484,7 @@ fn side_face_surface(
             // the edge endpoints and build the rational-quadratic NURBS over
             // just that span (geometry's arc converter is exact at the arc
             // endpoints, so the side and planar cap share the boundary).
-            let (t_start, t_end) = curve.domain_with_endpoints(p0, p1);
+            let (t_start, t_end) = curve.domain_with_endpoints(curve_start, curve_end);
             let nc =
                 brepkit_geometry::convert::ellipse_to_nurbs(ell, t_start, t_end).map_err(|e| {
                     crate::OperationsError::InvalidInput {
@@ -758,8 +763,14 @@ pub fn extrude(
 
         let p0 = input_positions[i];
         let p1 = input_positions[next];
-        let edge_curve = topo.edge(input_edge_ids[i])?.curve().clone();
-        let (surface, reversed) = side_face_surface(&edge_curve, p0, p1, offset, outer_is_cw)?;
+        let (edge_curve, e_start, e_end) = {
+            let e = topo.edge(input_edge_ids[i])?;
+            (e.curve().clone(), e.start(), e.end())
+        };
+        let cs = topo.vertex(e_start)?.point();
+        let ce = topo.vertex(e_end)?.point();
+        let (surface, reversed) =
+            side_face_surface(&edge_curve, p0, p1, cs, ce, offset, outer_is_cw)?;
 
         let side_face = if reversed {
             topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
@@ -811,10 +822,16 @@ pub fn extrude(
 
             let p0 = iwd.positions[i];
             let p1 = iwd.positions[next];
-            let edge_curve = topo.edge(iwd.edge_ids[i])?.curve().clone();
+            let (edge_curve, e_start, e_end) = {
+                let e = topo.edge(iwd.edge_ids[i])?;
+                (e.curve().clone(), e.start(), e.end())
+            };
+            let cs = topo.vertex(e_start)?.point();
+            let ce = topo.vertex(e_end)?.point();
             // Inner wires have flipped winding relative to outer
             let inner_is_cw = !is_cw;
-            let (surface, reversed) = side_face_surface(&edge_curve, p0, p1, offset, inner_is_cw)?;
+            let (surface, reversed) =
+                side_face_surface(&edge_curve, p0, p1, cs, ce, offset, inner_is_cw)?;
 
             let side_face = if reversed {
                 topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
