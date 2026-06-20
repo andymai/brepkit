@@ -20,20 +20,23 @@
 //! operands (a different capture than `gridfinity_wallcut_seq_inmem`, which
 //! uses the same tool but no honeycomb).
 //!
-//! OPEN RESIDUAL (documented, not yet fixed). The honeycomb pattern cut on the
-//! (now watertight) wall-cut body is the NEXT bug, surfaced only now that #923
-//! makes the body it cuts watertight. At the raw GFA level, `pcut0` (a
+//! PARTIAL FIX + RESIDUAL (documented). At the raw GFA level, `pcut0` (a
 //! full-footprint rounded-rect cutter whose outer wall is COINCIDENT with the
-//! body's ±41.75 outer wall) makes the assembler fail outright with
-//! AssemblyFailed "no outer shell found (all shells classified as holes)" —
-//! the #899/#911/#923 coincident-wall family. `pcut1`/`pcut2`/`pcut3` succeed
-//! but leave 15 to 52 free edges (open shells). In-tool this manifests as a
-//! multi-minute hang: `cutAllBisect` retries the failed n-way honeycomb cut by
-//! recursively bisecting (re-running the expensive NURBS-faced `pcut1` each
-//! time), never converging.
+//! body's ±41.75 outer wall) used to make the assembler fail outright with
+//! AssemblyFailed "no outer shell found (all shells classified as holes)" — the
+//! #899/#911/#923 coincident-wall family. That catastrophic failure (the root
+//! of the in-tool hang) is now FIXED: the honeycomb cap (pcut0's z=23 top) is no
+//! longer over-covered by an invalid overlapping wire-builder partition, so
+//! `Cut(body, pcut0)` returns Ok. In-tool this stops the multi-minute hang —
+//! `cutAllBisect` no longer retries a throwing n-way cut by recursively
+//! bisecting (re-running the expensive NURBS-faced `pcut1` each time).
 //!
-//! `honeycomb_cut_residual_documented` pins the CURRENT (broken) behavior so a
-//! future fix is forced to update it (flip the asserts to free=0 / Ok).
+//! `honeycomb_cut_no_longer_throws` locks in that pcut0..3 all return Ok. A
+//! residual remains: the cuts leave some free edges (an open shell), because the
+//! cap's correct partition introduces vertices its NEIGHBOR analytic faces don't
+//! yet share (a cross-face partition-consistency gap, not an assembler failure).
+//! `honeycomb_cut_residual_documented` pins those residual free-edge counts so a
+//! future cross-face-reconciliation fix is forced to update them (toward free=0).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -130,37 +133,56 @@ fn wallcut_step_is_watertight() {
 }
 
 #[test]
-fn honeycomb_cut_residual_documented() {
-    // DOCUMENTED RESIDUAL: the honeycomb pattern cut on the (now watertight)
-    // wall-cut body is broken. pcut0 fails the assembler; the others leave
-    // free edges. This pins the current behavior; a fix must flip these.
-    let mut topo = Topology::new();
-    let body = build_wallcut_body(&mut topo);
-
-    // pcut0: full-footprint coincident-wall cutter → assembler fails.
-    let p0 = load("a2hcomb_pcut0.bin", &mut topo);
-    let r0 = gfa::boolean(&mut topo, BooleanOp::Cut, body, p0);
-    assert!(
-        r0.is_err(),
-        "RESIDUAL: honeycomb pcut0 currently fails the assembler; \
-         a fix should make this Ok + watertight"
-    );
-
-    // pcut1..3: succeed but leave the shell open (free edges).
+fn honeycomb_cut_no_longer_throws() {
+    // WIN: the coincident-wall cap over-coverage that made pcut0 fail the
+    // assembler (AssemblyFailed "all shells classified as holes" — the in-tool
+    // hang root) is fixed. Every honeycomb pattern cut now returns Ok and stays
+    // manifold (over-shared edge count 0); the in-tool `cutAllBisect` no longer
+    // retries a throwing n-way cut, so the multi-minute hang is gone.
     for tool in [
+        "a2hcomb_pcut0.bin",
         "a2hcomb_pcut1.bin",
         "a2hcomb_pcut2.bin",
         "a2hcomb_pcut3.bin",
     ] {
-        let mut t = Topology::new();
-        let b = build_wallcut_body(&mut t);
-        let p = load(tool, &mut t);
-        let r = gfa::boolean(&mut t, BooleanOp::Cut, b, p).unwrap();
-        let (free, _over) = edge_health(&t, r);
+        let mut topo = Topology::new();
+        let body = build_wallcut_body(&mut topo);
+        let p = load(tool, &mut topo);
+        let r = gfa::boolean(&mut topo, BooleanOp::Cut, body, p);
         assert!(
-            free > 0,
-            "RESIDUAL: honeycomb {tool} currently leaves free edges; \
-             a fix should make free=0"
+            r.is_ok(),
+            "{tool} must not fail the assembler: {:?}",
+            r.err()
+        );
+        let solid = r.unwrap();
+        let (_free, over) = edge_health(&topo, solid);
+        assert_eq!(over, 0, "{tool} result must stay manifold (over-shared=0)");
+    }
+}
+
+#[test]
+fn honeycomb_cut_residual_documented() {
+    // DOCUMENTED RESIDUAL: the honeycomb pattern cuts return Ok but leave an
+    // OPEN shell (free edges) — the cap's correct partition introduces vertices
+    // its neighbour analytic faces don't yet share (a cross-face partition-
+    // consistency gap). These free-edge counts pin the current state; a future
+    // cross-face-reconciliation fix should drive them to 0.
+    let residual_free: &[(&str, usize)] = &[
+        ("a2hcomb_pcut0.bin", 8),
+        ("a2hcomb_pcut1.bin", 52),
+        ("a2hcomb_pcut2.bin", 35),
+        ("a2hcomb_pcut3.bin", 15),
+    ];
+    for &(tool, expect_free) in residual_free {
+        let mut topo = Topology::new();
+        let body = build_wallcut_body(&mut topo);
+        let p = load(tool, &mut topo);
+        let r = gfa::boolean(&mut topo, BooleanOp::Cut, body, p).unwrap();
+        let (free, _over) = edge_health(&topo, r);
+        assert_eq!(
+            free, expect_free,
+            "RESIDUAL: honeycomb {tool} free-edge count changed (was {expect_free}); \
+             a cross-face-reconciliation fix should reduce it toward 0"
         );
     }
 }

@@ -630,6 +630,80 @@ fn wire_loops_self_cross(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
     false
 }
 
+/// Whether the greedy wire loops form an INVALID (overlapping) partition: one
+/// OUTER (positive-area) loop's material directly covers another outer loop,
+/// with no hole region between them.
+///
+/// The angular wire builder partitions a plane face into loops, but when the
+/// dividing sections form an incomplete interior boundary (e.g. an open inner
+/// wall ring on a tool cap whose minuend cavity vents through wall cutouts) it
+/// can hand back a partition that is not edge-disjoint: one outer loop traces
+/// the whole face perimeter while sibling outer loops trace sub-regions sitting
+/// in its MATERIAL. Those sub-faces double-cover that area and the assembled
+/// shell goes non-manifold / inverted. The planar-arrangement decomposition is
+/// edge-disjoint by construction, so it should be preferred in that case.
+///
+/// The check must NOT fire for a legitimate material ISLAND — an outer loop that
+/// sits inside a HOLE of a larger outer ring (a washer with a central post: the
+/// outer ring's polygon contains the post, but a hole separates them, so they do
+/// not overlap). The distinguishing test is therefore: an outer loop B is
+/// contained by a larger outer loop A AND there is NO hole (negative) loop H of
+/// the same partition with B ⊆ H ⊆ A. With an intervening hole the configuration
+/// is a valid island; without one, A's material overlaps B.
+///
+/// `cw_loops` flips the area sign for clockwise-wound boundaries so "outer"
+/// (positive effective area) and "hole" (negative) are identified consistently
+/// with the caller.
+fn greedy_outer_loops_nested(loops: &[Vec<OrientedPCurveEdge>], cw_loops: bool) -> bool {
+    // Sampled UV polygon + |effective area| for each loop, split by sign.
+    let mut outers: Vec<(Vec<Point2>, f64)> = Vec::new();
+    let mut holes: Vec<Vec<Point2>> = Vec::new();
+    for wl in loops {
+        let pts = sample_wire_loop_uv(wl);
+        if pts.len() < 3 {
+            continue;
+        }
+        let raw = signed_area_2d(&pts);
+        let eff = if cw_loops { -raw } else { raw };
+        if eff > 0.0 {
+            outers.push((pts, eff));
+        } else if eff < 0.0 {
+            holes.push(pts);
+        }
+    }
+    // `outer`'s polygon contains every sampled vertex of `inner` (within the
+    // boundary tolerance).
+    let poly_contains = |outer: &[Point2], inner: &[Point2]| -> bool {
+        let eps = super::classify_2d::boundary_eps(outer);
+        inner.iter().all(|&v| {
+            super::classify_2d::point_in_polygon_2d(v, outer)
+                || super::classify_2d::distance_to_polygon_boundary(v, outer) <= eps
+        })
+    };
+    for i in 0..outers.len() {
+        for j in 0..outers.len() {
+            // Strict containment: A (i) strictly larger AND geometrically holds
+            // B (j). The area guard makes the relation asymmetric so two
+            // coincident traces do not each "contain" the other.
+            if i == j || outers[i].1 <= outers[j].1 {
+                continue;
+            }
+            if !poly_contains(&outers[i].0, &outers[j].0) {
+                continue;
+            }
+            // Valid island: some hole H sits between A and B (B ⊆ H ⊆ A). Then
+            // A and B do not overlap and this is a legitimate post-in-washer.
+            let separated_by_hole = holes
+                .iter()
+                .any(|h| poly_contains(h, &outers[j].0) && poly_contains(&outers[i].0, h));
+            if !separated_by_hole {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Quantized UV vertex key in the planar arrangement.
 type UvKey = (i64, i64);
 
@@ -2043,11 +2117,16 @@ pub fn split_face_2d(
     // covered by `try_split_crossing_plane_face` (2/4-section X/T/star only), and
     // the angular wire builder hands back a self-crossing loop. Decompose the
     // full arrangement into minimal regions when it yields more regions than the
-    // wire builder, OR when the wire builder's loops self-cross (the arrangement
+    // wire builder, when the wire builder's loops self-cross (the arrangement
     // can replace a broken trace with simple regions even at an equal/lower
-    // count). Lines are exact; in-plane arcs (corner roundings) are preserved via
-    // their true geometry — `split_plane_face_by_arrangement` bails on off-plane
-    // straddle arcs so those faces keep the existing curved paths.
+    // count), OR when the wire builder's loops OVERLAP — one outer loop's
+    // material directly covers another (`greedy_outer_loops_nested`), the
+    // signature of a tool cap whose minuend cavity vents through wall cutouts so
+    // its inner-wall ring is incomplete and the angular builder hands back the
+    // whole perimeter plus sub-regions sitting inside it. Lines are exact;
+    // in-plane arcs (corner roundings) are preserved via their true geometry —
+    // `split_plane_face_by_arrangement` bails on off-plane straddle arcs so those
+    // faces keep the existing curved paths.
     //
     // Skip when the face has un-integrated original holes: the arrangement
     // builds purely from the OUTER boundary + sections and never sees an inner
@@ -2066,7 +2145,9 @@ pub fn split_face_2d(
         && let Some(result) = split_plane_face_by_arrangement(
             &surface, boundary, sections, rank, reversed, face_id, frame, tol.linear,
         )
-        && (result.len() > loops.len() || wire_loops_self_cross(&loops, tol.linear))
+        && (result.len() > loops.len()
+            || wire_loops_self_cross(&loops, tol.linear)
+            || greedy_outer_loops_nested(&loops, cw_loops))
     {
         return result;
     }
