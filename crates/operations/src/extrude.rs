@@ -353,7 +353,16 @@ fn extrude_wire_vertices_with(
     for i in 0..n {
         let next = (i + 1) % n;
         let bottom_curve = topo.edge(edge_ids[i])?.curve().clone();
-        let top_curve = translate_edge_curve(&bottom_curve, offset)?;
+        let mut top_curve = translate_edge_curve(&bottom_curve, offset)?;
+        // The top edge's stored vertices (top_verts[i], top_verts[next]) follow
+        // wire-traversal order. For a reversed edge those are swapped relative
+        // to the curve's parameterization, so a periodic curve (ellipse/circle)
+        // would resolve to the complementary sub-arc — and a NURBS curve's
+        // endpoints would not match the stored vertices. Reverse the
+        // translated curve's parameterization so it stays consistent.
+        if !oriented[i].is_forward() {
+            top_curve = reverse_edge_curve(&top_curve)?;
+        }
         let top_edge = topo.add_edge(Edge::new(top_verts[i], top_verts[next], top_curve));
         top_edge_ids.push(top_edge);
     }
@@ -944,6 +953,58 @@ fn translate_edge_curve(
                     nc.knots().to_vec(),
                     translated_cps,
                     nc.weights().to_vec(),
+                )
+                .map_err(crate::OperationsError::Math)?,
+            )
+        }
+    })
+}
+
+/// Reverse a curve's intrinsic parameterization while preserving its geometry
+/// (same point set, opposite direction).
+///
+/// For a periodic analytic curve (circle/ellipse) the parameter direction is
+/// set by the binormal frame, so negating `normal` and `v_axis` flips
+/// `project` to `-θ`; for a NURBS curve the control net, weights, and (mirrored)
+/// knot vector are reversed. Used when copying an edge whose wire-traversal
+/// order is opposite its stored direction, so the copied edge's endpoints stay
+/// consistent with its curve.
+fn reverse_edge_curve(curve: &EdgeCurve) -> Result<EdgeCurve, crate::OperationsError> {
+    Ok(match curve {
+        EdgeCurve::Line => EdgeCurve::Line,
+        EdgeCurve::Circle(c) => EdgeCurve::Circle(
+            brepkit_math::curves::Circle3D::with_axes(
+                c.center(),
+                -c.normal(),
+                c.radius(),
+                c.u_axis(),
+                -c.v_axis(),
+            )
+            .map_err(crate::OperationsError::Math)?,
+        ),
+        EdgeCurve::Ellipse(e) => EdgeCurve::Ellipse(
+            brepkit_math::curves::Ellipse3D::with_axes(
+                e.center(),
+                -e.normal(),
+                e.semi_major(),
+                e.semi_minor(),
+                e.u_axis(),
+                -e.v_axis(),
+            )
+            .map_err(crate::OperationsError::Math)?,
+        ),
+        EdgeCurve::NurbsCurve(nc) => {
+            let knots = nc.knots();
+            let span = knots[0] + knots[knots.len() - 1];
+            let new_knots: Vec<f64> = knots.iter().rev().map(|&k| span - k).collect();
+            let new_cps: Vec<Point3> = nc.control_points().iter().rev().copied().collect();
+            let new_weights: Vec<f64> = nc.weights().iter().rev().copied().collect();
+            EdgeCurve::NurbsCurve(
+                brepkit_math::nurbs::curve::NurbsCurve::new(
+                    nc.degree(),
+                    new_knots,
+                    new_cps,
+                    new_weights,
                 )
                 .map_err(crate::OperationsError::Math)?,
             )
