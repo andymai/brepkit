@@ -870,6 +870,124 @@ struct EdgeEntry {
     qpair: QPosEdge,
 }
 
+/// Uniform spatial hash over a set of points, for broad-phase "which points
+/// lie near this segment" queries.
+///
+/// [`split_edges_at_collinear_vertices`] otherwise tests every vertex against
+/// every Line edge — O(V·E), which on a body grown by many sequential booleans
+/// (a honeycomb wall) dominates the boolean. A point can only be an interior
+/// cut of a segment if it lies within `snap` of that segment, so bucketing
+/// points by cell and probing only the cells a segment's AABB spans yields the
+/// identical candidate set with O(V + Σ cells-per-segment) work.
+struct PointGrid {
+    inv_cell: f64,
+    buckets: HashMap<(i64, i64, i64), Vec<usize>>,
+}
+
+impl PointGrid {
+    /// Build a grid over `points`, choosing a cell size so the total bucket
+    /// count stays ~O(N): the cube root of the AABB volume per point, but never
+    /// smaller than `min_cell` (the query band) so a segment never has to walk
+    /// an unbounded number of cells.
+    fn new(points: &[Point3], min_cell: f64) -> Self {
+        let cell = Self::choose_cell(points, min_cell);
+        let inv_cell = 1.0 / cell;
+        let mut buckets: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+        for (i, p) in points.iter().enumerate() {
+            buckets
+                .entry(Self::cell_of(*p, inv_cell))
+                .or_default()
+                .push(i);
+        }
+        Self { inv_cell, buckets }
+    }
+
+    fn choose_cell(points: &[Point3], min_cell: f64) -> f64 {
+        let Some(bb) = brepkit_math::aabb::Aabb3::try_from_points(points.iter().copied()) else {
+            return min_cell.max(1.0);
+        };
+        let ext = bb.max - bb.min;
+        let (dx, dy, dz) = (ext.x().abs(), ext.y().abs(), ext.z().abs());
+        // Largest non-degenerate extent sets the scale; aim for ~N cells along
+        // it so the grid is roughly N cells total across the populated region.
+        let span = dx.max(dy).max(dz);
+        #[allow(clippy::cast_precision_loss)]
+        let n = points.len().max(1) as f64;
+        let target = span / n.cbrt().max(1.0);
+        target.max(min_cell).max(f64::MIN_POSITIVE)
+    }
+
+    fn cell_of(p: Point3, inv_cell: f64) -> (i64, i64, i64) {
+        (
+            (p.x() * inv_cell).floor() as i64,
+            (p.y() * inv_cell).floor() as i64,
+            (p.z() * inv_cell).floor() as i64,
+        )
+    }
+
+    /// Indices of points whose cell lies within the segment `[a, b]`'s AABB,
+    /// inflated by `band` (so every point within `band` of the segment is
+    /// included). Conservative: returns a superset of the truly-near points;
+    /// the caller still applies the exact distance test.
+    fn segment_candidates(&self, a: Point3, b: Point3, band: f64) -> Vec<usize> {
+        let lo = Point3::new(a.x().min(b.x()), a.y().min(b.y()), a.z().min(b.z()));
+        let hi = Point3::new(a.x().max(b.x()), a.y().max(b.y()), a.z().max(b.z()));
+        self.box_candidates(lo, hi, band)
+    }
+
+    /// Indices of points whose cell lies within the AABB `[lo, hi]` inflated by
+    /// `band`. The geometric primitive behind [`Self::segment_candidates`]; a
+    /// caller with a curved edge passes the edge's own sampled AABB so the
+    /// query covers the arc's bulge, not just its chord. Returns a superset of
+    /// the truly-near points (exact test still applies downstream).
+    fn box_candidates(&self, lo: Point3, hi: Point3, band: f64) -> Vec<usize> {
+        let lo = Point3::new(lo.x() - band, lo.y() - band, lo.z() - band);
+        let hi = Point3::new(hi.x() + band, hi.y() + band, hi.z() + band);
+        let (clo, chi) = (
+            Self::cell_of(lo, self.inv_cell),
+            Self::cell_of(hi, self.inv_cell),
+        );
+        // Guard against a pathological cell range (a tiny cell size paired with
+        // a long edge): iterating every empty cell would defeat the speedup.
+        // Iterating the populated buckets directly is still a superset and
+        // bounded by the point count, so correctness is preserved.
+        let cells = chi
+            .0
+            .saturating_sub(clo.0)
+            .saturating_add(1)
+            .saturating_mul(chi.1.saturating_sub(clo.1).saturating_add(1))
+            .saturating_mul(chi.2.saturating_sub(clo.2).saturating_add(1));
+        let bucket_budget = i64::try_from(self.buckets.len())
+            .unwrap_or(i64::MAX)
+            .saturating_mul(4);
+        let mut out = Vec::new();
+        if cells > bucket_budget {
+            for (&(cx, cy, cz), list) in &self.buckets {
+                if cx >= clo.0
+                    && cx <= chi.0
+                    && cy >= clo.1
+                    && cy <= chi.1
+                    && cz >= clo.2
+                    && cz <= chi.2
+                {
+                    out.extend_from_slice(list);
+                }
+            }
+            return out;
+        }
+        for cx in clo.0..=chi.0 {
+            for cy in clo.1..=chi.1 {
+                for cz in clo.2..=chi.2 {
+                    if let Some(list) = self.buckets.get(&(cx, cy, cz)) {
+                        out.extend_from_slice(list);
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Rebuild faces whose wires contain zero-length Line edges (quantized
 /// start == end), dropping those edges. Closed curved edges (full circles)
 /// legitimately have coincident endpoints and are kept.
@@ -1236,6 +1354,14 @@ fn split_edges_at_collinear_vertices(
     // Deterministic order for sub-edge allocation.
     line_edges.sort_by_key(|(eid, ..)| eid.index());
 
+    // Index the candidate vertices and bucket them spatially. The cut test
+    // below only accepts a vertex within `snap` of the segment, so probing
+    // just the grid cells the segment's AABB spans yields the same candidate
+    // set as the former full scan of `vert_at`, but in O(near) per edge.
+    let verts: Vec<(VertexId, Point3)> = vert_at.values().copied().collect();
+    let positions: Vec<Point3> = verts.iter().map(|&(_, p)| p).collect();
+    let grid = PointGrid::new(&positions, snap);
+
     let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
     for (eid, sv, ev, sp, ep) in line_edges {
         let dir = ep - sp;
@@ -1244,7 +1370,8 @@ fn split_edges_at_collinear_vertices(
             continue;
         }
         let mut cuts: Vec<(f64, VertexId)> = Vec::new();
-        for &(vid, p) in vert_at.values() {
+        for ci in grid.segment_candidates(sp, ep, snap) {
+            let (vid, p) = verts[ci];
             if (p - sp).length() < snap || (p - ep).length() < snap {
                 continue;
             }
@@ -1261,9 +1388,9 @@ fn split_edges_at_collinear_vertices(
         if cuts.is_empty() {
             continue;
         }
-        // `cuts` is gathered by iterating `vert_at.values()` (a HashMap), so
-        // the `vid` tiebreak makes this a total order — without it, cuts at
-        // equal `t` keep nondeterministic hash order and sub-edge IDs drift.
+        // `cuts` is gathered by iterating grid buckets (a HashMap), so the `vid`
+        // tiebreak makes this a total order — without it, cuts at equal `t` keep
+        // nondeterministic hash order and sub-edge IDs drift.
         cuts.sort_by(|a, b| {
             a.0.total_cmp(&b.0)
                 .then_with(|| a.1.index().cmp(&b.1.index()))
@@ -1419,6 +1546,17 @@ fn split_arc_edges_at_collinear_vertices(
     // Deterministic order for sub-edge allocation.
     arc_edges.sort_by_key(|(eid, ..)| eid.index());
 
+    // Spatially index the candidate vertices: a vertex can only split an arc if
+    // it lies within `snap` of it, so probing the grid cells the arc's AABB
+    // spans yields the same candidate set as scanning all of `vert_at` — but in
+    // O(near) per arc rather than O(V·E). The arc's AABB is bounded by its
+    // endpoints inflated by its sagitta (it can bulge past the chord by up to
+    // the radius), so the band is the radius scale; the grid query is
+    // conservative and the exact on-arc test below still runs per candidate.
+    let verts: Vec<(VertexId, Point3)> = vert_at.values().copied().collect();
+    let positions: Vec<Point3> = verts.iter().map(|&(_, p)| p).collect();
+    let grid = PointGrid::new(&positions, snap);
+
     let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
     for (eid, sv, ev, sp, ep, curve) in arc_edges {
         // Skip closed (full) arcs: start ≈ end means the whole circle/ellipse,
@@ -1451,8 +1589,36 @@ fn split_arc_edges_at_collinear_vertices(
             continue;
         }
 
+        // The arc's true 3D AABB (it bulges past the chord), sampled along the
+        // span, so the spatial query covers every vertex that could lie on it.
+        let mut amin = sp;
+        let mut amax = sp;
+        let arc_samples = ARC_AABB_SAMPLES;
+        for k in 0..=arc_samples {
+            let f = f64::from(k) / f64::from(arc_samples);
+            let a = a0 + (a1 - a0) * f;
+            let q = curve.evaluate_with_endpoints(a, sp, ep);
+            amin = Point3::new(
+                amin.x().min(q.x()),
+                amin.y().min(q.y()),
+                amin.z().min(q.z()),
+            );
+            amax = Point3::new(
+                amax.x().max(q.x()),
+                amax.y().max(q.y()),
+                amax.z().max(q.z()),
+            );
+        }
+        // A sampled min/max can under-cover the arc's bulge between samples by up
+        // to the sagitta of one angular step; inflate the query band by that bound
+        // so the broad phase stays conservative (never prunes a real collinear cut).
+        let step = (a1 - a0) / f64::from(arc_samples);
+        let sagitta = radius_scale * (1.0 - (step * 0.5).cos());
+        let band = snap + sagitta;
+
         let mut cuts: Vec<(f64, VertexId)> = Vec::new();
-        for &(vid, p) in vert_at.values() {
+        for ci in grid.box_candidates(amin, amax, band) {
+            let (vid, p) = verts[ci];
             // Skip the arc's own endpoints.
             if (p - sp).length() < snap || (p - ep).length() < snap {
                 continue;
@@ -1784,6 +1950,11 @@ fn build_edge_face_map(
 
 /// Tolerance for position quantization (matches system linear tolerance).
 const MERGE_TOL: f64 = 1e-7;
+
+/// Samples per arc when building its broad-phase AABB for the collinear-split
+/// query (its bulge is covered by inflating the query band with the per-step
+/// sagitta — see `split_arc_edges_at_collinear_vertices`).
+const ARC_AABB_SAMPLES: u32 = 12;
 
 /// Get all edge keys (quantized position-pair) for a face's wires.
 fn face_edge_keys(topo: &Topology, fid: FaceId) -> Result<Vec<VPair>, AlgoError> {

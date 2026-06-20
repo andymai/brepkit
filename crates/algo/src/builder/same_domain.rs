@@ -219,32 +219,39 @@ pub fn detect_same_domain<S: BuildHasher>(
     // patches that rarely accumulate residue, and a 2D containment test on
     // their parametric domains needs surface-specific handling.
     {
-        let mut planar_indices: Vec<usize> = Vec::new();
+        let mut planar_aabbs: Vec<(usize, brepkit_math::aabb::Aabb3)> = Vec::new();
         for (idx, surf) in surfaces.iter().enumerate() {
-            if matches!(surf, Some(FaceSurface::Plane { .. })) {
-                planar_indices.push(idx);
+            if matches!(surf, Some(FaceSurface::Plane { .. }))
+                && let Some(bb) = face_outer_aabb(topo, sub_faces[idx].face_id)
+            {
+                planar_aabbs.push((idx, bb));
             }
         }
-        for (mi, &i) in planar_indices.iter().enumerate() {
-            for &j in &planar_indices[mi + 1..] {
-                // Cheap surface-match guard first.
-                let same_dir = match (surfaces[i], surfaces[j]) {
-                    (Some(si), Some(sj)) => surfaces_same_domain(si, sj, tol),
-                    _ => None,
-                };
-                let Some(same_dir) = same_dir else { continue };
-                if uf.find(i) == uf.find(j) {
-                    continue; // already grouped
-                }
-                if planar_faces_overlap(topo, sub_faces, i, j, tol) {
-                    uf.union(i, j);
-                    let key = (i.min(j), i.max(j));
-                    pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
-                    // Mark the post-union root so the emission code knows
-                    // this group came from geometric containment, not from
-                    // boundary-identical edge sets.
-                    geometric_overlap_groups.insert(uf.find(i));
-                }
+        // Broad-phase: only test pairs whose AABBs overlap. Two planar faces
+        // that don't share 3D space (expanded by tol for boundary-coincident
+        // outlines) cannot pass `planar_faces_overlap`, so pruning them is
+        // result-preserving while collapsing the former O(n²) scan to
+        // O(near). Candidate pairs come back in ascending (i, j) order — the
+        // same order the nested loop visited — so the union-find sequence (and
+        // hence representative selection) is unchanged.
+        for (i, j) in overlap_candidate_pairs(&planar_aabbs, tol.linear) {
+            // Cheap surface-match guard first.
+            let same_dir = match (surfaces[i], surfaces[j]) {
+                (Some(si), Some(sj)) => surfaces_same_domain(si, sj, tol),
+                _ => None,
+            };
+            let Some(same_dir) = same_dir else { continue };
+            if uf.find(i) == uf.find(j) {
+                continue; // already grouped
+            }
+            if planar_faces_overlap(topo, sub_faces, i, j, tol) {
+                uf.union(i, j);
+                let key = (i.min(j), i.max(j));
+                pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
+                // Mark the post-union root so the emission code knows
+                // this group came from geometric containment, not from
+                // boundary-identical edge sets.
+                geometric_overlap_groups.insert(uf.find(i));
             }
         }
     }
@@ -262,28 +269,33 @@ pub fn detect_same_domain<S: BuildHasher>(
     // the smaller for Intersect, exactly as for the planar geometric-overlap
     // pairs above.
     {
-        let mut analytic_indices: Vec<usize> = Vec::new();
+        let mut analytic_aabbs: Vec<(usize, brepkit_math::aabb::Aabb3)> = Vec::new();
         for (idx, surf) in surfaces.iter().enumerate() {
-            if matches!(surf, Some(FaceSurface::Cylinder(_) | FaceSurface::Cone(_))) {
-                analytic_indices.push(idx);
+            if matches!(surf, Some(FaceSurface::Cylinder(_) | FaceSurface::Cone(_)))
+                && let Some(bb) = face_outer_aabb(topo, sub_faces[idx].face_id)
+            {
+                analytic_aabbs.push((idx, bb));
             }
         }
-        for (mi, &i) in analytic_indices.iter().enumerate() {
-            for &j in &analytic_indices[mi + 1..] {
-                let same_dir = match (surfaces[i], surfaces[j]) {
-                    (Some(si), Some(sj)) => surfaces_same_domain(si, sj, tol),
-                    _ => None,
-                };
-                let Some(same_dir) = same_dir else { continue };
-                if uf.find(i) == uf.find(j) {
-                    continue; // already grouped (e.g. identical edge sets)
-                }
-                if analytic_faces_overlap(topo, sub_faces, i, j, tol) {
-                    uf.union(i, j);
-                    let key = (i.min(j), i.max(j));
-                    pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
-                    geometric_overlap_groups.insert(uf.find(i));
-                }
+        // Broad-phase: as with the planar pass, only test AABB-overlapping
+        // candidate pairs. Two coaxial patches whose 3D AABBs are disjoint
+        // (expanded by tol) cannot share a band, so pruning them preserves the
+        // result. Candidate order is ascending (i, j), matching the former
+        // nested loop, so the union-find sequence is unchanged.
+        for (i, j) in overlap_candidate_pairs(&analytic_aabbs, tol.linear) {
+            let same_dir = match (surfaces[i], surfaces[j]) {
+                (Some(si), Some(sj)) => surfaces_same_domain(si, sj, tol),
+                _ => None,
+            };
+            let Some(same_dir) = same_dir else { continue };
+            if uf.find(i) == uf.find(j) {
+                continue; // already grouped (e.g. identical edge sets)
+            }
+            if analytic_faces_overlap(topo, sub_faces, i, j, tol) {
+                uf.union(i, j);
+                let key = (i.min(j), i.max(j));
+                pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
+                geometric_overlap_groups.insert(uf.find(i));
             }
         }
     }
@@ -1044,6 +1056,145 @@ fn repr_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => analytic_face_param_area(topo, face_id),
         _ => None,
     }
+}
+
+/// Outer-wire AABB of a sub-face, sampled at [`SD_EDGE_SAMPLES`] points per
+/// edge to match the polygons the overlap tests build. Returns `None` when the
+/// wire has no usable points.
+///
+/// Used purely as a broad-phase reject for the geometric-overlap passes: both
+/// [`planar_faces_overlap`] and [`analytic_faces_overlap`] can only return
+/// `true` when the two faces share real 3D area, which requires their AABBs
+/// (expanded by tolerance for boundary-coincident cases) to intersect.
+fn face_outer_aabb(topo: &Topology, face_id: FaceId) -> Option<brepkit_math::aabb::Aabb3> {
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut pts: Vec<brepkit_math::vec::Point3> = Vec::new();
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        // Sample `0..SD_EDGE_SAMPLES` (not `..=`) to match the
+        // `planar_faces_overlap` / `planar_face_area` polygons exactly: the next
+        // edge's `frac=0` already covers each shared vertex, so this drops the
+        // redundant per-vertex duplicate without changing the AABB.
+        for k in 0..SD_EDGE_SAMPLES {
+            #[allow(clippy::cast_precision_loss)]
+            let frac = k as f64 / SD_EDGE_SAMPLES as f64;
+            let frac = if oe.is_forward() { frac } else { 1.0 - frac };
+            pts.push(super::pcurve_compute::evaluate_edge_at_t(
+                edge.curve(),
+                sp,
+                ep,
+                frac,
+            ));
+        }
+    }
+    brepkit_math::aabb::Aabb3::try_from_points(pts)
+}
+
+/// Generate the spatially-overlapping candidate pairs among `indices` using a
+/// uniform grid over the faces' (tolerance-expanded) AABBs.
+///
+/// Each face is inserted into every grid cell its expanded AABB touches; any
+/// two faces that ever land in the same cell become a candidate pair (emitted
+/// once, with `i < j` in original-index order, deduplicated). Faces whose AABBs
+/// never share a cell cannot overlap, so they are never tested — turning the
+/// former all-pairs O(n²) scan into O(n + candidate pairs). The pair set is a
+/// superset of the truly-overlapping pairs; the caller still runs the exact
+/// `*_faces_overlap` test on each.
+fn overlap_candidate_pairs(
+    aabbs: &[(usize, brepkit_math::aabb::Aabb3)],
+    margin: f64,
+) -> Vec<(usize, usize)> {
+    if aabbs.len() < 2 {
+        return Vec::new();
+    }
+    // Cell size: the cube root of the per-face AABB volume budget across the
+    // populated region, never below the average face extent, so a face spans a
+    // bounded number of cells.
+    let mut union = aabbs[0].1;
+    let mut ext_sum = 0.0_f64;
+    for &(_, bb) in aabbs {
+        union = union.union(bb);
+        let e = bb.max - bb.min;
+        ext_sum += e.x().abs().max(e.y().abs()).max(e.z().abs());
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let avg_ext = ext_sum / aabbs.len() as f64;
+    let span = {
+        let e = union.max - union.min;
+        e.x().abs().max(e.y().abs()).max(e.z().abs())
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let n = aabbs.len() as f64;
+    let cell = avg_ext
+        .max(span / n.cbrt().max(1.0))
+        .max(margin)
+        .max(f64::MIN_POSITIVE);
+    let inv = 1.0 / cell;
+    let cell_of = |c: f64| (c * inv).floor() as i64;
+
+    let mut buckets: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    let mut pairs: HashSet<(usize, usize)> = HashSet::new();
+    // A face whose expanded AABB spans more cells than this would cost O(cells)
+    // to grid (a broad wall patch among many tiny facets); above it, AABB-test
+    // the face against all faces directly instead — mirrors PointGrid's guard.
+    let cell_budget = i64::try_from(aabbs.len())
+        .unwrap_or(i64::MAX)
+        .saturating_mul(4)
+        .max(64);
+    for &(idx, bb) in aabbs {
+        let e = bb.expanded(margin);
+        let (lo, hi) = (e.min, e.max);
+        let (cx0, cx1) = (cell_of(lo.x()), cell_of(hi.x()));
+        let (cy0, cy1) = (cell_of(lo.y()), cell_of(hi.y()));
+        let (cz0, cz1) = (cell_of(lo.z()), cell_of(hi.z()));
+        let cells = cx1
+            .saturating_sub(cx0)
+            .saturating_add(1)
+            .saturating_mul(cy1.saturating_sub(cy0).saturating_add(1))
+            .saturating_mul(cz1.saturating_sub(cz0).saturating_add(1));
+        if cells > cell_budget {
+            // Candidate set stays a superset of true overlaps (the narrow phase
+            // filters and pairs are sorted before union-find), so the same-domain
+            // result is unchanged — only the cost path differs.
+            for &(jdx, jbb) in aabbs {
+                if jdx != idx && e.intersects(jbb.expanded(margin)) {
+                    let (a, b) = if jdx < idx { (jdx, idx) } else { (idx, jdx) };
+                    pairs.insert((a, b));
+                }
+            }
+            continue;
+        }
+        for cx in cx0..=cx1 {
+            for cy in cy0..=cy1 {
+                for cz in cz0..=cz1 {
+                    let bucket = buckets.entry((cx, cy, cz)).or_default();
+                    for &other in bucket.iter() {
+                        let (a, b) = if other < idx {
+                            (other, idx)
+                        } else {
+                            (idx, other)
+                        };
+                        if a != b {
+                            pairs.insert((a, b));
+                        }
+                    }
+                    bucket.push(idx);
+                }
+            }
+        }
+    }
+    let mut out: Vec<(usize, usize)> = pairs.into_iter().collect();
+    // Deterministic order so union-find sequencing (and thus representative
+    // selection) is reproducible regardless of HashSet iteration order.
+    out.sort_unstable();
+    out
 }
 
 /// Quantize a 3D point to integer grid coordinates.
