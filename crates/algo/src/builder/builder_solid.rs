@@ -951,9 +951,12 @@ impl PointGrid {
         // a long edge): iterating every empty cell would defeat the speedup.
         // Iterating the populated buckets directly is still a superset and
         // bounded by the point count, so correctness is preserved.
-        let cells = (chi.0 - clo.0 + 1)
-            .saturating_mul(chi.1 - clo.1 + 1)
-            .saturating_mul(chi.2 - clo.2 + 1);
+        let cells = chi
+            .0
+            .saturating_sub(clo.0)
+            .saturating_add(1)
+            .saturating_mul(chi.1.saturating_sub(clo.1).saturating_add(1))
+            .saturating_mul(chi.2.saturating_sub(clo.2).saturating_add(1));
         let bucket_budget = i64::try_from(self.buckets.len())
             .unwrap_or(i64::MAX)
             .saturating_mul(4);
@@ -1606,9 +1609,15 @@ fn split_arc_edges_at_collinear_vertices(
                 amax.z().max(q.z()),
             );
         }
+        // A sampled min/max can under-cover the arc's bulge between samples by up
+        // to the sagitta of one angular step; inflate the query band by that bound
+        // so the broad phase stays conservative (never prunes a real collinear cut).
+        let step = (a1 - a0) / f64::from(arc_samples);
+        let sagitta = radius_scale * (1.0 - (step * 0.5).cos());
+        let band = snap + sagitta;
 
         let mut cuts: Vec<(f64, VertexId)> = Vec::new();
-        for ci in grid.box_candidates(amin, amax, snap) {
+        for ci in grid.box_candidates(amin, amax, band) {
             let (vid, p) = verts[ci];
             // Skip the arc's own endpoints.
             if (p - sp).length() < snap || (p - ep).length() < snap {

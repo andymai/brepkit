@@ -1078,7 +1078,11 @@ fn face_outer_aabb(topo: &Topology, face_id: FaceId) -> Option<brepkit_math::aab
             continue;
         };
         let (sp, ep) = (sv.point(), ev.point());
-        for k in 0..=SD_EDGE_SAMPLES {
+        // Sample `0..SD_EDGE_SAMPLES` (not `..=`) to match the
+        // `planar_faces_overlap` / `planar_face_area` polygons exactly: the next
+        // edge's `frac=0` already covers each shared vertex, so this drops the
+        // redundant per-vertex duplicate without changing the AABB.
+        for k in 0..SD_EDGE_SAMPLES {
             #[allow(clippy::cast_precision_loss)]
             let frac = k as f64 / SD_EDGE_SAMPLES as f64;
             let frac = if oe.is_forward() { frac } else { 1.0 - frac };
