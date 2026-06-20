@@ -161,30 +161,28 @@ fn apply_sd_selection(
     for pair in sd_pairs {
         let sf_a = &sub_faces[pair.idx_a];
 
-        // Distinguish touching (face on boundary) from overlapping
-        // (face inside opposing solid). Uses AABB containment check
-        // from same_domain (deterministic).
-        let is_touching = !pair.b_contained_in_a;
-
         if same_ori_needed == pair.same_orientation {
             // Orientations match what the operation needs:
             // - Fuse + same-ori: keep the larger (containing) face for a
             //   containment pair, A for a coextensive pair
             // - Intersect + same-ori: keep the smaller (contained) face for a
             //   containment pair, A for a coextensive pair
-            // - Cut + opposite-ori: keep A only when the faces merely touch
-            //   on the boundary; discard both when A overlaps B's interior
+            // - Cut + opposite-ori: keep A. Opposite orientation means the
+            //   minuend's material and the tool's material lie on OPPOSITE
+            //   sides of the shared plane (the faces abut back-to-back), so the
+            //   cut removes nothing at A's plane and A stays a genuine result
+            //   boundary. This holds whether the faces are coextensive
+            //   (touching) or one is contained in the other: a smaller body
+            //   wall coincident with a larger tool face (e.g. two wall cutouts
+            //   that both reach the same back-plane, where an earlier cut's
+            //   back wall sits inside the next tool's coincident face) is the
+            //   exterior of the combined cut and must survive. Discarding it
+            //   leaves that boundary open (a free-edged, non-watertight shell).
             if op == BooleanOp::Cut {
-                if is_touching {
-                    // Touching: A's face is on the exterior — keep it. Cut is
-                    // asymmetric (A is the minuend), so A is always the correct
-                    // exterior representative — no geometry-based pick needed.
-                    selected.push(SelectedFace {
-                        face_id: sf_a.face_id,
-                        reversed: false,
-                    });
-                }
-                // Overlapping: both faces cancel — discard both
+                selected.push(SelectedFace {
+                    face_id: sf_a.face_id,
+                    reversed: false,
+                });
                 continue;
             }
             // Fuse/Intersect with matching orientation: a same-oriented

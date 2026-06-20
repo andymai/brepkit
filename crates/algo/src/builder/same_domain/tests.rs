@@ -120,9 +120,9 @@ fn adjacent_coplanar_faces_not_duplicates() {
     );
 }
 
-/// Cross-rank geometric containment should set `b_contained_in_a=true`
-/// so `apply_sd_selection` cancels the pair under Cut. Regression for
-/// the P1 review comment on the original PR.
+/// Cross-rank geometric containment should set `b_contained_in_a=true`,
+/// marking the pair as a different-extent overlap so the BOP selector orders
+/// it by area. Regression for the P1 review comment on the original PR.
 #[test]
 fn cross_rank_geometric_containment_marks_overlapping() {
     let mut topo = Topology::new();
@@ -161,7 +161,7 @@ fn cross_rank_geometric_containment_marks_overlapping() {
     assert_eq!(result.pairs.len(), 1, "expected one cross-rank SD pair");
     assert!(
         result.pairs[0].b_contained_in_a,
-        "geometric containment must set b_contained_in_a=true so Cut cancels both"
+        "geometric containment must set b_contained_in_a=true (different-extent overlap pair)"
     );
 }
 
@@ -260,7 +260,7 @@ fn cross_rank_partial_overlap_marks_overlapping() {
     );
     assert!(
         result.pairs[0].b_contained_in_a,
-        "geometric overlap must set b_contained_in_a=true so Cut cancels both"
+        "geometric overlap must set b_contained_in_a=true (different-extent overlap pair)"
     );
 }
 
