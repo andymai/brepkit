@@ -242,6 +242,14 @@ fn exact_plane_cone(
     // near-parabolic regime on the robust sampled path.
     if a_coeff < -1e-9 {
         let abs_a = -a_coeff; // = k − p² > 0
+        // Real-nappe guard: in the ellipse regime n·g(u) keeps constant sign(c),
+        // so v = e/(n·g) ≥ 0 only when e and c share a sign. When e·c < 0 the
+        // plane is offset to the far side of the apex from the cone's opening —
+        // the section lies entirely on the phantom nappe, so there is no real
+        // curve (RHS below is positive regardless of sign, so it can't catch this).
+        if e * c < 0.0 {
+            return Ok(vec![]);
+        }
         // |A|(s − s_c)² + k·t² = RHS, with s_c = ecp/|A| and
         // RHS = e²·k·(1−k)/|A| (always > 0 for a real ellipse).
         let s_c = e * c * p / abs_a;
@@ -2234,6 +2242,27 @@ mod tests {
         );
         // The ellipse straddles z=5; with the 0.3 tilt the z-extent stays modest.
         assert_on_plane_and_cone(&curves, &cone, n, d, (0.0, 12.0));
+    }
+
+    #[test]
+    fn oblique_plane_cone_wrong_nappe_is_empty() {
+        // Same ellipse-regime plane as above, but offset to the FAR side of the
+        // apex (z=-5). The +z cone's real (v≥0) nappe is not met — only the
+        // phantom v<0 nappe — so the result must be EMPTY, not a phantom ellipse.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let n = Vec3::new(0.3, 0.0, 1.0).normalize().unwrap();
+        let d = n.z() * -5.0;
+        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        assert!(
+            curves.is_empty(),
+            "plane on the phantom-nappe side must yield no real curve, got {}",
+            curves.len()
+        );
     }
 
     #[test]
