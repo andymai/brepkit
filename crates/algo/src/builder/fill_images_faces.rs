@@ -1937,28 +1937,45 @@ fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
                 continue;
             }
 
-            // Collinear and on the same infinite line, but possibly DISJOINT:
-            // two notches on opposite walls cut the same rim along the same
-            // x = ±cut_hw line, yet their cut segments sit at opposite ends of
-            // the face and must both survive. Only treat the shorter section as
-            // a redundant subset when its span actually OVERLAPS the longer one
-            // (a coplanar inner-region edge nested in the full-face FF edge).
+            // Collinear and on the same infinite line, but possibly DISJOINT or
+            // merely ADJACENT:
+            //  - DISJOINT: two notches on opposite walls cut the same rim along
+            //    the same x = ±cut_hw line, yet their cut segments sit at
+            //    opposite ends of the face and must both survive.
+            //  - ADJACENT: two PaveBlock fragments of one wall meeting end-to-end
+            //    at a shared junction vertex (e.g. a wall split into two faces by
+            //    a wall cutout). The junction carries sub-tolerance float noise,
+            //    so the two intervals overlap by a tiny sliver (~1e-3, well above
+            //    the 1e-7 linear tol) — but neither is a subset of the other and
+            //    dropping the shorter one deletes a genuine boundary piece (the
+            //    honeycomb-cut cap corner cell then never closes → open shell).
+            // Only treat the shorter section as a redundant subset when it is
+            // (nearly) FULLY CONTAINED in the longer one (a coplanar inner-region
+            // edge nested in the full-face FF edge): the overlap must cover
+            // essentially the whole shorter segment, not just a junction sliver.
             // Project both segments onto the shared line and compare intervals.
             let proj = |p: Point3, origin: Point3| (p - origin).dot(dj_unit);
             let (ia0, ia1) = (proj(si.start, sj.start), proj(si.end, sj.start));
             let (ib0, ib1) = (proj(sj.start, sj.start), proj(sj.end, sj.start));
             let (ia_lo, ia_hi) = (ia0.min(ia1), ia0.max(ia1));
             let (ib_lo, ib_hi) = (ib0.min(ib1), ib0.max(ib1));
-            // Overlap length of the two 1D intervals; require a real (not just
-            // touching) overlap before either can be a subset of the other.
             let overlap = ia_hi.min(ib_hi) - ia_lo.max(ib_lo);
             if overlap <= tol {
                 continue;
             }
 
-            // Overlapping collinear sections. Remove the shorter one.
             let len_i = (si.end - si.start).length();
             let len_j = (sj.end - sj.start).length();
+            let shorter_len = len_i.min(len_j);
+            // Containment guard: the shorter segment is a redundant subset only
+            // when the overlap spans (almost) its entire length. An adjacent pair
+            // sharing a noisy junction overlaps by far less than the shorter
+            // length, so it falls through and both survive.
+            if overlap < shorter_len - tol * 10.0 {
+                continue;
+            }
+
+            // Overlapping collinear sections, shorter fully contained — remove it.
             if len_i < len_j - tol {
                 to_remove[i] = true;
             } else if len_j < len_i - tol {
