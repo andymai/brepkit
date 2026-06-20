@@ -222,6 +222,43 @@ pub fn split_closed_edge(
     Ok(edge_ids)
 }
 
+/// Sample points along a wire's oriented edges for winding detection.
+///
+/// Walking only the wire vertices is unreliable for wires with fewer than
+/// three distinct vertices — notably a two-edge loop of one curved arc plus
+/// one closing line (a half-ellipse or half-circle), whose two endpoints are
+/// collinear and give the Newell normal zero signed area. Sampling the
+/// interior of each curved edge (via its trimmed domain) yields a
+/// non-degenerate polygon that captures the true winding, so the side-face
+/// outward-normal heuristic in [`side_face_surface`] orients correctly.
+fn winding_sample_points(
+    topo: &Topology,
+    oriented: &[OrientedEdge],
+) -> Result<Vec<Point3>, crate::OperationsError> {
+    let mut pts = Vec::with_capacity(oriented.len() * 3);
+    for oe in oriented {
+        let edge = topo.edge(oe.edge())?;
+        let p_start = topo.vertex(edge.start())?.point();
+        let p_end = topo.vertex(edge.end())?.point();
+        let curve = edge.curve();
+        // Sample fractions along the natural edge direction. Reverse them
+        // when the edge is traversed backward so the polygon is walked in
+        // wire order. Lines add only their endpoint; curved edges add
+        // interior samples so the arc's bulge contributes signed area.
+        let fracs: &[f64] = match curve {
+            EdgeCurve::Line => &[0.0],
+            _ => &[0.0, 0.25, 0.5, 0.75],
+        };
+        let (d0, d1) = curve.domain_with_endpoints(p_start, p_end);
+        for &f in fracs {
+            let f = if oe.is_forward() { f } else { 1.0 - f };
+            let t = d0 + (d1 - d0) * f;
+            pts.push(curve.evaluate_with_endpoints(t, p_start, p_end));
+        }
+    }
+    Ok(pts)
+}
+
 /// Extract vertices, create offset (top) vertices and edges for a wire.
 ///
 /// Returns: `(input_verts, input_positions, input_oriented, input_edge_ids,
@@ -353,6 +390,11 @@ fn side_face_surface(
     curve: &EdgeCurve,
     p0: Point3,
     p1: Point3,
+    // The edge's STORED start/end (its natural orientation), used to pick the
+    // arc span. `p0`/`p1` are wire-traversal order and may be swapped (reversed
+    // edge), which would select the complementary arc for ellipses/circles.
+    curve_start: Point3,
+    curve_end: Point3,
     offset: Vec3,
     outer_is_cw: bool,
 ) -> Result<(FaceSurface, bool), crate::OperationsError> {
@@ -435,9 +477,16 @@ fn side_face_surface(
             Ok((FaceSurface::Nurbs(surface), reversed))
         }
         EdgeCurve::Ellipse(ell) => {
-            // Delegate to heal's exact rational ellipse converter.
+            // Build the swept side from the edge's TRIMMED arc, not the full
+            // ellipse. `ellipse_to_nurbs(full)` ignores the edge's start/end
+            // trim, so a ruled surface over it sweeps the whole ellipse and
+            // over-counts volume (#869). Recover the arc's angular domain from
+            // the edge endpoints and build the rational-quadratic NURBS over
+            // just that span (geometry's arc converter is exact at the arc
+            // endpoints, so the side and planar cap share the boundary).
+            let (t_start, t_end) = curve.domain_with_endpoints(curve_start, curve_end);
             let nc =
-                brepkit_heal::construct::convert_curve::ellipse_to_nurbs(ell).map_err(|e| {
+                brepkit_geometry::convert::ellipse_to_nurbs(ell, t_start, t_end).map_err(|e| {
                     crate::OperationsError::InvalidInput {
                         reason: format!("ellipse_to_nurbs failed: {e}"),
                     }
@@ -592,8 +641,11 @@ pub fn extrude(
 
     // Detect CW-wound outer wire (e.g. from brepjs polygon approximations).
     // CW winding makes `edge_dir.cross(offset)` point inward instead of outward;
-    // the side-face surface builder uses this to flip side normals.
-    let outer_is_cw = crate::winding::is_cw_winding(&input_positions, &offset);
+    // the side-face surface builder uses this to flip side normals. Sample
+    // along the edges (not just vertices) so a two-edge arc+line loop, whose
+    // two endpoints alone give zero signed area, still winds correctly.
+    let outer_winding_pts = winding_sample_points(topo, &input_oriented)?;
+    let outer_is_cw = crate::winding::is_cw_winding(&outer_winding_pts, &offset);
 
     // Orient the cap-deriving normal by the extrusion direction, NOT the wire
     // winding. The two caps are at the input plane F and the swept plane F+offset;
@@ -711,8 +763,14 @@ pub fn extrude(
 
         let p0 = input_positions[i];
         let p1 = input_positions[next];
-        let edge_curve = topo.edge(input_edge_ids[i])?.curve().clone();
-        let (surface, reversed) = side_face_surface(&edge_curve, p0, p1, offset, outer_is_cw)?;
+        let (edge_curve, e_start, e_end) = {
+            let e = topo.edge(input_edge_ids[i])?;
+            (e.curve().clone(), e.start(), e.end())
+        };
+        let cs = topo.vertex(e_start)?.point();
+        let ce = topo.vertex(e_end)?.point();
+        let (surface, reversed) =
+            side_face_surface(&edge_curve, p0, p1, cs, ce, offset, outer_is_cw)?;
 
         let side_face = if reversed {
             topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
@@ -764,10 +822,16 @@ pub fn extrude(
 
             let p0 = iwd.positions[i];
             let p1 = iwd.positions[next];
-            let edge_curve = topo.edge(iwd.edge_ids[i])?.curve().clone();
+            let (edge_curve, e_start, e_end) = {
+                let e = topo.edge(iwd.edge_ids[i])?;
+                (e.curve().clone(), e.start(), e.end())
+            };
+            let cs = topo.vertex(e_start)?.point();
+            let ce = topo.vertex(e_end)?.point();
             // Inner wires have flipped winding relative to outer
             let inner_is_cw = !is_cw;
-            let (surface, reversed) = side_face_surface(&edge_curve, p0, p1, offset, inner_is_cw)?;
+            let (surface, reversed) =
+                side_face_surface(&edge_curve, p0, p1, cs, ce, offset, inner_is_cw)?;
 
             let side_face = if reversed {
                 topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
