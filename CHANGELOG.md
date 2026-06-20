@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.18](https://github.com/andymai/brepkit/compare/v2.114.17...v2.114.18) (2026-06-20)
+
+
+### Bug Fixes
+
+* **algo:** require real containment in dedup_collinear_sections (honeycomb cap watertight) ([#928](https://github.com/andymai/brepkit/issues/928)) ([f772f86](https://github.com/andymai/brepkit/commit/f772f86e4093ef5129a926c99625f3ec53074d3e))
+
 ## [2.114.17](https://github.com/andymai/brepkit/compare/v2.114.16...v2.114.17) (2026-06-20)
 
 
