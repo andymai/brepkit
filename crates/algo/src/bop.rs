@@ -305,7 +305,7 @@ mod tests {
             idx_a: 5,
             idx_b: 10,
             same_orientation: true,
-            b_contained_in_a: false,
+            geometric_overlap: false,
             representative: 5,
         }];
         // Should not panic — out-of-bounds pairs are skipped
@@ -377,7 +377,7 @@ mod tests {
             idx_a: 0,
             idx_b: 1,
             same_orientation: true,
-            b_contained_in_a: true,
+            geometric_overlap: true,
             representative: 0,
         }];
 
@@ -416,7 +416,7 @@ mod tests {
             idx_a: 0,
             idx_b: 1,
             same_orientation: true,
-            b_contained_in_a: true,
+            geometric_overlap: true,
             representative: 1,
         }];
 

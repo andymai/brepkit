@@ -1,5 +1,6 @@
 //! Faithful regression guard: sequential wall-cutout cuts on a 2×1-compartment
-//! bin WITH stacking lip leave free edges (non-watertight).
+//! bin WITH stacking lip stay watertight. Before the #923 fix the second cut
+//! dropped a contained back-wall and left free edges (the body mesh-fell-back).
 //!
 //! Operands captured from the live gridfinity tool (bin params: 2×2 width/depth,
 //! height 4, 2×1 compartments, stacking lip, honeycomb wall pattern, four

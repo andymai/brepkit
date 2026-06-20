@@ -120,7 +120,7 @@ fn adjacent_coplanar_faces_not_duplicates() {
     );
 }
 
-/// Cross-rank geometric containment should set `b_contained_in_a=true`,
+/// Cross-rank geometric containment should set `geometric_overlap=true`,
 /// marking the pair as a different-extent overlap so the BOP selector orders
 /// it by area. Regression for the P1 review comment on the original PR.
 #[test]
@@ -160,8 +160,8 @@ fn cross_rank_geometric_containment_marks_overlapping() {
     );
     assert_eq!(result.pairs.len(), 1, "expected one cross-rank SD pair");
     assert!(
-        result.pairs[0].b_contained_in_a,
-        "geometric containment must set b_contained_in_a=true (different-extent overlap pair)"
+        result.pairs[0].geometric_overlap,
+        "geometric containment must set geometric_overlap=true (different-extent overlap pair)"
     );
 }
 
@@ -259,8 +259,8 @@ fn cross_rank_partial_overlap_marks_overlapping() {
         "partially-overlapping coplanar cross-rank faces must be paired"
     );
     assert!(
-        result.pairs[0].b_contained_in_a,
-        "geometric overlap must set b_contained_in_a=true (different-extent overlap pair)"
+        result.pairs[0].geometric_overlap,
+        "geometric overlap must set geometric_overlap=true (different-extent overlap pair)"
     );
 }
 
@@ -786,7 +786,7 @@ fn coaxial_cone_eighth_in_quarter_pairs() {
         1,
         "coaxial cone eighth-in-quarter must form one cross-rank SD pair"
     );
-    assert!(result.pairs[0].b_contained_in_a);
+    assert!(result.pairs[0].geometric_overlap);
     assert_eq!(
         result.pairs[0].representative, 1,
         "the larger quarter cone patch must be the representative"
@@ -883,7 +883,7 @@ fn coaxial_cylinder_eighth_in_quarter_pairs() {
     );
     let p = &result.pairs[0];
     assert!(
-        p.b_contained_in_a,
+        p.geometric_overlap,
         "an overlap (not edge-set) pair must be flagged as a containment/overlap"
     );
     // The quarter (idx 1, rank B) is larger and must be the representative.

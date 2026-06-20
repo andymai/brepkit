@@ -40,7 +40,7 @@ pub struct SameDomainPair {
     /// the pair via [`Self::representative`] (the larger face) rather than
     /// reading this flag directly.
     #[allow(dead_code)]
-    pub b_contained_in_a: bool,
+    pub geometric_overlap: bool,
     /// Sub-face index of the **larger** face of this pair by projected outer-
     /// wire area (see [`repr_face_area`] — planar faces in their plane,
     /// cylinder/cone faces in `(arc-length, axial)` space), used to keep
@@ -48,7 +48,7 @@ pub struct SameDomainPair {
     ///
     /// For coextensive (edge-set) pairs both faces span the same domain, so
     /// area ties and this is `idx_a` — matching historical behaviour. For a
-    /// geometric-overlap pair (`b_contained_in_a == true`) the two faces have
+    /// geometric-overlap pair (`geometric_overlap == true`) the two faces have
     /// **different extent**, so the larger is chosen by area rather than by
     /// which operand is A; `idx_a` flips with operand order, so an A-only rule
     /// would make the result order-dependent.
@@ -174,7 +174,7 @@ pub fn detect_same_domain<S: BuildHasher>(
     // Tracks pairs unioned by the geometric containment pass (Step 3b).
     // Cross-rank groups containing such pairs are "overlapping" same-domain
     // faces (one face contained in / partially over the other) rather than
-    // exactly coextensive. `b_contained_in_a` records this so the BOP selector
+    // exactly coextensive. `geometric_overlap` records this so the BOP selector
     // can pick the larger face for Fuse and the smaller for Intersect; the two
     // faces always differ in extent for these pairs.
     let mut geometric_overlap_groups: HashSet<usize> = HashSet::new();
@@ -360,7 +360,7 @@ pub fn detect_same_domain<S: BuildHasher>(
                     idx_a,
                     idx_b,
                     same_orientation,
-                    b_contained_in_a: geometric_overlap,
+                    geometric_overlap,
                     representative,
                 });
 
