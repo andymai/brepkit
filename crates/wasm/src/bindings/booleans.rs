@@ -5,6 +5,7 @@
 use wasm_bindgen::prelude::*;
 
 use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::compound_ops;
 
 use crate::handles::solid_id_to_u32;
 use crate::helpers::{build_triangle_mesh, panic_message, parse_boolean_op, triangle_mesh_to_js};
@@ -106,6 +107,31 @@ impl BrepKernel {
         )
         .map_err(|e| JsError::new(&format!("{e}")))?;
         Ok(coincident_face_pairs_to_json(&pairs).to_string())
+    }
+
+    /// Fuse (union) many solids into one in a single call.
+    ///
+    /// Faster than a left-fold over `fuse`: overlapping solids are reduced
+    /// pairwise in a balanced tree while disjoint groups are merged directly
+    /// without a boolean.
+    ///
+    /// Returns a new solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any solid handle is invalid, the list is empty,
+    /// or a boolean operation produces an empty or non-manifold result.
+    #[wasm_bindgen(js_name = "fuseAll")]
+    pub fn fuse_all(&mut self, solid_handles: Vec<u32>) -> Result<u32, JsError> {
+        let solid_ids = solid_handles
+            .iter()
+            .map(|&h| self.resolve_solid(h))
+            .collect::<Result<Vec<_>, _>>()?;
+        let compound = self
+            .topo_mut()
+            .add_compound(brepkit_topology::compound::Compound::new(solid_ids));
+        let result = compound_ops::fuse_all(self.topo_mut(), compound)?;
+        Ok(solid_id_to_u32(result))
     }
 
     /// Intersect two solids, keeping only their common volume.

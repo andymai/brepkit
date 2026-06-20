@@ -350,6 +350,45 @@ fn compound_cut_after_fuse() {
     assert_no_crash(&parsed, 7, "fuse + compoundCut");
 }
 
+/// Fuse many boxes at once via `fuseAll` (mix of overlapping + disjoint).
+///
+/// Exercises both `fuse_all` paths: boxes 0 and 2 overlap (pairwise boolean
+/// reduction) while box 3 is far away (disjoint-merge fast path).
+///
+/// Solids: 0=box, 2=overlapping copy, 3=disjoint copy, 4=fuseAll result.
+#[test]
+fn fuse_all_mixed_overlap_and_disjoint() {
+    let mut k = BrepKernel::new();
+    let result = k.execute_batch(
+        r#"[
+        {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 10}},
+        {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 10}},
+        {"op": "copyAndTransformSolid", "args": {"solid": 1, "matrix": [1,0,0,5, 0,1,0,0, 0,0,1,0, 0,0,0,1]}},
+        {"op": "copyAndTransformSolid", "args": {"solid": 1, "matrix": [1,0,0,50, 0,1,0,0, 0,0,1,0, 0,0,0,1]}},
+        {"op": "fuseAll", "args": {"solids": [0, 2, 3]}}
+    ]"#,
+    );
+    let parsed = parse_batch(&result);
+    assert_no_crash(&parsed, 4, "fuseAll mix of overlapping and disjoint boxes");
+    assert_ok(&parsed, 4);
+
+    let handle = parsed[4]["ok"]
+        .as_u64()
+        .expect("fuseAll should return a solid handle") as u32;
+    let counts = k
+        .get_entity_counts(handle)
+        .expect("fuseAll result should be a valid solid");
+    assert_eq!(
+        counts.len(),
+        3,
+        "entity counts are [faces, edges, vertices]"
+    );
+    assert!(
+        counts[0] > 0 && counts[1] > 0 && counts[2] > 0,
+        "fused solid should be non-empty, got {counts:?}"
+    );
+}
+
 /// Full pipeline: box + fuse + fillet + compoundCut.
 ///
 /// Uses `solidEdges` to get edge handles for the fillet step.

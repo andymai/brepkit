@@ -451,6 +451,28 @@ impl BrepKernel {
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
+            "fuseAll" => {
+                let solid_arr = args["solids"]
+                    .as_array()
+                    .ok_or("missing or invalid 'solids' array")?;
+                let solids: Vec<brepkit_topology::solid::SolidId> = solid_arr
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let h = v
+                            .as_u64()
+                            .ok_or_else(|| format!("solids[{i}] is not a number"))
+                            .map(|n| n as u32)?;
+                        self.resolve_solid(h).map_err(|e| e.to_string())
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                let compound = self
+                    .topo_mut()
+                    .add_compound(brepkit_topology::compound::Compound::new(solids));
+                let result = brepkit_operations::compound_ops::fuse_all(self.topo_mut(), compound)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
             "transform" => {
                 let s = get_u32(args, "solid")?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
