@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.114.19](https://github.com/andymai/brepkit/compare/v2.114.18...v2.114.19) (2026-06-20)
+
+
+### Bug Fixes
+
+* **operations:** extrude elliptical-arc edge over the trimmed arc, not the full ellipse ([#869](https://github.com/andymai/brepkit/issues/869)) ([#930](https://github.com/andymai/brepkit/issues/930)) ([70535b9](https://github.com/andymai/brepkit/commit/70535b9795de4132d383bf85a3c2874f53d83c64))
+
 ## [2.114.18](https://github.com/andymai/brepkit/compare/v2.114.17...v2.114.18) (2026-06-20)
 
 
