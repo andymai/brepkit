@@ -153,8 +153,12 @@ fn exact_plane_sphere(
 
 /// Exact plane-cone intersection.
 ///
-/// - Plane perpendicular to axis → `Circle3D`
-/// - Otherwise → `Points` fallback (could be ellipse, parabola, or hyperbola)
+/// The conic type is set by the cone's half-opening angle from the axis
+/// (`γ = π/2 − half_angle`) versus the plane-axis angle `ψ`:
+/// - Plane perpendicular to axis (`ψ = π/2`) → `Circle3D`
+/// - `ψ > γ` (ellipse) → closed-form `Ellipse3D`
+/// - `ψ ≤ γ` (parabola/hyperbola) → bounded single-branch `Points` (one chain
+///   per branch — a hyperbola's two nappes never share a chain)
 fn exact_plane_cone(
     cone: &ConicalSurface,
     normal: Vec3,
@@ -172,8 +176,8 @@ fn exact_plane_cone(
         let t = (d - n_dot_apex) / n_dot_axis;
 
         // t is the signed distance from apex to plane along the axis.
-        // The cone surface can extend in either direction from the apex
-        // (positive or negative v), so use |t| for the radius.
+        // The real cone is a single nappe; the perpendicular-plane section is a
+        // circle whose radius follows from the axial offset |t|.
         // |t| ≈ 0 means the plane passes through the apex → degenerate point.
         if t.abs() < 1e-10 {
             return Ok(vec![]);
@@ -193,16 +197,88 @@ fn exact_plane_cone(
         }
 
         let circle = Circle3D::new(center, normal, circle_r)?;
-        Ok(vec![ExactIntersectionCurve::Circle(circle)])
-    } else {
-        // Oblique → could be ellipse, parabola, or hyperbola depending on angle vs half_angle.
-        // For MVP, fall back to sampling.
+        return Ok(vec![ExactIntersectionCurve::Circle(circle)]);
+    }
+
+    // Oblique plane. Classify the conic in the plane-aligned frame.
+    //
+    // Decompose the (unit) axis as a = c·n + p·e1, where c = n·a, e1 is the unit
+    // in-plane projection of the axis, and p = |projection| = sqrt(1−c²). Write a
+    // point Q on the plane as Q = apex + e·n + s·e1 + t·e2 (e = d − n·apex,
+    // e2 = n×e1). The cone equation (w·a)² = cos²γ·(w·w) with k = cos²γ =
+    // sin²(half_angle) reduces to (no s·t cross term, since e1/e2 align with the
+    // conic axes):
+    //     (p²−k)·s² + 2ecp·s + e²(c²−k) = k·t²
+    // The s² coefficient A = p²−k = sin²θ − sin²(half_angle) sets the type:
+    // A < 0 → ellipse, A = 0 → parabola, A > 0 → hyperbola.
+    let c = normal.dot(axis);
+    let p2 = (1.0 - c * c).max(0.0);
+    let p = p2.sqrt();
+    let k = half_angle.sin().powi(2);
+    let a_coeff = p2 - k;
+
+    // Build the plane-aligned frame e1 (in-plane axis projection), e2 = n×e1.
+    let m = Vec3::new(
+        axis.x() - c * normal.x(),
+        axis.y() - c * normal.y(),
+        axis.z() - c * normal.z(),
+    );
+    let m_len = m.length();
+    if m_len < 1e-12 {
+        // Axis parallel to normal — handled by the perpendicular branch above;
+        // fall back to sampling for safety.
         let chains = sample_plane_cone(cone, normal, d)?;
-        Ok(chains
+        return Ok(chains
             .into_iter()
             .map(ExactIntersectionCurve::Points)
-            .collect())
+            .collect());
     }
+    let e1 = m * (1.0 / m_len);
+    let e2 = normal.cross(e1);
+    let apex = cone.apex();
+    let e = d - dot_np(normal, apex);
+
+    // Ellipse → closed form. A = p²−k < 0 with a margin to keep the
+    // near-parabolic regime on the robust sampled path.
+    if a_coeff < -1e-9 {
+        let abs_a = -a_coeff; // = k − p² > 0
+        // Real-nappe guard: in the ellipse regime n·g(u) keeps constant sign(c),
+        // so v = e/(n·g) ≥ 0 only when e and c share a sign. When e·c < 0 the
+        // plane is offset to the far side of the apex from the cone's opening —
+        // the section lies entirely on the phantom nappe, so there is no real
+        // curve (RHS below is positive regardless of sign, so it can't catch this).
+        if e * c < 0.0 {
+            return Ok(vec![]);
+        }
+        // |A|(s − s_c)² + k·t² = RHS, with s_c = ecp/|A| and
+        // RHS = e²·k·(1−k)/|A| (always > 0 for a real ellipse).
+        let s_c = e * c * p / abs_a;
+        let rhs = e * e * k * (1.0 - k) / abs_a;
+        if rhs <= 0.0 {
+            return Ok(vec![]);
+        }
+        let semi_s = (rhs / abs_a).sqrt(); // extent along e1
+        let semi_t = (rhs / k).sqrt(); // extent along e2
+        if semi_s < 1e-12 || semi_t < 1e-12 {
+            return Ok(vec![]);
+        }
+        let center = apex + normal * e + e1 * s_c;
+        let (semi_major, semi_minor, u_axis, v_axis) = if semi_s >= semi_t {
+            (semi_s, semi_t, e1, e2)
+        } else {
+            (semi_t, semi_s, e2, e1)
+        };
+        let ellipse = Ellipse3D::with_axes(center, normal, semi_major, semi_minor, u_axis, v_axis)?;
+        return Ok(vec![ExactIntersectionCurve::Ellipse(ellipse)]);
+    }
+
+    // Parabola / hyperbola (and the near-parabolic ellipse margin): the section
+    // is unbounded, so emit bounded, branch-separated sample chains.
+    let chains = sample_plane_cone(cone, normal, d)?;
+    Ok(chains
+        .into_iter()
+        .map(ExactIntersectionCurve::Points)
+        .collect())
 }
 
 /// Reference to an analytic surface for intersection dispatch.
@@ -339,40 +415,123 @@ fn sample_plane_sphere(
 }
 
 /// Sample the plane-cone intersection as ordered 3D points.
+///
+/// The cone is the single real nappe `v >= 0` of `P(u,v) = apex + v·g(u)`.
+/// Along each generator `g(u)` the plane `n·P = d` is linear in `v`, so
+/// `v = (d − n·apex) / (n·g(u))`. We keep only `v >= 0` (the phantom `v < 0`
+/// nappe is geometrically absent) and `v` below a finite bound (near an
+/// asymptote `n·g(u) → 0` so `v → ∞` — those points run off the surface and
+/// must be excluded). The angular samples that survive form one contiguous arc
+/// (ellipse) or two (parabola/hyperbola, one per branch); each contiguous run
+/// is returned as a separate ordered chain so the consumer never stitches two
+/// disjoint branches into one curve.
 #[allow(clippy::cast_precision_loss, clippy::unnecessary_wraps)]
 fn sample_plane_cone(
     cone: &ConicalSurface,
     normal: Vec3,
     d: f64,
 ) -> Result<Vec<Vec<Point3>>, MathError> {
-    let n_samples = 64_usize;
-    let mut points = Vec::with_capacity(n_samples + 1);
-    let half_angle = cone.half_angle();
+    let apex = cone.apex();
+    let n_dot_apex = dot_np(normal, apex);
+    let e = d - n_dot_apex;
 
-    for i in 0..=n_samples {
+    // Per-generator solve: along g(u) the plane is linear in v, v = e / (n·g(u)).
+    // Sample u densely; keep only the real nappe (v >= 0) and skip near-asymptote
+    // generators (n·g(u) ≈ 0 → v → ∞).
+    let n_samples = 512_usize;
+    let mut vs: Vec<Option<f64>> = Vec::with_capacity(n_samples);
+    let mut v_min = f64::INFINITY;
+    for i in 0..n_samples {
         let u = TAU * (i as f64) / (n_samples as f64);
-        let base = cone.evaluate(u, 0.0);
-        let dir_v = cone.evaluate(u, 1.0) - base;
-        let n_dot_dir = normal.dot(Vec3::new(dir_v.x(), dir_v.y(), dir_v.z()));
-        let n_dot_base = dot_np(normal, base);
-
-        if n_dot_dir.abs() < 1e-12 {
-            if (n_dot_base - d).abs() < 1e-6 * (1.0 + half_angle.tan().abs()) {
-                points.push(base);
-            }
+        let g = cone.evaluate(u, 1.0) - apex;
+        let n_dot_g = normal.dot(Vec3::new(g.x(), g.y(), g.z()));
+        if n_dot_g.abs() < 1e-12 {
+            vs.push(None);
+            continue;
+        }
+        let v = e / n_dot_g;
+        if v >= -1e-12 {
+            let v = v.max(0.0);
+            v_min = v_min.min(v);
+            vs.push(Some(v));
         } else {
-            let v = (d - n_dot_base) / n_dot_dir;
-            if v.abs() <= 100.0 {
-                points.push(base + dir_v * v);
-            }
+            vs.push(None);
         }
     }
 
-    if points.len() < 2 {
-        Ok(vec![])
-    } else {
-        Ok(vec![points])
+    if !v_min.is_finite() {
+        return Ok(Vec::new());
     }
+
+    // Bound the arc around the conic vertex (closest approach to the apex, at
+    // v_min). An ellipse is naturally bounded; a parabola/hyperbola is not, so
+    // cap the cone radius at a generous multiple of the vertex radius. This is
+    // scale-invariant and centred on where any finite cone face's overlap lies;
+    // the downstream consumer trims the fitted curve to the actual face AABB, so
+    // over-coverage is harmless. The floor handles a vertex at the apex (v_min≈0).
+    let v_max = (8.0 * v_min).max(v_min + 4.0);
+
+    let valid: Vec<Option<Point3>> = vs
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let v = v?;
+            if v <= v_max {
+                let u = TAU * (i as f64) / (n_samples as f64);
+                let g = cone.evaluate(u, 1.0) - apex;
+                Some(apex + g * v)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Split into contiguous runs of `Some`, treating the array as circular so a
+    // branch straddling u=0 stays in one chain. A fully-valid sweep (ellipse)
+    // becomes a single closed chain.
+    let chains = contiguous_chains(&valid);
+    Ok(chains.into_iter().filter(|c| c.len() >= 2).collect())
+}
+
+/// Split a circular array of optional samples into contiguous `Some` runs.
+///
+/// If every entry is `Some` the whole array is one chain, closed by repeating
+/// the first point. Otherwise each maximal run of `Some` between `None` gaps is
+/// one chain; a run wrapping past index 0 is rejoined into a single chain.
+fn contiguous_chains(valid: &[Option<Point3>]) -> Vec<Vec<Point3>> {
+    let n = valid.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if valid.iter().all(Option::is_some) {
+        // Closed loop (ellipse): emit all points and repeat the first to close.
+        let mut pts: Vec<Point3> = valid.iter().filter_map(|p| *p).collect();
+        if let Some(&first) = pts.first() {
+            pts.push(first);
+        }
+        return vec![pts];
+    }
+    // Rotate the start to just after a gap so no run wraps the array boundary.
+    let gap = valid.iter().position(Option::is_none).unwrap_or(0);
+    let mut chains: Vec<Vec<Point3>> = Vec::new();
+    let mut current: Vec<Point3> = Vec::new();
+    for k in 0..n {
+        let idx = (gap + k) % n;
+        match valid[idx] {
+            Some(p) => current.push(p),
+            None => {
+                if current.len() >= 2 {
+                    chains.push(std::mem::take(&mut current));
+                } else {
+                    current.clear();
+                }
+            }
+        }
+    }
+    if current.len() >= 2 {
+        chains.push(current);
+    }
+    chains
 }
 
 /// Sample the plane-torus intersection as ordered 3D points.
@@ -2006,5 +2165,158 @@ mod tests {
         .unwrap();
 
         assert!(curves.is_empty(), "disjoint cylinders should not intersect");
+    }
+
+    // ── Oblique plane × cone conic (ellipse / parabola / hyperbola) ──────
+
+    /// Collect 3D points from a returned exact curve, sampling analytic forms.
+    fn collect_points(curve: &ExactIntersectionCurve) -> Vec<Point3> {
+        use crate::traits::ParametricCurve;
+        match curve {
+            ExactIntersectionCurve::Circle(c) => (0..=64)
+                .map(|i| ParametricCurve::evaluate(c, TAU * f64::from(i) / 64.0))
+                .collect(),
+            ExactIntersectionCurve::Ellipse(e) => (0..=64)
+                .map(|i| ParametricCurve::evaluate(e, TAU * f64::from(i) / 64.0))
+                .collect(),
+            ExactIntersectionCurve::Points(pts) => pts.clone(),
+        }
+    }
+
+    /// Assert every returned point lies on the plane and the cone surface, on
+    /// the real (`v >= 0`) nappe, and within a sane axial bound.
+    fn assert_on_plane_and_cone(
+        curves: &[ExactIntersectionCurve],
+        cone: &ConicalSurface,
+        n: Vec3,
+        d: f64,
+        z_bound: (f64, f64),
+    ) {
+        assert!(!curves.is_empty(), "expected at least one section curve");
+        let mut total = 0;
+        for curve in curves {
+            for p in collect_points(curve) {
+                total += 1;
+                let plane_err = (n.x() * p.x() + n.y() * p.y() + n.z() * p.z() - d).abs();
+                assert!(
+                    plane_err < 1e-9,
+                    "point off plane by {plane_err:.2e}: {p:?}"
+                );
+                let (u, v) = cone.project_point(p);
+                let q = cone.evaluate(u, v);
+                let cone_err =
+                    ((p.x() - q.x()).powi(2) + (p.y() - q.y()).powi(2) + (p.z() - q.z()).powi(2))
+                        .sqrt();
+                assert!(cone_err < 1e-7, "point off cone by {cone_err:.2e}: {p:?}");
+                assert!(v >= -1e-9, "point on phantom nappe (v={v:.4}): {p:?}");
+                assert!(
+                    p.z() >= z_bound.0 - 1e-6 && p.z() <= z_bound.1 + 1e-6,
+                    "point z={:.4} outside sane bound {z_bound:?}: {p:?}",
+                    p.z()
+                );
+            }
+        }
+        assert!(total >= 8, "too few section points ({total})");
+    }
+
+    #[test]
+    fn oblique_plane_cone_ellipse_is_exact_and_on_both() {
+        // 45°-half-angle cone (axis +z). A plane tilted only ~16.7° off horizontal
+        // has plane-axis angle ≈ 73° > 45° (the cone's half-opening from axis) →
+        // ellipse. Must come back as an exact Ellipse, fully on both surfaces.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let n = Vec3::new(0.3, 0.0, 1.0).normalize().unwrap();
+        // Plane through (0,0,5): d = n·(0,0,5).
+        let d = n.z() * 5.0;
+        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        assert!(
+            curves
+                .iter()
+                .any(|c| matches!(c, ExactIntersectionCurve::Ellipse(_))),
+            "oblique steep plane × cone must yield an exact Ellipse"
+        );
+        // The ellipse straddles z=5; with the 0.3 tilt the z-extent stays modest.
+        assert_on_plane_and_cone(&curves, &cone, n, d, (0.0, 12.0));
+    }
+
+    #[test]
+    fn oblique_plane_cone_wrong_nappe_is_empty() {
+        // Same ellipse-regime plane as above, but offset to the FAR side of the
+        // apex (z=-5). The +z cone's real (v≥0) nappe is not met — only the
+        // phantom v<0 nappe — so the result must be EMPTY, not a phantom ellipse.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let n = Vec3::new(0.3, 0.0, 1.0).normalize().unwrap();
+        let d = n.z() * -5.0;
+        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        assert!(
+            curves.is_empty(),
+            "plane on the phantom-nappe side must yield no real curve, got {}",
+            curves.len()
+        );
+    }
+
+    #[test]
+    fn oblique_plane_cone_parabola_on_both_single_branch() {
+        // Plane normal at exactly 45° to the axis (= the cone half-opening) → the
+        // plane is parallel to a generator → parabola. One unbounded branch.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let n = Vec3::new(1.0, 0.0, 1.0).normalize().unwrap();
+        let d = n.x() * 3.0 + n.z() * 3.0; // through (3,0,3)
+        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        assert_eq!(
+            curves.len(),
+            1,
+            "a parabola is a single branch, got {}",
+            curves.len()
+        );
+        // Bounded by r_max = 32·|e|; |e| here is O(few), so allow a wide z window.
+        assert_on_plane_and_cone(&curves, &cone, n, d, (0.0, 400.0));
+    }
+
+    #[test]
+    fn oblique_plane_cone_hyperbola_real_nappe_only() {
+        // Faithful scooplabel lip-foot geometry: a 45° cone with axis −z and
+        // apex at (−59,−59,15.85) (a bin corner), cut by the upper ramp tread
+        // plane n=(0,0.99518,0.09802), d=−58.36056. The plane is nearly parallel
+        // to the axis (cos≈0.098) → plane-axis angle ≈ 5.6° < 45° → hyperbola.
+        // The downward real nappe is hit by exactly one branch; the phantom
+        // upward nappe (and the asymptote runaway) must NOT appear, and the arc
+        // must stay near the apex (the plane is ~1.2 mm from it).
+        let cone = ConicalSurface::new(
+            Point3::new(-59.0, -59.0, 15.85),
+            Vec3::new(0.0, 0.0, -1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let n = Vec3::new(0.0, 0.995_18, 0.098_02).normalize().unwrap();
+        let d = -58.360_56;
+        let cos_theta = n.dot(cone.axis()).abs();
+        assert!(cos_theta < 0.2, "expected a shallow (hyperbola) plane");
+        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        // Real downward nappe only: never above the apex (z=15.85). The vertex is
+        // ~1.2 mm from the apex, so the bounded arc stays within a few mm of it.
+        assert_on_plane_and_cone(&curves, &cone, n, d, (5.0, 15.85));
+        // Every returned curve is sampled Points (no false Circle/Ellipse).
+        for c in &curves {
+            assert!(
+                matches!(c, ExactIntersectionCurve::Points(_)),
+                "hyperbola must be sampled Points, not a closed conic"
+            );
+        }
     }
 }
