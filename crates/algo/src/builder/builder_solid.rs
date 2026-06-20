@@ -1593,7 +1593,7 @@ fn split_arc_edges_at_collinear_vertices(
         // span, so the spatial query covers every vertex that could lie on it.
         let mut amin = sp;
         let mut amax = sp;
-        let arc_samples = 12;
+        let arc_samples = ARC_AABB_SAMPLES;
         for k in 0..=arc_samples {
             let f = f64::from(k) / f64::from(arc_samples);
             let a = a0 + (a1 - a0) * f;
@@ -1950,6 +1950,11 @@ fn build_edge_face_map(
 
 /// Tolerance for position quantization (matches system linear tolerance).
 const MERGE_TOL: f64 = 1e-7;
+
+/// Samples per arc when building its broad-phase AABB for the collinear-split
+/// query (its bulge is covered by inflating the query band with the per-step
+/// sagitta — see `split_arc_edges_at_collinear_vertices`).
+const ARC_AABB_SAMPLES: u32 = 12;
 
 /// Get all edge keys (quantized position-pair) for a face's wires.
 fn face_edge_keys(topo: &Topology, fid: FaceId) -> Result<Vec<VPair>, AlgoError> {

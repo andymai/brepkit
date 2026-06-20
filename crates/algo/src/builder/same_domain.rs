@@ -1141,12 +1141,36 @@ fn overlap_candidate_pairs(
 
     let mut buckets: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
     let mut pairs: HashSet<(usize, usize)> = HashSet::new();
+    // A face whose expanded AABB spans more cells than this would cost O(cells)
+    // to grid (a broad wall patch among many tiny facets); above it, AABB-test
+    // the face against all faces directly instead — mirrors PointGrid's guard.
+    let cell_budget = i64::try_from(aabbs.len())
+        .unwrap_or(i64::MAX)
+        .saturating_mul(4)
+        .max(64);
     for &(idx, bb) in aabbs {
         let e = bb.expanded(margin);
         let (lo, hi) = (e.min, e.max);
         let (cx0, cx1) = (cell_of(lo.x()), cell_of(hi.x()));
         let (cy0, cy1) = (cell_of(lo.y()), cell_of(hi.y()));
         let (cz0, cz1) = (cell_of(lo.z()), cell_of(hi.z()));
+        let cells = cx1
+            .saturating_sub(cx0)
+            .saturating_add(1)
+            .saturating_mul(cy1.saturating_sub(cy0).saturating_add(1))
+            .saturating_mul(cz1.saturating_sub(cz0).saturating_add(1));
+        if cells > cell_budget {
+            // Candidate set stays a superset of true overlaps (the narrow phase
+            // filters and pairs are sorted before union-find), so the same-domain
+            // result is unchanged — only the cost path differs.
+            for &(jdx, jbb) in aabbs {
+                if jdx != idx && e.intersects(jbb.expanded(margin)) {
+                    let (a, b) = if jdx < idx { (jdx, idx) } else { (idx, jdx) };
+                    pairs.insert((a, b));
+                }
+            }
+            continue;
+        }
         for cx in cx0..=cx1 {
             for cy in cy0..=cy1 {
                 for cz in cz0..=cz1 {
