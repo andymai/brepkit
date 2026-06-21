@@ -1376,6 +1376,34 @@ fn build_section_edges(
                     None => (curve_ds.curve.clone(), start, end),
                 };
 
+                // Clip an OPEN arc section to an analytic (cylinder/cone) face's
+                // axial v-range. An exact faceted-ramp arc (a tread × corner
+                // cylinder ellipse, see phase_ff::trim_ellipse_to_boundary_crossings)
+                // is trimmed only to the PLANAR tread's boundary crossings — its
+                // endpoints can overshoot the cylinder face's own v-band when the
+                // tread straddles the band's top/bottom (the scoop+label lip-foot
+                // staircase: the topmost tread spans z 12.9→13.9 but the corner
+                // cylinder face stops at z 13.3). The dangling endpoint above the
+                // top boundary leaves the staircase chain unable to close a
+                // boundary-to-boundary cut, so the splitter returns one whole
+                // sub-face and the cylinder is classified by a single sample and
+                // dropped, orphaning the tread arcs. Clipping the arc to the
+                // band's v-range lands its endpoint exactly on the face's top/
+                // bottom circle, restoring the cut. Only the analytic side is
+                // clipped; the planar tread keeps the full arc.
+                let is_open = (start - end).length() >= tol * 100.0;
+                let (start, end) = if is_open
+                    && !matches!(curve_3d, EdgeCurve::Line)
+                    && matches!(
+                        face.surface(),
+                        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+                    ) {
+                    clip_arc_to_face_v_range(topo, face_id, &curve_3d, start, end, tol)
+                        .unwrap_or((start, end))
+                } else {
+                    (start, end)
+                };
+
                 let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
                     &curve_3d,
                     start,
@@ -1894,6 +1922,110 @@ fn curve_endpoints(
     let start_3d = curve_ds.curve.evaluate_with_endpoints(t0, dummy, dummy);
     let end_3d = curve_ds.curve.evaluate_with_endpoints(t1, dummy, dummy);
     (Some(start_3d), Some(end_3d))
+}
+
+/// Clip an open arc section to the analytic face's axial `v` range.
+///
+/// Projects the arc's endpoints and a dense sample set onto the face surface to
+/// find the face's `v` band, then clamps each end of the arc that overshoots the
+/// band to the parameter where the arc crosses the band boundary (found by
+/// bisection on the monotone-in-`v` arc). Returns `None` when no clip is needed
+/// (both ends already inside) or the geometry can't be resolved, so the caller
+/// keeps the original endpoints.
+fn clip_arc_to_face_v_range(
+    topo: &Topology,
+    face_id: FaceId,
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    tol: f64,
+) -> Option<(Point3, Point3)> {
+    let face = topo.face(face_id).ok()?;
+    let surface = face.surface();
+
+    // Face v-band from its boundary vertices (the trimmed extent in v).
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        for vid in [edge.start(), edge.end()] {
+            if let Ok(vtx) = topo.vertex(vid)
+                && let Some((_, v)) = surface.project_point(vtx.point())
+            {
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
+        }
+    }
+    if v_min > v_max {
+        return None;
+    }
+    // A small margin decides whether to clip at all (only on a real overshoot),
+    // matching the FaceExtent analytic margin. The clip itself targets the EXACT
+    // band edge (v_min / v_max), so the clipped endpoint lands on the face's
+    // top/bottom boundary circle — not inside the margin, where the wire builder
+    // can't connect it to the boundary edge.
+    let margin = (v_max - v_min).abs() * 0.01 + tol;
+    let over_hi = v_max + margin;
+    let over_lo = v_min - margin;
+
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let v_at = |t: f64| -> Option<f64> {
+        let p = curve.evaluate_with_endpoints(t, start, end);
+        surface.project_point(p).map(|(_, v)| v)
+    };
+
+    let v_start = v_at(t0)?;
+    let v_end = v_at(t1)?;
+    let overshoots = |v: f64| v > over_hi || v < over_lo;
+    // Neither end overshoots the band — nothing to clip.
+    if !overshoots(v_start) && !overshoots(v_end) {
+        return None;
+    }
+
+    // Target v for an overshooting end: the band edge it crossed.
+    let target_v = |v: f64| if v > over_hi { v_max } else { v_min };
+    // Bisection: walk `t_far` (the overshooting end) toward `t_near` (the other
+    // end, deeper into the band) until the arc's v reaches the band edge. The
+    // staircase arcs are monotone in v, so v(t) crosses `target` exactly once;
+    // keep the half-interval whose far end is still beyond the target.
+    let bisect_to = |t_far: f64, t_near: f64, target: f64| -> Option<f64> {
+        let v_far = v_at(t_far)?;
+        // Sign convention: are we above or below the target at the far end?
+        let far_above = v_far > target;
+        let mut lo = t_far;
+        let mut hi = t_near;
+        for _ in 0..60 {
+            let tm = 0.5 * (lo + hi);
+            let vm = v_at(tm)?;
+            // `tm` is still beyond the target on the far side?
+            let beyond = if far_above { vm > target } else { vm < target };
+            if beyond { lo = tm } else { hi = tm }
+        }
+        Some(0.5 * (lo + hi))
+    };
+
+    let mut nt0 = t0;
+    let mut nt1 = t1;
+    if overshoots(v_start) {
+        nt0 = bisect_to(t0, t1, target_v(v_start))?;
+    }
+    if overshoots(v_end) {
+        nt1 = bisect_to(t1, t0, target_v(v_end))?;
+    }
+    if (nt0 - t0).abs() < f64::EPSILON && (nt1 - t1).abs() < f64::EPSILON {
+        return None;
+    }
+
+    let new_start = curve.evaluate_with_endpoints(nt0, start, end);
+    let new_end = curve.evaluate_with_endpoints(nt1, start, end);
+    // Reject a clip that collapses the arc (the band barely clips a sliver and
+    // the two ends meet) — a zero-length section corrupts the wire.
+    if (new_start - new_end).length() < tol * 100.0 {
+        return None;
+    }
+    Some((new_start, new_end))
 }
 
 /// Remove section edges that are subsets of longer collinear edges.
