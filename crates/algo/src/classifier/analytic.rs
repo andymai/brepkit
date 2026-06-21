@@ -631,13 +631,67 @@ fn try_build_box_classifier(
     })
 }
 
+/// Returns true if any outer-wire vertex of `faces` lies radially beyond the
+/// classifier's pipe envelope by more than `tol.linear`. For a constant-radius
+/// cylinder pass `r_lo == r_hi`. Radial distance is measured from the axis
+/// through `origin`; the envelope radius is not axially-interpolated here
+/// (cylinder envelope is constant), so callers needing a tapered envelope must
+/// guard inline (see `try_build_cone_classifier`).
+fn any_outer_vertex_beyond_radius(
+    topo: &Topology,
+    faces: &[brepkit_topology::face::FaceId],
+    origin: Point3,
+    axis: Vec3,
+    r_lo: f64,
+    r_hi: f64,
+    tol: &Tolerance,
+) -> bool {
+    let r_env = r_lo.max(r_hi);
+    for &fid in faces {
+        let Ok(face) = topo.face(fid) else {
+            return true;
+        };
+        let Ok(wire) = topo.wire(face.outer_wire()) else {
+            return true;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return true;
+            };
+            for vid in [edge.start(), edge.end()] {
+                let Ok(v) = topo.vertex(vid) else {
+                    return true;
+                };
+                let diff = v.point() - origin;
+                let axial = axis * diff.dot(axis);
+                let radial = (diff - axial).length();
+                if radial > r_env + tol.linear {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Try to build a cylinder classifier from cylinder + plane caps.
 fn try_build_cylinder_classifier(
     topo: &Topology,
     faces: &[brepkit_topology::face::FaceId],
     (origin, axis, radius): (Point3, Vec3, f64),
-    _tol: &Tolerance,
+    tol: &Tolerance,
 ) -> Option<AnalyticClassifier> {
+    // Pipe-validity guard. A `Cylinder` classifier models an infinite pipe of
+    // the given radius: every interior point must lie within `radius` of the
+    // axis. When the cylinder face is a corner FILLET (an arc spanning < 90°,
+    // not a full bore) the rest of the solid extends far beyond that radius, so
+    // a pipe model would wrongly classify those points Outside. If ANY outer-
+    // wire vertex of the solid lies beyond `radius + tol`, the pipe model is
+    // invalid — bail to the geometrically-exact ray-cast classifier.
+    if any_outer_vertex_beyond_radius(topo, faces, origin, axis, radius, radius, tol) {
+        return None;
+    }
+
     let mut z_min = f64::INFINITY;
     let mut z_max = f64::NEG_INFINITY;
     for &fid in faces {
@@ -727,18 +781,58 @@ fn try_build_cone_classifier(
         r_at_z_max = 0.0;
     }
 
-    if (z_max - z_min).abs() > tol.linear {
-        Some(AnalyticClassifier::Cone {
-            origin,
-            axis,
-            z_min,
-            z_max,
-            r_at_z_min,
-            r_at_z_max,
-        })
-    } else {
-        None
+    if (z_max - z_min).abs() <= tol.linear {
+        return None;
     }
+
+    // Pipe/cone-validity guard (mirror of the cylinder case). The `Cone`
+    // classifier models a single linear-radius pipe; a corner FILLET cone (an
+    // arc spanning < 90°) leaves the rest of the solid beyond that envelope and
+    // would mis-classify those points Outside. If ANY outer-wire vertex lies
+    // beyond the cone-interpolated radius by more than tolerance, bail to
+    // ray-cast.
+    {
+        let dz = z_max - z_min;
+        for &fid in faces {
+            let Ok(face) = topo.face(fid) else {
+                return None;
+            };
+            let Ok(wire) = topo.wire(face.outer_wire()) else {
+                return None;
+            };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    return None;
+                };
+                for vid in [edge.start(), edge.end()] {
+                    let Ok(v) = topo.vertex(vid) else {
+                        return None;
+                    };
+                    let diff = v.point() - origin;
+                    let axial = diff.dot(axis);
+                    let radial = (diff - axis * axial).length();
+                    let t = if dz.abs() > tol.linear {
+                        ((axial - z_min) / dz).clamp(0.0, 1.0)
+                    } else {
+                        0.5
+                    };
+                    let expected_r = r_at_z_min + t * (r_at_z_max - r_at_z_min);
+                    if radial > expected_r + tol.linear {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    Some(AnalyticClassifier::Cone {
+        origin,
+        axis,
+        z_min,
+        z_max,
+        r_at_z_min,
+        r_at_z_max,
+    })
 }
 
 /// Build a `ConvexAnalytic` classifier from a convex solid with mixed surface types.
@@ -1127,5 +1221,147 @@ fn wire_cone_extent(
         Some((z_min, z_max, r_at_zmin, r_at_zmax))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod pipe_guard_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// Build a single-corner solid: one cylinder lateral face (radius 4 at the
+    /// origin, axis +Z, z in [0, 10]) plus top/bottom cap planes. When
+    /// `far_corner` is true the cap wires also include a vertex at (80, 80)
+    /// — far beyond the radius — modelling a corner FILLET (the cylinder is one
+    /// rounded corner of a much larger prism, not a full bore). When false the
+    /// cap wires stay within the radius (a genuine narrow pillar).
+    fn make_corner_cyl_solid(topo: &mut Topology, far_corner: bool) -> SolidId {
+        let r = 4.0;
+        let z0 = 0.0;
+        let z1 = 10.0;
+        // Cylinder arc endpoints on the radius-r circle.
+        let a_bot = topo.add_vertex(Vertex::new(Point3::new(r, 0.0, z0), 1e-7));
+        let b_bot = topo.add_vertex(Vertex::new(Point3::new(0.0, r, z0), 1e-7));
+        let a_top = topo.add_vertex(Vertex::new(Point3::new(r, 0.0, z1), 1e-7));
+        let b_top = topo.add_vertex(Vertex::new(Point3::new(0.0, r, z1), 1e-7));
+        // Optional far corner vertex (the rest of the prism).
+        let far_bot = topo.add_vertex(Vertex::new(Point3::new(80.0, 80.0, z0), 1e-7));
+        let far_top = topo.add_vertex(Vertex::new(Point3::new(80.0, 80.0, z1), 1e-7));
+
+        let circ_bot =
+            Circle3D::new(Point3::new(0.0, 0.0, z0), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let circ_top =
+            Circle3D::new(Point3::new(0.0, 0.0, z1), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let arc_bot = topo.add_edge(Edge::new(a_bot, b_bot, EdgeCurve::Circle(circ_bot)));
+        let arc_top = topo.add_edge(Edge::new(a_top, b_top, EdgeCurve::Circle(circ_top)));
+        let seam_a = topo.add_edge(Edge::new(a_bot, a_top, EdgeCurve::Line));
+        let seam_b = topo.add_edge(Edge::new(b_bot, b_top, EdgeCurve::Line));
+
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r)
+            .unwrap();
+        let cyl_wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(arc_bot, true),
+                    OrientedEdge::new(seam_b, true),
+                    OrientedEdge::new(arc_top, false),
+                    OrientedEdge::new(seam_a, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let cyl_face = topo.add_face(Face::new(cyl_wire, vec![], FaceSurface::Cylinder(cyl)));
+
+        // Cap planes perpendicular to the axis. The outer wires carry the arc
+        // endpoints and (optionally) the far corner vertex.
+        let cap_wire = |topo: &mut Topology, va, vb, vfar| {
+            let e_arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+            if far_corner {
+                let e1 = topo.add_edge(Edge::new(vb, vfar, EdgeCurve::Line));
+                let e2 = topo.add_edge(Edge::new(vfar, va, EdgeCurve::Line));
+                topo.add_wire(
+                    Wire::new(
+                        vec![
+                            OrientedEdge::new(e_arc, true),
+                            OrientedEdge::new(e1, true),
+                            OrientedEdge::new(e2, true),
+                        ],
+                        true,
+                    )
+                    .unwrap(),
+                )
+            } else {
+                let e_back = topo.add_edge(Edge::new(vb, va, EdgeCurve::Line));
+                topo.add_wire(
+                    Wire::new(
+                        vec![
+                            OrientedEdge::new(e_arc, true),
+                            OrientedEdge::new(e_back, true),
+                        ],
+                        true,
+                    )
+                    .unwrap(),
+                )
+            }
+        };
+        let w_bot = cap_wire(topo, a_bot, b_bot, far_bot);
+        let w_top = cap_wire(topo, a_top, b_top, far_top);
+        let f_bot = topo.add_face(Face::new(
+            w_bot,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: -z0,
+            },
+        ));
+        let f_top = topo.add_face(Face::new(
+            w_top,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z1,
+            },
+        ));
+
+        let shell = topo.add_shell(Shell::new(vec![cyl_face, f_bot, f_top]).unwrap());
+        topo.add_solid(Solid::new(shell, vec![]))
+    }
+
+    #[test]
+    fn fillet_corner_cylinder_rejects_pipe_classifier() {
+        let mut topo = Topology::new();
+        let solid = make_corner_cyl_solid(&mut topo, true);
+        // The cap wires reach (80,80), far beyond the radius-4 cylinder. A
+        // `Cylinder` (pipe) classifier would call those points Outside, so the
+        // pipe-validity guard must reject it and force ray-cast fallback.
+        let c = try_build_analytic_classifier(&topo, solid);
+        assert!(
+            !matches!(c, Some(AnalyticClassifier::Cylinder { .. })),
+            "fillet-corner cylinder must NOT build a pipe Cylinder classifier"
+        );
+    }
+
+    #[test]
+    fn genuine_narrow_pillar_still_builds_cylinder_classifier() {
+        let mut topo = Topology::new();
+        let solid = make_corner_cyl_solid(&mut topo, false);
+        // Every cap vertex lies on the radius-4 circle — the pipe model IS valid
+        // here, so the guard must not over-fire.
+        let c = try_build_analytic_classifier(&topo, solid);
+        assert!(
+            matches!(c, Some(AnalyticClassifier::Cylinder { .. })),
+            "a genuine within-radius pillar should still build a Cylinder classifier; got {:?}",
+            c.map(|_| "non-cylinder")
+        );
     }
 }

@@ -4925,3 +4925,79 @@ fn cut_2x2_wall_cutouts_four_walls_is_watertight() {
         "four-wall cutout cut must have no over-shared edges"
     );
 }
+
+/// Layer 2: `flatten_planar_nurbs_faces` must align the flattened plane normal
+/// to the NURBS surface's own du×dv normal, not the (possibly opposed) sign that
+/// `recognize_surface` derives from a control-point cross product. A `Plane`
+/// face is read with its normal flipped by `is_reversed`, so an opposed sign
+/// silently inverts the face's effective outward direction.
+#[test]
+fn flatten_plane_normal_matches_nurbs_du_cross_dv() {
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let mut topo = Topology::new();
+
+    // Build a planar NURBS face whose control-point parameterisation gives a
+    // du×dv normal pointing -Z. The control grid is laid out so that the naive
+    // control-point cross product `recognize_surface` uses points the OTHER way
+    // (+Z), producing the sign mismatch the fix must correct.
+    //
+    // grid[i][j]: i indexes u, j indexes v.
+    //   u: 0 -> x=0, 1 -> x=1 ; v: 0 -> y=0, 1 -> y=1, but with x and y swapped
+    //   in a way that makes du and dv produce -Z under du×dv.
+    let control_points = vec![
+        vec![Point3::new(0.0, 0.0, 5.0), Point3::new(1.0, 0.0, 5.0)],
+        vec![Point3::new(0.0, 1.0, 5.0), Point3::new(1.0, 1.0, 5.0)],
+    ];
+    let nurbs = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        control_points,
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .unwrap();
+    let (u0, u1) = nurbs.domain_u();
+    let (v0, v1) = nurbs.domain_v();
+    let nurbs_n = nurbs.normal(0.5 * (u0 + u1), 0.5 * (v0 + v1)).unwrap();
+
+    let v00 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 5.0), 1e-7));
+    let v10 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 5.0), 1e-7));
+    let v11 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 5.0), 1e-7));
+    let v01 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 5.0), 1e-7));
+    let e0 = topo.add_edge(Edge::new(v00, v10, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v10, v11, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v11, v01, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v01, v00, EdgeCurve::Line));
+    let wire = topo.add_wire(
+        Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap(),
+    );
+    let fid = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(nurbs)));
+    let shell = topo.add_shell(Shell::new(vec![fid]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+
+    let n = flatten_planar_nurbs_faces(&mut topo, solid, 1e-7).unwrap();
+    assert_eq!(n, 1, "the planar NURBS face should have been flattened");
+
+    let FaceSurface::Plane { normal, .. } = topo.face(fid).unwrap().surface() else {
+        panic!("face should now be a Plane");
+    };
+    assert!(
+        normal.dot(nurbs_n) > 0.0,
+        "flattened plane normal {normal:?} must align with the NURBS du×dv normal {nurbs_n:?} \
+         (dot={})",
+        normal.dot(nurbs_n)
+    );
+}

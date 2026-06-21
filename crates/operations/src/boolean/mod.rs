@@ -2650,7 +2650,23 @@ fn flatten_planar_nurbs_faces(
                 return None;
             };
             match recognize_surface(nurbs, tol) {
-                RecognizedSurface::Plane { normal, d } => Some((fid, normal, d)),
+                RecognizedSurface::Plane { normal, d } => {
+                    // `recognize_surface` derives the plane normal from a
+                    // control-point cross product, whose sign can OPPOSE the
+                    // NURBS surface's own du×dv normal. A `FaceSurface::Plane`
+                    // is read with its normal flipped by `is_reversed`, so an
+                    // opposed sign silently inverts the face's effective
+                    // outward direction. Align to the surface du×dv normal at
+                    // the domain midpoint.
+                    let (u0, u1) = nurbs.domain_u();
+                    let (v0, v1) = nurbs.domain_v();
+                    let mid_n = nurbs.normal(0.5 * (u0 + u1), 0.5 * (v0 + v1)).ok();
+                    let (normal, d) = match mid_n {
+                        Some(n) if normal.dot(n) < 0.0 => (-normal, -d),
+                        _ => (normal, d),
+                    };
+                    Some((fid, normal, d))
+                }
                 _ => None,
             }
         })
@@ -2687,6 +2703,18 @@ fn flatten_planar_nurbs_faces(
     }
 
     Ok(count)
+}
+
+/// Test-only access to [`flatten_planar_nurbs_faces`] so integration tests can
+/// reproduce the exact operand preprocessing the boolean applies before handing
+/// the operands to the GFA engine.
+#[doc(hidden)]
+pub fn flatten_planar_nurbs_faces_for_tests(
+    topo: &mut Topology,
+    solid: SolidId,
+    tol: f64,
+) -> Result<usize, crate::OperationsError> {
+    flatten_planar_nurbs_faces(topo, solid, tol)
 }
 
 /// For each vertex position (quantized at tolerance), picks one canonical
