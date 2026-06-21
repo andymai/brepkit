@@ -86,6 +86,34 @@ fn over_shared_edges(topo: &Topology, solid: SolidId) -> usize {
         .count()
 }
 
+/// Count geometrically free edges (a quantized endpoint pair bordered by a
+/// single face) — the open-shell witness.
+fn free_edges(topo: &Topology, solid: SolidId) -> usize {
+    type QPoint = (i64, i64, i64);
+    let scale = 1.0e5;
+    let q = |p: brepkit_math::vec::Point3| -> QPoint {
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+    let mut counts: HashMap<(QPoint, QPoint), usize> = HashMap::new();
+    for fid in solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                let e = topo.edge(oe.edge()).unwrap();
+                let a = q(topo.vertex(e.start()).unwrap().point());
+                let b = q(topo.vertex(e.end()).unwrap().point());
+                let key = if a <= b { (a, b) } else { (b, a) };
+                *counts.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+    counts.values().filter(|&&c| c == 1).count()
+}
+
 /// Count faces whose outer wire is a pure out-and-back spur (collapses to
 /// nothing after stripping consecutive same-endpoint opposite-direction
 /// pairs) — i.e. degenerate zero-area "ribbon" faces.
@@ -173,4 +201,37 @@ fn scooplabel_bracket_fuse_has_no_degenerate_sections() {
         curved >= 36,
         "expected the body's analytic corner surfaces preserved, got {curved} curved"
     );
+}
+
+/// TARGET (currently failing): the full scoop+label bracket fuse must be
+/// watertight (free edges = 0), analytic (curved ≥ 36), with the lip-foot cone
+/// present. This is the 4-part close: Part 1 (#936, bounded oblique plane-cone
+/// conic) and Part 3 (co-circular arc split convention, this PR) are landed.
+/// Parts 2 (phase_ff cone-hyperbola section weld) and 4 (multi-surface
+/// lip-foot z-stack section chaining + z-step ring reconciliation) are not yet
+/// implemented, so the lip-foot stack still leaves free edges. Ignored until
+/// Parts 2+4 land; remove `#[ignore]` then.
+#[test]
+#[ignore = "needs Parts 2+4 (cone-hyperbola weld + z-stack section chaining)"]
+fn scooplabel_bracket_fuse_is_watertight() {
+    let mut topo = Topology::new();
+    let body = load("scooplabel_inmem_body.bin", &mut topo);
+    let bracket = load("scooplabel_inmem_bracket.bin", &mut topo);
+
+    let result = gfa::boolean(&mut topo, BooleanOp::Fuse, body, bracket).unwrap();
+
+    let free = free_edges(&topo, result);
+    let curved = solid_faces(&topo, result)
+        .unwrap()
+        .iter()
+        .filter(|&&f| topo.face(f).unwrap().surface().type_tag() != "plane")
+        .count();
+    let cone_present = solid_faces(&topo, result)
+        .unwrap()
+        .iter()
+        .any(|&f| topo.face(f).unwrap().surface().type_tag() == "cone");
+
+    assert_eq!(free, 0, "scoop+label fuse must be watertight (free edges)");
+    assert!(curved >= 36, "analytic surfaces preserved, got {curved}");
+    assert!(cone_present, "lip-foot cone must survive the fuse");
 }
