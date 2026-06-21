@@ -2285,6 +2285,26 @@ fn cap_partial_overlap_free_loops(
         if !build_ok {
             continue;
         }
+        // The walk order alone yields an arbitrary winding; orient the wire CCW
+        // around the cap's outward normal so the face winding matches its
+        // surface normal (otherwise a manifold-but-inside-out cap could corrupt
+        // a downstream boolean). Newell's method gives the loop's normal.
+        let (mut nx, mut ny, mut nz) = (0.0_f64, 0.0_f64, 0.0_f64);
+        let nverts = verts3d.len();
+        for i in 0..nverts {
+            let c = verts3d[i];
+            let np = verts3d[(i + 1) % nverts];
+            nx += (c.y() - np.y()) * (c.z() + np.z());
+            ny += (c.z() - np.z()) * (c.x() + np.x());
+            nz += (c.x() - np.x()) * (c.y() + np.y());
+        }
+        if Vec3::new(nx, ny, nz).dot(cap.out_normal) < 0.0 {
+            oriented = oriented
+                .into_iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+        }
         let Ok(wire) = Wire::new(oriented, true) else {
             continue;
         };
