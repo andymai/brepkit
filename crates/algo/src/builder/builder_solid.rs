@@ -1961,7 +1961,9 @@ fn remove_doubled_faces(topo: &Topology, face_ids: &mut Vec<FaceId>) {
     use brepkit_topology::edge::EdgeId;
     use brepkit_topology::wire::OrientedEdge;
 
-    // Key = sorted outer-wire edge-ID multiset.
+    // Key = sorted outer- AND inner-wire edge-ID multiset, so a face only
+    // matches a TRULY identical one — a holed face never collides with a
+    // coincident spurious non-holed copy (which would otherwise drop it).
     let mut groups: HashMap<Vec<EdgeId>, Vec<usize>> = HashMap::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let Ok(face) = topo.face(fid) else { continue };
@@ -1969,6 +1971,11 @@ fn remove_doubled_faces(topo: &Topology, face_ids: &mut Vec<FaceId>) {
             continue;
         };
         let mut key: Vec<EdgeId> = wire.edges().iter().map(OrientedEdge::edge).collect();
+        for &iw in face.inner_wires() {
+            if let Ok(inner) = topo.wire(iw) {
+                key.extend(inner.edges().iter().map(OrientedEdge::edge));
+            }
+        }
         key.sort_by_key(|e| e.index());
         groups.entry(key).or_default().push(fi);
     }
