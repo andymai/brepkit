@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.4](https://github.com/andymai/brepkit/compare/v2.115.3...v2.115.4) (2026-06-21)
+
+
+### Bug Fixes
+
+* **algo:** synthesize cap for partial coplanar same-domain overlap (compartmented bin) ([#944](https://github.com/andymai/brepkit/issues/944)) ([9328e9c](https://github.com/andymai/brepkit/commit/9328e9cda7f3e4d2a46fb93a8935e2e9cf50e90b))
+
 ## [2.115.3](https://github.com/andymai/brepkit/compare/v2.115.2...v2.115.3) (2026-06-21)
 
 
