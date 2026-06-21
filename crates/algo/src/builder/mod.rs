@@ -135,8 +135,54 @@ impl Builder {
             &self.sd_pairs,
             &self.sd_within_rank_dups,
         );
-        let solid_id = assemble::assemble_solid(&mut self.topo, &selected)?;
+        let cap_planes = self.partial_overlap_cap_planes(&selected);
+        let solid_id = assemble::assemble_solid(&mut self.topo, &selected, &cap_planes)?;
         Ok((self.topo, solid_id))
+    }
+
+    /// Candidate cap planes for partial coplanar same-domain overlaps.
+    ///
+    /// For each planar `geometric_overlap` SD pair whose two faces were BOTH
+    /// discarded by `select_faces` (the partial-overlap signature: their
+    /// coincident contact is interior, but the larger face's overhang remainder
+    /// is exterior and left as free edges), record the larger face's plane so
+    /// the assembler can synthesise the missing remainder cap. Coextensive pairs
+    /// (one face kept) and non-planar pairs are excluded.
+    fn partial_overlap_cap_planes(
+        &self,
+        selected: &[bop::SelectedFace],
+    ) -> Vec<assemble::CapPlane> {
+        use brepkit_topology::face::FaceSurface;
+        let kept: std::collections::HashSet<FaceId> = selected.iter().map(|s| s.face_id).collect();
+        let mut planes = Vec::new();
+        for pair in &self.sd_pairs {
+            if !pair.geometric_overlap {
+                continue;
+            }
+            let fa = self.sub_faces[pair.idx_a].face_id;
+            let fb = self.sub_faces[pair.idx_b].face_id;
+            // Only when both faces were discarded — a kept face already covers
+            // the plane and capping would double it.
+            if kept.contains(&fa) || kept.contains(&fb) {
+                continue;
+            }
+            let larger = self.sub_faces[pair.representative].face_id;
+            let Ok(face) = self.topo.face(larger) else {
+                continue;
+            };
+            let FaceSurface::Plane { normal, d } = *face.surface() else {
+                continue;
+            };
+            let Some(out_normal) = face.effective_plane_normal() else {
+                continue;
+            };
+            planes.push(assemble::CapPlane {
+                normal,
+                d,
+                out_normal,
+            });
+        }
+        planes
     }
 
     /// Get the sub-faces, SD pairs, and topology for testing.

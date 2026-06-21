@@ -22,10 +22,12 @@
 //! rejected by `operations::boolean`'s acceptance gate → mesh fallback →
 //! non-manifold (over-shared) result.
 //!
-//! Near-dup free-endpoint scan = 0 and the gap is 0.1mm (>> any weld
-//! tolerance), so this is NOT the #859/#867 weld family. The fix is a deeper
-//! GFA change: split the partial coplanar same-domain overlap into matching
-//! sub-regions and synthesise the corner step faces. Left `#[ignore]`d.
+//! Near-dup free-endpoint scan = 0 and the gap is ~1.27mm at the corner
+//! diagonal (>> any weld tolerance), so this is NOT the #859/#867 weld family.
+//! Fixed by synthesising the overhang remainder cap face: the assembler now
+//! caps closed planar loops of free edges that lie in a partial-overlap
+//! same-domain plane (`cap_partial_overlap_free_loops` in `builder_solid.rs`),
+//! reusing the existing edge entities so the loop becomes manifold.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -78,7 +80,6 @@ fn free_and_over(topo: &Topology, solid: SolidId) -> (usize, usize) {
 }
 
 #[test]
-#[ignore = "repro: 2x1 compartment socket-fuse goes non-manifold (corner-radius mismatch partial coplanar overlap)"]
 fn compartment_socket_fuse_is_manifold() {
     let mut topo = Topology::new();
     let body = load("compart2x1_socketfuse_body.bin", &mut topo);

@@ -10,6 +10,8 @@ use brepkit_topology::solid::SolidId;
 use crate::bop::SelectedFace;
 use crate::error::AlgoError;
 
+pub use super::builder_solid::CapPlane;
+
 /// Assemble selected faces into a solid.
 ///
 /// Delegates to [`builder_solid::build_solid`], which implements the
@@ -29,6 +31,7 @@ use crate::error::AlgoError;
 pub fn assemble_solid(
     topo: &mut Topology,
     selected: &[SelectedFace],
+    cap_planes: &[CapPlane],
 ) -> Result<SolidId, AlgoError> {
-    super::builder_solid::build_solid(topo, selected)
+    super::builder_solid::build_solid(topo, selected, cap_planes)
 }
