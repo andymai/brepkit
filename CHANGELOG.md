@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.2](https://github.com/andymai/brepkit/compare/v2.115.1...v2.115.2) (2026-06-21)
+
+
+### Bug Fixes
+
+* **algo:** drop doubled faces in solid assembly (baseplate dovetail groove cut) ([#938](https://github.com/andymai/brepkit/issues/938)) ([5f1e89b](https://github.com/andymai/brepkit/commit/5f1e89b6a370211d1a137601c4fb0d304426219a))
+
 ## [2.115.1](https://github.com/andymai/brepkit/compare/v2.115.0...v2.115.1) (2026-06-20)
 
 
