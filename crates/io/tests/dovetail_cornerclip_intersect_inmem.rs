@@ -143,3 +143,75 @@ fn dovetail_corner_clip_intersect_is_watertight() {
          got {curved} curved faces (mesh fallback tessellates them away)"
     );
 }
+
+/// Layers 1+2 regression guard (raw GFA, no mesh fallback).
+///
+/// The full operations `boolean()` above still falls back to a mesh because the
+/// raw GFA result is not yet watertight (a residual free=4 splitter defect — the
+/// Layer-3 follow-up). But the two independently-correct fixes that LAND here —
+///
+///   Layer 1: `algo::classifier::analytic` now rejects an invalid PIPE
+///            classifier for a fillet-corner cylinder/cone (so the slab's
+///            sub-faces classify via the geometrically-exact ray-cast path
+///            instead of being wrongly called Outside), and
+///   Layer 2: `operations::boolean::flatten_planar_nurbs_faces` now aligns the
+///            flattened plane normal to the NURBS du×dv normal (so a coincident
+///            wall's same-domain pair comes out same-orientation instead of
+///            being discarded) —
+///
+/// take the raw GFA intersect from an open shell (free≈74, ~9 faces, most
+/// boundary dropped) to free=4 with EVERY pocket wall present and zero
+/// over-shared edges. This test asserts that improved, measurable state on the
+/// raw `gfa::boolean` result (operands flattened exactly as the operations
+/// boolean flattens them).
+///
+/// The residual free=4 (two free legs on each of the z=0 / z=-5 caps at the
+/// rounded corner) is the Layer-3 face-splitter co-circular-arc defect; closing
+/// it un-ignores `dovetail_corner_clip_intersect_is_watertight` above. It is NOT
+/// fixed here (a ray-cast direction change regresses the honeycomb guard).
+#[test]
+fn cornerclip_intersect_raw_gfa_reaches_free_le_4() {
+    use brepkit_algo::bop::BooleanOp as RawOp;
+    use brepkit_algo::gfa;
+    use brepkit_operations::boolean::flatten_planar_nurbs_faces_for_tests;
+
+    let mut topo = Topology::new();
+    let slab = load("dovetail_cornerclip_slab.bin", &mut topo);
+    let round = load("dovetail_cornerclip_round.bin", &mut topo);
+
+    // Flatten the rounded-rect prism's planar-NURBS walls exactly as the
+    // operations boolean does before calling the GFA engine.
+    let tol = 1e-7;
+    flatten_planar_nurbs_faces_for_tests(&mut topo, slab, tol).unwrap();
+    flatten_planar_nurbs_faces_for_tests(&mut topo, round, tol).unwrap();
+
+    let result = gfa::boolean(&mut topo, RawOp::Intersect, slab, round).unwrap();
+
+    let (free, over) = edge_health(&topo, result);
+    let faces = solid_faces(&topo, result).unwrap();
+
+    assert_eq!(
+        over,
+        0,
+        "raw GFA must stay free of over-shared edges; got {} faces, {free} free",
+        faces.len()
+    );
+    // Layers 1+2: open shell (free≈74) → free=4. The residual 4 is the Layer-3
+    // splitter follow-up; do NOT tighten to 0 here.
+    assert!(
+        free <= 4,
+        "Layers 1+2 should bring the raw GFA intersect to free<=4; got free={free} \
+         over {} faces (regression — a pipe-classifier or plane-sign bug returned)",
+        faces.len()
+    );
+
+    // Every pocket wall must survive: the slab carries 4 square cell pockets, so
+    // an analytic result keeps far more than the ~9 faces of the broken open
+    // shell. A compact analytic intersect is dozens of faces, not thousands.
+    assert!(
+        faces.len() > 20 && faces.len() < 200,
+        "expected a compact analytic raw result with all pocket walls present; \
+         got {} faces",
+        faces.len()
+    );
+}
