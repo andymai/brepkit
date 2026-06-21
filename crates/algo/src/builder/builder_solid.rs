@@ -36,7 +36,11 @@ type VPair = (QPos, QPos);
 /// Returns [`AlgoError`] if assembly produces no valid shells or
 /// topology lookups fail.
 #[allow(clippy::too_many_lines)]
-pub fn build_solid(topo: &mut Topology, selected: &[SelectedFace]) -> Result<SolidId, AlgoError> {
+pub fn build_solid(
+    topo: &mut Topology,
+    selected: &[SelectedFace],
+    cap_planes: &[CapPlane],
+) -> Result<SolidId, AlgoError> {
     if selected.is_empty() {
         return Err(AlgoError::AssemblyFailed("no faces selected".into()));
     }
@@ -120,6 +124,14 @@ pub fn build_solid(topo: &mut Topology, selected: &[SelectedFace]) -> Result<Sol
             "all faces avoided (all have free edges)".into(),
         ));
     }
+
+    // Step 0c: Synthesise the floor/ceiling cap of a partial coplanar
+    // same-domain overlap (e.g. a body whose rounded corner overhangs a
+    // chamfered socket — gridfinity compartmented bin). The BOP selector
+    // discarded both faces of such an overlap, leaving a closed planar loop of
+    // free edges where the larger face's overhang remainder should be. Cap each
+    // such loop with a planar face that reuses the existing edges.
+    cap_partial_overlap_free_loops(topo, &mut face_ids, cap_planes)?;
 
     // Phase 2: Build shells via connectivity flood-fill
     let shells = perform_loops(topo, &face_ids)?;
@@ -2081,6 +2093,217 @@ fn build_edge_positions(
     }
 
     Ok(map)
+}
+
+/// A candidate cap plane derived from a partial-overlap same-domain pair.
+///
+/// `normal`/`d` describe the shared plane (`normal · p = d`); `out_normal` is
+/// the **effective** outward normal of the larger discarded face, used to
+/// orient any synthesised cap face so it contributes outward in the result.
+#[derive(Debug, Clone, Copy)]
+pub struct CapPlane {
+    /// Plane normal (unit).
+    pub normal: Vec3,
+    /// Plane offset: `normal · p = d` for points on the plane.
+    pub d: f64,
+    /// Effective outward normal of the larger discarded face.
+    pub out_normal: Vec3,
+}
+
+/// Synthesise the missing floor/ceiling cap face(s) of a partial coplanar
+/// same-domain overlap.
+///
+/// When two opposing-solid faces share a plane but only *partially* overlap
+/// (e.g. a body whose rounded corner overhangs a socket whose corner is
+/// chamfered — gridfinity compartmented bin), the BOP selector discards both
+/// (their contact is interior to the union) but the larger face's *overhang
+/// remainder* is exterior and must remain. Discarding it leaves a closed planar
+/// loop of free edges where that remainder face should be, so the shell never
+/// closes and the result falls back to mesh.
+///
+/// This pass finds closed planar loops of free (single-incidence) edges that
+/// lie in one of the `cap_planes` and builds a planar face for each, reusing the
+/// existing edge entities (so the new face shares them exactly and the loop
+/// becomes manifold). It only fires on loops coplanar with a partial-overlap SD
+/// plane, so it cannot cap a legitimately-open boundary elsewhere.
+fn cap_partial_overlap_free_loops(
+    topo: &mut Topology,
+    face_ids: &mut Vec<FaceId>,
+    cap_planes: &[CapPlane],
+) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::EdgeId;
+    use brepkit_topology::wire::Wire;
+
+    if cap_planes.is_empty() {
+        return Ok(());
+    }
+
+    // Collect free edges: those whose quantized vertex-pair key is incident to
+    // exactly one selected face.
+    let edge_map = build_edge_face_map(topo, face_ids)?;
+    let free_keys: HashSet<VPair> = edge_map
+        .iter()
+        .filter(|(_, faces)| faces.len() == 1)
+        .map(|(k, _)| *k)
+        .collect();
+    if free_keys.is_empty() {
+        return Ok(());
+    }
+
+    // Gather the actual EdgeIds whose endpoints match a free key (one canonical
+    // edge per key — duplicates were merged earlier). Record each edge's
+    // endpoints so we can walk loops by quantized position.
+    let mut free_edges: Vec<(EdgeId, QPos, QPos)> = Vec::new();
+    let mut seen_keys: HashSet<VPair> = HashSet::new();
+    for &fid in face_ids.iter() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
+                let qs = quantize_point(sp, MERGE_TOL);
+                let qe = quantize_point(ep, MERGE_TOL);
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                if free_keys.contains(&key) && seen_keys.insert(key) {
+                    free_edges.push((oe.edge(), qs, qe));
+                }
+            }
+        }
+    }
+
+    // Build an undirected adjacency over quantized vertices, vertex -> list of
+    // (edge index, other-endpoint). A closed loop walks vertices of degree 2.
+    let mut adj: HashMap<QPos, Vec<(usize, QPos)>> = HashMap::new();
+    for (i, &(_, qs, qe)) in free_edges.iter().enumerate() {
+        adj.entry(qs).or_default().push((i, qe));
+        adj.entry(qe).or_default().push((i, qs));
+    }
+    // Only loops whose every vertex has degree exactly 2 are unambiguous closed
+    // cycles. A vertex of higher degree means the free edges branch (a T or a
+    // pinch); capping those is ambiguous, so skip such components.
+    if adj.values().any(|v| v.len() != 2) {
+        return Ok(());
+    }
+
+    let mut used_edge: Vec<bool> = vec![false; free_edges.len()];
+    let mut pos3d: HashMap<QPos, Point3> = HashMap::new();
+    for &fid in face_ids.iter() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
+                pos3d.entry(quantize_point(sp, MERGE_TOL)).or_insert(sp);
+                pos3d.entry(quantize_point(ep, MERGE_TOL)).or_insert(ep);
+            }
+        }
+    }
+
+    let mut new_faces: Vec<Face> = Vec::new();
+
+    for start in 0..free_edges.len() {
+        if used_edge[start] {
+            continue;
+        }
+        // Walk the cycle containing `start`.
+        let (e0, a0, b0) = free_edges[start];
+        let mut loop_edges: Vec<EdgeId> = vec![e0];
+        let mut loop_verts: Vec<QPos> = vec![a0, b0];
+        used_edge[start] = true;
+        let mut cur = b0;
+        let mut ok = true;
+        loop {
+            if cur == a0 {
+                break; // closed back to the loop start
+            }
+            let Some(neigh) = adj.get(&cur) else {
+                ok = false;
+                break;
+            };
+            // Degree is exactly 2; pick the edge that isn't where we came from.
+            let next = neigh.iter().find(|&&(ei, _)| !used_edge[ei]).copied();
+            let Some((ei, other)) = next else {
+                ok = false;
+                break;
+            };
+            used_edge[ei] = true;
+            loop_edges.push(free_edges[ei].0);
+            loop_verts.push(other);
+            cur = other;
+            if loop_edges.len() > free_edges.len() {
+                ok = false;
+                break;
+            }
+        }
+        if !ok || loop_edges.len() < 3 {
+            continue;
+        }
+
+        // Coplanarity: every loop vertex must lie in one cap plane (within tol).
+        let verts3d: Vec<Point3> = loop_verts
+            .iter()
+            .filter_map(|q| pos3d.get(q).copied())
+            .collect();
+        if verts3d.len() != loop_verts.len() {
+            continue;
+        }
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let Some(cap) = cap_planes.iter().copied().find(|cp| {
+            verts3d
+                .iter()
+                .all(|p| (cp.normal.dot(*p - origin) - cp.d).abs() <= MERGE_TOL * 10.0)
+        }) else {
+            continue;
+        };
+
+        // Build the outer wire from the existing edges in walk order. Each
+        // OrientedEdge's natural direction is recovered by matching the edge's
+        // stored start vertex against the walk's incoming vertex.
+        let mut oriented: Vec<OrientedEdge> = Vec::with_capacity(loop_edges.len());
+        let mut walk_from = loop_verts[0];
+        let mut build_ok = true;
+        for &eid in &loop_edges {
+            let edge = topo.edge(eid)?;
+            let es = quantize_point(topo.vertex(edge.start())?.point(), MERGE_TOL);
+            let ee = quantize_point(topo.vertex(edge.end())?.point(), MERGE_TOL);
+            let forward = if es == walk_from {
+                walk_from = ee;
+                true
+            } else if ee == walk_from {
+                walk_from = es;
+                false
+            } else {
+                build_ok = false;
+                break;
+            };
+            oriented.push(OrientedEdge::new(eid, forward));
+        }
+        if !build_ok {
+            continue;
+        }
+        let Ok(wire) = Wire::new(oriented, true) else {
+            continue;
+        };
+        let wid = topo.add_wire(wire);
+        new_faces.push(Face::new(
+            wid,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: cap.out_normal,
+                d: cap.out_normal.dot(verts3d[0] - origin),
+            },
+        ));
+    }
+
+    for f in new_faces {
+        let fid = topo.add_face(f);
+        face_ids.push(fid);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
