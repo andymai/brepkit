@@ -105,6 +105,16 @@ pub fn build_solid(topo: &mut Topology, selected: &[SelectedFace]) -> Result<Sol
     // This is operation-safe: only operates on BOP-selected faces.
     merge_duplicate_edges(topo, &mut face_ids)?;
 
+    // Step 0b2: Drop doubled faces — two (or more) selected faces whose outer
+    // wires reference the identical set of (merged) edge entities. Such faces
+    // are geometrically coincident copies bounding zero volume between them
+    // (e.g. the baseplate dovetail groove cut: the slanted slab wall and the
+    // groove flank each emit the same corner triangle, and after edge-merging
+    // both reference the same three edges). Keeping them makes every shared edge
+    // incident to 3+ faces (non-manifold). Removing the whole group is sound:
+    // coincident faces with one identical boundary cancel.
+    remove_doubled_faces(topo, &mut face_ids);
+
     if face_ids.is_empty() {
         return Err(AlgoError::AssemblyFailed(
             "all faces avoided (all have free edges)".into(),
@@ -1928,6 +1938,71 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
     );
 
     Ok(())
+}
+
+/// Remove doubled faces: two or more selected faces whose outer wires reference
+/// the identical multiset of edge entities.
+///
+/// After [`merge_duplicate_edges`] has unified shared edges, two geometrically
+/// coincident sub-faces (the same boundary traced twice) reference the exact
+/// same edge IDs. Such faces bound zero volume between them and make every one
+/// of their shared edges incident to 3+ faces (non-manifold). This arises when
+/// the planar-arrangement splitter, fed a foreign (off-plane) section, emits a
+/// sliver region that duplicates the true owner face on the adjacent surface —
+/// the baseplate dovetail groove cut, where the slanted slab wall and the groove
+/// flank each produce the same corner triangle.
+///
+/// Keying on the merged-edge-ID multiset is exact (no tolerance): only faces
+/// that literally share every boundary edge group together, and a coincident
+/// pair with one identical boundary always cancels, so dropping the whole group
+/// is sound. Inner wires are ignored — a doubled hole boundary is not a
+/// manifold defect on its own and removing the holed face would be unsafe.
+fn remove_doubled_faces(topo: &Topology, face_ids: &mut Vec<FaceId>) {
+    use brepkit_topology::edge::EdgeId;
+    use brepkit_topology::wire::OrientedEdge;
+
+    // Key = sorted outer- AND inner-wire edge-ID multiset, so a face only
+    // matches a TRULY identical one — a holed face never collides with a
+    // coincident spurious non-holed copy (which would otherwise drop it).
+    let mut groups: HashMap<Vec<EdgeId>, Vec<usize>> = HashMap::new();
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let Ok(face) = topo.face(fid) else { continue };
+        let Ok(wire) = topo.wire(face.outer_wire()) else {
+            continue;
+        };
+        let mut key: Vec<EdgeId> = wire.edges().iter().map(OrientedEdge::edge).collect();
+        for &iw in face.inner_wires() {
+            if let Ok(inner) = topo.wire(iw) {
+                key.extend(inner.edges().iter().map(OrientedEdge::edge));
+            }
+        }
+        key.sort_by_key(|e| e.index());
+        groups.entry(key).or_default().push(fi);
+    }
+
+    let mut drop_idx: HashSet<usize> = HashSet::new();
+    for members in groups.values() {
+        if members.len() >= 2 {
+            for &m in members {
+                drop_idx.insert(m);
+            }
+        }
+    }
+
+    if drop_idx.is_empty() {
+        return;
+    }
+    log::debug!(
+        "remove_doubled_faces: dropped {} doubled faces",
+        drop_idx.len()
+    );
+    let mut keep = Vec::with_capacity(face_ids.len() - drop_idx.len());
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        if !drop_idx.contains(&fi) {
+            keep.push(fid);
+        }
+    }
+    *face_ids = keep;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
