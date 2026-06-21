@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.3](https://github.com/andymai/brepkit/compare/v2.115.2...v2.115.3) (2026-06-21)
+
+
+### Bug Fixes
+
+* **algo,operations:** coincident-contact Intersect classifier + flatten normal fixes ([#941](https://github.com/andymai/brepkit/issues/941)) ([7a202d6](https://github.com/andymai/brepkit/commit/7a202d6fe7c2e7c543a873bd7775ee5416aa3cbd))
+
 ## [2.115.2](https://github.com/andymai/brepkit/compare/v2.115.1...v2.115.2) (2026-06-21)
 
 
