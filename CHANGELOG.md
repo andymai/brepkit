@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.8](https://github.com/andymai/brepkit/compare/v2.115.7...v2.115.8) (2026-06-22)
+
+
+### Bug Fixes
+
+* **tessellate:** honor angularTolerance in meshEdges/meshEdgesAll ([#953](https://github.com/andymai/brepkit/issues/953)) ([5962901](https://github.com/andymai/brepkit/commit/5962901cdf90e107bc2af48c0b7988874c1ddb08))
+
 ## [2.115.7](https://github.com/andymai/brepkit/compare/v2.115.6...v2.115.7) (2026-06-22)
 
 
