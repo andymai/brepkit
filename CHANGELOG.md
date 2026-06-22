@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.7](https://github.com/andymai/brepkit/compare/v2.115.6...v2.115.7) (2026-06-22)
+
+
+### Bug Fixes
+
+* **algo:** preserve untouched holes in the holed-cap arrangement split ([#950](https://github.com/andymai/brepkit/issues/950)) ([b0b3144](https://github.com/andymai/brepkit/commit/b0b314433b016d9d6fe436b485d29c1a926aec07))
+
 ## [2.115.6](https://github.com/andymai/brepkit/compare/v2.115.5...v2.115.6) (2026-06-22)
 
 
