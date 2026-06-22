@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.5](https://github.com/andymai/brepkit/compare/v2.115.4...v2.115.5) (2026-06-22)
+
+
+### Bug Fixes
+
+* **algo:** orient partial-overlap cap wire by Newell normal ([#946](https://github.com/andymai/brepkit/issues/946)) ([fffa034](https://github.com/andymai/brepkit/commit/fffa03410de9f4931d239ebc379299924799c9ee))
+
 ## [2.115.4](https://github.com/andymai/brepkit/compare/v2.115.3...v2.115.4) (2026-06-21)
 
 
