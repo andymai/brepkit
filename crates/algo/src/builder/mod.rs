@@ -301,8 +301,31 @@ impl Builder {
 
             match sample {
                 Ok(point) => {
-                    sf.classification =
-                        classifier::classify_point(&self.topo, opposing_solid, point)?;
+                    // Coincident-coplanar fast path: a planar sub-face lying in
+                    // a plane coincident with an opposing-solid face cannot be
+                    // classified by ray-cast — its interior point sits on the
+                    // opposing plane and cardinal rays graze the coincident cap
+                    // (voting wrongly Inside). Classify by 2D containment in the
+                    // opposing face's region instead.
+                    let coincident =
+                        if let brepkit_topology::face::FaceSurface::Plane { normal, d } =
+                            self.topo.face(sf.face_id)?.surface()
+                        {
+                            classifier::classify_coincident_coplanar(
+                                &self.topo,
+                                opposing_solid,
+                                sf.face_id,
+                                *normal,
+                                *d,
+                                self.tol,
+                            )?
+                        } else {
+                            None
+                        };
+                    sf.classification = match coincident {
+                        Some(class) => class,
+                        None => classifier::classify_point(&self.topo, opposing_solid, point)?,
+                    };
                     log::trace!(
                         "classify_sub_faces: idx={idx} face={:?} rank={:?} pt={point:?} class={:?}",
                         sf.face_id,

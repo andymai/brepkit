@@ -144,33 +144,36 @@ fn dovetail_corner_clip_intersect_is_watertight() {
     );
 }
 
-/// Layers 1+2 regression guard (raw GFA, no mesh fallback).
+/// Layers 1+2 + Stage 2 regression guard (raw GFA, no mesh fallback).
 ///
 /// The full operations `boolean()` above still falls back to a mesh because the
-/// raw GFA result is not yet watertight (a residual free=4 splitter defect — the
-/// Layer-3 follow-up). But the two independently-correct fixes that LAND here —
+/// raw GFA result is not yet fully watertight (a residual free=1 splitter
+/// defect). But three independently-correct fixes LAND here:
 ///
-///   Layer 1: `algo::classifier::analytic` now rejects an invalid PIPE
-///            classifier for a fillet-corner cylinder/cone (so the slab's
-///            sub-faces classify via the geometrically-exact ray-cast path
-///            instead of being wrongly called Outside), and
-///   Layer 2: `operations::boolean::flatten_planar_nurbs_faces` now aligns the
+///   Layer 1: `algo::classifier::analytic` rejects an invalid PIPE classifier
+///            for a fillet-corner cylinder/cone (so the slab's sub-faces
+///            classify via the geometrically-exact ray-cast path instead of
+///            being wrongly called Outside),
+///   Layer 2: `operations::boolean::flatten_planar_nurbs_faces` aligns the
 ///            flattened plane normal to the NURBS du×dv normal (so a coincident
 ///            wall's same-domain pair comes out same-orientation instead of
-///            being discarded) —
+///            being discarded), and
+///   Stage 2: `algo::classifier::classify_coincident_coplanar` drops a planar
+///            sub-face that is a wholly-exterior wedge coincident with an
+///            opposing outer face (the clipped-away corner orphan), via 2D
+///            containment + a depth probe — instead of the grazing ray-cast
+///            that wrongly keeps it.
 ///
-/// take the raw GFA intersect from an open shell (free≈74, ~9 faces, most
-/// boundary dropped) to free=4 with EVERY pocket wall present and zero
-/// over-shared edges. This test asserts that improved, measurable state on the
-/// raw `gfa::boolean` result (operands flattened exactly as the operations
-/// boolean flattens them).
+/// Together they take the raw GFA intersect from an open shell (free≈74, ~9
+/// faces) to free=1 with EVERY pocket wall present and zero over-shared edges.
 ///
-/// The residual free=4 (two free legs on each of the z=0 / z=-5 caps at the
-/// rounded corner) is the Layer-3 face-splitter co-circular-arc defect; closing
-/// it un-ignores `dovetail_corner_clip_intersect_is_watertight` above. It is NOT
-/// fixed here (a ray-cast direction change regresses the honeycomb guard).
+/// The residual free=1 (one chord-vs-arc leg on the z=-5 cap at the rounded
+/// corner) is the co-circular-arc section-generation defect (the cap adopts a
+/// straight chord where the corner cylinder uses the arc) — NOT a
+/// classification problem. Closing it un-ignores
+/// `dovetail_corner_clip_intersect_is_watertight` above.
 #[test]
-fn cornerclip_intersect_raw_gfa_reaches_free_le_4() {
+fn cornerclip_intersect_raw_gfa_reaches_free_le_1() {
     use brepkit_algo::bop::BooleanOp as RawOp;
     use brepkit_algo::gfa;
     use brepkit_operations::boolean::flatten_planar_nurbs_faces_for_tests;
@@ -196,12 +199,17 @@ fn cornerclip_intersect_raw_gfa_reaches_free_le_4() {
         "raw GFA must stay free of over-shared edges; got {} faces, {free} free",
         faces.len()
     );
-    // Layers 1+2: open shell (free≈74) → free=4. The residual 4 is the Layer-3
-    // splitter follow-up; do NOT tighten to 0 here.
+    // Layers 1+2: open shell (free≈74) → free=4 (two corner-triangle orphans on
+    // each of the z=0 / z=-5 caps). Stage 2 (coincident-coplanar classification)
+    // drops both orphans by 2D containment → free=1. The residual 1 is a chord-
+    // vs-arc section-generation defect on the bottom cap (the
+    // co-circular-arc-split family), NOT a classification problem — do not tighten
+    // to 0 here.
     assert!(
-        free <= 4,
-        "Layers 1+2 should bring the raw GFA intersect to free<=4; got free={free} \
-         over {} faces (regression — a pipe-classifier or plane-sign bug returned)",
+        free <= 1,
+        "Layers 1+2 + Stage 2 should bring the raw GFA intersect to free<=1; got free={free} \
+         over {} faces (regression — a pipe-classifier, plane-sign, or coincident-cap \
+         classification bug returned)",
         faces.len()
     );
 

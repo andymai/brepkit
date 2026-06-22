@@ -60,6 +60,27 @@ pub fn classify_ray_cast(
     solid: SolidId,
     point: Point3,
 ) -> Result<FaceClass, AlgoError> {
+    let inside_votes = ray_cast_inside_votes(topo, solid, point)?;
+    if inside_votes >= 2 {
+        Ok(FaceClass::Inside)
+    } else {
+        Ok(FaceClass::Outside)
+    }
+}
+
+/// Number of cardinal rays (of three) reporting an odd crossing count.
+///
+/// A point is classified inside when 2+ of the three rays agree; the raw count
+/// distinguishes a confident 3-vote verdict from a grazing 2-vote tie.
+///
+/// # Errors
+///
+/// Returns [`AlgoError::ClassificationFailed`] if no face geometry is collected.
+pub fn ray_cast_inside_votes(
+    topo: &Topology,
+    solid: SolidId,
+    point: Point3,
+) -> Result<u8, AlgoError> {
     let face_data = collect_face_geoms(topo, solid)?;
 
     if face_data.is_empty() {
@@ -85,12 +106,7 @@ pub fn classify_ray_cast(
             inside_votes += 1;
         }
     }
-
-    if inside_votes >= 2 {
-        Ok(FaceClass::Inside)
-    } else {
-        Ok(FaceClass::Outside)
-    }
+    Ok(inside_votes)
 }
 
 /// Sample a wire into a polygon by geometrically chaining its edges.
@@ -552,6 +568,63 @@ pub fn point_in_face_3d(point: Point3, polygon: &[Point3], normal: &Vec3) -> boo
 /// Compute `n . p` treating a `Point3` as a direction vector.
 fn dot_normal_point(n: Vec3, p: Point3) -> f64 {
     n.dot(Vec3::new(p.x(), p.y(), p.z()))
+}
+
+/// A planar face's sampled boundary: `(outer_polygon, hole_polygons, normal)`.
+pub type FacePolygons = (Vec<Point3>, Vec<Vec<Point3>>, Vec3);
+
+/// Build a planar face's boundary as `(outer_polygon, hole_polygons, normal)`.
+///
+/// The outer wire and inner wires are sampled into polylines (arcs densified
+/// via [`wire_polygon`]) so a rounded-corner cap's true region is captured.
+/// Returns `None` if the outer polygon is degenerate (< 3 points).
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] on a topology lookup failure.
+pub fn planar_face_polygons(
+    topo: &Topology,
+    face_id: brepkit_topology::face::FaceId,
+) -> Result<Option<FacePolygons>, AlgoError> {
+    let face = topo.face(face_id)?;
+    let verts = wire_polygon(topo, face.outer_wire())?;
+    if verts.len() < 3 {
+        return Ok(None);
+    }
+    let raw_normal =
+        if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() {
+            *normal
+        } else {
+            newell_normal(&verts)
+        };
+    let normal = if face.is_reversed() {
+        -raw_normal
+    } else {
+        raw_normal
+    };
+    let mut holes = Vec::with_capacity(face.inner_wires().len());
+    for &iw in face.inner_wires() {
+        let hole = wire_polygon(topo, iw)?;
+        if hole.len() >= 3 {
+            holes.push(hole);
+        }
+    }
+    Ok(Some((verts, holes, normal)))
+}
+
+/// Test whether `point` lies inside the planar face's region (inside the outer
+/// polygon and outside every hole), projecting along the face normal.
+#[must_use]
+pub fn point_in_planar_region(
+    point: Point3,
+    outer: &[Point3],
+    holes: &[Vec<Point3>],
+    normal: &Vec3,
+) -> bool {
+    if !point_in_face_3d(point, outer, normal) {
+        return false;
+    }
+    !holes.iter().any(|h| point_in_face_3d(point, h, normal))
 }
 
 /// Compute the solid-level AABB from boundary vertices.
