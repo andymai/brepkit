@@ -228,11 +228,18 @@ impl BrepKernel {
         &self,
         solid: u32,
         deflection: f64,
+        angular_tolerance: Option<f64>,
     ) -> Result<crate::shapes::JsEdgeLines, JsError> {
         validate_positive(deflection, "deflection")?;
+        let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let solid_id = self.resolve_solid(solid)?;
-        let edge_lines =
-            tessellate::sample_solid_edges_filtered(&self.topo, solid_id, deflection, true)?;
+        let edge_lines = tessellate::sample_solid_edges_filtered(
+            &self.topo,
+            solid_id,
+            deflection,
+            angular_tol,
+            true,
+        )?;
         Ok(edge_lines.into())
     }
 
@@ -245,11 +252,18 @@ impl BrepKernel {
         &self,
         solid: u32,
         deflection: f64,
+        angular_tolerance: Option<f64>,
     ) -> Result<crate::shapes::JsEdgeLines, JsError> {
         validate_positive(deflection, "deflection")?;
+        let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let solid_id = self.resolve_solid(solid)?;
-        let edge_lines =
-            tessellate::sample_solid_edges_filtered(&self.topo, solid_id, deflection, false)?;
+        let edge_lines = tessellate::sample_solid_edges_filtered(
+            &self.topo,
+            solid_id,
+            deflection,
+            angular_tol,
+            false,
+        )?;
         Ok(edge_lines.into())
     }
 }
@@ -362,7 +376,7 @@ mod tests {
     #[test]
     fn mesh_edges_all_box_produces_nonempty_edge_lines() {
         let (k, solid) = kernel_with_box();
-        let edge_lines = k.mesh_edges_all(solid, 0.1).unwrap();
+        let edge_lines = k.mesh_edges_all(solid, 0.1, None).unwrap();
         assert!(edge_lines.edge_count() > 0, "expected edges, got 0");
         assert!(
             !edge_lines.positions().is_empty(),
@@ -374,7 +388,7 @@ mod tests {
     fn mesh_edges_all_box_has_twelve_edges() {
         // A box has exactly 12 edges.
         let (k, solid) = kernel_with_box();
-        let edge_lines = k.mesh_edges_all(solid, 0.1).unwrap();
+        let edge_lines = k.mesh_edges_all(solid, 0.1, None).unwrap();
         assert_eq!(
             edge_lines.edge_count(),
             12,

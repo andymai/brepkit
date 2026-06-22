@@ -865,11 +865,40 @@ fn sample_solid_edges_cylinder() {
         edge_lines.positions.len()
     );
 
-    let all_edges = sample_solid_edges_filtered(&topo, solid, 0.1, false).unwrap();
+    let all_edges = sample_solid_edges_filtered(
+        &topo,
+        solid,
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        false,
+    )
+    .unwrap();
     assert!(
         all_edges.offsets.len() >= 3,
         "unfiltered cylinder should have at least 3 edges, got {}",
         all_edges.offsets.len()
+    );
+}
+
+#[test]
+fn sample_solid_edges_angular_tolerance_densifies_curves() {
+    // A tighter angular tolerance must refine curved edges (the cylinder's two
+    // circle rims) even with the linear deflection held fixed. Regression guard:
+    // meshEdges() previously hardcoded DEFAULT_ANGULAR_TOL, so the caller's
+    // angular tolerance had no effect (brepkit#952).
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 3.0).unwrap();
+
+    // Loose linear deflection so the angular criterion governs sample density.
+    let deflection = 1.0;
+    let coarse = sample_solid_edges_filtered(&topo, solid, deflection, 0.5, false).unwrap();
+    let fine = sample_solid_edges_filtered(&topo, solid, deflection, 0.05, false).unwrap();
+
+    assert!(
+        fine.positions.len() > coarse.positions.len(),
+        "finer angular tolerance must add edge samples: coarse={}, fine={}",
+        coarse.positions.len(),
+        fine.positions.len()
     );
 }
 
@@ -900,7 +929,14 @@ fn sample_solid_edges_boolean_filters_coplanar() {
     .unwrap();
 
     let filtered = sample_solid_edges(&topo, fused, 0.1).unwrap();
-    let all = sample_solid_edges_filtered(&topo, fused, 0.1, false).unwrap();
+    let all = sample_solid_edges_filtered(
+        &topo,
+        fused,
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        false,
+    )
+    .unwrap();
 
     // Exactly the three coplanar seams (top, bottom, front) must be dropped — a bare
     // `filtered < unfiltered` would still pass if the boolean output drifted to a

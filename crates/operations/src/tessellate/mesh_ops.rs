@@ -287,7 +287,13 @@ pub fn sample_solid_edges(
     solid: SolidId,
     deflection: f64,
 ) -> Result<EdgeLines, crate::OperationsError> {
-    sample_solid_edges_filtered(topo, solid, deflection, true)
+    sample_solid_edges_filtered(
+        topo,
+        solid,
+        deflection,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        true,
+    )
 }
 
 /// Sample edges of a solid, optionally filtering out smooth (co-surface) edges.
@@ -296,6 +302,10 @@ pub fn sample_solid_edges(
 /// underlying geometric surface are omitted. These edges arise from boolean
 /// face-splitting and add wireframe clutter without representing visible creases.
 ///
+/// `angular_tol` caps the per-segment turn angle when discretizing curved
+/// edges (circles, ellipses, NURBS); a smaller value yields smoother polylines.
+/// Pass [`brepkit_math::chord::DEFAULT_ANGULAR_TOL`] for the historical default.
+///
 /// # Errors
 ///
 /// Returns an error if topology traversal or edge sampling fails.
@@ -303,6 +313,7 @@ pub fn sample_solid_edges_filtered(
     topo: &Topology,
     solid: SolidId,
     deflection: f64,
+    angular_tol: f64,
     filter_smooth: bool,
 ) -> Result<EdgeLines, crate::OperationsError> {
     let edges = brepkit_topology::explorer::solid_edges(topo, solid)?;
@@ -332,13 +343,7 @@ pub fn sample_solid_edges_filtered(
 
         result.offsets.push(result.positions.len());
         let edge = topo.edge(*edge_id)?;
-        let points = sample_edge(
-            topo,
-            edge,
-            deflection,
-            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
-            false,
-        )?;
+        let points = sample_edge(topo, edge, deflection, angular_tol, false)?;
         result.positions.extend(points);
     }
 
