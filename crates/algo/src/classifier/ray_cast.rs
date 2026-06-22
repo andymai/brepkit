@@ -576,7 +576,7 @@ pub type FacePolygons = (Vec<Point3>, Vec<Vec<Point3>>, Vec3);
 /// Build a planar face's boundary as `(outer_polygon, hole_polygons, normal)`.
 ///
 /// The outer wire and inner wires are sampled into polylines (arcs densified
-/// via [`wire_polygon`]) so a rounded-corner cap's true region is captured.
+/// via `wire_polygon`) so a rounded-corner cap's true region is captured.
 /// Returns `None` if the outer polygon is degenerate (< 3 points).
 ///
 /// # Errors
