@@ -332,9 +332,15 @@ fn split_plane_boundary_arcs_at_points(
 /// sub-segment that lies inside the hole — and split the hole edges at those
 /// crossings. The wire builder then traces the real material region.
 ///
-/// Returns the section + hole edges to append to the boundary, or `None` to
-/// fall back to the attach-whole-hole path (curved holes/sections, or no
-/// crossing — nothing to integrate).
+/// Returns `(woven_edges, passthrough_hole_indices)` to append to the boundary,
+/// or `None` to fall back to the attach-whole-hole path (curved holes/sections,
+/// or no crossing — nothing to integrate). `passthrough_hole_indices` are the
+/// holes that DON'T interact with any section: they are left out of the woven
+/// arrangement (so their exact — possibly arc-bounded — geometry is not
+/// chord-fragmented into spurious sliver regions) and must be attached whole by
+/// the caller. Only holes a section actually crosses (or that cross a section)
+/// need weaving; a baseplate top cut at one corner has 15 untouched cell
+/// openings that must stay intact.
 fn integrate_holes_plane(
     sections: &[SectionEdge],
     inner_wires: &[Vec<OrientedPCurveEdge>],
@@ -342,7 +348,7 @@ fn integrate_holes_plane(
     surface: &FaceSurface,
     wire_pts: &[Point3],
     base_src: usize,
-) -> Option<Vec<OrientedPCurveEdge>> {
+) -> Option<(Vec<OrientedPCurveEdge>, Vec<usize>)> {
     // Line sections are split at hole crossings (the in-hole sub-segment is air,
     // dropped). Arc sections cannot be chord-trimmed here, so they are carried
     // through whole — valid only when an arc lies clear of every hole (a corner
@@ -353,6 +359,52 @@ fn integrate_holes_plane(
     let (line_sections, arc_sections): (Vec<&SectionEdge>, Vec<&SectionEdge>) = sections
         .iter()
         .partition(|s| matches!(s.curve_3d, EdgeCurve::Line));
+
+    // Identify holes that actually interact with a section: a section endpoint
+    // lies inside the hole, OR a section segment crosses one of the hole's
+    // edges. Non-interacting holes are left whole (returned as passthrough) so
+    // their exact arc geometry is preserved instead of being chord-fragmented
+    // by the arrangement subdivision.
+    let sec_uv_all: Vec<(Point2, Point2)> = sections
+        .iter()
+        .map(|s| (frame.project(s.start), frame.project(s.end)))
+        .collect();
+    let interacts = |hole: &[OrientedPCurveEdge]| -> bool {
+        let poly: Vec<Point2> = hole.iter().map(|e| frame.project(e.start_3d)).collect();
+        if poly.len() >= 3 {
+            for (a, b) in &sec_uv_all {
+                if super::classify_2d::point_in_polygon_2d(*a, &poly)
+                    || super::classify_2d::point_in_polygon_2d(*b, &poly)
+                {
+                    return true;
+                }
+            }
+        }
+        for e in hole {
+            let h0 = frame.project(e.start_3d);
+            let h1 = frame.project(e.end_3d);
+            for (a, b) in &sec_uv_all {
+                if seg_cross_param(h0, h1, *a, *b).is_some() {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    let mut passthrough: Vec<usize> = Vec::new();
+    let woven_inner_wires: Vec<Vec<OrientedPCurveEdge>> = inner_wires
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            if interacts(h) {
+                Some(h.clone())
+            } else {
+                passthrough.push(i);
+                None
+            }
+        })
+        .collect();
+    let inner_wires: &[Vec<OrientedPCurveEdge>] = &woven_inner_wires;
 
     // Chord polygon per hole (arc edges contribute their start endpoint, which
     // is the right fidelity for the "is this section sub-segment inside the
@@ -590,7 +642,69 @@ fn integrate_holes_plane(
         });
     }
 
-    any_crossing.then_some(out)
+    any_crossing.then_some((out, passthrough))
+}
+
+/// Attach each whole hole to the sub-face that geometrically contains it.
+///
+/// A hole is assigned to the INNERMOST containing sub-face (the one whose own
+/// interior point lies inside the most other containing sub-faces) so a hole
+/// nested inside an annular region lands in the inner ring, not the outer disk.
+/// Falls back to the largest sub-face when no sub-face contains the hole's
+/// interior probe (degenerate sample or a hole straddling sub-face boundaries),
+/// so the hole geometry is never silently dropped.
+fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurveEdge>]) {
+    if sub_faces.is_empty() || holes.is_empty() {
+        return;
+    }
+    let sub_outer_uv: Vec<Vec<Point2>> = sub_faces
+        .iter()
+        .map(|sf| sample_wire_loop_uv(&sf.outer_wire))
+        .collect();
+    let sub_interior: Vec<Point2> = sub_outer_uv
+        .iter()
+        .map(|pts| super::classify_2d::sample_interior_point(pts))
+        .collect();
+    let largest_idx = || -> Option<usize> {
+        sub_outer_uv
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                super::classify_2d::signed_area_2d(a)
+                    .abs()
+                    .partial_cmp(&super::classify_2d::signed_area_2d(b).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+    };
+    for hole in holes {
+        let hole_pts = sample_wire_loop_uv(hole);
+        if hole_pts.len() >= 3 {
+            let probe = super::classify_2d::sample_interior_point(&hole_pts);
+            let containing: Vec<usize> = (0..sub_faces.len())
+                .filter(|&i| super::classify_2d::point_in_polygon_2d(probe, &sub_outer_uv[i]))
+                .collect();
+            let best = containing.iter().copied().max_by_key(|&i| {
+                containing
+                    .iter()
+                    .filter(|&&j| {
+                        j != i
+                            && super::classify_2d::point_in_polygon_2d(
+                                sub_interior[i],
+                                &sub_outer_uv[j],
+                            )
+                    })
+                    .count()
+            });
+            if let Some(i) = best {
+                sub_faces[i].inner_wires.push(hole.clone());
+                continue;
+            }
+        }
+        if let Some(idx) = largest_idx() {
+            sub_faces[idx].inner_wires.push(hole.clone());
+        }
+    }
 }
 
 /// True when any wire loop revisits a UV vertex — the signature of a
@@ -1370,16 +1484,6 @@ fn arrangement_regions_from_inputs(
             if !depth[i].is_multiple_of(2) {
                 continue; // odd depth = hole in its container, not a solid region
             }
-            // Drop a solid region that fills an original hole (air, not material).
-            if hole_polys
-                .iter()
-                .any(|poly| super::classify_2d::point_in_polygon_2d(probes[i], poly))
-            {
-                continue;
-            }
-            let Some(outer_wire) = build_ccw_wire(interior[i]) else {
-                continue;
-            };
             // Direct children (depth+1, parented to i) become inner wires (the
             // holes of this solid region). A child that is itself an original
             // hole still bounds this region, so include it regardless.
@@ -1408,6 +1512,20 @@ fn arrangement_regions_from_inputs(
                 probes[i]
             } else {
                 find_point_outside_holes(&polys[i], &inner)
+            };
+            // Drop a solid region that fills an original hole (air, not material).
+            // Probe at the MATERIAL seed (outside this region's own inner-wire
+            // holes), not the raw outer-polygon centroid: a large holed cap (a
+            // 16-cell baseplate top) has a centroid that can land inside one of
+            // its own cell openings, which would wrongly discard the entire cap.
+            if hole_polys
+                .iter()
+                .any(|poly| super::classify_2d::point_in_polygon_2d(seed_uv, poly))
+            {
+                continue;
+            }
+            let Some(outer_wire) = build_ccw_wire(interior[i]) else {
+                continue;
             };
             result.push(SplitSubFace {
                 surface: surface.clone(),
@@ -1811,21 +1929,48 @@ pub fn split_face_2d(
 
     // Holed planar face cut by sections: weave the hole boundaries into the
     // arrangement (trim sections at hole crossings, split hole edges) so the
-    // wire builder traces the true material region. When this applies, the
-    // original holes are consumed here and not attached whole below.
+    // wire builder traces the true material region. Only holes a section
+    // actually interacts with are woven; non-interacting holes are returned as
+    // `passthrough` indices and attached whole below (so a cap with many
+    // untouched openings — a baseplate top cut at one corner — keeps the other
+    // openings' exact arc geometry instead of chord-fragmenting them).
+    let mut woven_hole_indices: Vec<usize> = Vec::new();
     let holes_integrated = if is_plane && !original_inner_wires.is_empty() {
-        integrate_holes_plane(
+        if let Some((extra, passthrough)) = integrate_holes_plane(
             sections,
             &original_inner_wires,
             frame,
             &surface,
             &wire_pts,
             1_000_000,
-        )
-        .map(|extra| all_edges.extend(extra))
-        .is_some()
+        ) {
+            all_edges.extend(extra);
+            let pass: std::collections::HashSet<usize> = passthrough.into_iter().collect();
+            woven_hole_indices = (0..original_inner_wires.len())
+                .filter(|i| !pass.contains(i))
+                .collect();
+            true
+        } else {
+            false
+        }
     } else {
         false
+    };
+    // The holes the arrangement actually consumed (woven). The passthrough holes
+    // are attached whole after the split (see the `!holes_integrated` /
+    // passthrough attach pass below).
+    let woven_inner_wires: Vec<Vec<OrientedPCurveEdge>> = woven_hole_indices
+        .iter()
+        .map(|&i| original_inner_wires[i].clone())
+        .collect();
+    let passthrough_inner_wires: Vec<Vec<OrientedPCurveEdge>> = if holes_integrated {
+        let woven: std::collections::HashSet<usize> = woven_hole_indices.iter().copied().collect();
+        (0..original_inner_wires.len())
+            .filter(|i| !woven.contains(i))
+            .map(|i| original_inner_wires[i].clone())
+            .collect()
+    } else {
+        Vec::new()
     };
 
     for section in sections {
@@ -2088,10 +2233,11 @@ pub fn split_face_2d(
     if holes_integrated
         && is_plane
         && original_inner_wires.len() >= 2
-        && let Some(result) = arrangement_regions_from_combined(
+        && !woven_inner_wires.is_empty()
+        && let Some(mut result) = arrangement_regions_from_combined(
             &surface,
             &all_edges,
-            &original_inner_wires,
+            &woven_inner_wires,
             rank,
             reversed,
             face_id,
@@ -2099,6 +2245,12 @@ pub fn split_face_2d(
             tol.linear,
         )
     {
+        // Attach the passthrough holes (openings no section touched) whole to
+        // the sub-face that geometrically contains each — they were deliberately
+        // kept out of the woven arrangement so their exact arc geometry survives.
+        if !passthrough_inner_wires.is_empty() {
+            attach_whole_holes(&mut result, &passthrough_inner_wires);
+        }
         return result;
     }
 
