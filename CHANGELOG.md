@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.6](https://github.com/andymai/brepkit/compare/v2.115.5...v2.115.6) (2026-06-22)
+
+
+### Bug Fixes
+
+* **algo:** coincident-coplanar classification for clipped-away corner wedges ([#948](https://github.com/andymai/brepkit/issues/948)) ([1b16e32](https://github.com/andymai/brepkit/commit/1b16e32a6ac63aabe6ea1644a38f46f30c78da92))
+
 ## [2.115.5](https://github.com/andymai/brepkit/compare/v2.115.4...v2.115.5) (2026-06-22)
 
 
