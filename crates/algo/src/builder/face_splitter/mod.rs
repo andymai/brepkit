@@ -2610,6 +2610,30 @@ pub fn split_face_2d(
         }
     }
 
+    // Holes-integrated loops fallback. The arrangement happy path
+    // (`arrangement_regions_from_combined`) attaches the passthrough holes
+    // (openings no section touched, deliberately kept out of the woven
+    // arrangement to preserve their exact arc geometry) before returning. When
+    // that path is SKIPPED — the arrangement returned `None` on a degenerate
+    // weave (e.g. a woven-hole arc endpoint coinciding with another woven edge
+    // chord trips the arc-split bail) — execution falls through to this loops
+    // path, where the `!holes_integrated`-gated distribution above does not
+    // fire. Without this, the passthrough holes are silently dropped. The woven
+    // holes are already carried here via `all_edges` (their edges were extended
+    // in and the wire builder traces them), so only the passthrough set needs
+    // re-attaching. `attach_whole_holes` never drops — it falls back to the
+    // largest sub-face when no sub-face contains a hole's interior probe.
+    //
+    // No dedicated regression test: reaching this branch needs the woven
+    // arrangement to bail to `None` (an exact arc-endpoint/chord coincidence
+    // deep in `arrangement_regions_from_inputs`) WHILE passthrough holes exist,
+    // a degenerate float-coincident internal state not feasibly constructible
+    // from the public solid API. The reused `attach_whole_holes` never-drop
+    // contract is exercised by the happy path (`dovetail_tongue_groove_cut_inmem`).
+    if holes_integrated && !passthrough_inner_wires.is_empty() {
+        attach_whole_holes(&mut sub_faces, &passthrough_inner_wires);
+    }
+
     sub_faces
 }
 
