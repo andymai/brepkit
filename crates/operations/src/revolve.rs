@@ -155,6 +155,99 @@ struct WireRevolveData {
     n: usize,
 }
 
+/// Fast exact path for revolving a single circular profile a full turn: the
+/// result is a torus, built as one analytic [`FaceSurface::Torus`] face.
+///
+/// The general revolve splits the circle into line chords and revolves each
+/// into a NURBS band, which inscribes the circle and undershoots the analytic
+/// volume by ~2% (gh #968). A `Torus` face is integrated exactly.
+///
+/// Returns `Ok(None)` — fall back to the general revolve — unless the profile
+/// is a single closed circle, the revolution is full, the axis lies in the
+/// profile plane, and the circle clears the axis (`major > minor`, so the
+/// torus does not self-intersect; the sphere and spindle cases fall back).
+fn try_circle_revolution_torus(
+    topo: &mut Topology,
+    face: FaceId,
+    axis_origin: Point3,
+    axis: Vec3,
+    is_full: bool,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    if !is_full {
+        return Ok(None);
+    }
+
+    let face_data = topo.face(face)?;
+    if !face_data.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let normal = match face_data.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => return Ok(None),
+    };
+
+    let wire = topo.wire(face_data.outer_wire())?;
+    let oriented = wire.edges();
+    if oriented.len() != 1 {
+        return Ok(None);
+    }
+    let edge = topo.edge(oriented[0].edge())?;
+    let (center, radius) = match edge.curve() {
+        EdgeCurve::Circle(c) => (c.center(), c.radius()),
+        _ => return Ok(None),
+    };
+
+    let tol = Tolerance::new();
+    // The axis must lie in the profile plane (perpendicular to its normal),
+    // else the swept surface is not a torus of revolution.
+    if normal.dot(axis).abs() > 1e-9 {
+        return Ok(None);
+    }
+
+    // Major radius = perpendicular distance from the circle center to the axis.
+    let to_center = center - axis_origin;
+    let along = to_center.dot(axis);
+    let major_radius = (to_center - axis * along).length();
+    // The circle must clear the axis; otherwise the revolution is a sphere
+    // (center on axis) or a self-intersecting spindle — both fall back.
+    if major_radius <= radius + tol.linear {
+        return Ok(None);
+    }
+
+    let torus_center = axis_origin + axis * along;
+    let surface = brepkit_math::surfaces::ToroidalSurface::with_axis(
+        torus_center,
+        major_radius,
+        radius,
+        axis,
+    )
+    .map_err(crate::OperationsError::Math)?;
+
+    // One doubly-periodic torus face, like `primitives::make_torus`: a single
+    // seam vertex with two degenerate seam edges forming the fundamental
+    // polygon a → b → a⁻¹ → b⁻¹.
+    let seam = surface.evaluate(0.0, 0.0);
+    let v0 = topo.add_vertex(Vertex::new(seam, tol.linear));
+    let ea = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+    let eb = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+    let wid = topo.add_wire(
+        Wire::new(
+            vec![
+                OrientedEdge::new(ea, true),
+                OrientedEdge::new(eb, true),
+                OrientedEdge::new(ea, false),
+                OrientedEdge::new(eb, false),
+            ],
+            true,
+        )
+        .map_err(crate::OperationsError::Topology)?,
+    );
+    let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Torus(surface)));
+    let shell_id =
+        topo.add_shell(Shell::new(vec![face_id]).map_err(crate::OperationsError::Topology)?);
+    Ok(Some(topo.add_solid(Solid::new(shell_id, vec![]))))
+}
+
 /// Revolve a planar face around an axis to produce a solid of revolution.
 ///
 /// # Parameters
@@ -209,6 +302,14 @@ pub fn revolve(
     };
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
+
+    // Fast exact path: a full revolution of a single circular profile that
+    // clears the axis is a torus. Build it as one analytic `ToroidalSurface`
+    // face instead of faceting the circle into chords, which undershoots the
+    // analytic volume by ~2% (gh #968).
+    if let Some(solid) = try_circle_revolution_torus(topo, face, axis_origin, axis, is_full)? {
+        return Ok(solid);
+    }
 
     // Ensure input_normal agrees with actual vertex winding (CCW convention).
     // If the outer wire is CW-wound (e.g. from brepjs), the Newell normal
@@ -588,6 +689,67 @@ mod tests {
         // The profile sweeps fully around, merging start/end into a closed ring.
         let chi = euler_characteristic(&topo, solid);
         assert_eq!(chi, 0, "full revolve should have χ=0 (genus-1), got {chi}");
+    }
+
+    #[test]
+    fn revolve_circle_full_turn_is_exact_torus() {
+        // gh #968: revolving a circle (r=2, center x=10) a full turn around the
+        // Y axis is a torus (R=10, r=2). It must be one analytic Torus face with
+        // the exact analytic volume 2π²Rr², not a faceted ~2%-low approximation.
+        use brepkit_topology::builder::make_circle_edge;
+
+        let mut topo = Topology::new();
+        let circle = make_circle_edge(
+            &mut topo,
+            Point3::new(10.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            1e-7,
+        )
+        .unwrap();
+        let wid = topo.add_wire(Wire::new(vec![OrientedEdge::new(circle, true)], true).unwrap());
+        let profile = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let solid = revolve(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let shell = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        assert_eq!(
+            shell.faces().len(),
+            1,
+            "torus is a single doubly-periodic face"
+        );
+        assert!(matches!(
+            topo.face(shell.faces()[0]).unwrap().surface(),
+            FaceSurface::Torus(_)
+        ));
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let expected = 2.0 * PI * PI * 10.0 * 4.0;
+        assert!(
+            (vol - expected).abs() / expected < 1e-6,
+            "expected exact torus volume {expected}, got {vol}"
+        );
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
     }
 
     #[test]
