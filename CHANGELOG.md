@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.115.9](https://github.com/andymai/brepkit/compare/v2.115.8...v2.115.9) (2026-06-23)
+
+
+### Bug Fixes
+
+* **measure:** clamp volume tessellation deflection for accurate curved-face volume ([#959](https://github.com/andymai/brepkit/issues/959)) ([a41d03b](https://github.com/andymai/brepkit/commit/a41d03b22d90da6966f0c8fe8b72611080b87ea0))
+
 ## [2.115.8](https://github.com/andymai/brepkit/compare/v2.115.7...v2.115.8) (2026-06-22)
 
 
