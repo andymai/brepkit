@@ -45,6 +45,74 @@ fn extrude_triangle_creates_prism() {
 }
 
 #[test]
+fn extrude_rect_with_circular_hole_uses_exact_cylinder() {
+    // gh #966: a rectangle with a circular hole, extruded, must remove the
+    // exact analytic π·r²·h instead of an inscribed-polygon prism. The hole
+    // wall becomes ONE cylinder face, not a faceted ring, and the measured
+    // volume matches the analytic value.
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::builder::{make_circle_edge, make_polygon_wire};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let tol = 1e-7;
+    let mut topo = Topology::new();
+
+    let outer = make_polygon_wire(
+        &mut topo,
+        &[
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(20.0, 0.0, 0.0),
+            Point3::new(20.0, 20.0, 0.0),
+            Point3::new(0.0, 20.0, 0.0),
+        ],
+        tol,
+    )
+    .unwrap();
+    let hole = make_circle_edge(
+        &mut topo,
+        Point3::new(10.0, 10.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        3.0,
+        tol,
+    )
+    .unwrap();
+    let inner = topo.add_wire(Wire::new(vec![OrientedEdge::new(hole, false)], true).unwrap());
+    let face = topo.add_face(Face::new(
+        outer,
+        vec![inner],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 10.0).unwrap();
+
+    let shell = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+    let cyl_count = shell
+        .faces()
+        .iter()
+        .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .count();
+    assert_eq!(cyl_count, 1, "hole wall must be one exact cylinder face");
+
+    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+    let expected = (400.0 - std::f64::consts::PI * 9.0) * 10.0;
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "expected ~{expected}, got {vol}"
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+}
+
+#[test]
 fn extrude_zero_direction_error() {
     let mut topo = Topology::new();
     let face = make_unit_square_face(&mut topo);

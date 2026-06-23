@@ -105,6 +105,39 @@ fn curve_is_analytic_circle(curve: &EdgeCurve) -> bool {
     }
 }
 
+/// Whether an inner (hole) wire is a single closed *circle* — a true circle or
+/// a rational NURBS recognized as one. This is the only hole the extrude path
+/// turns into a single exact cylinder wall (with a known inward orientation).
+///
+/// Ellipses and generic closed curves are deliberately excluded: their
+/// single-face pass-through wall is a ruled NURBS whose orientation can't be
+/// derived from the degenerate `start==end` endpoints, so they keep the
+/// chord-split path, which stays correct (if faceted).
+fn inner_wire_is_single_circle(topo: &Topology, wire_id: WireId) -> bool {
+    let Ok(wire) = topo.wire(wire_id) else {
+        return false;
+    };
+    let edges = wire.edges();
+    if edges.len() != 1 {
+        return false;
+    }
+    let Ok(edge) = topo.edge(edges[0].edge()) else {
+        return false;
+    };
+    if edge.start() != edge.end() {
+        return false; // not a closed loop
+    }
+    let tol = Tolerance::new().linear;
+    match edge.curve() {
+        EdgeCurve::Circle(_) => true,
+        EdgeCurve::NurbsCurve(nc) => matches!(
+            brepkit_geometry::convert::recognize_curve(nc, tol * 100.0),
+            brepkit_geometry::convert::RecognizedCurve::Circle { .. }
+        ),
+        _ => false,
+    }
+}
+
 /// Compute the number of segments for splitting a closed edge based on
 /// the chord-height deviation bound.
 ///
@@ -264,26 +297,6 @@ fn winding_sample_points(
 /// Returns: `(input_verts, input_positions, input_oriented, input_edge_ids,
 ///            top_verts, top_edge_ids, vertical_edge_ids)`
 #[allow(clippy::type_complexity)]
-fn extrude_wire_vertices(
-    topo: &mut Topology,
-    wire_id: WireId,
-    offset: Vec3,
-) -> Result<
-    (
-        Vec<VertexId>,
-        Vec<Point3>,
-        Vec<OrientedEdge>,
-        Vec<EdgeId>,
-        Vec<VertexId>,
-        Vec<EdgeId>,
-        Vec<EdgeId>,
-    ),
-    crate::OperationsError,
-> {
-    extrude_wire_vertices_with(topo, wire_id, offset, /*pass_through_circles=*/ false)
-}
-
-#[allow(clippy::type_complexity)]
 fn extrude_wire_vertices_with(
     topo: &mut Topology,
     wire_id: WireId,
@@ -308,9 +321,9 @@ fn extrude_wire_vertices_with(
     // Check for closed single-edge wires (e.g. a full circle) and split them
     // into multiple edges so that the extrusion can create proper side faces.
     // Closed circles/ellipses (incl. NURBS-recognized ones) optionally pass
-    // through unsplit when the caller can handle analytic side faces. Inner
-    // wires of an extrude DON'T pass through — the inner side face
-    // construction still expects the per-edge polyline layout.
+    // through unsplit when the caller can build analytic side faces: the outer
+    // wire always does, and a single-circle inner (hole) wire does too (one
+    // exact cylinder wall — see `inner_wire_is_single_circle`).
     let oriented = maybe_split_closed_wire_with(
         topo,
         &original_oriented,
@@ -705,7 +718,12 @@ pub fn extrude(
             _iw_top_verts,
             iw_top_edge_ids,
             iw_vert_edge_ids,
-        ) = extrude_wire_vertices(topo, iw_id, offset)?;
+        ) = extrude_wire_vertices_with(
+            topo,
+            iw_id,
+            offset,
+            inner_wire_is_single_circle(topo, iw_id),
+        )?;
 
         // Bottom inner wire: reversed winding (same as outer wire reversal).
         let reversed_inner_edges: Vec<OrientedEdge> = iw_oriented
@@ -841,6 +859,14 @@ pub fn extrude(
             let inner_is_cw = !is_cw;
             let (surface, reversed) =
                 side_face_surface(&edge_curve, p0, p1, cs, ce, offset, inner_is_cw)?;
+
+            // A full closed circle passed through unsplit becomes one exact
+            // cylinder wall, but its start==end vertex makes `edge_dir` zero, so
+            // `side_face_surface` cannot derive the outward direction. A hole
+            // wall always faces into the hole (toward the axis), i.e. opposite
+            // the cylinder's natural outward radial normal, so force the flip.
+            let reversed =
+                reversed || (e_start == e_end && matches!(surface, FaceSurface::Cylinder(_)));
 
             let side_face = if reversed {
                 topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
