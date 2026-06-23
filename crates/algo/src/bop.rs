@@ -124,6 +124,7 @@ pub(crate) fn select_faces(
             if keep {
                 Some(SelectedFace {
                     face_id: sf.face_id,
+                    source_face: sf.source_face,
                     reversed: op == BooleanOp::Cut && sf.rank == Rank::B,
                 })
             } else {
@@ -181,6 +182,7 @@ fn apply_sd_selection(
             if op == BooleanOp::Cut {
                 selected.push(SelectedFace {
                     face_id: sf_a.face_id,
+                    source_face: sf_a.source_face,
                     reversed: false,
                 });
                 continue;
@@ -215,6 +217,7 @@ fn apply_sd_selection(
             };
             selected.push(SelectedFace {
                 face_id: sub_faces[keep].face_id,
+                source_face: sub_faces[keep].source_face,
                 reversed: false,
             });
         } else {
@@ -242,6 +245,10 @@ fn apply_sd_selection(
 pub(crate) struct SelectedFace {
     /// The topology face to include.
     pub face_id: brepkit_topology::face::FaceId,
+    /// The original input face this selection derives from (shape-evolution
+    /// provenance). For a same-domain pair it is the kept representative's
+    /// source.
+    pub source_face: brepkit_topology::face::FaceId,
     /// Whether to reverse this face's orientation in the result.
     pub reversed: bool,
 }
@@ -277,8 +284,10 @@ mod tests {
 
     /// Helper to create a SubFace for testing.
     fn make_sub_face(topo: &mut Topology, rank: Rank, classification: FaceClass) -> SubFace {
+        let fid = dummy_face_id(topo);
         SubFace {
-            face_id: dummy_face_id(topo),
+            face_id: fid,
+            source_face: fid,
             classification,
             rank,
             interior_point: None,

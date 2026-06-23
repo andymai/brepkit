@@ -596,6 +596,65 @@ fn fuse_overlapping_3d() {
 }
 
 #[test]
+fn fuse_evolution_is_faithful() {
+    use brepkit_topology::explorer::solid_faces;
+    use std::collections::HashSet;
+
+    let mut topo = Topology::new();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.5, 0.5);
+
+    // Partial overlap → not a fast-path box; the fuse runs through the GFA, so
+    // provenance is the faithful builder map, not the geometry heuristic.
+    let input_set: HashSet<usize> = solid_faces(&topo, a)
+        .unwrap()
+        .into_iter()
+        .chain(solid_faces(&topo, b).unwrap())
+        .map(brepkit_topology::arena::Id::index)
+        .collect();
+    assert_eq!(
+        input_set.len(),
+        12,
+        "two cubes have 12 distinct input faces"
+    );
+
+    let (result, evo) =
+        crate::boolean::boolean_with_evolution(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+
+    let result_faces: HashSet<usize> = solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .map(brepkit_topology::arena::Id::index)
+        .collect();
+
+    // Every modified mapping is input-face → result-face, both real entities.
+    assert!(!evo.modified.is_empty(), "fuse must track modified faces");
+    let mut attributed: HashSet<usize> = HashSet::new();
+    for (&in_idx, outs) in &evo.modified {
+        assert!(
+            input_set.contains(&in_idx),
+            "modified key {in_idx} is not one of the input faces"
+        );
+        for &out in outs {
+            assert!(
+                result_faces.contains(&out),
+                "modified output {out} is not a face of the result"
+            );
+            attributed.insert(out);
+        }
+    }
+    for &d in &evo.deleted {
+        assert!(input_set.contains(&d), "deleted {d} is not an input face");
+    }
+    // Faithful tracking attributes every result face to an input here — the
+    // overlapping cubes produce no synthesised (cap) faces.
+    assert_eq!(
+        attributed, result_faces,
+        "every result face should trace to an input face"
+    );
+}
+
+#[test]
 fn intersect_overlapping_3d() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
