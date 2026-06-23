@@ -235,11 +235,19 @@ fn find_cap_circle(topo: &Topology, face_id: FaceId) -> Option<(Point3, f64)> {
 /// Clamp the tessellation deflection used for volume so curved faces are
 /// sampled finely enough for an accurate boundary integral.
 ///
-/// A coarse preview deflection inscribes too few facets in a curved analytic
-/// face and under-counts its volume; volume is a precise query, so cap the
-/// deflection at a small fraction of the solid's bounding-box diagonal. Never
-/// coarsens a finer request, and falls back to `requested` if the extent
-/// cannot be determined.
+/// A coarse preview deflection inscribes too few facets in a curved face and
+/// under-counts its volume; volume is a precise query, so cap the deflection at
+/// a small fraction of the solid's extent, estimated as the diagonal of the
+/// **vertex** bounding box. (Curvature can bulge slightly beyond the vertices,
+/// so this under-estimates the true AABB — but only by making the cap
+/// conservatively finer, which is safe.) Never coarsens a finer request, and
+/// falls back to `requested` if the extent cannot be determined.
+///
+/// A solid-extent scale (rather than per-curved-face curvature radius) is used
+/// deliberately: it keeps the deflection consistent between a sub-solid and a
+/// boolean result containing it, preserving the `volume(A ∪ B) == volume(A) +
+/// volume(B)` invariant for coincident-contact fuses. A curvature-radius cap
+/// would tessellate a shared face differently in each context and break it.
 fn volume_tessellation_deflection(topo: &Topology, solid: SolidId, requested: f64) -> f64 {
     let Ok(pts) = collect_solid_vertex_points(topo, solid) else {
         return requested;
@@ -281,12 +289,12 @@ pub fn solid_volume(
         return Ok(v);
     }
 
-    // Volume integrates the boundary, so curved analytic faces must be
-    // tessellated finely or the inscribed mesh under-counts them (a swept
-    // cylinder or a box with a cylindrical hole measures ~1-2% low at a coarse
-    // preview deflection). Clamp the deflection to a small fraction of the
-    // solid's extent — never coarsening a finer request — so the volume is
-    // accurate regardless of the (preview-tuned) deflection the caller passes.
+    // Volume integrates the boundary, so curved faces must be tessellated
+    // finely or the inscribed mesh under-counts them (a swept cylinder or a
+    // box with a cylindrical hole measures ~1-2% low at a coarse preview
+    // deflection). Clamp the deflection to a small fraction of the solid's
+    // extent — never coarsening a finer request — so the volume is accurate
+    // regardless of the (preview-tuned) deflection the caller passes.
     let deflection = volume_tessellation_deflection(topo, solid, deflection);
 
     // Fast path: for solids made entirely of planar triangular faces
