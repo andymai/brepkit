@@ -77,7 +77,7 @@ brepkit is in active development. Core modeling is solid. Each feature below is 
 | **Sweeps**              | Extrude (planar + NURBS profiles)                                            | Stable       |
 | **Sweeps**              | Revolve, sweep, loft, pipe (planar profiles)                                 | Stable       |
 | **Sweeps**              | Helical sweep                                                                | Stable       |
-| **Sweeps**              | Non-planar profiles for revolve, sweep, loft, pipe                           | Planned      |
+| **Sweeps**              | Non-planar profiles for loft, sweep, pipe, revolve                           | Beta         |
 | **Construction**        | Coons-patch face fill, sew, untrim                                           | Stable       |
 | **Sectioning**          | Cross-section faces, split by plane                                          | Stable       |
 | **Measurement**         | Bounding box, area, volume, center of mass                                   | Stable       |
@@ -104,7 +104,7 @@ A few areas are still maturing. Worth knowing before you build on them:
 
 - **Boolean fallback.** Most booleans run on an exact path that preserves analytic and NURBS surfaces. Hard configurations fall back to a mesh-based boolean: coincident-face contact, coaxial analytic surfaces, razor-thin geometry, or very high face counts. The fallback returns a usable, non-degenerate solid, but it tessellates the curved faces and is not guaranteed watertight.
 - **Torus booleans.** Box-with-torus and coaxial-torus cases work and give correct volumes. General torus-to-torus and torus-with-other-surface intersections have known gaps and may fall back to meshing.
-- **Sweep profiles.** Revolve, sweep, loft, and pipe require planar profiles. Non-planar profiles are not yet supported.
+- **Non-planar profiles.** Loft, sweep, and pipe accept profiles with non-planar surfaces, and close non-planar section boundaries with bilinear caps for four-sided rings (boundaries with more than four edges, or holes on a non-planar section, are not yet supported). Revolve accepts non-planar profile surfaces; a full revolution takes any boundary, but a partial revolution still requires a planar boundary for its caps. The advanced sweep variants (smooth, scaled/guided, miter, multi-section) still require planar profiles.
 - **IGES is experimental.** Export writes planar and NURBS surfaces but skips analytic surfaces and approximates circular and elliptical edges as polylines. Import reconstructs planar placeholder faces only. Use STEP for B-Rep exchange.
 - **Inertia tensor.** Volume, area, bounding box, and center of mass are computed for any solid. A full inertia tensor exists only as closed-form formulas for analytic primitives and is not exposed through the modeling or WASM API.
 - **Beta subsystems.** Feature recognition, assemblies, evolution tracking, and defeaturing work but are still maturing. Defeaturing handles planar faces only.
@@ -229,7 +229,7 @@ cargo doc --workspace --no-deps --open
 Broad directions, no dates.
 
 - **Boolean robustness.** Harden torus and mixed-surface booleans, and shrink the set of inputs that fall back to meshing.
-- **Sweep generalization.** Non-planar profile support for revolve, sweep, loft, and pipe.
+- **Sweep generalization.** Extend non-planar profile support to the advanced sweep variants (smooth, scaled/guided, miter, multi-section), to section boundaries with more than four edges, and to partial revolutions with non-planar boundaries.
 - **Parallel tessellation in WASM.** Native builds already parallelize per-face meshing. Bring it to the WASM target via threads.
 - **Assembly metadata.** Colors, layers, materials, and PMI for richer data exchange.
 - **Lossless IGES.** Real B-Rep import and analytic-surface export.
