@@ -56,6 +56,54 @@ pub(super) fn compute_v_param_range(
     }
 }
 
+/// Compute the tube-angle (v) range for a toroidal face from its wire boundary.
+///
+/// A full torus has no boundary constraint on v, so the default is the full
+/// tube `(0, TAU)`. A toroidal *band* (e.g. a rim-fillet quarter-torus) is
+/// bounded by two closed circle edges sitting at distinct constant v; the band
+/// fills the arc between them. v is periodic, so two arcs are possible — the
+/// fillet band is the shorter one (a 90° rim corner spans π/2; we accept up to
+/// just under π). Returns `(0, TAU)` whenever the boundary doesn't clearly
+/// describe such a band (preserving full-tube tessellation for every other
+/// toroidal face).
+pub(super) fn compute_torus_v_range(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> (f64, f64) {
+    use brepkit_topology::edge::EdgeCurve;
+    use std::f64::consts::{PI, TAU};
+
+    // Collect the (constant) v of each closed circular boundary edge.
+    let mut circle_vs: Vec<f64> = Vec::new();
+    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
+        for oe in wire.edges() {
+            if let Ok(edge) = topo.edge(oe.edge())
+                && matches!(edge.curve(), EdgeCurve::Circle(_))
+                && edge.start() == edge.end()
+                && let Ok(vertex) = topo.vertex(edge.start())
+            {
+                circle_vs.push(torus.project_point(vertex.point()).1.rem_euclid(TAU));
+            }
+        }
+    }
+
+    if circle_vs.len() != 2 {
+        return (0.0, TAU);
+    }
+    let (va, vb) = (circle_vs[0], circle_vs[1]);
+
+    // Two candidate arcs between the circles; the band is the shorter one.
+    let (lo, hi) = if va <= vb { (va, vb) } else { (vb, va) };
+    let forward_span = hi - lo; // arc lo -> hi without wrap
+    if forward_span <= PI {
+        (lo, hi)
+    } else {
+        // The wrapped arc hi -> lo + TAU is the shorter one.
+        (hi, lo + TAU)
+    }
+}
+
 /// Compute the v-range (axial extent) for an analytic surface from its face
 /// wire boundary vertices.
 ///

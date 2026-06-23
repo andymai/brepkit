@@ -6,11 +6,15 @@
 
 use std::collections::HashSet;
 
+use brepkit_math::curves::Circle3D;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
-use brepkit_topology::face::FaceId;
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::vertex::Vertex;
+use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::analytic;
 use crate::blend_func::{ConstRadBlend, EvolRadBlend};
@@ -139,7 +143,32 @@ impl<'a> FilletBuilder<'a> {
             });
         }
 
-        let stripes: Vec<Stripe> = stripe_results.iter().map(|sr| sr.stripe.clone()).collect();
+        // Partition out closed-revolution rim stripes (a full circular rim
+        // between a bounded disc cap and a cylinder/cone wall). These need an
+        // annular assembly that rebuilds the cap, shortens the wall, and emits
+        // a toroidal band — all sharing the two contact-circle edges — which
+        // the per-face line-based trimmer cannot produce (a closed interior
+        // contact circle crosses no boundary edge). Regular stripes still flow
+        // through the trim + corner + blend-face path below.
+        let mut blend_face_ids: Vec<FaceId> = Vec::new();
+        let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
+            std::collections::HashMap::new();
+        let mut regular_results: Vec<&StripeResult> = Vec::new();
+        for sr in &stripe_results {
+            if let Some(rim) = closed_rim_info(topo, &sr.stripe)? {
+                match assemble_closed_rim(topo, &sr.stripe, &rim, &mut face_replacements) {
+                    Ok(band) => blend_face_ids.push(band),
+                    Err(e) => {
+                        log::warn!("closed-rim assembly failed: {e}, falling back to trim path");
+                        regular_results.push(sr);
+                    }
+                }
+            } else {
+                regular_results.push(sr);
+            }
+        }
+
+        let stripes: Vec<Stripe> = regular_results.iter().map(|sr| sr.stripe.clone()).collect();
         let corner_results = match corner::compute_corners(topo, &stripes, self.solid) {
             Ok(results) => results,
             Err(e) => {
@@ -153,11 +182,7 @@ impl<'a> FilletBuilder<'a> {
             corner_face_ids.push(cr.face_id);
         }
 
-        // Map from original face ID to its latest trimmed replacement.
-        let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
-            std::collections::HashMap::new();
-
-        for sr in &stripe_results {
+        for sr in &regular_results {
             let stripe = &sr.stripe;
 
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
@@ -226,9 +251,7 @@ impl<'a> FilletBuilder<'a> {
             }
         }
 
-        let mut blend_face_ids: Vec<FaceId> = Vec::new();
-
-        for sr in &stripe_results {
+        for sr in &regular_results {
             let stripe = &sr.stripe;
 
             // For v1, we create a minimal wire from the contact curve endpoints.
@@ -265,6 +288,349 @@ impl<'a> FilletBuilder<'a> {
             is_partial,
         })
     }
+}
+
+/// Geometry of a full-revolution rim fillet (a closed circular edge between a
+/// bounded disc cap and an axisymmetric wall), recovered from a stripe whose
+/// blend surface is a torus.
+struct ClosedRimInfo {
+    /// The bounded disc cap face (a `Plane`).
+    plane_face: FaceId,
+    /// The axisymmetric wall face (`Cylinder` or `Cone`).
+    wall_face: FaceId,
+    /// The original closed rim edge on the wall, to be replaced by the
+    /// wall-contact circle.
+    rim_edge: EdgeId,
+    /// Contact circle on the plate (radius `r_c − r`), in the plane.
+    plate_circle: Circle3D,
+    /// Contact circle on the wall (radius `r_c` for a cylinder), one fillet
+    /// radius along the axis from the plate.
+    wall_circle: Circle3D,
+}
+
+/// Project a point onto the infinite axis line through `origin` with unit
+/// direction `axis`, returning the foot of the perpendicular.
+fn project_onto_axis(p: Point3, origin: Point3, axis: Vec3) -> Point3 {
+    let d = p - origin;
+    origin + axis * axis.dot(d)
+}
+
+/// Radial distance from a point to the axis line.
+fn radial_distance(p: Point3, origin: Point3, axis: Vec3) -> f64 {
+    let d = p - origin;
+    (d - axis * axis.dot(d)).length()
+}
+
+/// Detect a full-revolution rim-fillet stripe and recover its annular geometry.
+///
+/// Returns `Some` when the blend surface is a torus, the spine is a single
+/// closed circular edge (start vertex == end vertex), and the two adjacent
+/// faces are a plane (the disc cap) and a cylinder/cone (the wall). Returns
+/// `None` for every other configuration (so the caller uses the normal trim
+/// path).
+///
+/// # Errors
+///
+/// Returns [`BlendError`] if topology lookups or circle construction fail.
+fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimInfo>, BlendError> {
+    if !matches!(stripe.surface, FaceSurface::Torus(_)) {
+        return Ok(None);
+    }
+
+    // Spine must be a single closed circular edge.
+    let edges = stripe.spine.edges();
+    if edges.len() != 1 {
+        return Ok(None);
+    }
+    let rim_edge = edges[0];
+    {
+        let e = topo.edge(rim_edge)?;
+        if e.start() != e.end() {
+            return Ok(None);
+        }
+        if !matches!(e.curve(), EdgeCurve::Circle(_)) {
+            return Ok(None);
+        }
+    }
+
+    // One side is the plane (cap), the other the cylinder/cone wall.
+    let s1 = topo.face(stripe.face1)?.surface().clone();
+    let s2 = topo.face(stripe.face2)?.surface().clone();
+    let (plane_face, wall_face) = match (&s1, &s2) {
+        (FaceSurface::Plane { .. }, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) => {
+            (stripe.face1, stripe.face2)
+        }
+        (FaceSurface::Cylinder(_) | FaceSurface::Cone(_), FaceSurface::Plane { .. }) => {
+            (stripe.face2, stripe.face1)
+        }
+        _ => return Ok(None),
+    };
+
+    // The annular rebuild replaces the cap's whole outer wire with the
+    // plate-contact circle, so it only applies when the cap is a bare disc
+    // whose sole boundary is this rim (no inner wires). A more complex cap
+    // falls back to the normal trim path.
+    {
+        let cap = topo.face(plane_face)?;
+        if !cap.inner_wires().is_empty() {
+            return Ok(None);
+        }
+        let cap_wire = topo.wire(cap.outer_wire())?;
+        let edges = cap_wire.edges();
+        if edges.len() != 1 || edges[0].edge() != rim_edge {
+            return Ok(None);
+        }
+    }
+
+    // The plane-side contact curve is the one whose face is the plane.
+    let (plate_contact, wall_contact) = if plane_face == stripe.face1 {
+        (&stripe.contact1, &stripe.contact2)
+    } else {
+        (&stripe.contact2, &stripe.contact1)
+    };
+
+    // Recover the wall axis line from the wall surface.
+    let wall_surf = topo.face(wall_face)?.surface().clone();
+    let (axis, axis_origin) = match &wall_surf {
+        FaceSurface::Cylinder(c) => (c.axis(), c.origin()),
+        FaceSurface::Cone(c) => (c.axis(), c.apex()),
+        _ => return Ok(None),
+    };
+
+    // Each contact is a full circle perpendicular to the axis; recover its
+    // centre (foot on the axis line) and radius (radial distance) from one
+    // sampled point.
+    let (pt0, _) = plate_contact.domain();
+    let plate_pt = plate_contact.evaluate(pt0);
+    let plate_center = project_onto_axis(plate_pt, axis_origin, axis);
+    let plate_radius = radial_distance(plate_pt, axis_origin, axis);
+
+    let (wt0, _) = wall_contact.domain();
+    let wall_pt = wall_contact.evaluate(wt0);
+    let wall_center = project_onto_axis(wall_pt, axis_origin, axis);
+    let wall_radius = radial_distance(wall_pt, axis_origin, axis);
+
+    let plate_circle = Circle3D::new(plate_center, axis, plate_radius)?;
+    let wall_circle = Circle3D::new(wall_center, axis, wall_radius)?;
+
+    Ok(Some(ClosedRimInfo {
+        plane_face,
+        wall_face,
+        rim_edge,
+        plate_circle,
+        wall_circle,
+    }))
+}
+
+/// Assemble a full-revolution rim fillet: rebuild the disc cap bounded by the
+/// plate-contact circle, shorten the wall to the wall-contact circle, and emit
+/// the toroidal band between them. The cap and wall edges are shared with the
+/// band so the result is watertight.
+///
+/// Updates `face_replacements` for the cap and wall (so a later stripe sees the
+/// shortened wall). Returns the new toroidal band face.
+///
+/// # Errors
+///
+/// Returns [`BlendError`] if topology lookups or wire/face construction fail.
+fn assemble_closed_rim(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    rim: &ClosedRimInfo,
+    face_replacements: &mut std::collections::HashMap<FaceId, FaceId>,
+) -> Result<FaceId, BlendError> {
+    const TOL: f64 = 1e-7;
+
+    // Snapshot the cap and wall (resolving any prior replacement) before
+    // mutating the arena.
+    let plane_surf = topo.face(rim.plane_face)?.surface().clone();
+    let plane_reversed = topo.face(rim.plane_face)?.is_reversed();
+
+    let current_wall = face_replacements
+        .get(&rim.wall_face)
+        .copied()
+        .unwrap_or(rim.wall_face);
+    let wall_surf = topo.face(current_wall)?.surface().clone();
+    let wall_reversed = topo.face(current_wall)?.is_reversed();
+    let wall_outer_wire = topo.face(current_wall)?.outer_wire();
+    let wall_inner = topo.face(current_wall)?.inner_wires().to_vec();
+    let wall_oriented: Vec<OrientedEdge> = topo.wire(wall_outer_wire)?.edges().to_vec();
+
+    // Vertices for the two closed contact circles (start == end → degenerate).
+    let plate_v = topo.add_vertex(Vertex::new(rim.plate_circle.evaluate(0.0), TOL));
+    let wall_v = topo.add_vertex(Vertex::new(rim.wall_circle.evaluate(0.0), TOL));
+
+    // Shared contact-circle edges.
+    let plate_edge = topo.add_edge(Edge::new(
+        plate_v,
+        plate_v,
+        EdgeCurve::Circle(rim.plate_circle.clone()),
+    ));
+    let wall_edge = topo.add_edge(Edge::new(
+        wall_v,
+        wall_v,
+        EdgeCurve::Circle(rim.wall_circle.clone()),
+    ));
+    // Seam connecting the two circles (degenerate-seam band, as the primitive
+    // cylinder lateral uses).
+    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, EdgeCurve::Line));
+
+    // --- Rebuild the disc cap bounded by the plate-contact circle. ---
+    // The cap originally borders the rim via a single closed-circle wire; the
+    // new cap reuses the plate-contact circle with the same orientation the cap
+    // had on the original rim edge.
+    let cap_orig_wire = topo.face(
+        face_replacements
+            .get(&rim.plane_face)
+            .copied()
+            .unwrap_or(rim.plane_face),
+    )?;
+    let cap_orig_wire_id = cap_orig_wire.outer_wire();
+    let cap_forward = topo
+        .wire(cap_orig_wire_id)?
+        .edges()
+        .iter()
+        .find(|oe| oe.edge() == rim.rim_edge)
+        .is_some_and(OrientedEdge::is_forward);
+    let cap_wire = Wire::new(vec![OrientedEdge::new(plate_edge, cap_forward)], true)?;
+    let cap_wire_id = topo.add_wire(cap_wire);
+    let mut cap_face = Face::new(cap_wire_id, Vec::new(), plane_surf);
+    cap_face.set_reversed(plane_reversed);
+    let cap_face_id = topo.add_face(cap_face);
+    face_replacements.insert(rim.plane_face, cap_face_id);
+
+    // --- Shorten the wall to the wall-contact circle. ---
+    // The wall's outer wire references the rim circle plus (for the cylinder /
+    // cone primitive) a degenerate seam line whose lower endpoint is the rim
+    // vertex. Replace the rim circle with the wall-contact circle, and rebuild
+    // any seam edge touching the old rim vertex so its lower endpoint becomes
+    // the new wall-circle vertex (otherwise the wire no longer closes — the
+    // seam would still start at the old rim height).
+    let old_rim_vertex = topo.edge(rim.rim_edge)?.start();
+    // A seam edge may appear twice in the wall wire (fwd + rev); rebuild each
+    // distinct edge once so both references share the new edge (otherwise the
+    // two copies each become a free edge).
+    let mut rebuilt: std::collections::HashMap<EdgeId, EdgeId> = std::collections::HashMap::new();
+    let mut new_wall_edges: Vec<OrientedEdge> = Vec::with_capacity(wall_oriented.len());
+    let mut replaced = false;
+    for oe in &wall_oriented {
+        if oe.edge() == rim.rim_edge {
+            new_wall_edges.push(OrientedEdge::new(wall_edge, oe.is_forward()));
+            replaced = true;
+            continue;
+        }
+        let e = topo.edge(oe.edge())?;
+        let touches_rim = e.start() == old_rim_vertex || e.end() == old_rim_vertex;
+        if touches_rim {
+            let new_eid = if let Some(&id) = rebuilt.get(&oe.edge()) {
+                id
+            } else {
+                // Rebuild this edge with `wall_v` substituted for the old rim vertex.
+                let curve = e.curve().clone();
+                let new_start = if e.start() == old_rim_vertex {
+                    wall_v
+                } else {
+                    e.start()
+                };
+                let new_end = if e.end() == old_rim_vertex {
+                    wall_v
+                } else {
+                    e.end()
+                };
+                let id = topo.add_edge(Edge::new(new_start, new_end, curve));
+                rebuilt.insert(oe.edge(), id);
+                id
+            };
+            new_wall_edges.push(OrientedEdge::new(new_eid, oe.is_forward()));
+        } else {
+            new_wall_edges.push(*oe);
+        }
+    }
+    if !replaced {
+        return Err(BlendError::TrimmingFailure {
+            face: rim.wall_face,
+        });
+    }
+    let new_wall_wire = Wire::new(new_wall_edges, true)?;
+    let new_wall_wire_id = topo.add_wire(new_wall_wire);
+    let mut new_wall_face = Face::new(new_wall_wire_id, wall_inner, wall_surf);
+    new_wall_face.set_reversed(wall_reversed);
+    let new_wall_face_id = topo.add_face(new_wall_face);
+    face_replacements.insert(rim.wall_face, new_wall_face_id);
+
+    // --- Toroidal band between the two contact circles. ---
+    // Degenerate-seam wire (plate circle, seam up, wall circle reversed, seam
+    // down). The seam runs plate_v → wall_v, so this fixed order always closes
+    // (plate_v → plate_v → wall_v → wall_v → plate_v). The shared circle edges
+    // are used opposite to the standard-wound cap and wall, keeping the shell
+    // manifold.
+    let torus = match &stripe.surface {
+        FaceSurface::Torus(t) => t.clone(),
+        _ => {
+            return Err(BlendError::TrimmingFailure {
+                face: rim.wall_face,
+            });
+        }
+    };
+    let band_wire = Wire::new(
+        vec![
+            OrientedEdge::new(plate_edge, true),
+            OrientedEdge::new(seam_edge, true),
+            OrientedEdge::new(wall_edge, false),
+            OrientedEdge::new(seam_edge, false),
+        ],
+        true,
+    )?;
+    let band_wire_id = topo.add_wire(band_wire);
+    let mut band_face = Face::new(band_wire_id, Vec::new(), stripe.surface.clone());
+    // Orient the band so its outward normal points away from the solid. The
+    // solid tessellator orients a torus band's triangles from the surface's
+    // intrinsic (u, v) frame, then applies the face `reversed` flag; pick the
+    // flag that makes the geometric normal at the band's mid-arc point outward.
+    // Outward at a rim fillet points away from the cylinder axis (positive
+    // radial) and away from the material along the axis; the torus geometric
+    // normal at the mid-arc already has the correct radial sign, so we compare
+    // its axial component against the material side.
+    if torus_band_needs_reversal(&torus, rim) {
+        band_face.set_reversed(true);
+    }
+    let band_face_id = topo.add_face(band_face);
+
+    Ok(band_face_id)
+}
+
+/// Decide whether a rim-fillet torus band must carry `reversed` so its outward
+/// normal points away from the solid.
+///
+/// The band's mid-arc geometric normal points radially out from the tube; we
+/// need it to also point to the *empty* side along the axis. The empty side is
+/// opposite the wall material: for a non-reversed cylinder/cone wall the
+/// material is on the axis-interior side, and the band sits one fillet radius
+/// from the plate toward the material — so the band's outward axial direction is
+/// the one pointing from the wall-contact circle back toward the plate.
+fn torus_band_needs_reversal(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    rim: &ClosedRimInfo,
+) -> bool {
+    // The torus geometric normal at the mid-arc point (halfway between the two
+    // contacts) should point away from the segment plate→wall along the axis.
+    // The "away from material" axial direction is plate_center → (plate_center −
+    // wall_center) i.e. from the wall contact toward the plate.
+    let axis = torus.z_axis();
+    let to_plate = rim.plate_circle.center() - rim.wall_circle.center();
+    let outward_axial = axis * axis.dot(to_plate); // component along the axis toward the plate
+    // Mid-arc point and its geometric normal.
+    let v_plate = torus.project_point(rim.plate_circle.evaluate(0.0)).1;
+    let v_wall = torus.project_point(rim.wall_circle.evaluate(0.0)).1;
+    // Shortest signed mid-angle between the two contact v-parameters (periodic):
+    // reduce the raw difference into (−π, π].
+    let dv = (v_wall - v_plate + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+        - std::f64::consts::PI;
+    let v_mid = v_plate + dv * 0.5;
+    let n = torus.normal(0.0, v_mid);
+    // If the geometric normal's axial part opposes the outward axial direction,
+    // the band must be reversed.
+    n.dot(outward_axial) < 0.0
 }
 
 /// Compute a stripe for a single edge using the adjacency index.

@@ -152,9 +152,9 @@ pub fn json_f64(val: &serde_json::Value, key: &str) -> Result<f64, JsError> {
 /// is watertight too (#834). It runs first; the `FilletBuilder` and a flat
 /// bevel are fallbacks.
 ///
-/// Every candidate is validated as a manifold solid before being accepted, so
-/// a malformed result is rejected in favour of the next engine and, if none
-/// qualifies, the solid is returned unchanged. This guard lets
+/// Every candidate is validated as a closed (watertight) solid before being
+/// accepted, so a malformed result is rejected in favour of the next engine
+/// and, if none qualifies, the solid is returned unchanged. This guard lets
 /// `filter_filletable_edges` be permissive about curved neighbours without ever
 /// returning a degenerate solid.
 #[allow(deprecated)]
@@ -172,13 +172,17 @@ pub fn try_fillet(
     }
     let edges = edges.as_slice();
 
-    // A candidate is acceptable only if its outer shell is a manifold (no edge
-    // shared by more than two faces).
+    // A candidate is acceptable only if its outer shell is a CLOSED 2-manifold
+    // (every edge used by exactly two faces — no free/boundary edges). The
+    // weaker manifold-only check silently accepted open shells (e.g. a fillet
+    // that leaves a cap untrimmed at a contact circle), which tessellate to a
+    // plausible-but-wrong volume; reject them so the next engine or the
+    // unchanged input is used.
     let is_valid =
         |topo: &brepkit_topology::Topology, s: brepkit_topology::solid::SolidId| -> bool {
             topo.solid(s)
                 .and_then(|sd| topo.shell(sd.outer_shell()))
-                .map(|sh| brepkit_topology::validation::validate_shell_manifold(sh, topo).is_ok())
+                .map(|sh| brepkit_topology::validation::validate_shell_closed(sh, topo).is_ok())
                 .unwrap_or(false)
         };
 
@@ -549,6 +553,47 @@ mod fillet_tests {
         assert!(
             vol > 970.0 && vol < 1000.0,
             "filleted box volume should be ≈975.6, got {vol}"
+        );
+    }
+
+    // gh #967: filleting a plain cylinder's circular rim used to remove ~37% of
+    // the volume (the rolling-ball engine collapses closed circular edges). The
+    // rim now rounds into an exact quarter-torus: the rolling-ball degenerate
+    // result is rejected, `try_fillet` falls through to the walking engine, and
+    // the watertight rounded solid (≈6275.7, a ~0.12% rim round) is accepted —
+    // never the corrupt ~3978.
+    #[test]
+    fn try_fillet_cylinder_rim_rounds_not_corrupts() {
+        use brepkit_topology::face::FaceSurface;
+
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+        let raw = brepkit_operations::measure::solid_volume(&topo, cyl, 0.01).unwrap();
+        let edges = solid_edge_ids(&topo, cyl);
+
+        let result = try_fillet(&mut topo, cyl, &edges, 0.5).expect("rim fillet");
+        let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.01).unwrap();
+
+        // A tiny rim round — well under 1% removed, never the −37% corruption.
+        assert!(
+            vol < raw && vol > raw * 0.99,
+            "cylinder rim fillet should round (~{:.0}), got {vol} vs raw {raw}",
+            raw * 0.999
+        );
+        let sh = topo
+            .shell(topo.solid(result).unwrap().outer_shell())
+            .unwrap();
+        let torus_count = sh
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Torus(_)))
+            .count();
+        assert_eq!(torus_count, 2, "both rims round into toroidal bands");
+        assert!(
+            brepkit_operations::validate::validate_solid(&topo, result)
+                .unwrap()
+                .is_valid(),
+            "rounded rim solid must be watertight"
         );
     }
 

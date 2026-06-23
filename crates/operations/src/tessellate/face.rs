@@ -8,8 +8,8 @@ use super::AnalyticKind;
 use super::TriangleMeshUV;
 use super::edge_sampling::{plane_axes, segments_for_chord_deviation_a};
 use super::nurbs::{
-    compute_angular_range, compute_axial_range, compute_sphere_v_range, compute_v_param_range,
-    sphere_analytic_kind, tessellate_nurbs,
+    compute_angular_range, compute_axial_range, compute_sphere_v_range, compute_torus_v_range,
+    compute_v_param_range, sphere_analytic_kind, tessellate_nurbs,
 };
 use super::planar::{tessellate_analytic, tessellate_analytic_with_boundary, tessellate_planar};
 
@@ -179,7 +179,7 @@ pub fn tessellate_with_uvs_a(
         }
         FaceSurface::Torus(torus) => {
             let u_range = compute_angular_range(topo, face_data, |p| torus.project_point(p));
-            let v_range = (0.0, std::f64::consts::TAU);
+            let v_range = compute_torus_v_range(topo, face_data, torus);
             let nu = segments_for_chord_deviation_a(
                 torus.major_radius(),
                 u_range.1 - u_range.0,
