@@ -118,18 +118,18 @@ Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs
 
 | Operation                | brepkit (WASM) | OCCT (WASM) | Speedup | brepkit (native) |
 | ------------------------ | -------------- | ----------- | ------- | ---------------- |
-| fuse(box, box)           | 0.6 ms         | 45.1 ms     | 75x     | 117 µs           |
-| cut(box, cylinder)       | 61.4 ms        | 71.2 ms     | 1.2x    | 24.8 ms          |
-| intersect(box, sphere)   | 0.3 ms         | 63.9 ms     | 210x    | 97 µs            |
-| box + chamfer            | 0.1 ms         | 6.5 ms      | 65x     | 45 µs            |
-| box + fillet             | 0.3 ms         | 6.2 ms      | 21x     | 74 µs            |
-| multi-boolean (16 holes) | 7.6 ms         | 30.7 ms     | 4.0x    | 4.1 ms           |
-| mesh sphere (tol=0.01)   | 34.8 ms        | 50.0 ms     | 1.4x    | 1.5 ms           |
-| exportSTEP (×10)         | 0.8 ms         | 14.6 ms     | 18x     | —                |
+| fuse(box, box)           | 0.5 ms         | 43.3 ms     | 87x     | 122 µs           |
+| cut(box, cylinder)       | 59.6 ms        | 72.0 ms     | 1.2x    | 24.1 ms          |
+| intersect(box, sphere)   | 0.3 ms         | 62.6 ms     | 209x    | 104 µs           |
+| box + chamfer            | 0.1 ms         | 5.6 ms      | 56x     | 44 µs            |
+| box + fillet             | 0.3 ms         | 6.3 ms      | 21x     | 73 µs            |
+| multi-boolean (16 holes) | 7.0 ms         | 31.2 ms     | 4.5x    | 4.1 ms           |
+| mesh sphere (tol=0.01)   | 33.4 ms        | 49.7 ms     | 1.5x    | 1.5 ms           |
+| exportSTEP (×10)         | 1.1 ms         | 18.6 ms     | 17x     | —                |
 
 Booleans preserve analytic surfaces, keeping face counts low (72 vs ~7,000 for a 9-step compound boolean).
 
-> OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js. Boolean and `exportSTEP` rows are timed as batches of ten operations. Native benchmarks: `cargo bench -p brepkit-operations`. Full benchmark source: [brepjs/benchmarks](https://github.com/andymai/brepjs/tree/main/benchmarks). Measured 2026-06-14.
+> OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js. Boolean and `exportSTEP` rows are timed as batches of ten operations. Native benchmarks: `cargo bench -p brepkit-operations`. Full benchmark source: [brepjs/benchmarks](https://github.com/andymai/brepjs/tree/main/benchmarks). Measured 2026-06-23.
 
 ## Data Exchange
 
