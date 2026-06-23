@@ -151,7 +151,7 @@ Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs
 | box + fillet                 | 0.3 ms         | 6.3 ms      | 21x     | 73 µs            |
 | multi-boolean (16 holes)     | 7.0 ms         | 31.2 ms     | 4.5x    | 4.1 ms           |
 | mesh sphere (tol=0.01)       | 33.4 ms        | 49.7 ms     | 1.5x    | 1.5 ms           |
-| exportSTEP (×10)             | 1.1 ms         | 18.6 ms     | 17x     | —                |
+| exportSTEP (×10)             | 1.1 ms         | 18.6 ms     | 17x     | n/a              |
 
 Booleans preserve analytic surfaces, so face counts stay low across chained operations. A nine-step compound boolean settles at 72 faces where a mesh-based approach would reach roughly 7,000.
 
@@ -228,17 +228,17 @@ cargo doc --workspace --no-deps --open
 
 Broad directions, no dates.
 
-- **Boolean robustness** — harden torus and mixed-surface booleans, and shrink the set of inputs that fall back to meshing
-- **Sweep generalization** — non-planar profile support for revolve, sweep, loft, and pipe
-- **Parallel tessellation in WASM** — native builds already parallelize per-face meshing; bring it to the WASM target via threads
-- **Assembly metadata** — colors, layers, materials, and PMI for richer data exchange
-- **Lossless IGES** — real B-Rep import and analytic-surface export
-- **Documentation** — API reference, tutorials, and architectural guides
+- **Boolean robustness.** Harden torus and mixed-surface booleans, and shrink the set of inputs that fall back to meshing.
+- **Sweep generalization.** Non-planar profile support for revolve, sweep, loft, and pipe.
+- **Parallel tessellation in WASM.** Native builds already parallelize per-face meshing. Bring it to the WASM target via threads.
+- **Assembly metadata.** Colors, layers, materials, and PMI for richer data exchange.
+- **Lossless IGES.** Real B-Rep import and analytic-surface export.
+- **Documentation.** API reference, tutorials, and architectural guides.
 
 ## Projects Using brepkit
 
-- [brepjs](https://github.com/andymai/brepjs) — CAD modeling for JavaScript
-- [Gridfinity Layout Tool](https://github.com/andymai/gridfinity-layout-tool) — web-based Gridfinity storage layout generator
+- [brepjs](https://github.com/andymai/brepjs), CAD modeling for JavaScript.
+- [Gridfinity Layout Tool](https://github.com/andymai/gridfinity-layout-tool), a web-based Gridfinity storage layout generator.
 
 [Open a PR](https://github.com/andymai/brepkit/pulls) to add your project.
 
