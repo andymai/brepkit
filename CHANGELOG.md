@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.116.1](https://github.com/andymai/brepkit/compare/v2.116.0...v2.116.1) (2026-06-23)
+
+
+### Bug Fixes
+
+* **fillet:** round a cylinder rim into an exact quarter-torus ([#967](https://github.com/andymai/brepkit/issues/967)) ([#972](https://github.com/andymai/brepkit/issues/972)) ([3d17fb8](https://github.com/andymai/brepkit/commit/3d17fb838a4230c3aeeab2af15f3d52256d5ffdc))
+* **operations:** exact analytic volume for revolved circular and line profiles ([#968](https://github.com/andymai/brepkit/issues/968)) ([#970](https://github.com/andymai/brepkit/issues/970)) ([830a633](https://github.com/andymai/brepkit/commit/830a633fc19dc9ead0b6230242018affa6b0f30f))
+* **operations:** exact analytic volume for swept circles and extruded circular holes ([#969](https://github.com/andymai/brepkit/issues/969)) ([a0f2f10](https://github.com/andymai/brepkit/commit/a0f2f10074949189b92df6aab8a12d055229a4e2)), closes [#965](https://github.com/andymai/brepkit/issues/965) [#966](https://github.com/andymai/brepkit/issues/966)
+
 ## [2.116.0](https://github.com/andymai/brepkit/compare/v2.115.9...v2.116.0) (2026-06-23)
 
 
