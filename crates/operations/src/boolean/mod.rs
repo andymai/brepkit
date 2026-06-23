@@ -936,14 +936,17 @@ pub fn boolean_with_evolution(
             // face ID — survives. `unify_faces` is intentionally NOT run here:
             // it merges coplanar faces into new entities, discarding the
             // per-face provenance this path exists to track.
+            // A heal failure here is not fatal: fall through to boolean()'s
+            // full pipeline rather than propagating (the result solid stays as
+            // orphaned topology, which is harmless in the arena).
             let tol = brepkit_math::tolerance::Tolerance::default();
-            let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-            let _ = crate::heal::remove_wire_spurs(topo, result)?;
+            let healed_ok = crate::heal::remove_degenerate_edges(topo, result, tol.linear).is_ok()
+                && crate::heal::remove_wire_spurs(topo, result).is_ok();
 
             // Trust the faithful path only if its result is valid; otherwise
             // fall through to boolean()'s full pipeline (fast paths + mesh
             // fallback + validation), matching boolean()'s contract.
-            if validate_boolean_result(topo, result).is_ok() {
+            if healed_ok && validate_boolean_result(topo, result).is_ok() {
                 let mut evo = crate::evolution::EvolutionMap::new();
                 let mut sourced: std::collections::HashSet<usize> =
                     std::collections::HashSet::new();
@@ -963,7 +966,10 @@ pub fn boolean_with_evolution(
         }
     }
 
-    // Fallback: geometry heuristic over the standard boolean result.
+    // Fallback: geometry heuristic over the standard boolean result. Reached
+    // for identical operands, a GFA error, or a GFA result that failed
+    // validation — the EvolutionMap is then approximate, not faithful.
+    log::debug!("boolean_with_evolution: faithful GFA provenance unavailable, using heuristic");
     let input_faces_a = collect_face_signatures(topo, a)?;
     let input_faces_b = collect_face_signatures(topo, b)?;
 

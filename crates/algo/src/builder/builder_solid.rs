@@ -2079,7 +2079,9 @@ fn remove_doubled_faces(
     for (fi, &fid) in face_ids.iter().enumerate() {
         if !drop_idx.contains(&fi) {
             keep.push(fid);
-            keep_sources.push(sources.get(fi).copied().flatten());
+            // `sources` is parallel to `face_ids`, so `fi` is always in bounds;
+            // index directly (panics loudly in debug if the invariant breaks).
+            keep_sources.push(sources[fi]);
         }
     }
     *face_ids = keep;
