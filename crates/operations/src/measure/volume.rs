@@ -465,6 +465,17 @@ fn analytic_cylinder_signed_volume(
                 let (u, _) = cyl.project_point(mid);
                 u_vals.push(u);
             }
+            // A revolution-band boundary is a rational NURBS arc, not an
+            // `EdgeCurve::Circle`. Sample its domain midpoint too, or a partial
+            // (sub-2π) band has only its two endpoint angles, `compute_angular_range`
+            // falls back to the full 2π, and the band over-counts (gh #968).
+            if !edge.is_closed()
+                && let brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) = edge.curve()
+            {
+                let (t0, t1) = nc.domain();
+                let (u, _) = cyl.project_point(nc.evaluate(f64::midpoint(t0, t1)));
+                u_vals.push(u);
+            }
         }
     }
 
@@ -543,6 +554,14 @@ fn analytic_cone_signed_volume(
                 };
                 let mid = circle.evaluate(mid_t);
                 let (u, _) = cone.project_point(mid);
+                u_vals.push(u);
+            }
+            // Sample NURBS revolution-band arcs too (see the cylinder case, #968).
+            if !edge.is_closed()
+                && let brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) = edge.curve()
+            {
+                let (t0, t1) = nc.domain();
+                let (u, _) = cone.project_point(nc.evaluate(f64::midpoint(t0, t1)));
                 u_vals.push(u);
             }
         }
