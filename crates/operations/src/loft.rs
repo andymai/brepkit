@@ -82,106 +82,6 @@ fn cap_normal_from_verts(verts: &[Point3], inward: bool) -> Result<Vec3, crate::
     Ok(if inward { unit * -1.0 } else { unit })
 }
 
-/// A cap ring whose vertices deviate from their best-fit plane by less than
-/// this fraction of the ring's size is treated as planar (capped by an exact
-/// `Plane`); a larger deviation is filled by a bilinear patch.
-const CAP_PLANARITY_TOL: f64 = 1e-6;
-
-/// Characteristic size of a cap ring: the largest distance from its first
-/// vertex to any other, used to scale the planarity test.
-fn ring_scale(verts: &[Point3]) -> f64 {
-    let c = verts[0];
-    verts.iter().map(|p| (*p - c).length()).fold(0.0, f64::max)
-}
-
-/// Bilinear (degree-1) NURBS patch through a 4-corner ring, in ring order.
-///
-/// Its four boundary iso-curves are the straight segments between consecutive
-/// corners — exactly the ring's chord edges — so the cap face shares its
-/// boundary with the side faces and tessellates/integrates clipped to the
-/// section. (Reusing the section's own parent surface would not: brepkit
-/// tessellates a non-planar face over its full u/v extent, not clipped to a
-/// chord-polygon wire, so a reused surface overfills past the section.)
-fn bilinear_cap_patch(corners: &[Point3]) -> Result<NurbsSurface, brepkit_math::MathError> {
-    NurbsSurface::new(
-        1,
-        1,
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![vec![corners[0], corners[1]], vec![corners[3], corners[2]]],
-        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
-    )
-}
-
-/// Build one loft cap face that fills the ring boundary.
-///
-/// A planar ring is capped by an exact `Plane` (the planar tessellator clips it
-/// to the polygon). A non-planar ring is filled by a bilinear patch through its
-/// corners — currently only 4-sided non-planar rings are supported. The cap
-/// surface is always derived from the ring, never from the section's parent
-/// surface, because a non-planar face is tessellated/integrated over its u/v
-/// extent rather than clipped to the chord-polygon wire.
-///
-/// `outward` is the section's outward (Newell-based) normal; `start_role`
-/// builds the reversed-ring wire. Shared by the upcoming sweep/revolve PRs,
-/// whose caps are likewise chord-polygon rings.
-fn build_cap_face(
-    topo: &mut Topology,
-    ring_edges: &[EdgeId],
-    cap_verts: &[Point3],
-    outward: Vec3,
-    start_role: bool,
-) -> Result<FaceId, crate::OperationsError> {
-    let n = ring_edges.len();
-    let edges: Vec<OrientedEdge> = if start_role {
-        (0..n)
-            .rev()
-            .map(|i| OrientedEdge::new(ring_edges[i], false))
-            .collect()
-    } else {
-        (0..n)
-            .map(|i| OrientedEdge::new(ring_edges[i], true))
-            .collect()
-    };
-    let wid = topo.add_wire(Wire::new(edges, true).map_err(crate::OperationsError::Topology)?);
-
-    let plane_pt = cap_verts[0];
-    let max_dev = cap_verts
-        .iter()
-        .map(|p| (*p - plane_pt).dot(outward).abs())
-        .fold(0.0, f64::max);
-
-    let (surface, reversed) = if max_dev <= CAP_PLANARITY_TOL * ring_scale(cap_verts) {
-        (
-            FaceSurface::Plane {
-                normal: outward,
-                d: dot_normal_point(outward, plane_pt),
-            },
-            false,
-        )
-    } else if n == 4 {
-        let surf = bilinear_cap_patch(cap_verts).map_err(crate::OperationsError::Math)?;
-        // A near-flat bilinear lid: its center normal is stable and aligned
-        // with the ring axis, so probe there and flip if it opposes `outward`.
-        let reversed = surf
-            .normal(0.5, 0.5)
-            .map(|nrm| nrm.dot(outward) < 0.0)
-            .unwrap_or(false);
-        (FaceSurface::Nurbs(surf), reversed)
-    } else {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "loft of a non-planar section boundary with more than 4 edges is not supported"
-                .into(),
-        });
-    };
-
-    let mut face = Face::new(wid, vec![], surface);
-    if reversed {
-        face.set_reversed(true);
-    }
-    Ok(topo.add_face(face))
-}
-
 /// Loft two or more profiles into a solid.
 ///
 /// Each profile is a face; its surface may be planar or curved — only the
@@ -296,9 +196,10 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     // Start cap: reversed first profile (outward normal pointing away from loft).
     {
         let cap_normal = cap_normal_from_verts(&profile_verts[0], true)?;
-        all_faces.push(build_cap_face(
+        all_faces.push(crate::cap::build_cap_face(
             topo,
             &ring_edges[0],
+            vec![],
             &profile_verts[0],
             cap_normal,
             true,
@@ -350,9 +251,10 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     {
         let last = num_profiles - 1;
         let cap_normal = cap_normal_from_verts(&profile_verts[last], false)?;
-        all_faces.push(build_cap_face(
+        all_faces.push(crate::cap::build_cap_face(
             topo,
             &ring_edges[last],
+            vec![],
             &profile_verts[last],
             cap_normal,
             false,
@@ -1112,9 +1014,10 @@ pub fn loft_smooth(
     // Start cap: reversed first profile.
     {
         let cap_normal = cap_normal_from_verts(&profile_verts[0], true)?;
-        all_faces.push(build_cap_face(
+        all_faces.push(crate::cap::build_cap_face(
             topo,
             &ring_edges[0],
+            vec![],
             &profile_verts[0],
             cap_normal,
             true,
@@ -1180,9 +1083,10 @@ pub fn loft_smooth(
     {
         let last = num_profiles - 1;
         let cap_normal = cap_normal_from_verts(&profile_verts[last], false)?;
-        all_faces.push(build_cap_face(
+        all_faces.push(crate::cap::build_cap_face(
             topo,
             &ring_edges[last],
+            vec![],
             &profile_verts[last],
             cap_normal,
             false,

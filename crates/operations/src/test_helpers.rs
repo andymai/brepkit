@@ -175,3 +175,31 @@ where
     let solid = build_solid(&mut topo, face);
     assert_volume_near(&topo, solid, expected_vol, rel_tol);
 }
+
+/// Build a non-planar test profile: a 4-corner Coons patch with z-staggered
+/// corners, so both its boundary (the four corners) and its surface are
+/// non-planar. Centered at the origin with half-extent `half`.
+pub fn make_saddle_profile(topo: &mut Topology, half: f64) -> FaceId {
+    let h = half;
+    let bottom = vec![
+        Point3::new(-h, -h, 0.3),
+        Point3::new(0.0, -h, 0.6),
+        Point3::new(h, -h, -0.3),
+    ];
+    let right = vec![
+        Point3::new(h, -h, -0.3),
+        Point3::new(h, 0.0, 0.6),
+        Point3::new(h, h, 0.3),
+    ];
+    let top = vec![
+        Point3::new(-h, h, -0.3),
+        Point3::new(0.0, h, 0.6),
+        Point3::new(h, h, 0.3),
+    ];
+    let left = vec![
+        Point3::new(-h, -h, 0.3),
+        Point3::new(-h, 0.0, 0.6),
+        Point3::new(-h, h, -0.3),
+    ];
+    crate::fill_face::fill_coons_patch(topo, &[bottom, right, top, left]).unwrap()
+}

@@ -34,10 +34,15 @@ struct InnerPipeData {
 ///
 /// If no guide is provided, this behaves identically to a regular sweep.
 ///
+/// The profile surface may be planar or curved — only its boundary is used, and
+/// the end caps are filled from that boundary (a planar ring gets a `Plane`
+/// cap, a non-planar 4-sided ring a bilinear patch).
+///
 /// # Errors
 ///
-/// Returns an error if the profile is not planar, the path is too short,
-/// or the guide curve produces degenerate scaling.
+/// Returns an error if the path is too short, the guide curve produces
+/// degenerate scaling, or a section boundary is non-planar with more than four
+/// edges or with holes (unsupported cap).
 #[allow(clippy::too_many_lines)]
 pub fn pipe(
     topo: &mut Topology,
@@ -54,14 +59,6 @@ pub fn pipe(
     }
 
     let face_data = topo.face(profile)?;
-    let mut input_normal = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        _ => {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: "pipe of non-planar faces is not supported".into(),
-            });
-        }
-    };
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
@@ -81,6 +78,12 @@ pub fn pipe(
         let vid = oe.oriented_start(edge);
         input_verts.push(topo.vertex(vid)?.point());
     }
+
+    // Up-hint for the profile frame: the section boundary's own normal (Newell),
+    // which works for planar and non-planar profiles alike.
+    let mut input_normal = crate::winding::newell_normal(&input_verts)
+        .normalize()
+        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
 
     // Ensure CCW winding relative to path direction at t=0.
     // CW-wound profiles make `edge_dir.cross(path_dir)` point inward.
@@ -230,14 +233,6 @@ pub fn pipe(
 
     let mut all_faces = Vec::with_capacity(num_segments * n + 2);
 
-    let start_reversed: Vec<OrientedEdge> = (0..n)
-        .rev()
-        .map(|i| OrientedEdge::new(ring_edges[0][i], false))
-        .collect();
-    let start_wire = Wire::new(start_reversed, true).map_err(crate::OperationsError::Topology)?;
-    let start_wire_id = topo.add_wire(start_wire);
-    let start_normal = -(path.tangent(0.0)?);
-    let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
     let mut start_inner_wires = Vec::new();
     for ipd in &inner_pipe_data {
         let iw_edges: Vec<OrientedEdge> = (0..ipd.n)
@@ -247,15 +242,16 @@ pub fn pipe(
         let iw = Wire::new(iw_edges, true).map_err(crate::OperationsError::Topology)?;
         start_inner_wires.push(topo.add_wire(iw));
     }
-    let start_face = topo.add_face(Face::new(
-        start_wire_id,
+    let start_verts = crate::cap::ring_point_positions(topo, &ring_verts[0])?;
+    let start_outward = crate::cap::outward_normal(&start_verts, -(path.tangent(0.0)?))?;
+    all_faces.push(crate::cap::build_cap_face(
+        topo,
+        &ring_edges[0],
         start_inner_wires,
-        FaceSurface::Plane {
-            normal: start_normal,
-            d: start_d,
-        },
-    ));
-    all_faces.push(start_face);
+        &start_verts,
+        start_outward,
+        true,
+    )?);
 
     for seg in 0..num_segments {
         for i in 0..n {
@@ -332,11 +328,6 @@ pub fn pipe(
         }
     }
 
-    let end_edges: Vec<OrientedEdge> = (0..n)
-        .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
-        .collect();
-    let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
-    let end_wire_id = topo.add_wire(end_wire);
     let mut end_inner_wires = Vec::new();
     for ipd in &inner_pipe_data {
         let iw_edges: Vec<OrientedEdge> = (0..ipd.n)
@@ -345,20 +336,16 @@ pub fn pipe(
         let iw = Wire::new(iw_edges, true).map_err(crate::OperationsError::Topology)?;
         end_inner_wires.push(topo.add_wire(iw));
     }
-    let end_normal = path.tangent(1.0)?;
-    let end_d = dot_normal_point(
-        end_normal,
-        topo.vertex(ring_verts[num_segments][0])?.point(),
-    );
-    let end_face = topo.add_face(Face::new(
-        end_wire_id,
+    let end_verts = crate::cap::ring_point_positions(topo, &ring_verts[num_segments])?;
+    let end_outward = crate::cap::outward_normal(&end_verts, path.tangent(1.0)?)?;
+    all_faces.push(crate::cap::build_cap_face(
+        topo,
+        &ring_edges[num_segments],
         end_inner_wires,
-        FaceSurface::Plane {
-            normal: end_normal,
-            d: end_d,
-        },
-    ));
-    all_faces.push(end_face);
+        &end_verts,
+        end_outward,
+        false,
+    )?);
 
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
@@ -571,6 +558,62 @@ mod tests {
             rel_err < 0.01,
             "CW pipe volumes should match: origin={vol1}, translated={vol2}, \
              rel_err={rel_err:.2e}"
+        );
+    }
+
+    #[test]
+    fn pipe_planar_profile_caps_are_planar() {
+        // Regression: a planar profile must still produce flat `Plane` caps
+        // (pipe has no straight-extrude fast path, so this exercises the cap
+        // code directly).
+        let mut topo = Topology::new();
+        let profile = make_unit_square_face(&mut topo);
+        let path = straight_z_path(3.0);
+        let solid = pipe(&mut topo, profile, &path, None).unwrap();
+        let sh = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        let planar = sh
+            .faces()
+            .iter()
+            .filter(|&&fid| topo.face(fid).unwrap().surface().is_planar())
+            .count();
+        assert_eq!(planar, sh.faces().len(), "planar pipe stays all-planar");
+    }
+
+    #[test]
+    fn pipe_nonplanar_saddle_profile_is_valid_solid() {
+        // A non-planar (saddle) profile piped along a straight path: previously
+        // rejected by the planar-only gate, now closed with bilinear caps.
+        let mut topo = Topology::new();
+        let profile = crate::test_helpers::make_saddle_profile(&mut topo, 2.0);
+        assert!(!topo.face(profile).unwrap().surface().is_planar());
+        let path = straight_z_path(6.0);
+
+        let solid = pipe(&mut topo, profile, &path, None).unwrap();
+        let sh = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        let nurbs_caps = sh
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .count();
+        assert_eq!(
+            nurbs_caps, 2,
+            "non-planar ring caps are bilinear NURBS fills"
+        );
+
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid(),
+            "non-planar pipe must be a valid solid"
+        );
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 85.0 && vol < 110.0,
+            "non-planar pipe volume out of expected range, got {vol}"
         );
     }
 }
