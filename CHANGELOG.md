@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.119.1](https://github.com/andymai/brepkit/compare/v2.119.0...v2.119.1) (2026-06-23)
+
+
+### Bug Fixes
+
+* **operations:** correct sweep_smooth side-face rails and orientation ([#981](https://github.com/andymai/brepkit/issues/981)) ([b59cb64](https://github.com/andymai/brepkit/commit/b59cb640ed2f9c93b956a161eed7c99d6e901a50))
+
 ## [2.119.0](https://github.com/andymai/brepkit/compare/v2.118.0...v2.119.0) (2026-06-23)
 
 
