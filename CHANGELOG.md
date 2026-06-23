@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.119.0](https://github.com/andymai/brepkit/compare/v2.118.0...v2.119.0) (2026-06-23)
+
+
+### Features
+
+* **operations:** support non-planar profiles in revolve ([#979](https://github.com/andymai/brepkit/issues/979)) ([4c708ad](https://github.com/andymai/brepkit/commit/4c708ad6671432f8ba8f2ed2777d0dbad24a7b3d))
+
 ## [2.118.0](https://github.com/andymai/brepkit/compare/v2.117.0...v2.118.0) (2026-06-23)
 
 
