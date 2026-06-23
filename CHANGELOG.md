@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.116.0](https://github.com/andymai/brepkit/compare/v2.115.9...v2.116.0) (2026-06-23)
+
+
+### Features
+
+* **algo:** faithful shape-evolution via GFA face provenance ([#962](https://github.com/andymai/brepkit/issues/962)) ([267fedf](https://github.com/andymai/brepkit/commit/267fedf486f0e2ac2df808e885b93f51223d7167)), closes [#863](https://github.com/andymai/brepkit/issues/863)
+
 ## [2.115.9](https://github.com/andymai/brepkit/compare/v2.115.8...v2.115.9) (2026-06-23)
 
 
