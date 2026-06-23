@@ -116,16 +116,16 @@ Layered Cargo workspace. Crates depend only on the same or lower layers. Boundar
 
 Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs/tree/main/benchmarks) (5 iterations, Node.js, Linux x86_64). WASM is single-threaded; native benchmarks use criterion.
 
-| Operation                | brepkit (WASM) | OCCT (WASM) | Speedup | brepkit (native) |
-| ------------------------ | -------------- | ----------- | ------- | ---------------- |
-| fuse(box, box)           | 0.5 ms         | 43.3 ms     | 87x     | 122 µs           |
-| cut(box, cylinder)       | 59.6 ms        | 72.0 ms     | 1.2x    | 24.1 ms          |
-| intersect(box, sphere)   | 0.3 ms         | 62.6 ms     | 209x    | 104 µs           |
-| box + chamfer            | 0.1 ms         | 5.6 ms      | 56x     | 44 µs            |
-| box + fillet             | 0.3 ms         | 6.3 ms      | 21x     | 73 µs            |
-| multi-boolean (16 holes) | 7.0 ms         | 31.2 ms     | 4.5x    | 4.1 ms           |
-| mesh sphere (tol=0.01)   | 33.4 ms        | 49.7 ms     | 1.5x    | 1.5 ms           |
-| exportSTEP (×10)         | 1.1 ms         | 18.6 ms     | 17x     | —                |
+| Operation                    | brepkit (WASM) | OCCT (WASM) | Speedup | brepkit (native) |
+| ---------------------------- | -------------- | ----------- | ------- | ---------------- |
+| fuse(box, box) (×10)         | 0.5 ms         | 43.3 ms     | 87x     | 122 µs           |
+| cut(box, cylinder) (×10)     | 59.6 ms        | 72.0 ms     | 1.2x    | 24.1 ms          |
+| intersect(box, sphere) (×10) | 0.3 ms         | 62.6 ms     | 209x    | 104 µs           |
+| box + chamfer                | 0.1 ms         | 5.6 ms      | 56x     | 44 µs            |
+| box + fillet                 | 0.3 ms         | 6.3 ms      | 21x     | 73 µs            |
+| multi-boolean (16 holes)     | 7.0 ms         | 31.2 ms     | 4.5x    | 4.1 ms           |
+| mesh sphere (tol=0.01)       | 33.4 ms        | 49.7 ms     | 1.5x    | 1.5 ms           |
+| exportSTEP (×10)             | 1.1 ms         | 18.6 ms     | 17x     | —                |
 
 Booleans preserve analytic surfaces, keeping face counts low (72 vs ~7,000 for a 9-step compound boolean).
 
