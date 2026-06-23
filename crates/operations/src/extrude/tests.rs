@@ -497,6 +497,79 @@ fn extrude_face_with_ccw_circle_hole_volume() {
 }
 
 #[test]
+fn extrude_analytic_circle_hole_volume_is_exact() {
+    use brepkit_math::curves::Circle3D;
+
+    // 20×20 plate with a true (analytic) circular hole, radius 3, extruded by
+    // 10. The hole is four quarter-circle arc edges (how a full circle is
+    // lifted), so the extruded wall is four CylindricalSurface faces and the
+    // volume is exactly box − cylinder = 4000 − π·9·10. Tessellation (and a
+    // chord-polygonised cap) mis-count the curved boundary by ~1-2%; exact
+    // divergence-theorem integration over the analytic faces must hit it.
+    let mut topo = Topology::new();
+
+    let outer_pts = vec![
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(20.0, 0.0, 0.0),
+        Point3::new(20.0, 20.0, 0.0),
+        Point3::new(0.0, 20.0, 0.0),
+    ];
+    let outer_wire =
+        brepkit_topology::builder::make_polygon_wire(&mut topo, &outer_pts, 1e-7).unwrap();
+
+    let (cx, cy, r) = (10.0, 10.0, 3.0);
+    let mk = |topo: &mut Topology, x: f64, y: f64| {
+        topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7))
+    };
+    let p = [
+        mk(&mut topo, cx + r, cy),
+        mk(&mut topo, cx, cy + r),
+        mk(&mut topo, cx - r, cy),
+        mk(&mut topo, cx, cy - r),
+    ];
+    let circ = || {
+        Circle3D::with_axes(
+            Point3::new(cx, cy, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            r,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap()
+    };
+    let arcs: Vec<_> = (0..4)
+        .map(|i| {
+            let e = topo.add_edge(Edge::new(p[i], p[(i + 1) % 4], EdgeCurve::Circle(circ())));
+            OrientedEdge::new(e, true)
+        })
+        .collect();
+    let inner_wire = topo.add_wire(Wire::new(arcs, true).unwrap());
+
+    let face = topo.add_face(Face::new(
+        outer_wire,
+        vec![inner_wire],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 10.0).unwrap();
+    // Pass a deliberately COARSE deflection: solid_volume must internally clamp
+    // it fine enough to integrate the curved hole wall accurately. Without that
+    // clamp the inscribed mesh under-counts the wall and the volume is ~1-2% off.
+    let vol = crate::measure::solid_volume(&topo, solid, 0.5).unwrap();
+
+    let expected = 20.0 * 20.0 * 10.0 - std::f64::consts::PI * r * r * 10.0;
+    let rel_err = (vol - expected).abs() / expected;
+    assert!(
+        rel_err < 1e-3,
+        "analytic circular-hole volume should be ~{expected:.4}, got {vol:.4} \
+             (rel_err={rel_err:.2e}) — coarse deflection must be clamped fine"
+    );
+}
+
+#[test]
 fn extrude_cw_profile_produces_correct_solid() {
     crate::test_helpers::assert_cw_profile_produces_valid_solid(
         |topo, face| extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap(),
