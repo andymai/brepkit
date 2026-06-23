@@ -54,7 +54,16 @@ pub fn fuse_all(
         .map(|&sid| crate::measure::solid_bounding_box(topo, sid))
         .collect::<Result<_, _>>()?;
 
-    let groups = partition_overlapping(&bboxes);
+    // Per-solid polyhedral bounds (plane normals + vertices), or `None` for any
+    // solid with a curved face. Lets `partition_touching` prove that two solids
+    // whose loose AABBs overlap are actually disjoint (e.g. honeycomb hex prisms
+    // packed tighter than their corner-to-corner AABB extent), keeping them off
+    // the expensive boolean path.
+    let margin = brepkit_math::tolerance::Tolerance::new().linear;
+    let poly_bounds: Vec<Option<PolyhedralBounds>> =
+        solids.iter().map(|&s| polyhedral_bounds(topo, s)).collect();
+
+    let groups = partition_touching(&bboxes, &poly_bounds, margin);
 
     let mut group_results: Vec<SolidId> = Vec::new();
     for group in &groups {
@@ -133,19 +142,114 @@ fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
     x
 }
 
-/// Partition indices into groups where AABBs overlap (union-find).
-fn partition_overlapping(bboxes: &[Aabb3]) -> Vec<Vec<usize>> {
+/// Plane normals (candidate separating axes) and boundary vertices of a
+/// solid, used to prove disjointness via the separating-axis theorem.
+struct PolyhedralBounds {
+    normals: Vec<brepkit_math::vec::Vec3>,
+    verts: Vec<brepkit_math::vec::Point3>,
+}
+
+/// Collect a solid's plane normals and vertices — but only if *every* outer-shell
+/// face is planar. A flat-faced solid is contained in the convex hull of its
+/// vertices, which makes the vertex-projection separation test (below) sound.
+/// A single curved face can bulge past that hull, so any non-`Plane` face makes
+/// this return `None` (the caller then falls back to the conservative AABB test).
+fn polyhedral_bounds(topo: &Topology, sid: SolidId) -> Option<PolyhedralBounds> {
+    use brepkit_topology::face::FaceSurface;
+
+    let solid = topo.solid(sid).ok()?;
+    let shell = topo.shell(solid.outer_shell()).ok()?;
+
+    let mut normals = Vec::new();
+    let mut vert_ids = std::collections::HashSet::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid).ok()?;
+        match face.surface() {
+            // Normalize: stored plane normals aren't guaranteed unit length (e.g.
+            // raw STEP `DIRECTION` data), and `polyhedral_separated` compares
+            // projection gaps against a world-space margin, which is only valid
+            // for unit axes. Bail the whole solid to the AABB path on a
+            // degenerate normal.
+            FaceSurface::Plane { normal, .. } => normals.push(normal.normalize().ok()?),
+            _ => return None,
+        }
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).ok()?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                vert_ids.insert(edge.start());
+                vert_ids.insert(edge.end());
+            }
+        }
+    }
+
+    let mut verts = Vec::with_capacity(vert_ids.len());
+    for vid in vert_ids {
+        verts.push(topo.vertex(vid).ok()?.point());
+    }
+    if verts.is_empty() {
+        return None;
+    }
+    Some(PolyhedralBounds { normals, verts })
+}
+
+/// Whether two flat-faced solids are provably disjoint: `true` iff some face
+/// normal of either separates their vertex projections by a clear `margin`.
+///
+/// Soundness: each solid lies within the convex hull of its vertices (all faces
+/// planar), so a gap between the vertex projections on any axis is a real gap
+/// between the solids. Only face-normal axes are tried (not edge-edge cross
+/// products), so the test is sound but not complete — an undetected separation
+/// just falls through to the boolean, never a false "disjoint" for touching
+/// inputs.
+fn polyhedral_separated(a: &PolyhedralBounds, b: &PolyhedralBounds, margin: f64) -> bool {
+    let project = |verts: &[brepkit_math::vec::Point3], axis: &brepkit_math::vec::Vec3| {
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        for p in verts {
+            let d = p.x() * axis.x() + p.y() * axis.y() + p.z() * axis.z();
+            lo = lo.min(d);
+            hi = hi.max(d);
+        }
+        (lo, hi)
+    };
+    a.normals.iter().chain(b.normals.iter()).any(|axis| {
+        let (a_lo, a_hi) = project(&a.verts, axis);
+        let (b_lo, b_hi) = project(&b.verts, axis);
+        b_lo - a_hi > margin || a_lo - b_hi > margin
+    })
+}
+
+/// Partition indices into groups that may actually touch (union-find).
+///
+/// Two solids share a group when their AABBs overlap *unless* both are flat-faced
+/// and a separating axis proves a real gap between them. This keeps geometrically
+/// disjoint pieces whose loose AABBs overlap (honeycomb hex prisms, tightly
+/// packed feet) in separate groups, so `fuse_all` merges them via the cheap
+/// disjoint-shell path instead of an O(n) chain of boolean unions.
+fn partition_touching(
+    bboxes: &[Aabb3],
+    poly_bounds: &[Option<PolyhedralBounds>],
+    margin: f64,
+) -> Vec<Vec<usize>> {
     let n = bboxes.len();
     let mut parent: Vec<usize> = (0..n).collect();
 
     for i in 0..n {
         for j in (i + 1)..n {
-            if bboxes[i].intersects(bboxes[j]) {
-                let ri = uf_find(&mut parent, i);
-                let rj = uf_find(&mut parent, j);
-                if ri != rj {
-                    parent[ri] = rj;
-                }
+            if !bboxes[i].intersects(bboxes[j]) {
+                continue;
+            }
+            // AABBs overlap. Only keep them apart if we can *prove* a gap.
+            if let (Some(pi), Some(pj)) = (&poly_bounds[i], &poly_bounds[j])
+                && polyhedral_separated(pi, pj, margin)
+            {
+                continue;
+            }
+            let ri = uf_find(&mut parent, i);
+            let rj = uf_find(&mut parent, j);
+            if ri != rj {
+                parent[ri] = rj;
             }
         }
     }
@@ -276,6 +380,80 @@ mod tests {
         assert!(
             vol > 1.0 && vol < 2.0,
             "fused volume should be between 1 and 2, got {vol}"
+        );
+    }
+
+    /// Build a hexagonal prism (flat top at z=0..h) centred at the origin via
+    /// convex hull — a polyhedral stand-in for a honeycomb pocket.
+    fn make_hex_prism(topo: &mut Topology, circumradius: f64, height: f64) -> SolidId {
+        use brepkit_math::vec::Point3;
+        let mut pts = Vec::with_capacity(12);
+        for k in 0..6 {
+            let a = std::f64::consts::PI / 3.0 * k as f64;
+            let (x, y) = (circumradius * a.cos(), circumradius * a.sin());
+            pts.push(Point3::new(x, y, 0.0));
+            pts.push(Point3::new(x, y, height));
+        }
+        crate::primitives::make_convex_hull(topo, &pts).unwrap()
+    }
+
+    /// Honeycomb-packed hex prisms with a real gap between every pair, but
+    /// corner-to-corner AABBs that overlap. The AABB-only partition collapsed
+    /// these into one giant group and unioned them with an O(n) boolean chain;
+    /// `partition_touching` proves the gaps with the separating-axis test and
+    /// keeps each prism in its own group, so `fuse_all` takes the cheap
+    /// disjoint-shell merge.
+    #[test]
+    fn fuse_all_honeycomb_stays_disjoint() {
+        let r = 1.0_f64; // circumradius; across-corners = 2r = 2.0
+        let pitch = 2.3_f64; // clear gap on every neighbour, AABBs still overlap
+        let height = 4.0_f64;
+        let nx = 6;
+        let ny = 6;
+
+        let mut topo = Topology::new();
+        let mut bboxes = Vec::new();
+        let mut solids = Vec::new();
+        for j in 0..ny {
+            for i in 0..nx {
+                let s = make_hex_prism(&mut topo, r, height);
+                let x = i as f64 * pitch + (j % 2) as f64 * pitch / 2.0;
+                let y = j as f64 * pitch * 0.9;
+                crate::transform::transform_solid(
+                    &mut topo,
+                    s,
+                    &brepkit_math::mat::Mat4::translation(x, y, 0.0),
+                )
+                .unwrap();
+                bboxes.push(crate::measure::solid_bounding_box(&topo, s).unwrap());
+                solids.push(s);
+            }
+        }
+        let n = solids.len();
+
+        // Every prism is provably disjoint from the others -> one group each.
+        let margin = brepkit_math::tolerance::Tolerance::new().linear;
+        let pb: Vec<Option<PolyhedralBounds>> = solids
+            .iter()
+            .map(|&s| polyhedral_bounds(&topo, s))
+            .collect();
+        let groups = partition_touching(&bboxes, &pb, margin);
+        assert_eq!(
+            groups.len(),
+            n,
+            "disjoint hex prisms should each be their own group, got {} groups",
+            groups.len()
+        );
+
+        // Geometry is still the full disjoint union: volume == n * hex-prism volume.
+        let cid = topo.add_compound(Compound::new(solids));
+        let fused = fuse_all(&mut topo, cid).unwrap();
+        let vol = crate::measure::solid_volume(&topo, fused, 0.05).unwrap();
+        let hex_area = 3.0_f64.sqrt() * 1.5 * r * r; // (3*sqrt(3)/2) r^2
+        let expected = n as f64 * hex_area * height;
+        assert!(
+            (vol - expected).abs() < expected * 0.02,
+            "fused volume {vol:.2} should match {expected:.2} (n disjoint prisms)"
         );
     }
 }
