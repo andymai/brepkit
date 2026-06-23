@@ -8,6 +8,8 @@ use brepkit_topology::face::{Face, FaceSurface};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
+use crate::fill_face::fill_coons_patch;
+
 use super::*;
 
 /// Helper: make a square face at z=offset with given size.
@@ -746,5 +748,246 @@ fn loft_merges_split_arc_corners_for_curve_preservation() {
     assert_eq!(
         euler, 2,
         "split-arc frustum should be genus-0 (F={f} E={e} V={v})"
+    );
+}
+
+#[test]
+fn loft_planar_caps_unchanged() {
+    // Regression: planar profiles must still produce flat `Plane` caps with the
+    // section normal (±Z) and no reversal — the non-planar cap work must not
+    // touch the planar path.
+    let mut topo = Topology::new();
+    let bottom = make_square_at(&mut topo, 1.0, 0.0);
+    let top = make_square_at(&mut topo, 1.0, 1.0);
+    let solid = loft(&mut topo, &[bottom, top]).unwrap();
+    let sh = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+    assert_eq!(sh.faces().len(), 6);
+
+    // The two z-facing faces are the caps: still planar, normal ±Z, not reversed.
+    let cap_reversed: Vec<bool> = sh
+        .faces()
+        .iter()
+        .filter_map(|&fid| {
+            let f = topo.face(fid).unwrap();
+            match f.surface() {
+                FaceSurface::Plane { normal, .. } if normal.z().abs() > 0.99 => {
+                    Some(f.is_reversed())
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    assert_eq!(cap_reversed.len(), 2, "two ±Z planar caps");
+    assert!(
+        cap_reversed.iter().all(|&rev| !rev),
+        "planar caps must never be reversed"
+    );
+}
+
+/// A non-planar profile: a 4-corner Coons patch whose corners are staggered in
+/// z (genuinely non-coplanar boundary) and whose surface bulges (non-planar
+/// NURBS). Corner order p00,p10,p11,p01 is CCW in XY.
+fn make_saddle_patch(topo: &mut Topology, half: f64, z: f64) -> FaceId {
+    let h = half;
+    let bottom = vec![
+        Point3::new(-h, -h, z + 0.3),
+        Point3::new(0.0, -h, z + 0.6),
+        Point3::new(h, -h, z - 0.3),
+    ];
+    let right = vec![
+        Point3::new(h, -h, z - 0.3),
+        Point3::new(h, 0.0, z + 0.6),
+        Point3::new(h, h, z + 0.3),
+    ];
+    let top = vec![
+        Point3::new(-h, h, z - 0.3),
+        Point3::new(0.0, h, z + 0.6),
+        Point3::new(h, h, z + 0.3),
+    ];
+    let left = vec![
+        Point3::new(-h, -h, z + 0.3),
+        Point3::new(-h, 0.0, z + 0.6),
+        Point3::new(-h, h, z - 0.3),
+    ];
+    fill_coons_patch(topo, &[bottom, right, top, left]).unwrap()
+}
+
+#[test]
+fn loft_two_nonplanar_coons_patches_is_valid_solid() {
+    let mut topo = Topology::new();
+    let bottom = make_saddle_patch(&mut topo, 2.0, 0.0);
+    let top = make_saddle_patch(&mut topo, 2.0, 6.0);
+    assert!(
+        !topo.face(bottom).unwrap().surface().is_planar(),
+        "saddle profile must be a non-planar (NURBS) face"
+    );
+
+    let solid = loft(&mut topo, &[bottom, top]).unwrap();
+    let sh = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+
+    // 2 caps + 4 ruled sides = 6 faces. The non-planar section boundaries are
+    // filled by bilinear (NURBS) caps whose iso-boundaries are the ring chords.
+    assert_eq!(sh.faces().len(), 6);
+    let nurbs_caps = sh
+        .faces()
+        .iter()
+        .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+        .count();
+    assert_eq!(
+        nurbs_caps, 2,
+        "non-planar ring caps are bilinear NURBS fills"
+    );
+
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "non-planar loft must be a valid solid"
+    );
+    // ~4×4 cross-section, height ~6 → ≈96. The bilinear caps fill only the
+    // section (no parent-surface overfill), so the volume stays near the prism;
+    // a reused-surface overfill would inflate it well past this bound.
+    let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+    assert!(
+        vol > 85.0 && vol < 110.0,
+        "non-planar loft volume out of expected range, got {vol}"
+    );
+}
+
+/// A profile whose *surface* is non-planar (a sphere) but whose *boundary* is a
+/// planar ring at `ring_z`. Previously rejected by the planar-only gate; now
+/// accepted and closed with an exact flat (`Plane`) cap.
+fn make_sphere_cap_patch(topo: &mut Topology, ring_z: f64, ring_r: f64, sphere_r: f64) -> FaceId {
+    let sphere =
+        brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), sphere_r)
+            .unwrap();
+    let pts = [
+        Point3::new(ring_r, 0.0, ring_z),
+        Point3::new(0.0, ring_r, ring_z),
+        Point3::new(-ring_r, 0.0, ring_z),
+        Point3::new(0.0, -ring_r, ring_z),
+    ];
+    let v: Vec<_> = pts
+        .iter()
+        .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+        .collect();
+    let e: Vec<_> = (0..4)
+        .map(|i| topo.add_edge(Edge::new(v[i], v[(i + 1) % 4], EdgeCurve::Line)))
+        .collect();
+    let wire = Wire::new(
+        e.iter().map(|&id| OrientedEdge::new(id, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    topo.add_face(Face::new(wid, vec![], FaceSurface::Sphere(sphere)))
+}
+
+#[test]
+fn loft_nonplanar_surface_planar_boundary_makes_flat_caps() {
+    let mut topo = Topology::new();
+    // Two sphere-surfaced sections with planar boundaries (z=4, z=14), same
+    // radius-3 diamond cross-section → a square prism of height 10.
+    let bottom = make_sphere_cap_patch(&mut topo, 4.0, 3.0, 5.0);
+    let top = make_sphere_cap_patch(&mut topo, 14.0, 3.0, 5.0);
+    assert!(
+        !topo.face(bottom).unwrap().surface().is_planar(),
+        "the profile surface is non-planar (a sphere)"
+    );
+
+    let solid = loft(&mut topo, &[bottom, top]).unwrap();
+    let sh = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+    assert_eq!(sh.faces().len(), 6);
+    // Planar boundary ⇒ exact flat caps (the curved surface is not reused).
+    let planar = sh
+        .faces()
+        .iter()
+        .filter(|&&fid| topo.face(fid).unwrap().surface().is_planar())
+        .count();
+    assert_eq!(planar, 6, "all faces (caps + sides) are planar");
+
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+    // Diamond cross-section area = d²/2 = 6²/2 = 18, height 10 → exact prism 180.
+    let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+    assert!(
+        (vol - 180.0).abs() / 180.0 < 0.01,
+        "prism volume should be ~180, got {vol}"
+    );
+}
+
+#[test]
+fn loft_nonplanar_boundary_over_4_edges_is_unsupported() {
+    // A genuinely non-planar section boundary with >4 edges has no supported cap
+    // fill yet, so loft rejects it rather than emit overfilled/non-watertight
+    // geometry.
+    let mut topo = Topology::new();
+    let mk = |topo: &mut Topology, z: f64| -> FaceId {
+        let pts = [
+            Point3::new(2.0, 0.0, z + 0.4),
+            Point3::new(0.6, 1.9, z - 0.4),
+            Point3::new(-1.6, 1.2, z + 0.4),
+            Point3::new(-1.6, -1.2, z - 0.4),
+            Point3::new(0.6, -1.9, z + 0.4),
+        ];
+        let v: Vec<_> = pts
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let e: Vec<_> = (0..5)
+            .map(|i| topo.add_edge(Edge::new(v[i], v[(i + 1) % 5], EdgeCurve::Line)))
+            .collect();
+        let wire = Wire::new(
+            e.iter().map(|&id| OrientedEdge::new(id, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    };
+    let p0 = mk(&mut topo, 0.0);
+    let p1 = mk(&mut topo, 5.0);
+    assert!(
+        loft(&mut topo, &[p0, p1]).is_err(),
+        "non-planar >4-edge section boundary must be rejected"
+    );
+}
+
+#[test]
+fn loft_smooth_three_nonplanar_patches_positive_volume() {
+    // loft_smooth's own cap path (3+ profiles → NURBS side faces) must also fill
+    // the non-planar section boundaries (bilinear caps) and stay sane.
+    let mut topo = Topology::new();
+    let p0 = make_saddle_patch(&mut topo, 2.0, 0.0);
+    let p1 = make_saddle_patch(&mut topo, 1.5, 4.0);
+    let p2 = make_saddle_patch(&mut topo, 2.0, 8.0);
+
+    let solid = loft_smooth(&mut topo, &[p0, p1, p2]).unwrap();
+    let sh = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+    // 2 caps + 4 NURBS sides = 6 faces.
+    assert_eq!(sh.faces().len(), 6);
+
+    let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+    assert!(
+        vol > 0.0,
+        "smooth non-planar loft must have positive volume, got {vol}"
     );
 }
