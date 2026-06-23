@@ -136,6 +136,77 @@ fn make_revolution_surface(
     )
 }
 
+/// Decompose a point into `(radial_distance, axial_coordinate)` relative to the
+/// revolution axis (a line through `axis_origin` with unit direction `axis`).
+fn radial_axial(p: Point3, axis_origin: Point3, axis: Vec3) -> (f64, f64) {
+    let v = p - axis_origin;
+    let z = v.dot(axis);
+    ((v - axis * z).length(), z)
+}
+
+/// Build the surface for one revolution band.
+///
+/// For a straight (line) profile edge, returns the **exact** analytic surface
+/// of revolution — a `Cylinder` (edge parallel to the axis) or a `Plane` (edge
+/// perpendicular to it) — so the band integrates exactly instead of inscribing
+/// the swept arc as a NURBS band (~2% / ~0.04% deficit, gh #968). The surface is
+/// oriented to agree with the correctly-wound NURBS band normal.
+///
+/// Oblique line edges (cones), curved profile edges, and degenerate on-axis
+/// bands keep the NURBS band — they have no simpler exact form here.
+#[allow(clippy::too_many_arguments)]
+fn revolution_band_surface(
+    profile_is_line: bool,
+    p0_start: Point3,
+    p0_end: Point3,
+    p1_start: Point3,
+    p1_end: Point3,
+    axis_origin: Point3,
+    axis: Vec3,
+    seg_angle: f64,
+) -> Result<(FaceSurface, bool), brepkit_math::MathError> {
+    let nurbs = make_revolution_surface(
+        p0_start,
+        p0_end,
+        p1_start,
+        p1_end,
+        axis_origin,
+        axis,
+        seg_angle,
+    )?;
+    if !profile_is_line {
+        return Ok((FaceSurface::Nurbs(nurbs), false));
+    }
+
+    let tol = 1e-9;
+    let (r0, _z0) = radial_axial(p0_start, axis_origin, axis);
+    let (r1, _z1) = radial_axial(p1_start, axis_origin, axis);
+
+    // Only the axis-parallel case (a cylinder wall) is converted: it has the
+    // dominant inscription error and integrates exactly via the analytic
+    // cylinder formula. A perpendicular edge would become a flat annular Plane,
+    // but the planar tessellator samples its circular boundary more coarsely
+    // than the rational-NURBS band does, so those caps stay NURBS.
+    if r0 < tol || (r0 - r1).abs() >= tol {
+        return Ok((FaceSurface::Nurbs(nurbs), false));
+    }
+
+    let surface = brepkit_math::surfaces::CylindricalSurface::new(axis_origin, axis, r0)?;
+    // Match the NURBS bands' orientation so every face of the result winds the
+    // same way (the volume integrator takes the absolute value of the total, so
+    // consistency — not outward-vs-inward per se — is what matters). The NURBS
+    // band `normal` (its du×dv) points into the swept material; the cylinder's
+    // natural normal is radial-outward, so reverse the wall exactly when that
+    // outward radial opposes the NURBS band normal.
+    let center = rotate_point(p0_start, axis_origin, axis, seg_angle / 2.0);
+    let radial = center - (axis_origin + axis * (center - axis_origin).dot(axis));
+    let natural_outward = radial.normalize().unwrap_or(axis);
+    Ok((
+        FaceSurface::Cylinder(surface),
+        natural_outward.dot(nurbs.normal(0.5, 0.5)?) < 0.0,
+    ))
+}
+
 /// Index of the next ring for a given segment, wrapping to 0 for the last
 /// segment of a full revolution.
 const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
@@ -153,6 +224,99 @@ struct WireRevolveData {
     ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
     input_oriented: Vec<OrientedEdge>,
     n: usize,
+}
+
+/// Fast exact path for revolving a single circular profile a full turn: the
+/// result is a torus, built as one analytic [`FaceSurface::Torus`] face.
+///
+/// The general revolve splits the circle into line chords and revolves each
+/// into a NURBS band, which inscribes the circle and undershoots the analytic
+/// volume by ~2% (gh #968). A `Torus` face is integrated exactly.
+///
+/// Returns `Ok(None)` — fall back to the general revolve — unless the profile
+/// is a single closed circle, the revolution is full, the axis lies in the
+/// profile plane, and the circle clears the axis (`major > minor`, so the
+/// torus does not self-intersect; the sphere and spindle cases fall back).
+fn try_circle_revolution_torus(
+    topo: &mut Topology,
+    face: FaceId,
+    axis_origin: Point3,
+    axis: Vec3,
+    is_full: bool,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    if !is_full {
+        return Ok(None);
+    }
+
+    let face_data = topo.face(face)?;
+    if !face_data.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let normal = match face_data.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => return Ok(None),
+    };
+
+    let wire = topo.wire(face_data.outer_wire())?;
+    let oriented = wire.edges();
+    if oriented.len() != 1 {
+        return Ok(None);
+    }
+    let edge = topo.edge(oriented[0].edge())?;
+    let (center, radius) = match edge.curve() {
+        EdgeCurve::Circle(c) => (c.center(), c.radius()),
+        _ => return Ok(None),
+    };
+
+    let tol = Tolerance::new();
+    // The axis must lie in the profile plane (perpendicular to its normal),
+    // else the swept surface is not a torus of revolution.
+    if normal.dot(axis).abs() > 1e-9 {
+        return Ok(None);
+    }
+
+    // Major radius = perpendicular distance from the circle center to the axis.
+    let to_center = center - axis_origin;
+    let along = to_center.dot(axis);
+    let major_radius = (to_center - axis * along).length();
+    // The circle must clear the axis; otherwise the revolution is a sphere
+    // (center on axis) or a self-intersecting spindle — both fall back.
+    if major_radius <= radius + tol.linear {
+        return Ok(None);
+    }
+
+    let torus_center = axis_origin + axis * along;
+    let surface = brepkit_math::surfaces::ToroidalSurface::with_axis(
+        torus_center,
+        major_radius,
+        radius,
+        axis,
+    )
+    .map_err(crate::OperationsError::Math)?;
+
+    // One doubly-periodic torus face, like `primitives::make_torus`: a single
+    // seam vertex with two degenerate seam edges forming the fundamental
+    // polygon a → b → a⁻¹ → b⁻¹.
+    let seam = surface.evaluate(0.0, 0.0);
+    let v0 = topo.add_vertex(Vertex::new(seam, tol.linear));
+    let ea = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+    let eb = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+    let wid = topo.add_wire(
+        Wire::new(
+            vec![
+                OrientedEdge::new(ea, true),
+                OrientedEdge::new(eb, true),
+                OrientedEdge::new(ea, false),
+                OrientedEdge::new(eb, false),
+            ],
+            true,
+        )
+        .map_err(crate::OperationsError::Topology)?,
+    );
+    let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Torus(surface)));
+    let shell_id =
+        topo.add_shell(Shell::new(vec![face_id]).map_err(crate::OperationsError::Topology)?);
+    Ok(Some(topo.add_solid(Solid::new(shell_id, vec![]))))
 }
 
 /// Revolve a planar face around an axis to produce a solid of revolution.
@@ -209,6 +373,14 @@ pub fn revolve(
     };
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
+
+    // Fast exact path: a full revolution of a single circular profile that
+    // clears the axis is a torus. Build it as one analytic `ToroidalSurface`
+    // face instead of faceting the circle into chords, which undershoots the
+    // analytic volume by ~2% (gh #968).
+    if let Some(solid) = try_circle_revolution_torus(topo, face, axis_origin, axis, is_full)? {
+        return Ok(solid);
+    }
 
     // Ensure input_normal agrees with actual vertex winding (CCW convention).
     // If the outer wire is CW-wound (e.g. from brepjs), the Newell normal
@@ -424,7 +596,12 @@ pub fn revolve(
             let p1_start = topo.vertex(outer.ring_verts[seg][next_i])?.point();
             let p1_end = topo.vertex(outer.ring_verts[next][next_i])?.point();
 
-            let surface = make_revolution_surface(
+            let profile_is_line = matches!(
+                topo.edge(outer.input_oriented[i].edge())?.curve(),
+                EdgeCurve::Line
+            );
+            let (surface, reversed) = revolution_band_surface(
+                profile_is_line,
                 p0_start,
                 p0_end,
                 p1_start,
@@ -434,7 +611,11 @@ pub fn revolve(
                 seg_angle,
             )?;
 
-            let fid = topo.add_face(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface)));
+            let fid = if reversed {
+                topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
+            } else {
+                topo.add_face(Face::new(side_wire_id, vec![], surface))
+            };
             all_faces.push(fid);
         }
     }
@@ -573,21 +754,153 @@ mod tests {
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
-        // 4 profile edges × 4 arc segments = 16 NURBS faces, no planar caps.
+        // 4 profile edges × 4 arc segments = 16 side faces. Revolving the unit
+        // square around its x=0 edge yields a unit cylinder, so the x=1 edge's
+        // four bands are exact analytic cylinders (gh #968); the perpendicular
+        // caps and the degenerate on-axis edge stay NURBS.
         assert_eq!(shell.faces().len(), 16);
+        let cyl_count = shell
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert_eq!(cyl_count, 4, "the axis-parallel wall's bands are cylinders");
 
-        for &fid in shell.faces() {
-            let f = topo.face(fid).unwrap();
-            assert!(
-                matches!(f.surface(), FaceSurface::Nurbs(_)),
-                "full revolution should only have NURBS faces"
-            );
-        }
+        // Revolving the unit square around its edge is a unit cylinder: V = π.
+        // The exact-cylinder walls leave only the NURBS disc caps' boundary
+        // tessellation residual (~0.006%, vs the ~2% of an all-faceted revolve).
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        assert!(
+            (vol - PI).abs() / PI < 1e-3,
+            "expected unit cylinder volume π, got {vol}"
+        );
 
         // Full 360° revolution of a rectangle → torus-like topology (genus-1, χ=0).
         // The profile sweeps fully around, merging start/end into a closed ring.
         let chi = euler_characteristic(&topo, solid);
         assert_eq!(chi, 0, "full revolve should have χ=0 (genus-1), got {chi}");
+    }
+
+    #[test]
+    fn revolve_circle_full_turn_is_exact_torus() {
+        // gh #968: revolving a circle (r=2, center x=10) a full turn around the
+        // Y axis is a torus (R=10, r=2). It must be one analytic Torus face with
+        // the exact analytic volume 2π²Rr², not a faceted ~2%-low approximation.
+        use brepkit_topology::builder::make_circle_edge;
+
+        let mut topo = Topology::new();
+        let circle = make_circle_edge(
+            &mut topo,
+            Point3::new(10.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            1e-7,
+        )
+        .unwrap();
+        let wid = topo.add_wire(Wire::new(vec![OrientedEdge::new(circle, true)], true).unwrap());
+        let profile = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let solid = revolve(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let shell = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        assert_eq!(
+            shell.faces().len(),
+            1,
+            "torus is a single doubly-periodic face"
+        );
+        assert!(matches!(
+            topo.face(shell.faces()[0]).unwrap().surface(),
+            FaceSurface::Torus(_)
+        ));
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let expected = 2.0 * PI * PI * 10.0 * 4.0;
+        assert!(
+            (vol - expected).abs() / expected < 1e-6,
+            "expected exact torus volume {expected}, got {vol}"
+        );
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
+    }
+
+    #[test]
+    fn revolve_washer_walls_are_exact_cylinders() {
+        // gh #968: a rectangular cross-section revolved a full turn (a washer)
+        // has axis-parallel inner/outer walls that must become exact analytic
+        // cylinders — the inner wall reversed (faces the hole), the outer not.
+        // The all-faceted revolve undershot by ~0.04%; the walls are now exact,
+        // leaving only the NURBS disc-cap residual.
+        use brepkit_topology::builder::make_polygon_wire;
+
+        let mut topo = Topology::new();
+        let wire = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(5.0, 0.0, 0.0),
+                Point3::new(7.0, 0.0, 0.0),
+                Point3::new(7.0, 0.0, 5.0),
+                Point3::new(5.0, 0.0, 5.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 0.0,
+            },
+        ));
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let shell = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        let cyl_count = shell
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert_eq!(cyl_count, 8, "inner+outer walls × 4 segments are cylinders");
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let expected = PI * (49.0 - 25.0) * 5.0;
+        assert!(
+            (vol - expected).abs() / expected < 1e-3,
+            "washer volume {expected}, got {vol}"
+        );
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
     }
 
     #[test]
