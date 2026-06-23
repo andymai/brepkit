@@ -325,13 +325,16 @@ fn plane_cylinder_fillet_concave_emits_torus_with_smaller_major() {
     );
 }
 
-/// Convex plane-cylinder fillet sanity check — the existing
-/// `fillet_cylinder_base_circle_produces_torus` integration test
-/// covers the convex path through `fillet_v2`, but adding a direct
-/// helper-level convex test alongside the concave one above guards
-/// against regression in the shared `major_radius` branch.
+/// A bare disc cap whose only boundary is the cylinder rim (no inner wires,
+/// all boundary vertices within `r_c` of the axis) is an INWARD rim — the
+/// fillet rounds the disc inward, with `major = r_c − r` and the torus centre
+/// one radius into the material (z = +r). This is the gh #967 geometry, and
+/// the direct analogue of the integration-level
+/// `fillet_cylinder_base_circle_produces_torus`. (A genuine post-on-a-plate,
+/// where the plate extends past the cylinder, instead keeps `major = r_c + r`;
+/// that configuration is not modelled by a bare disc.)
 #[test]
-fn plane_cylinder_fillet_convex_emits_torus_with_larger_major() {
+fn plane_cylinder_fillet_rim_emits_torus_with_smaller_major() {
     use brepkit_math::curves::Circle3D;
     use brepkit_math::surfaces::CylindricalSurface;
     use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -358,7 +361,7 @@ fn plane_cylinder_fillet_convex_emits_torus_with_larger_major() {
         },
     ));
 
-    // NOT reversed — typical post-on-plate cylinder face.
+    // NOT reversed — the disc cap's rim borders a solid (post/cylinder body).
     let cyl_surface =
         CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
     let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
@@ -383,7 +386,7 @@ fn plane_cylinder_fillet_convex_emits_torus_with_larger_major() {
         face_cyl,
     )
     .unwrap()
-    .expect("convex plane-cylinder fillet should produce a stripe");
+    .expect("rim plane-cylinder fillet should produce a stripe");
 
     let torus = match result.stripe.surface {
         FaceSurface::Torus(t) => t,
@@ -391,17 +394,16 @@ fn plane_cylinder_fillet_convex_emits_torus_with_larger_major() {
     };
 
     assert!(
-        (torus.major_radius() - (r_c + r_fillet)).abs() < 1e-9,
-        "torus major should be r_c + r_fillet = {} for convex, got {}",
-        r_c + r_fillet,
+        (torus.major_radius() - (r_c - r_fillet)).abs() < 1e-9,
+        "torus major should be r_c − r_fillet = {} for an inward rim, got {}",
+        r_c - r_fillet,
         torus.major_radius()
     );
-    // Convex case: torus center at z = -r (below plate, in empty wedge).
+    // Rim case: torus centre at z = +r (one radius into the material).
     let center = torus.center();
     assert!(
-        (center.z() - (-r_fillet)).abs() < 1e-9,
-        "convex torus center should sit at z = -r ({}), got {}",
-        -r_fillet,
+        (center.z() - r_fillet).abs() < 1e-9,
+        "rim torus centre should sit at z = +r ({r_fillet}), got {}",
         center.z()
     );
 }
@@ -491,24 +493,44 @@ fn plane_cylinder_fillet_concave_rejects_spindle_radius() {
         "concave fillet must reject r = r_c/2 (degenerate major = minor)"
     );
 
-    // Convex at r_c/2 < r < r_c is still fine — major = r_c + r > minor.
-    let mut topo_convex = Topology::new();
-    let (spine_convex, cyl_convex, fp_convex, fc_convex) = setup(&mut topo_convex, false);
-    let n_p_inward_convex = Vec3::new(0.0, 0.0, 1.0);
-    let result_convex = plane_cylinder_fillet(
-        n_p_inward_convex,
+    // The non-reversed cylinder face here borders a bare disc cap (the rim
+    // circle is the plate's only boundary), so it is an INWARD rim, not a
+    // post-on-a-plate. The rim shares the concave `major = r_c − r` formula, so
+    // it must reject r ≥ r_c/2 (spindle) too…
+    let mut topo_rim = Topology::new();
+    let (spine_rim, cyl_rim, fp_rim, fc_rim) = setup(&mut topo_rim, false);
+    let n_p_inward_rim = Vec3::new(0.0, 0.0, 1.0);
+    let result_rim_spindle = plane_cylinder_fillet(
+        n_p_inward_rim,
         0.0,
-        &cyl_convex,
-        &spine_convex,
-        &topo_convex,
+        &cyl_rim,
+        &spine_rim,
+        &topo_rim,
         1.5,
-        fp_convex,
-        fc_convex,
+        fp_rim,
+        fc_rim,
     )
     .unwrap();
     assert!(
-        result_convex.is_some(),
-        "convex fillet should accept r in (r_c/2, r_c)"
+        result_rim_spindle.is_none(),
+        "rim fillet must reject r > r_c/2 (spindle-torus regime)"
+    );
+
+    // …and accept a small radius (major = r_c − r > minor = r).
+    let result_rim_ok = plane_cylinder_fillet(
+        n_p_inward_rim,
+        0.0,
+        &cyl_rim,
+        &spine_rim,
+        &topo_rim,
+        0.5,
+        fp_rim,
+        fc_rim,
+    )
+    .unwrap();
+    assert!(
+        result_rim_ok.is_some(),
+        "rim fillet should accept r < r_c/2"
     );
 }
 

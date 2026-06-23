@@ -688,17 +688,29 @@ pub fn plane_cylinder_fillet(
     //      * reversed:     material is on the cylinder's *outward* side
     //        (a hole through a slab). Concave internal corner.
     let concave = topo.face(face_cyl)?.is_reversed();
+    let r_c = cyl.radius();
+
+    // 2b) Among the convex (non-reversed-cylinder) configurations, distinguish
+    //     the "post on a large plate" (the plate extends past the cylinder, so
+    //     the fillet flares OUTWARD with plate contact at `r_c + r`) from the
+    //     "rim of a bare disc cap bounded BY the cylinder" (e.g. a primitive
+    //     cylinder's bottom/top rim — the cap *is* the circle of radius `r_c`,
+    //     so the fillet rounds INWARD with plate contact at `r_c - r`). The
+    //     discriminator: a bounded disc cap has no inner wires and every
+    //     boundary vertex lies within `r_c` of the cylinder axis; a plate that
+    //     the post stands on has boundary vertices beyond `r_c`.
+    let rim = !concave && plane_is_bounded_disc(topo, face_plane, cyl, r_c)?;
 
     // 3) Radius bound depends on the case:
-    //    - Convex: major = `r_c + r`, always > minor = `r`, so the only
+    //    - Convex post: major = `r_c + r`, always > minor = `r`, so the only
     //      regime to reject is `r ≥ r_c` (rolling ball would encircle the
     //      cylinder axis).
-    //    - Concave: major = `r_c - r`; needs `r < r_c` to keep major
-    //      positive *and* `r ≤ r_c/2` to keep major ≥ minor. Past `r_c/2`
-    //      the construction becomes a spindle (self-intersecting) torus
+    //    - Concave hole / convex rim: major = `r_c - r`; needs `r < r_c` to
+    //      keep major positive *and* `r ≤ r_c/2` to keep major ≥ minor. Past
+    //      `r_c/2` the construction becomes a spindle (self-intersecting) torus
     //      which is invalid as a fillet surface.
-    let r_c = cyl.radius();
-    let max_radius = if concave { r_c * 0.5 } else { r_c };
+    let inward = concave || rim;
+    let max_radius = if inward { r_c * 0.5 } else { r_c };
     if radius <= tol_lin || radius >= max_radius {
         return Ok(None);
     }
@@ -711,14 +723,22 @@ pub fn plane_cylinder_fillet(
     let step = d_plane - n_p_inward.dot(Vec3::new(o_c.x(), o_c.y(), o_c.z()));
     let p_axis_on_plane = o_c + n_p_inward * step;
 
-    // 5) The torus center sits one fillet radius "above" the spine plane
-    //    along the side opposite the plane material (`-n_p_inward`) for
-    //    both convex and concave — the empty wedge is on the same side of
-    //    the plate in either case. Major radius differs: `r_c + r` for
-    //    convex (plate contact OUTSIDE the spine), `r_c - r` for concave
-    //    (plate contact INSIDE the spine).
-    let torus_center = p_axis_on_plane - n_p_inward * radius;
-    let major_radius = if concave { r_c - radius } else { r_c + radius };
+    // 5) Torus placement.
+    //    `z_axis_dir` is the side of the plate the rolling ball trajectory is
+    //    lifted toward (the cylinder-material side along the axis), and the
+    //    torus center sits one fillet radius along it.
+    //      - Concave hole / convex post: the empty wedge is on the plate side
+    //        opposite the cylinder material, so the ball lifts toward
+    //        `-n_p_inward` and the torus center is below the plate.
+    //      - Convex rim (disc bounded by the cylinder): the material *is* on
+    //        the `+n_p_inward` side, so the ball lifts INTO the material
+    //        (toward `+n_p_inward`) and the torus center sits one radius above
+    //        the plate; plate contact lands at `r_c - r`.
+    //    Major radius: `r_c + r` for a convex post (plate contact OUTSIDE the
+    //    spine), `r_c - r` for the inward cases (plate contact INSIDE).
+    let z_axis_dir = if rim { n_p_inward } else { -n_p_inward };
+    let torus_center = p_axis_on_plane + z_axis_dir * radius;
+    let major_radius = if inward { r_c - radius } else { r_c + radius };
     let minor_radius = radius;
 
     // 6) Spine must span an arc to be useful. `Spine::from_single_edge`
@@ -768,11 +788,10 @@ pub fn plane_cylinder_fillet(
     };
 
     // 9) 3D contact curves.
-    //    - On the plane: a circle of radius `R = r_c + r` around the cylinder
-    //      axis on the spine plane.
-    //    - On the cylinder: a circle of radius `r_c` at axial offset `r`
-    //      (the height of the ball trajectory above the plane).
-    let z_axis_dir = -n_p_inward; // Direction "out of the plate" along the cylinder axis side.
+    //    - On the plane: a circle of radius `major` (= `r_c ± r`) around the
+    //      cylinder axis on the spine plane.
+    //    - On the cylinder: a circle of radius `r_c` at axial offset `r` along
+    //      `z_axis_dir` (the height of the ball trajectory above the plane).
     let contact_plane_circle = brepkit_math::curves::Circle3D::with_axes(
         p_axis_on_plane,
         axis_c,
@@ -866,6 +885,45 @@ pub fn plane_cylinder_fillet(
         stripe,
         new_edges: Vec::new(),
     }))
+}
+
+/// Is the plane face a bounded disc cap whose rim is the cylinder (radius
+/// `r_c`), as opposed to a larger plate the cylinder stands on?
+///
+/// True when the face has no inner wires AND every outer-boundary vertex lies
+/// within `r_c` (plus a small tolerance) of the cylinder axis. For a primitive
+/// cylinder's end cap the only boundary is the rim circle of radius `r_c`, so
+/// all its vertices sit exactly on the axis-distance `r_c`; for a plate that a
+/// post stands on, the plate corners lie beyond `r_c`.
+fn plane_is_bounded_disc(
+    topo: &Topology,
+    face_plane: FaceId,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    r_c: f64,
+) -> Result<bool, BlendError> {
+    let face = topo.face(face_plane)?;
+    if !face.inner_wires().is_empty() {
+        return Ok(false);
+    }
+    let axis = cyl.axis();
+    let o_c = cyl.origin();
+    // Radial distance from the cylinder axis to a point: |(p − o_c) − ((p − o_c)·axis)·axis|.
+    let radial = |p: Point3| -> f64 {
+        let d = p - o_c;
+        let along = axis * axis.dot(d);
+        (d - along).length()
+    };
+    let tol = r_c * 1e-6 + ANALYTIC_TOL_LIN;
+    let wire = topo.wire(face.outer_wire())?;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let s = topo.vertex(edge.start())?.point();
+        let e = topo.vertex(edge.end())?.point();
+        if radial(s) > r_c + tol || radial(e) > r_c + tol {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Recover the cylinder's axial v-parameter for a 3D point known to lie on

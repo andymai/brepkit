@@ -149,29 +149,32 @@ fn fillet_empty_edges_error() {
     assert!(err.is_err(), "empty edges should return an error");
 }
 
-/// Plane-cylinder fillet on a primitive cylinder. The bottom-cap circle
-/// edge sits where the plane (cap) meets the cylinder lateral; the analytic
-/// dispatcher should produce an exact toroidal fillet face for the convex
-/// "post on plate" geometry.
+/// Plane-cylinder fillet on a primitive cylinder. The bottom-cap circle edge
+/// sits where the disc cap (a bare disc bounded by the cylinder) meets the
+/// lateral; the analytic dispatcher should produce an exact toroidal fillet
+/// that rounds the rim INWARD (gh #967): `major = r_c − r`, torus centre one
+/// fillet radius into the material (z = +r). The result must be a watertight
+/// solid that removes only the thin rim sliver.
 #[test]
 fn fillet_cylinder_base_circle_produces_torus() {
     let mut topo = Topology::new();
-    // Cylinder of radius 2, height 4 — convex base circle is the spine.
+    // Cylinder of radius 2, height 4 — a rim circle is the spine.
     let solid = make_cylinder(&mut topo, 2.0, 4.0).unwrap();
+    let base_vol = solid_volume(&topo, solid, 0.005).unwrap();
 
     // The two `EdgeCurve::Circle` edges on a primitive cylinder are the top
-    // and bottom rims; pick whichever the explorer surfaces first.
-    let circle_edges: Vec<_> = solid_edges(&topo, solid)
+    // and bottom rims; pick the bottom rim (z = 0).
+    let bottom_rim = solid_edges(&topo, solid)
         .unwrap()
         .into_iter()
-        .filter(|&eid| matches!(topo.edge(eid).unwrap().curve(), EdgeCurve::Circle(_)))
-        .collect();
-    assert!(
-        !circle_edges.is_empty(),
-        "cylinder must have at least one circular rim edge"
-    );
+        .find(|&eid| {
+            let e = topo.edge(eid).unwrap();
+            matches!(e.curve(), EdgeCurve::Circle(_))
+                && topo.vertex(e.start()).unwrap().point().z().abs() < 1e-9
+        })
+        .expect("cylinder must have a bottom rim circle edge");
 
-    let result = fillet_v2(&mut topo, solid, &circle_edges[..1], 0.3).unwrap();
+    let result = fillet_v2(&mut topo, solid, &[bottom_rim], 0.3).unwrap();
 
     assert!(
         !result.succeeded.is_empty(),
@@ -191,34 +194,30 @@ fn fillet_cylinder_base_circle_produces_torus() {
     });
     let torus = torus.expect("analytic fast path should produce a Torus face");
 
-    // Torus geometry: minor radius == fillet radius, major radius ==
-    // r_cylinder + r_fillet (convex case), axis parallel to cylinder axis.
+    let r_c = 2.0;
+    let r_fillet = 0.3;
+    // Torus geometry: minor radius == fillet radius; major radius == r_c − r
+    // (inward rim); axis parallel to the cylinder axis.
     assert!(
-        (torus.minor_radius() - 0.3).abs() < 1e-9,
-        "torus minor radius should equal fillet radius 0.3, got {}",
+        (torus.minor_radius() - r_fillet).abs() < 1e-9,
+        "torus minor radius should equal fillet radius {r_fillet}, got {}",
         torus.minor_radius()
     );
     assert!(
-        (torus.major_radius() - 2.3).abs() < 1e-9,
-        "torus major radius should equal cylinder radius + fillet radius (2.3), got {}",
+        (torus.major_radius() - (r_c - r_fillet)).abs() < 1e-9,
+        "torus major radius should equal r_c − r_fillet ({}), got {}",
+        r_c - r_fillet,
         torus.major_radius()
     );
 
-    // Stricter geometric assertion: the torus must actually be tangent to
-    // both surfaces at the predicted contact points. Sample the small-circle
-    // u-frame densely and check that the predicted plate-contact and
-    // cylinder-contact 3D positions are reproduced. Without this we'd accept
-    // any torus with the right radii regardless of placement.
-    let r_c = 2.0;
-    let r_fillet = 0.3;
-    // Plate contact = top-of-tube (z toward +axis_dir): radial = r_c + r at z=0.
-    // Cylinder contact = inner-equator: radial = r_c at z = -r (one fillet
-    // radius below the plate, since the rolling ball center sits at z=-r).
-    // Both contacts lie in the plane spanned by the cylinder's local x_axis
-    // direction; for the brepkit primitive `Frame3::from_normal(z)` picks
-    // `x_axis = (0, 1, 0)`, so contact points appear in the +y direction.
-    let want_plate = brepkit_math::vec::Point3::new(0.0, r_c + r_fillet, 0.0);
-    let want_cyl = brepkit_math::vec::Point3::new(0.0, r_c, -r_fillet);
+    // Stricter geometric assertion: the torus must actually be tangent to both
+    // surfaces at the predicted contact points. The rim rounds inward, so the
+    // plate contact is at radial r_c − r (z = 0, inside the rim) and the
+    // cylinder contact is at radial r_c, z = +r (one fillet radius up into the
+    // body). For the brepkit primitive, `Frame3::from_normal(z)` picks
+    // `x_axis = (0, 1, 0)`, so contacts appear in the +y direction.
+    let want_plate = brepkit_math::vec::Point3::new(0.0, r_c - r_fillet, 0.0);
+    let want_cyl = brepkit_math::vec::Point3::new(0.0, r_c, r_fillet);
     let mut closest_plate = f64::INFINITY;
     let mut closest_cyl = f64::INFINITY;
     for i in 0..1440 {
@@ -234,6 +233,20 @@ fn fillet_cylinder_base_circle_produces_torus() {
     assert!(
         closest_cyl < 1e-6,
         "torus should touch cylinder at {want_cyl:?}; closest sample was {closest_cyl:.6}"
+    );
+
+    // The assembled solid must be watertight and remove only the thin rim
+    // sliver — a small fraction of the cylinder volume.
+    let sd = topo.solid(result.solid).unwrap();
+    let sh = topo.shell(sd.outer_shell()).unwrap();
+    brepkit_topology::validation::validate_shell_closed(sh, &topo)
+        .expect("rim fillet result must be watertight");
+    brepkit_topology::validation::validate_shell_manifold(sh, &topo)
+        .expect("rim fillet result must be manifold");
+    let vol = solid_volume(&topo, result.solid, 0.005).unwrap();
+    assert!(
+        vol < base_vol && vol > base_vol * 0.99,
+        "rim fillet should remove only a thin sliver: base={base_vol:.3}, filleted={vol:.3}"
     );
 }
 

@@ -288,6 +288,24 @@ pub(super) fn tessellate_nonplanar_cdt(
                 }
             }
         }
+
+        // The tube angle (v) is periodic on a torus too. A toroidal band (a rim
+        // fillet) is bounded by two rims at distinct v, joined by a seam where v
+        // jumps by nearly a full turn; without unwrapping, the v-bbox spans the
+        // long arc (the bulging 270° of the tube) instead of the short fillet
+        // arc, and the interior CDT samples cover the wrong side. Unwrap v the
+        // same way u is unwrapped so consecutive boundary points stay within
+        // half a turn, collapsing the band to its true (short-arc) v-extent.
+        if matches!(face_data.surface(), FaceSurface::Torus(_)) && !boundary_uv.is_empty() {
+            for i in 1..boundary_uv.len() {
+                let prev_v = boundary_uv[i - 1].1;
+                let mut v = boundary_uv[i].1;
+                let diff = v - prev_v;
+                let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
+                v -= shifts * std::f64::consts::TAU;
+                boundary_uv[i].1 = v;
+            }
+        }
     }
 
     // Compute (u,v) bounding box from a set of UV pairs.

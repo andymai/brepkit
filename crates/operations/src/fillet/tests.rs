@@ -923,9 +923,15 @@ fn fillet_radius_just_fits() {
 
 #[test]
 fn fillet_plane_cylinder_edge() {
-    // A cylinder has planar top/bottom and a cylindrical lateral face.
-    // The edges between the planar caps and the cylindrical face should
-    // now be filleted (previously silently skipped).
+    // A cylinder's rim edges are CLOSED circles (start vertex == end vertex).
+    // The rolling-ball engine is built around polygonal wires with distinct
+    // corner vertices; a closed circular edge collapses its blend strip and the
+    // adjacent disc cap to zero-area faces (the result is manifold but
+    // geometrically degenerate — it silently drops the caps and shrinks the
+    // wall, removing ~35% of the volume; see gh #967). The engine must reject
+    // this rather than return the broken solid, so the dispatcher
+    // (`wasm::try_fillet`) falls through to the walking blend engine
+    // (`blend_ops::fillet_v2`), which rounds a closed rim correctly.
     let mut topo = Topology::new();
     let solid = crate::primitives::make_cylinder(&mut topo, 2.0, 4.0).unwrap();
 
@@ -972,26 +978,19 @@ fn fillet_plane_cylinder_edge() {
         "cylinder should have plane-cylinder edges"
     );
 
-    // Fillet the first plane-cylinder edge. This should succeed now
-    // (previously it would have been silently skipped).
+    // Filleting the closed rim circle must be REJECTED (not return a degenerate
+    // solid). The rejection lets the dispatcher fall through to the walking
+    // engine, which rounds the rim into an exact quarter-torus (gh #967).
     let result = fillet_rolling_ball(&mut topo, solid, &plane_cyl_edges[..1], 0.3);
     assert!(
-        result.is_ok(),
-        "plane-cylinder fillet should succeed: {:?}",
-        result.err()
+        result.is_err(),
+        "rolling-ball fillet of a closed cylinder-rim edge must be rejected as \
+         degenerate, not return a silently-broken solid"
     );
-
-    // Verify the result has a NURBS fillet face.
-    let result_solid = result.unwrap();
-    let rs = topo.solid(result_solid).unwrap();
-    let rsh = topo.shell(rs.outer_shell()).unwrap();
-    let has_nurbs = rsh
-        .faces()
-        .iter()
-        .any(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)));
+    let msg = format!("{}", result.err().unwrap());
     assert!(
-        has_nurbs,
-        "plane-cylinder fillet should produce a NURBS face"
+        msg.contains("degenerate"),
+        "expected a degenerate-face rejection, got: {msg}"
     );
 }
 
@@ -1239,11 +1238,17 @@ fn adjacent_fillet_overlap_curved_face_detected() {
             assert!(vol > 0.0);
         }
         Err(e) => {
-            // Overlap or curvature error is expected for large radius
+            // A large radius on the closed cylinder rim is expected to fail.
+            // Acceptable reasons: overlap / curvature bound, or the degenerate
+            // closed-circular-edge rejection (the rim collapses the blend strip;
+            // see gh #967). The key is that it must NOT panic.
             let msg = format!("{e}");
             assert!(
-                msg.contains("overlap") || msg.contains("curvature") || msg.contains("exceeds"),
-                "expected overlap/curvature error, got: {msg}"
+                msg.contains("overlap")
+                    || msg.contains("curvature")
+                    || msg.contains("exceeds")
+                    || msg.contains("degenerate"),
+                "expected overlap/curvature/degenerate error, got: {msg}"
             );
         }
     }

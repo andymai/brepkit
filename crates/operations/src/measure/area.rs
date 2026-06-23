@@ -303,8 +303,8 @@ fn analytic_torus_face_area(
     if v_vals.is_empty() {
         return Ok(0.0);
     }
-    let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
-    let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let mut v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let mut v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if (v_max - v_min).abs() < 1e-15 {
         // Full torus: v wraps from 0 to 2pi, all boundary v-vals are the same.
         // Use full v-range.
@@ -315,6 +315,17 @@ fn analytic_torus_face_area(
         let dv = std::f64::consts::TAU;
         let area = small_r * (u1 - u0) * (big_r * dv + small_r * 0.0);
         return Ok(area.abs());
+    }
+
+    // A toroidal band (e.g. a rim fillet) is bounded by two rims at distinct v,
+    // and v is periodic: the raw [v_min, v_max] may be the long (bulge) arc
+    // rather than the short fillet arc. If the naive span exceeds π, take the
+    // complementary (wrapped) arc instead.
+    if v_max - v_min > std::f64::consts::PI {
+        let new_min = v_max;
+        let new_max = v_min + std::f64::consts::TAU;
+        v_min = new_min;
+        v_max = new_max;
     }
 
     let u_range = compute_angular_range(&mut u_vals);
