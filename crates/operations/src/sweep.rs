@@ -991,6 +991,13 @@ pub fn sweep_smooth(
     let degree_u = (num_rings - 1).min(3);
     let degree_v = 1;
 
+    // Rail edges, one per profile vertex (the swept-vertex path from the first
+    // to the last ring), shared between the two adjacent side faces so the shell
+    // is manifold.
+    let rail_edges: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(first_ring[i], last_ring[i], EdgeCurve::Line)))
+        .collect();
+
     for i in 0..n {
         let next_i = (i + 1) % n;
 
@@ -1002,26 +1009,41 @@ pub fn sweep_smooth(
         let surface =
             interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
 
-        let e_left_rail = topo.add_edge(Edge::new(first_ring[i], last_ring[i], EdgeCurve::Line));
-        let e_right_rail = topo.add_edge(Edge::new(
-            first_ring[next_i],
-            last_ring[next_i],
-            EdgeCurve::Line,
-        ));
-
         let side_wire = Wire::new(
             vec![
                 OrientedEdge::new(first_ring_edges[i], true),
-                OrientedEdge::new(e_right_rail, true),
+                OrientedEdge::new(rail_edges[next_i], true),
                 OrientedEdge::new(last_ring_edges[i], false),
-                OrientedEdge::new(e_left_rail, false),
+                OrientedEdge::new(rail_edges[i], false),
             ],
             true,
         )
         .map_err(crate::OperationsError::Topology)?;
 
         let side_wire_id = topo.add_wire(side_wire);
-        all_faces.push(topo.add_face(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface))));
+        // The surface normal ∂u×∂v = path×edge points *into* the swept body for
+        // a CCW profile; reverse the face when it opposes the geometric outward
+        // so the solid's faces are consistently outward. Probe everything at the
+        // start ring (u=0), mid-edge (v=0.5): the edge tangent crossed with the
+        // local path direction *at the edge midpoint*. If they are parallel (the
+        // edge runs along the path) the cross product vanishes, so fall back to
+        // the radial direction from the ring centroid.
+        let mid0 = ring_positions[0][i] + (ring_positions[0][next_i] - ring_positions[0][i]) * 0.5;
+        let mid1 = ring_positions[1][i] + (ring_positions[1][next_i] - ring_positions[1][i]) * 0.5;
+        let edge_dir = ring_positions[0][next_i] - ring_positions[0][i];
+        let mut outward = edge_dir.cross(mid1 - mid0);
+        if outward.length() < tol.linear {
+            outward = mid0 - crate::winding::polygon_centroid(&ring_positions[0]);
+        }
+        let reversed = surface
+            .normal(0.0, 0.5)
+            .map(|nrm| nrm.dot(outward) < 0.0)
+            .unwrap_or(false);
+        let mut face = Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface));
+        if reversed {
+            face.set_reversed(true);
+        }
+        all_faces.push(topo.add_face(face));
     }
 
     for iwd in &inner_swept_smooth {

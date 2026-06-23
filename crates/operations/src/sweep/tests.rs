@@ -1236,3 +1236,59 @@ fn sweep_nonplanar_saddle_profile_is_valid_solid() {
         "non-planar sweep volume out of expected range, got {vol}"
     );
 }
+
+#[test]
+fn sweep_smooth_straight_path_exact_volume() {
+    // Regression for the rail bug: sweep_smooth built per-face (duplicated)
+    // straight rails and left the NURBS side faces with inward normals, giving a
+    // non-manifold shell whose volume integrated to 1/3 of the true value. A
+    // 2×2 square swept 6 along +Z is an exact 24-volume prism.
+    let mut topo = Topology::new();
+    let profile = make_square(&mut topo, 2.0);
+    let solid = sweep_smooth(&mut topo, profile, &straight_z_path(6.0)).unwrap();
+
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "smooth sweep must be a valid (manifold) solid"
+    );
+    let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+    assert!(
+        (vol - 24.0).abs() / 24.0 < 0.01,
+        "straight smooth-sweep prism volume should be 24, got {vol}"
+    );
+}
+
+#[test]
+fn sweep_smooth_gentle_curve_is_valid_with_sane_volume() {
+    // A gently curved path (initial tangent +Z, bending toward +X): the shared
+    // rails keep the shell manifold and the volume near the swept prism
+    // (~profile area 4 × arc length ~6.3 ≈ 25), not 1/3 of it.
+    let mut topo = Topology::new();
+    let profile = make_square(&mut topo, 2.0);
+    let path = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 3.0),
+            Point3::new(1.5, 0.0, 6.0),
+        ],
+        vec![1.0, 1.0, 1.0],
+    )
+    .unwrap();
+    let solid = sweep_smooth(&mut topo, profile, &path).unwrap();
+
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "curved smooth sweep must be a valid solid"
+    );
+    let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+    assert!(
+        vol > 24.0 && vol < 26.0,
+        "gently curved smooth-sweep volume should be ~25, got {vol}"
+    );
+}
