@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.119.2](https://github.com/andymai/brepkit/compare/v2.119.1...v2.119.2) (2026-06-23)
+
+
+### Performance
+
+* **operations:** keep disjoint flat-faced solids out of fuse_all's boolean groups ([#982](https://github.com/andymai/brepkit/issues/982)) ([c60aa9a](https://github.com/andymai/brepkit/commit/c60aa9accebff2329b4aea29b091921a2751628d))
+
 ## [2.119.1](https://github.com/andymai/brepkit/compare/v2.119.0...v2.119.1) (2026-06-23)
 
 
