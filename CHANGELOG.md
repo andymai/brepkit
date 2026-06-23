@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.117.0](https://github.com/andymai/brepkit/compare/v2.116.1...v2.117.0) (2026-06-23)
+
+
+### Features
+
+* **operations:** support non-planar profiles in loft ([#974](https://github.com/andymai/brepkit/issues/974)) ([2f1b11d](https://github.com/andymai/brepkit/commit/2f1b11de32a0e17f100ab4a9ad62097508007523))
+
 ## [2.116.1](https://github.com/andymai/brepkit/compare/v2.116.0...v2.116.1) (2026-06-23)
 
 
