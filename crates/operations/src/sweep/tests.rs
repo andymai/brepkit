@@ -1166,3 +1166,73 @@ fn densify_short_input_is_identity() {
     let pts = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 0.0, 0.0)];
     assert_eq!(densify_path_points(&pts), pts);
 }
+
+#[test]
+fn sweep_planar_profile_caps_are_planar() {
+    // Regression: a planar profile must still produce flat `Plane` caps. The
+    // path is curved (but starts tangent +Z) so the general sweep runs — a
+    // straight path short-circuits to extrude and skips the cap code under test.
+    let mut topo = Topology::new();
+    let profile = make_square(&mut topo, 2.0);
+    let path = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 3.0),
+            Point3::new(2.0, 0.0, 5.0),
+        ],
+        vec![1.0, 1.0, 1.0],
+    )
+    .unwrap();
+    let solid = sweep(&mut topo, profile, &path).unwrap();
+    let sh = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+    let planar = sh
+        .faces()
+        .iter()
+        .filter(|&&fid| topo.face(fid).unwrap().surface().is_planar())
+        .count();
+    assert_eq!(planar, sh.faces().len(), "planar sweep stays all-planar");
+}
+
+#[test]
+fn sweep_nonplanar_saddle_profile_is_valid_solid() {
+    // A non-planar (saddle) profile swept along a straight path: previously
+    // rejected by the planar-only gate, now closed with bilinear caps.
+    let mut topo = Topology::new();
+    let profile = crate::test_helpers::make_saddle_profile(&mut topo, 2.0);
+    assert!(
+        !topo.face(profile).unwrap().surface().is_planar(),
+        "saddle profile must be a non-planar face"
+    );
+    let path = straight_z_path(6.0);
+    let solid = sweep(&mut topo, profile, &path).unwrap();
+
+    let sh = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+    let nurbs_caps = sh
+        .faces()
+        .iter()
+        .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+        .count();
+    assert_eq!(
+        nurbs_caps, 2,
+        "non-planar ring caps are bilinear NURBS fills"
+    );
+
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "non-planar sweep must be a valid solid"
+    );
+    // ~4×4 cross-section over a length-6 path → ≈96; bilinear caps don't overfill.
+    let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+    assert!(
+        vol > 85.0 && vol < 110.0,
+        "non-planar sweep volume out of expected range, got {vol}"
+    );
+}

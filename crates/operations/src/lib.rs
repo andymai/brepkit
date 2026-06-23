@@ -69,6 +69,7 @@ pub mod validate;
 pub mod tessellate;
 
 pub mod assembly;
+pub(crate) mod cap;
 pub mod compound_ops;
 pub mod evolution;
 pub mod sketch;

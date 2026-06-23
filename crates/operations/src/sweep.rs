@@ -506,15 +506,18 @@ fn try_straight_extrude(
 
 /// Sweep a face along a path curve to produce a solid.
 ///
-/// Creates a solid by moving a planar profile along a NURBS curve, with the
-/// profile oriented perpendicular to the path tangent at each sample point.
-/// Side faces are planar quads connecting consecutive profile rings.
+/// Creates a solid by moving a profile along a NURBS curve, with the profile
+/// oriented perpendicular to the path tangent at each sample point. Side faces
+/// are planar quads connecting consecutive profile rings. The profile surface
+/// may be planar or curved — only its boundary is used; the end caps are filled
+/// from that boundary (a planar ring gets a `Plane` cap, a non-planar 4-sided
+/// ring a bilinear patch).
 ///
 /// # Errors
 ///
-/// Returns an error if the profile is not planar, has inner wires (holes),
-/// the path has fewer than 2 control points, or a degenerate tangent is
-/// encountered.
+/// Returns an error if the path has fewer than 2 control points, a degenerate
+/// tangent is encountered, or a section boundary is non-planar with more than
+/// four edges or with holes (unsupported cap).
 #[allow(clippy::too_many_lines)]
 pub fn sweep(
     topo: &mut Topology,
@@ -535,14 +538,6 @@ pub fn sweep(
     }
 
     let face_data = topo.face(profile)?;
-    let mut input_normal = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        _ => {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: "sweep of non-planar faces is not supported".into(),
-            });
-        }
-    };
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
@@ -599,13 +594,19 @@ pub fn sweep(
         })
         .collect::<Result<_, _>>()?;
 
+    // Up-hint for the rotation-minimizing frame: the section boundary's own
+    // normal (Newell), which works for planar and non-planar profiles alike —
+    // a profile's stored surface is no longer required to be a plane.
+    let mut input_normal = crate::winding::newell_normal(&input_positions)
+        .normalize()
+        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+
     // Ensure CCW winding relative to the path direction at t=0.
     // CW-wound profiles (e.g. from brepjs) make `edge_dir.cross(path_dir)` point
     // inward instead of outward, producing inside-out side faces.
     let path_tangent_0 = path.tangent(0.0)?;
     if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
-        // Positions were reversed → stored face normal was from CW winding.
-        // Negate so the up-hint for frame computation is correct.
+        // Positions were reversed → boundary normal flips with them.
         input_normal = -input_normal;
     }
 
@@ -710,26 +711,17 @@ pub fn sweep(
 
     // Start cap (open paths only — closed paths have no caps).
     if !is_closed {
-        let start_reversed_edges: Vec<OrientedEdge> = (0..n)
-            .rev()
-            .map(|i| OrientedEdge::new(ring_edges[0][i], false))
-            .collect();
-        let start_wire =
-            Wire::new(start_reversed_edges, true).map_err(crate::OperationsError::Topology)?;
-        let start_wire_id = topo.add_wire(start_wire);
         let start_inner_wires = build_inner_cap_wires(topo, &inner_swept, 0, true)?;
-
-        let start_normal = -frames[0].tangent;
-        let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
-        let start_face = topo.add_face(Face::new(
-            start_wire_id,
+        let start_verts = crate::cap::ring_point_positions(topo, &ring_verts[0])?;
+        let outward = crate::cap::outward_normal(&start_verts, -frames[0].tangent)?;
+        all_faces.push(crate::cap::build_cap_face(
+            topo,
+            &ring_edges[0],
             start_inner_wires,
-            FaceSurface::Plane {
-                normal: start_normal,
-                d: start_d,
-            },
-        ));
-        all_faces.push(start_face);
+            &start_verts,
+            outward,
+            true,
+        )?);
     }
 
     // Side faces: one quad per profile-edge × path-segment.
@@ -781,27 +773,17 @@ pub fn sweep(
 
     // End cap (open paths only).
     if !is_closed {
-        let end_edges: Vec<OrientedEdge> = (0..n)
-            .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
-            .collect();
-        let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
-        let end_wire_id = topo.add_wire(end_wire);
         let end_inner_wires = build_inner_cap_wires(topo, &inner_swept, num_segments, false)?;
-
-        let end_normal = frames[num_segments].tangent;
-        let end_d = dot_normal_point(
-            end_normal,
-            topo.vertex(ring_verts[num_segments][0])?.point(),
-        );
-        let end_face = topo.add_face(Face::new(
-            end_wire_id,
+        let end_verts = crate::cap::ring_point_positions(topo, &ring_verts[num_segments])?;
+        let outward = crate::cap::outward_normal(&end_verts, frames[num_segments].tangent)?;
+        all_faces.push(crate::cap::build_cap_face(
+            topo,
+            &ring_edges[num_segments],
             end_inner_wires,
-            FaceSurface::Plane {
-                normal: end_normal,
-                d: end_d,
-            },
-        ));
-        all_faces.push(end_face);
+            &end_verts,
+            outward,
+            false,
+        )?);
     }
 
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
