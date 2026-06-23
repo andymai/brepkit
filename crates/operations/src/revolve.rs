@@ -24,6 +24,10 @@ use crate::dot_normal_point;
 /// Minimum radial distance threshold for non-degenerate arcs.
 const MIN_RADIAL_LEN: f64 = 1e-12;
 
+/// A partial-revolve profile boundary is treated as planar when its deviation
+/// from the best-fit plane is below this fraction of the boundary's size.
+const PLANARITY_REL_TOL: f64 = 1e-6;
+
 /// Rotate a point around an axis (origin + unit direction) by angle θ.
 ///
 /// Uses Rodrigues' rotation formula:
@@ -319,11 +323,16 @@ fn try_circle_revolution_torus(
     Ok(Some(topo.add_solid(Solid::new(shell_id, vec![]))))
 }
 
-/// Revolve a planar face around an axis to produce a solid of revolution.
+/// Revolve a face around an axis to produce a solid of revolution.
+///
+/// The profile surface may be planar or curved — only its boundary is used. A
+/// full revolution (2π) has no caps, so it accepts any boundary; a partial
+/// revolution closes its ends with planar caps and therefore requires a planar
+/// profile boundary.
 ///
 /// # Parameters
 ///
-/// - `face` — a planar face whose outer wire defines the profile
+/// - `face` — a face whose outer wire defines the profile
 /// - `axis_origin` — a point on the rotation axis
 /// - `axis_direction` — direction of the rotation axis (will be normalized)
 /// - `angle_radians` — rotation angle in radians, must be in (0, 2π]
@@ -334,8 +343,8 @@ fn try_circle_revolution_torus(
 ///
 /// # Errors
 ///
-/// Returns an error if the axis is zero-length, the angle is out of range,
-/// or the face surface is not a plane.
+/// Returns an error if the axis is zero-length, the angle is out of range, or a
+/// partial revolution is requested for a non-planar profile boundary.
 #[allow(clippy::too_many_lines)]
 pub fn revolve(
     topo: &mut Topology,
@@ -363,13 +372,16 @@ pub fn revolve(
     let angle = if is_full { 2.0 * PI } else { angle_radians };
 
     let face_data = topo.face(face)?;
-    let mut input_normal = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        _ => {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: "revolve of non-planar faces is not supported".into(),
-            });
-        }
+    // A planar profile keeps its stored plane normal; a non-planar surface has
+    // its profile normal derived from the boundary below. The gate that rejected
+    // every non-planar face is gone.
+    let stored_plane_normal = match face_data.surface() {
+        FaceSurface::Plane { normal, .. } => Some(*normal),
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_) => None,
     };
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
@@ -382,11 +394,13 @@ pub fn revolve(
         return Ok(solid);
     }
 
-    // Ensure input_normal agrees with actual vertex winding (CCW convention).
-    // If the outer wire is CW-wound (e.g. from brepjs), the Newell normal
-    // opposes the stored normal. Correct by negating so that cap normals,
-    // side face winding, and all downstream logic produce outward-facing faces.
-    {
+    // Profile-plane normal for cap orientation and side-face winding. A planar
+    // profile keeps its stored normal, corrected to the CCW convention (the
+    // outer wire may be CW-wound, e.g. from brepjs). A non-planar surface
+    // derives the normal from the boundary's Newell normal. Partial revolutions
+    // close the ends with planar caps, so a non-planar boundary is only allowed
+    // for a full revolution.
+    let input_normal = {
         let wire = topo.wire(input_wire_id)?;
         let oes: Vec<_> = wire.edges().to_vec();
         let wire_positions: Vec<Point3> = oes
@@ -401,10 +415,48 @@ pub fn revolve(
                 Ok(topo.vertex(vid)?.point())
             })
             .collect::<Result<_, _>>()?;
-        if crate::winding::is_cw_winding(&wire_positions, &input_normal) {
-            input_normal = -input_normal;
+        if let Some(normal) = stored_plane_normal {
+            // Planar profile: keep the stored normal, corrected to CCW.
+            if crate::winding::is_cw_winding(&wire_positions, &normal) {
+                -normal
+            } else {
+                normal
+            }
+        } else if is_full {
+            // A full revolution has no caps, so the profile normal is unused;
+            // accept any boundary (including a single closed edge). Derive a
+            // best-effort normal, falling back to the axis when degenerate.
+            crate::winding::newell_normal(&wire_positions)
+                .normalize()
+                .unwrap_or(axis)
+        } else {
+            // A partial revolution closes its ends with planar caps, so the
+            // boundary must be a planar polygon.
+            if wire_positions.len() < 3 {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "partial revolve of a non-planar profile requires a polygonal boundary"
+                        .into(),
+                });
+            }
+            let normal = crate::winding::newell_normal(&wire_positions).normalize()?;
+            let plane_pt = wire_positions[0];
+            let max_dev = wire_positions
+                .iter()
+                .map(|p| (*p - plane_pt).dot(normal).abs())
+                .fold(0.0, f64::max);
+            let scale = wire_positions
+                .iter()
+                .map(|p| (*p - plane_pt).length())
+                .fold(0.0, f64::max);
+            if max_dev > PLANARITY_REL_TOL * scale {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "partial revolve of a non-planar profile boundary is not supported"
+                        .into(),
+                });
+            }
+            normal
         }
-    }
+    };
 
     let (num_segs, seg_angle) = arc_segmentation(angle);
     let num_boundaries = if is_full { num_segs } else { num_segs + 1 };
@@ -1307,6 +1359,153 @@ mod tests {
             rel_err < 0.05,
             "CW profile revolve volume should be 5π ≈ {expected:.2}, \
              got {vol:.2} (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// A 2×3 rectangle at x=2..4, y=0..3 (planar boundary) whose *surface* is a
+    /// cylinder — previously rejected by the planar-only gate. The revolve uses
+    /// only the boundary, so the result matches the planar-profile case.
+    fn cylinder_surface_rect(topo: &mut Topology) -> FaceId {
+        let pts = vec![
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(4.0, 3.0, 0.0),
+            Point3::new(2.0, 3.0, 0.0),
+        ];
+        let wire = brepkit_topology::builder::make_polygon_wire(topo, &pts, 1e-7).unwrap();
+        let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+        )
+        .unwrap();
+        topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Cylinder(cyl),
+        ))
+    }
+
+    #[test]
+    fn revolve_nonplanar_surface_full_turn_volume() {
+        let mut topo = Topology::new();
+        let face = cylinder_surface_rect(&mut topo);
+        assert!(
+            !topo.face(face).unwrap().surface().is_planar(),
+            "profile surface is non-planar (a cylinder)"
+        );
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+        // Pappus: V = 2π × centroid_x × area = 2π × 3 × 6 = 36π.
+        let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+        let expected = 36.0 * PI;
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "non-planar-surface revolve volume should be 36π, got {vol}"
+        );
+    }
+
+    #[test]
+    fn revolve_nonplanar_surface_partial_volume() {
+        // Partial revolve closes the ends with planar caps; the planar boundary
+        // makes that exact.
+        let mut topo = Topology::new();
+        let face = cylinder_surface_rect(&mut topo);
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            PI,
+        )
+        .unwrap();
+        // Half revolution: V = π × centroid_x × area = π × 3 × 6 = 18π.
+        let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+        let expected = 18.0 * PI;
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "non-planar-surface partial revolve volume should be 18π, got {vol}"
+        );
+    }
+
+    #[test]
+    fn revolve_partial_nonplanar_boundary_is_rejected() {
+        // A genuinely non-planar boundary (corners lifted off z=0) can't be
+        // closed by a planar cap, so a partial revolve is rejected.
+        let mut topo = Topology::new();
+        let pts = vec![
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 0.6),
+            Point3::new(4.0, 3.0, 0.0),
+            Point3::new(2.0, 3.0, 0.6),
+        ];
+        let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+        let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+        )
+        .unwrap();
+        let face = topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Cylinder(cyl),
+        ));
+        let result = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            PI,
+        );
+        assert!(
+            result.is_err(),
+            "partial revolve of a non-planar boundary must be rejected"
+        );
+    }
+
+    #[test]
+    fn revolve_full_nonplanar_boundary_is_accepted() {
+        // A full revolution has no caps, so a genuinely non-planar boundary is
+        // accepted (each boundary point traces a circle); the profile normal is
+        // unused, so the boundary-vertex-count guard must not reject it.
+        let mut topo = Topology::new();
+        let pts = vec![
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 0.6),
+            Point3::new(4.0, 3.0, 0.0),
+            Point3::new(2.0, 3.0, 0.6),
+        ];
+        let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+        let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+        )
+        .unwrap();
+        let face = topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Cylinder(cyl),
+        ));
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "full revolve of a non-planar boundary should have positive volume, got {vol}"
         );
     }
 }
