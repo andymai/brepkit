@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.118.0](https://github.com/andymai/brepkit/compare/v2.117.0...v2.118.0) (2026-06-23)
+
+
+### Features
+
+* **operations:** support non-planar profiles in sweep and pipe ([#976](https://github.com/andymai/brepkit/issues/976)) ([67cdd5e](https://github.com/andymai/brepkit/commit/67cdd5e9c4acb18289a09043c4281cc18118c7dc))
+
 ## [2.117.0](https://github.com/andymai/brepkit/compare/v2.116.1...v2.117.0) (2026-06-23)
 
 
