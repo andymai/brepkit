@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.119.3](https://github.com/andymai/brepkit/compare/v2.119.2...v2.119.3) (2026-06-23)
+
+
+### Bug Fixes
+
+* **operations:** sweep profiles perpendicular to the path regardless of orientation ([#985](https://github.com/andymai/brepkit/issues/985)) ([7c8c96b](https://github.com/andymai/brepkit/commit/7c8c96b4f0c5a23c55ca4e9cc18273efd3fd9783))
+
 ## [2.119.2](https://github.com/andymai/brepkit/compare/v2.119.1...v2.119.2) (2026-06-23)
 
 
