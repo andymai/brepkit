@@ -15,7 +15,7 @@ Solid modeling kernel for Rust and WebAssembly.
 
 </div>
 
-The same exact-geometry engine, from Rust and from JavaScript. Drill a hole, measure it, export it.
+One exact-geometry engine, from Rust and from JavaScript. Drill a hole, measure it, export it.
 
 ```rust
 use brepkit_operations::primitives::{make_box, make_cylinder};
@@ -53,7 +53,7 @@ const step = kernel.exportStep(drilled); // Uint8Array
 
 ## Why a CAD kernel?
 
-brepkit is a B-Rep solid modeling kernel written from scratch in Rust. It targets WebAssembly, so the same kernel runs in a browser and on the desktop without a separate native build. `unsafe` is denied by lint, as are `unwrap` and `panic`. Every public operation returns a `Result`.
+brepkit is a B-Rep solid modeling kernel written from scratch in Rust. It targets WebAssembly, so the same kernel runs in the browser and on the desktop. `unsafe` is denied by lint, as are `unwrap` and `panic`. Every public operation returns a `Result`.
 
 It grew out of building [gridfinitylayouttool.com](https://gridfinitylayouttool.com), where the options for parametric CAD in the browser were proprietary or compiled from large C++ codebases.
 
@@ -61,46 +61,46 @@ The geometry is exact. Booleans run on analytic and NURBS surfaces and keep thos
 
 ## Status
 
-brepkit is in active development. Core modeling is solid. Some areas are still maturing, and the [Known Limitations](#known-limitations) section is specific about the edges.
+brepkit is in active development. Core modeling is solid. Each feature below is marked stable, beta, planned, or experimental, and [Known Limitations](#known-limitations) covers the gaps.
 
-| Category                | Feature                                                                | Status       |
-| ----------------------- | ---------------------------------------------------------------------- | ------------ |
-| **Primitives**          | Box, cylinder, cone, sphere, torus, ellipsoid                          | Stable       |
-| **Primitives**          | Convex hull, Minkowski sum (convex inputs)                             | Stable       |
-| **Booleans**            | Union, cut, intersect on plane, cylinder, cone, sphere, NURBS          | Stable       |
-| **Booleans**            | Batch fuse-all (disjoint-aware union)                                  | Stable       |
-| **Booleans**            | Torus booleans (box ± torus, coaxial torus)                            | Beta         |
-| **Modifiers**           | Fillet (constant + variable radius), chamfer (walking engine)          | Stable       |
-| **Modifiers**           | Shell (hollow solid)                                                   | Stable       |
-| **Modifiers**           | Offset face, offset solid, thicken, mirror, pattern                    | Stable       |
-| **Modifiers**           | Draft (planar faces)                                                   | Beta         |
-| **Sweeps**              | Extrude (planar + NURBS profiles)                                      | Stable       |
-| **Sweeps**              | Revolve, sweep, loft, pipe (planar profiles)                           | Stable       |
-| **Sweeps**              | Helical sweep                                                          | Stable       |
-| **Sweeps**              | Non-planar profiles for revolve, sweep, loft, pipe                     | Planned      |
-| **Construction**        | Coons-patch face fill, sew, untrim                                     | Stable       |
-| **Sectioning**          | Cross-section faces, split by plane                                    | Stable       |
-| **Measurement**         | Bounding box, area, volume, center of mass                             | Stable       |
-| **Measurement**         | Point-to-solid, solid-to-solid distance, point classification          | Stable       |
-| **Drawing**             | Hidden-line edge projection                                            | Stable       |
-| **Geometry**            | NURBS evaluation, derivatives, knot ops, fitting, projection           | Stable       |
-| **Geometry**            | Analytic intersections (plane × cylinder, cone, sphere; torus sampled) | Stable       |
-| **Geometry**            | Surface-surface intersection (analytic + marching)                     | Stable       |
-| **Geometry**            | Curve-curve intersection (Bezier clipping)                             | Stable       |
-| **Tessellation**        | Adaptive deflection, CDT, analytic-surface optimization                | Stable       |
-| **Repair**              | Shape healing (wire, face, shell fixes), sewing, validation            | Stable       |
-| **I/O**                 | STEP import/export (analytic-preserving round-trip)                    | Stable       |
-| **I/O**                 | STL, 3MF, OBJ, PLY, glTF (`.glb`) import/export                        | Stable       |
-| **I/O**                 | IGES import/export                                                     | Experimental |
-| **Sketching**           | 2D constraint solver (DogLeg)                                          | Stable       |
-| **Feature Recognition** | Holes, pockets, chamfers, fillets                                      | Beta         |
-| **Assemblies**          | Hierarchy, transforms, bill of materials                               | Beta         |
-| **Evolution**           | Face provenance through booleans                                       | Beta         |
-| **Defeaturing**         | Remove planar faces                                                    | Beta         |
+| Category                | Feature                                                                      | Status       |
+| ----------------------- | ---------------------------------------------------------------------------- | ------------ |
+| **Primitives**          | Box, cylinder, cone, sphere, torus, ellipsoid                                | Stable       |
+| **Primitives**          | Convex hull, Minkowski sum (convex inputs)                                   | Stable       |
+| **Booleans**            | Union, cut, intersect on plane, cylinder, cone, sphere, NURBS                | Stable       |
+| **Booleans**            | Batch fuse-all (disjoint-aware union)                                        | Stable       |
+| **Booleans**            | Torus booleans (box ± torus, coaxial torus)                                  | Beta         |
+| **Modifiers**           | Fillet (constant + variable radius), chamfer (walking engine)                | Stable       |
+| **Modifiers**           | Shell (hollow solid)                                                         | Stable       |
+| **Modifiers**           | Offset face, offset solid, thicken, mirror, pattern                          | Stable       |
+| **Modifiers**           | Draft (planar faces)                                                         | Beta         |
+| **Sweeps**              | Extrude (planar + NURBS profiles)                                            | Stable       |
+| **Sweeps**              | Revolve, sweep, loft, pipe (planar profiles)                                 | Stable       |
+| **Sweeps**              | Helical sweep                                                                | Stable       |
+| **Sweeps**              | Non-planar profiles for revolve, sweep, loft, pipe                           | Planned      |
+| **Construction**        | Coons-patch face fill, sew, untrim                                           | Stable       |
+| **Sectioning**          | Cross-section faces, split by plane                                          | Stable       |
+| **Measurement**         | Bounding box, area, volume, center of mass                                   | Stable       |
+| **Measurement**         | Point-to-solid, solid-to-solid distance, point classification                | Stable       |
+| **Drawing**             | Hidden-line edge projection                                                  | Stable       |
+| **Geometry**            | NURBS evaluation, derivatives, knot ops, fitting, projection                 | Stable       |
+| **Geometry**            | Analytic intersections (plane × cylinder, cone, sphere exact; torus sampled) | Stable       |
+| **Geometry**            | Surface-surface intersection (analytic + marching)                           | Stable       |
+| **Geometry**            | Curve-curve intersection (Bezier clipping)                                   | Stable       |
+| **Tessellation**        | Adaptive deflection, CDT, analytic-surface optimization                      | Stable       |
+| **Repair**              | Shape healing (wire, face, shell fixes), sewing, validation                  | Stable       |
+| **I/O**                 | STEP import/export (analytic-preserving round-trip)                          | Stable       |
+| **I/O**                 | STL, 3MF, OBJ, PLY, glTF (`.glb`) import/export                              | Stable       |
+| **I/O**                 | IGES import/export                                                           | Experimental |
+| **Sketching**           | 2D constraint solver (DogLeg)                                                | Stable       |
+| **Feature Recognition** | Holes, pockets, chamfers, fillets                                            | Beta         |
+| **Assemblies**          | Hierarchy, transforms, bill of materials                                     | Beta         |
+| **Evolution**           | Face provenance through booleans                                             | Beta         |
+| **Defeaturing**         | Remove planar faces                                                          | Beta         |
 
 ## Known Limitations
 
-A few areas are still maturing. The current edges, before you depend on them:
+A few areas are still maturing. Worth knowing before you build on them:
 
 - **Boolean fallback.** Most booleans run on an exact path that preserves analytic and NURBS surfaces. Hard configurations fall back to a mesh-based boolean: coincident-face contact, coaxial analytic surfaces, razor-thin geometry, or very high face counts. The fallback returns a usable, non-degenerate solid, but it tessellates the curved faces and is not guaranteed watertight.
 - **Torus booleans.** Box-with-torus and coaxial-torus cases work and give correct volumes. General torus-to-torus and torus-with-other-surface intersections have known gaps and may fall back to meshing.
@@ -133,7 +133,7 @@ Layered Cargo workspace. Each crate depends only on the same or lower layers, an
 | L2    | `brepkit-heal`       | Shape healing: analysis, fixing, upgrading, sewing, tolerance management, configurable pipeline     |
 | L2    | `brepkit-check`      | Point classification, validation, properties (volume, area, center of mass), distance               |
 | L2    | `brepkit-offset`     | Solid offset and thickening via global face-face intersection                                       |
-| L2    | `brepkit-sketch`     | 2D parametric constraint solver (GCS) with a DogLeg trust-region solver                             |
+| L2    | `brepkit-sketch`     | 2D parametric constraint solver (GCS) using a DogLeg trust-region method                            |
 | L3    | `brepkit-operations` | Booleans, fillet, chamfer, extrude, revolve, sweep, loft, shell, offset, measure, tessellation      |
 | L3    | `brepkit-io`         | Import and export: STEP, IGES, STL, 3MF, OBJ, PLY, glTF                                             |
 | L4    | `brepkit-wasm`       | JavaScript API via wasm-bindgen, with batch execution and checkpoint/restore                        |
@@ -153,7 +153,7 @@ Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs
 | mesh sphere (tol=0.01)       | 33.4 ms        | 49.7 ms     | 1.5x    | 1.5 ms           |
 | exportSTEP (×10)             | 1.1 ms         | 18.6 ms     | 17x     | n/a              |
 
-Booleans preserve analytic surfaces, so face counts stay low across chained operations. A nine-step compound boolean settles at 72 faces where a mesh-based approach would reach roughly 7,000.
+Booleans preserve analytic surfaces, so face counts stay low across chained operations. A nine-step compound boolean settles at 72 faces while a mesh-based approach would reach roughly 7,000.
 
 > The OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js. Boolean and `exportSTEP` rows are timed as batches of ten operations. Native benchmarks: `cargo bench -p brepkit-operations --bench cad_operations`. Full benchmark source: [brepjs/benchmarks](https://github.com/andymai/brepjs/tree/main/benchmarks). Measured 2026-06-23.
 
@@ -169,7 +169,7 @@ Booleans preserve analytic surfaces, so face counts stay low across chained oper
 | glTF (`.glb`) | Mesh  | ✓       | ✓      |
 | IGES          | B-Rep | preview | lossy  |
 
-STEP preserves exact geometry on round-trip. Analytic surfaces (plane, cylinder, cone, sphere, torus) are written as native STEP surface entities rather than tessellated, and they read back to the same surface types. NURBS surfaces and circle, ellipse, and NURBS edges are preserved too.
+STEP preserves exact geometry on round-trip. Analytic surfaces (plane, cylinder, cone, sphere, torus) are written as native STEP surface entities rather than tessellated, and they read back to the same surface types. NURBS surfaces are preserved too, as are line, circle, ellipse, and NURBS edges.
 
 Mesh formats export tessellated triangles. glTF is binary `.glb`, with no materials or scene graph. IGES is experimental, as described in [Known Limitations](#known-limitations).
 
