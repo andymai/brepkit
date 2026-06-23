@@ -172,13 +172,19 @@ pub fn try_fillet(
     }
     let edges = edges.as_slice();
 
-    // A candidate is acceptable only if its outer shell is a manifold (no edge
-    // shared by more than two faces).
+    // A candidate is acceptable only if its outer shell is a CLOSED 2-manifold
+    // (every edge used by exactly two faces — no free/boundary edges). The
+    // weaker `validate_shell_manifold` (only rejects edges shared by 3+ faces)
+    // silently accepted open shells: e.g. a primitive cylinder's rim fillet,
+    // where the walking engine cannot trim the disc cap to the toroidal blend's
+    // contact circle and leaves 8 free edges at the cap/torus seams. An open
+    // shell measures a plausible-but-wrong volume, so it must be rejected so the
+    // next engine (or the unchanged input) is used instead.
     let is_valid =
         |topo: &brepkit_topology::Topology, s: brepkit_topology::solid::SolidId| -> bool {
             topo.solid(s)
                 .and_then(|sd| topo.shell(sd.outer_shell()))
-                .map(|sh| brepkit_topology::validation::validate_shell_manifold(sh, topo).is_ok())
+                .map(|sh| brepkit_topology::validation::validate_shell_closed(sh, topo).is_ok())
                 .unwrap_or(false)
         };
 
@@ -549,6 +555,36 @@ mod fillet_tests {
         assert!(
             vol > 970.0 && vol < 1000.0,
             "filleted box volume should be ≈975.6, got {vol}"
+        );
+    }
+
+    // gh #967: filleting a plain cylinder's circular rim used to silently
+    // remove ~37% of the volume — the deprecated rolling-ball engine collapses
+    // a closed circular edge's blend strip and caps to zero-area faces, and the
+    // walking engine leaves an open shell. Both are now rejected, so `try_fillet`
+    // falls back to returning the input unchanged: a VALID solid with the raw
+    // volume, never the silently-corrupt one. (Genuine rim rounding — occt's
+    // ~0.1% reduction — is a separate blend-engine feature.)
+    #[test]
+    fn try_fillet_cylinder_rim_does_not_corrupt_volume() {
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+        let raw = brepkit_operations::measure::solid_volume(&topo, cyl, 0.01).unwrap();
+        let edges = solid_edge_ids(&topo, cyl);
+
+        let result = try_fillet(&mut topo, cyl, &edges, 0.5).expect("rim fillet must not error");
+        let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.01).unwrap();
+
+        // Must NOT be the corrupt ~3978 (−37%); a no-op keeps the raw volume.
+        assert!(
+            (vol - raw).abs() / raw < 0.02,
+            "cylinder rim fillet must keep raw volume {raw:.1} (no-op), got {vol:.1}"
+        );
+        assert!(
+            brepkit_operations::validate::validate_solid(&topo, result)
+                .unwrap()
+                .is_valid(),
+            "fillet result must be a valid solid"
         );
     }
 

@@ -2155,6 +2155,30 @@ pub fn fillet_rolling_ball(
     // the mesh boolean fallback on moderate-complexity filleted solids.
     let _ = crate::heal::unify_faces(topo, solid_id);
 
+    // Reject a geometrically-degenerate assembly. This engine is built around
+    // polygonal wires with distinct corner vertices; a closed circular edge
+    // (a cylinder/cone rim, where start vertex == end vertex) collapses its
+    // blend strip and the adjacent disc cap to zero-area faces while still
+    // passing the manifold check. Such a result is silently wrong (it drops
+    // the caps and shrinks the wall), so surface it as an error and let the
+    // caller fall through to the walking blend engine, which handles closed
+    // spines. The guard is keyed on actual face area, not edge topology, so a
+    // valid fillet (every face has real area) is never rejected.
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid_id)
+        .map_err(crate::OperationsError::Topology)?;
+    let area_floor = (radius * radius) * 1e-6;
+    for fid in faces {
+        let area = crate::measure::face_area(topo, fid, radius * 0.1)?;
+        if area <= area_floor {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!(
+                    "fillet produced a degenerate face (area {area:.3e} <= {area_floor:.3e}); \
+                     closed circular edges are not supported by the rolling-ball engine"
+                ),
+            });
+        }
+    }
+
     Ok(solid_id)
 }
 
