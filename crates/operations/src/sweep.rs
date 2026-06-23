@@ -111,6 +111,24 @@ fn compute_frames(
     Ok(frames)
 }
 
+/// The profile's own orthonormal basis `(right, up, tangent)` for mapping its 2D
+/// shape onto the path's perpendicular plane.
+///
+/// `tangent` is the profile normal, so a planar profile has ~zero tangent
+/// component and is mapped entirely into `right`/`up`; the profile is then swept
+/// perpendicular to the path regardless of how its plane was oriented relative
+/// to the path (an edge-on profile no longer collapses to a flat ribbon). For a
+/// profile already perpendicular to the path this equals the path frame's basis,
+/// leaving such sweeps unchanged.
+fn profile_basis(input_normal: Vec3) -> (Vec3, Vec3, Vec3) {
+    let tangent = input_normal
+        .normalize()
+        .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0));
+    let up = orthogonalize(pick_reference_axis(tangent), tangent);
+    let right = tangent.cross(up);
+    (right, up, tangent)
+}
+
 /// Project `v` to be perpendicular to `tangent`, then normalize.
 ///
 /// Falls back to a world-axis-based vector if the projection is degenerate.
@@ -622,9 +640,10 @@ pub fn sweep(
 
     // The first frame's basis vectors define the local coordinate system
     // in which profile vertex offsets are expressed.
-    let initial_right = frames[0].right;
-    let initial_up = frames[0].up;
-    let initial_tangent = frames[0].tangent;
+    // Map the profile's 2D shape onto the path's perpendicular plane using the
+    // profile's own basis, so a profile whose plane is not perpendicular to the
+    // path is still swept perpendicular (rather than collapsing to a ribbon).
+    let (initial_right, initial_up, initial_tangent) = profile_basis(input_normal);
 
     // ring_verts[k][i] = vertex at path sample k, profile vertex i.
     // For closed paths, frames has num_segments entries; we append a copy
@@ -897,9 +916,10 @@ pub fn sweep_smooth(
     let up_hint = orthogonalize(input_normal, path_tangent_0);
     let frames = compute_frames(path, num_segments, up_hint, is_closed)?;
 
-    let initial_right = frames[0].right;
-    let initial_up = frames[0].up;
-    let initial_tangent = frames[0].tangent;
+    // Map the profile's 2D shape onto the path's perpendicular plane using the
+    // profile's own basis, so a profile whose plane is not perpendicular to the
+    // path is still swept perpendicular (rather than collapsing to a ribbon).
+    let (initial_right, initial_up, initial_tangent) = profile_basis(input_normal);
 
     // Compute all ring positions (without allocating vertices yet).
     let num_rings = frames.len();
@@ -1336,9 +1356,10 @@ pub fn sweep_with_options(
         }
     };
 
-    let initial_right = frames[0].right;
-    let initial_up = frames[0].up;
-    let initial_tangent = frames[0].tangent;
+    // Map the profile's 2D shape onto the path's perpendicular plane using the
+    // profile's own basis, so a profile whose plane is not perpendicular to the
+    // path is still swept perpendicular (rather than collapsing to a ribbon).
+    let (initial_right, initial_up, initial_tangent) = profile_basis(input_normal);
 
     let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_segments + 1);
 

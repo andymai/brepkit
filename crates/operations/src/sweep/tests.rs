@@ -621,8 +621,15 @@ fn sweep_smooth_curved_path() {
         "smooth curved sweep should have 6 faces"
     );
 
+    // A unit square swept along a quarter circle of radius 5: the swept volume
+    // is ~ profile area (1) × arc length (π/2 × 5 ≈ 7.85). Before profile
+    // auto-orientation the XY-plane profile was edge-on to the +X start tangent
+    // and collapsed to a ~zero-volume ribbon that still satisfied `vol > 0`.
     let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
-    assert!(vol > 0.0, "curved smooth sweep should have positive volume");
+    assert!(
+        vol > 7.0 && vol < 8.5,
+        "curved smooth sweep volume should be ~7.85, got {vol}"
+    );
 }
 
 /// Helper: create a closed circular NURBS path (full circle in XZ plane).
@@ -1290,5 +1297,34 @@ fn sweep_smooth_gentle_curve_is_valid_with_sane_volume() {
     assert!(
         vol > 24.0 && vol < 26.0,
         "gently curved smooth-sweep volume should be ~25, got {vol}"
+    );
+}
+
+#[test]
+fn sweep_edge_on_profile_is_auto_oriented() {
+    // An XY-plane square (normal +Z) swept along a +X path is "edge-on": its
+    // plane contains the path tangent. Before profile auto-orientation this
+    // collapsed to a flat, zero-volume ribbon; now the profile's 2D shape is
+    // placed perpendicular to the path, giving a proper 1×1×5 prism (volume 5).
+    let mut topo = Topology::new();
+    let profile = make_square(&mut topo, 1.0);
+    let path = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(5.0, 0.0, 0.0)],
+        vec![1.0, 1.0],
+    )
+    .unwrap();
+    let solid = sweep(&mut topo, profile, &path).unwrap();
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "edge-on sweep must be a valid solid"
+    );
+    let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+    assert!(
+        (vol - 5.0).abs() / 5.0 < 0.02,
+        "edge-on profile should sweep to a 1×1×5 prism (volume 5), got {vol}"
     );
 }
