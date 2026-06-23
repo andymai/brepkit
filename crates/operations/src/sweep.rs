@@ -823,10 +823,15 @@ pub fn sweep(
 /// `num_segments × n + 2` flat faces, making the topology significantly
 /// more compact while improving geometric quality.
 ///
+/// The profile surface may be planar or curved — only its boundary is used; the
+/// end caps are filled from that boundary (planar ring → `Plane`, non-planar
+/// 4-edge ring → bilinear patch).
+///
 /// # Errors
 ///
-/// Returns an error if the profile is not planar, has inner wires (holes),
-/// the path has fewer than 2 control points, or surface fitting fails.
+/// Returns an error if the path has fewer than 2 control points, surface
+/// fitting fails, or a section boundary is non-planar with more than four edges
+/// or with holes (unsupported cap).
 #[allow(clippy::too_many_lines)]
 pub fn sweep_smooth(
     topo: &mut Topology,
@@ -842,14 +847,6 @@ pub fn sweep_smooth(
     }
 
     let face_data = topo.face(profile)?;
-    let mut input_normal = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        _ => {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: "sweep of non-planar faces is not supported".into(),
-            });
-        }
-    };
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids_smooth: Vec<brepkit_topology::wire::WireId> =
         face_data.inner_wires().to_vec();
@@ -903,6 +900,12 @@ pub fn sweep_smooth(
                 .map(brepkit_topology::vertex::Vertex::point)
         })
         .collect::<Result<_, _>>()?;
+
+    // Profile normal from the section boundary (planar or non-planar alike); the
+    // gate that required a planar surface is gone.
+    let mut input_normal = crate::winding::newell_normal(&input_positions)
+        .normalize()
+        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
 
     // Ensure CCW winding relative to path direction (same fix as sweep()).
     let path_tangent_0 = path.tangent(0.0)?;
@@ -989,23 +992,16 @@ pub fn sweep_smooth(
 
     let mut all_faces = Vec::with_capacity(n + 2);
 
-    let start_reversed: Vec<OrientedEdge> = (0..n)
-        .rev()
-        .map(|i| OrientedEdge::new(first_ring_edges[i], false))
-        .collect();
-    let start_wire = Wire::new(start_reversed, true).map_err(crate::OperationsError::Topology)?;
-    let start_wire_id = topo.add_wire(start_wire);
     let start_inner_wires_smooth = build_inner_cap_wires(topo, &inner_swept_smooth, 0, true)?;
-    let start_normal = -frames[0].tangent;
-    let start_d = dot_normal_point(start_normal, ring_positions[0][0]);
-    all_faces.push(topo.add_face(Face::new(
-        start_wire_id,
+    let start_outward = crate::cap::outward_normal(&ring_positions[0], -frames[0].tangent)?;
+    all_faces.push(crate::cap::build_cap_face(
+        topo,
+        &first_ring_edges,
         start_inner_wires_smooth,
-        FaceSurface::Plane {
-            normal: start_normal,
-            d: start_d,
-        },
-    )));
+        &ring_positions[0],
+        start_outward,
+        true,
+    )?);
 
     // NURBS side faces: one surface per edge index spanning all rings.
     let degree_u = (num_rings - 1).min(3);
@@ -1071,23 +1067,18 @@ pub fn sweep_smooth(
         all_faces.extend(inner_faces);
     }
 
-    let end_edges: Vec<OrientedEdge> = (0..n)
-        .map(|i| OrientedEdge::new(last_ring_edges[i], true))
-        .collect();
-    let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
-    let end_wire_id = topo.add_wire(end_wire);
     let end_inner_wires_smooth =
         build_inner_cap_wires(topo, &inner_swept_smooth, num_segments, false)?;
-    let end_normal = frames[num_segments].tangent;
-    let end_d = dot_normal_point(end_normal, ring_positions[num_rings - 1][0]);
-    all_faces.push(topo.add_face(Face::new(
-        end_wire_id,
+    let end_outward =
+        crate::cap::outward_normal(&ring_positions[num_rings - 1], frames[num_segments].tangent)?;
+    all_faces.push(crate::cap::build_cap_face(
+        topo,
+        &last_ring_edges,
         end_inner_wires_smooth,
-        FaceSurface::Plane {
-            normal: end_normal,
-            d: end_d,
-        },
-    )));
+        &ring_positions[num_rings - 1],
+        end_outward,
+        false,
+    )?);
 
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
@@ -1195,14 +1186,6 @@ pub fn sweep_with_options(
     }
 
     let face_data = topo.face(profile)?;
-    let mut input_normal = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        _ => {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: "sweep of non-planar faces is not supported".into(),
-            });
-        }
-    };
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids_opts: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
@@ -1264,6 +1247,12 @@ pub fn sweep_with_options(
                 .map(brepkit_topology::vertex::Vertex::point)
         })
         .collect::<Result<_, _>>()?;
+
+    // Profile normal from the section boundary (planar or non-planar alike); the
+    // gate that required a planar surface is gone.
+    let mut input_normal = crate::winding::newell_normal(&input_positions)
+        .normalize()
+        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
 
     // Ensure CCW winding relative to path direction (same fix as sweep()).
     let path_tangent_0 = path.tangent(0.0)?;
@@ -1436,25 +1425,17 @@ pub fn sweep_with_options(
 
     let mut all_faces = Vec::with_capacity(num_segments * n + 2);
 
-    let start_reversed_edges: Vec<OrientedEdge> = (0..n)
-        .rev()
-        .map(|i| OrientedEdge::new(ring_edges[0][i], false))
-        .collect();
-    let start_wire =
-        Wire::new(start_reversed_edges, true).map_err(crate::OperationsError::Topology)?;
-    let start_wire_id = topo.add_wire(start_wire);
     let start_inner_wires_opts = build_inner_cap_wires(topo, &inner_swept_opts, 0, true)?;
-    let start_normal = -frames[0].tangent;
-    let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
-    let start_face = topo.add_face(Face::new(
-        start_wire_id,
+    let start_verts = crate::cap::ring_point_positions(topo, &ring_verts[0])?;
+    let start_outward = crate::cap::outward_normal(&start_verts, -frames[0].tangent)?;
+    all_faces.push(crate::cap::build_cap_face(
+        topo,
+        &ring_edges[0],
         start_inner_wires_opts,
-        FaceSurface::Plane {
-            normal: start_normal,
-            d: start_d,
-        },
-    ));
-    all_faces.push(start_face);
+        &start_verts,
+        start_outward,
+        true,
+    )?);
 
     for seg in 0..num_segments {
         for i in 0..n {
@@ -1499,26 +1480,17 @@ pub fn sweep_with_options(
         all_faces.extend(inner_faces);
     }
 
-    let end_edges: Vec<OrientedEdge> = (0..n)
-        .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
-        .collect();
-    let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
-    let end_wire_id = topo.add_wire(end_wire);
     let end_inner_wires_opts = build_inner_cap_wires(topo, &inner_swept_opts, num_segments, false)?;
-    let end_normal = frames[num_segments].tangent;
-    let end_d = dot_normal_point(
-        end_normal,
-        topo.vertex(ring_verts[num_segments][0])?.point(),
-    );
-    let end_face = topo.add_face(Face::new(
-        end_wire_id,
+    let end_verts = crate::cap::ring_point_positions(topo, &ring_verts[num_segments])?;
+    let end_outward = crate::cap::outward_normal(&end_verts, frames[num_segments].tangent)?;
+    all_faces.push(crate::cap::build_cap_face(
+        topo,
+        &ring_edges[num_segments],
         end_inner_wires_opts,
-        FaceSurface::Plane {
-            normal: end_normal,
-            d: end_d,
-        },
-    ));
-    all_faces.push(end_face);
+        &end_verts,
+        end_outward,
+        false,
+    )?);
 
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
@@ -2057,8 +2029,9 @@ fn sweep_miter(
 /// # Errors
 ///
 /// Returns [`crate::OperationsError::InvalidInput`] for fewer than two
-/// sections, a parameter outside `[0, 1]`, a non-planar profile, or a spine
-/// with fewer than two control points; propagates loft errors otherwise.
+/// sections, a parameter outside `[0, 1]`, or a spine with fewer than two
+/// control points; propagates loft errors otherwise. Sections may be planar or
+/// non-planar (they are joined by [`crate::loft::loft`], which supports both).
 pub fn multi_section_sweep(
     topo: &mut Topology,
     spine: &NurbsCurve,
@@ -2132,23 +2105,15 @@ fn pick_reference_axis(dir: Vec3) -> Vec3 {
     }
 }
 
-/// Rigid transform placing a planar profile face into `frame`: centroid →
-/// `frame.origin`, normal → tangent, in-plane axes → right/up.
+/// Rigid transform placing a profile face into `frame`: centroid →
+/// `frame.origin`, normal → tangent, in-plane axes → right/up. A planar profile
+/// uses its stored plane normal; a non-planar section uses its boundary's
+/// Newell normal.
 fn profile_to_frame_matrix(
     topo: &Topology,
     face_id: FaceId,
     frame: &Frame,
 ) -> Result<Mat4, crate::OperationsError> {
-    let face = topo.face(face_id)?;
-    let normal = match face.surface() {
-        FaceSurface::Plane { normal, .. } => normal.normalize().unwrap_or(*normal),
-        _ => {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: "multi-section sweep profiles must be planar".into(),
-            });
-        }
-    };
-
     // Centroid of the sampled boundary — robust for a circle profile whose
     // outer wire is a single closed edge (where averaging start vertices would
     // collapse to the seam point).
@@ -2158,6 +2123,16 @@ fn profile_to_frame_matrix(
             reason: "multi-section sweep profile has no boundary".into(),
         });
     }
+    // A planar profile uses its stored plane normal; a non-planar section's
+    // orientation normal is its boundary's Newell normal (the planar-only gate
+    // is gone — the placed sections are joined by `loft`, which handles
+    // non-planar profiles).
+    let normal = match topo.face(face_id)?.surface() {
+        FaceSurface::Plane { normal, .. } => normal.normalize().unwrap_or(*normal),
+        _ => crate::winding::newell_normal(&boundary)
+            .normalize()
+            .unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
+    };
     let centroid = crate::winding::polygon_centroid(&boundary);
 
     // Profile in-plane basis from a consistent world reference, so all profiles
@@ -2210,8 +2185,8 @@ fn profile_to_frame_matrix(
 ///
 /// # Errors
 ///
-/// Propagates [`sweep_with_options`] errors (e.g. a non-planar profile or a
-/// degenerate path).
+/// Propagates [`sweep_with_options`] errors (e.g. a degenerate path or an
+/// unsupported non-planar cap).
 pub fn sweep_guided(
     topo: &mut Topology,
     profile: FaceId,
