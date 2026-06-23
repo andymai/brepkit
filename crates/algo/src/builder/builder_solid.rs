@@ -184,13 +184,10 @@ pub fn build_solid_with_origins(
 
     // Phase 4: Assemble
     let solid_id = assemble(topo, growth, holes)?;
-    let origins = brepkit_topology::explorer::solid_faces(topo, solid_id)
-        .map(|fids| {
-            fids.into_iter()
-                .map(|f| (f, face_source.get(&f).copied().flatten()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let origins = brepkit_topology::explorer::solid_faces(topo, solid_id)?
+        .into_iter()
+        .map(|f| (f, face_source.get(&f).copied().flatten()))
+        .collect();
     Ok((solid_id, origins))
 }
 

@@ -893,12 +893,15 @@ pub fn compound_cut(
 /// Perform a boolean operation and return an [`crate::evolution::EvolutionMap`]
 /// tracking face provenance.
 ///
-/// Uses faithful provenance from the GFA builder — each result face records the
-/// input face it was split/derived from (`brepkit_algo::gfa::boolean_with_face_origins`).
-/// For operands handled by a non-GFA path (identical solids, AABB/containment
-/// fast paths), it falls back to the geometry heuristic (normal + centroid
-/// similarity). Unmatched input faces are classified as "deleted"; synthesised
-/// result faces with no input origin are left unattributed.
+/// Prefers **faithful** provenance from the GFA builder — each result face
+/// records the input face it was split/derived from
+/// (`brepkit_algo::gfa::boolean_with_face_origins`). Because that path runs the
+/// GFA directly, it can take a different route than [`boolean`] (which
+/// short-circuits some cases via AABB/containment fast paths), so its result is
+/// validated; on a GFA error or an invalid result — and for identical operands
+/// — it falls back to [`boolean`] with the geometry heuristic (normal +
+/// centroid). Either way, unmatched input faces are classified as "deleted";
+/// synthesised result faces with no input origin are left unattributed.
 ///
 /// # Errors
 ///
@@ -937,20 +940,26 @@ pub fn boolean_with_evolution(
             let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
             let _ = crate::heal::remove_wire_spurs(topo, result)?;
 
-            let mut evo = crate::evolution::EvolutionMap::new();
-            let mut sourced: std::collections::HashSet<usize> = std::collections::HashSet::new();
-            for (out_idx, src) in origins {
-                if let Some(in_idx) = src {
-                    evo.add_modified(in_idx, out_idx);
-                    sourced.insert(in_idx);
+            // Trust the faithful path only if its result is valid; otherwise
+            // fall through to boolean()'s full pipeline (fast paths + mesh
+            // fallback + validation), matching boolean()'s contract.
+            if validate_boolean_result(topo, result).is_ok() {
+                let mut evo = crate::evolution::EvolutionMap::new();
+                let mut sourced: std::collections::HashSet<usize> =
+                    std::collections::HashSet::new();
+                for (out_idx, src) in origins {
+                    if let Some(in_idx) = src {
+                        evo.add_modified(in_idx, out_idx);
+                        sourced.insert(in_idx);
+                    }
                 }
-            }
-            for in_idx in input_indices {
-                if !sourced.contains(&in_idx) {
-                    evo.add_deleted(in_idx);
+                for in_idx in input_indices {
+                    if !sourced.contains(&in_idx) {
+                        evo.add_deleted(in_idx);
+                    }
                 }
+                return Ok((result, evo));
             }
-            return Ok((result, evo));
         }
     }
 

@@ -145,16 +145,25 @@ pub fn boolean_with_face_origins(
 
     let (result, export_map) = store.export_solid_with_face_map(topo, store_result)?;
 
-    // Translate store-space provenance to caller-space face indices.
-    let origins = store_origins
-        .into_iter()
-        .filter_map(|(store_out, store_src)| {
-            let caller_out = export_map.get(&store_out.index())?.index();
-            let caller_src =
-                store_src.and_then(|s| store.input_face_to_caller.get(&s.index()).copied());
-            Some((caller_out, caller_src))
-        })
-        .collect();
+    // Translate store-space provenance to caller-space face indices. The export
+    // map is total over result faces, so a miss is a real provenance desync and
+    // is surfaced as an error rather than silently dropped (which would mark a
+    // real input as `deleted`). A missing input source is `None` by design — a
+    // synthesised face with no input origin.
+    let mut origins = Vec::with_capacity(store_origins.len());
+    for (store_out, store_src) in store_origins {
+        let caller_out = export_map
+            .get(&store_out.index())
+            .ok_or_else(|| {
+                AlgoError::AssemblyFailed(
+                    "result face missing from export map (provenance desync)".into(),
+                )
+            })?
+            .index();
+        let caller_src =
+            store_src.and_then(|s| store.input_face_to_caller.get(&s.index()).copied());
+        origins.push((caller_out, caller_src));
+    }
 
     Ok((result, origins))
 }
