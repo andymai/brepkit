@@ -42,11 +42,18 @@ use crate::classifier;
 use crate::ds::{GfaArena, Rank};
 use crate::error::AlgoError;
 
+/// Provenance of result faces: for each face, the input source face it was
+/// derived from, or `None` for a synthesised face. Face IDs are store-local.
+pub type FaceProvenance = Vec<(FaceId, Option<FaceId>)>;
+
 /// A sub-face produced by the Builder after splitting.
 #[derive(Debug, Clone)]
 pub struct SubFace {
     /// The face entity in topology (same as parent if no split occurred).
     pub face_id: FaceId,
+    /// The original input face this sub-face was derived from. Provenance for
+    /// shape evolution — every sub-face traces back to one input argument face.
+    pub source_face: FaceId,
     /// Classification relative to the opposing solid.
     pub classification: FaceClass,
     /// Which boolean argument this face came from.
@@ -138,6 +145,26 @@ impl Builder {
         let cap_planes = self.partial_overlap_cap_planes(&selected);
         let solid_id = assemble::assemble_solid(&mut self.topo, &selected, &cap_planes)?;
         Ok((self.topo, solid_id))
+    }
+
+    /// Like [`Builder::build_result`], but also returns the provenance of each
+    /// result face: `(result face, Some(input source face) | None)`. The source
+    /// face IDs are in this builder's (store-local) topology — callers crossing
+    /// the GFA shape-store boundary must translate them to caller IDs.
+    pub fn build_result_with_origins(
+        mut self,
+        op: BooleanOp,
+    ) -> Result<(Topology, SolidId, FaceProvenance), AlgoError> {
+        let selected = bop::select_faces(
+            &self.sub_faces,
+            op,
+            &self.sd_pairs,
+            &self.sd_within_rank_dups,
+        );
+        let cap_planes = self.partial_overlap_cap_planes(&selected);
+        let (solid_id, origins) =
+            assemble::assemble_solid_with_origins(&mut self.topo, &selected, &cap_planes)?;
+        Ok((self.topo, solid_id, origins))
     }
 
     /// Candidate cap planes for partial coplanar same-domain overlaps.

@@ -35,3 +35,19 @@ pub fn assemble_solid(
 ) -> Result<SolidId, AlgoError> {
     super::builder_solid::build_solid(topo, selected, cap_planes)
 }
+
+/// Like [`assemble_solid`], but also returns each result face's input-source
+/// provenance (store-local face IDs). See
+/// [`builder_solid::build_solid_with_origins`](super::builder_solid::build_solid_with_origins).
+///
+/// # Errors
+///
+/// Returns `AlgoError::AssemblyFailed` if no faces are selected or shell
+/// construction fails.
+pub fn assemble_solid_with_origins(
+    topo: &mut Topology,
+    selected: &[SelectedFace],
+    cap_planes: &[CapPlane],
+) -> Result<(SolidId, super::FaceProvenance), AlgoError> {
+    super::builder_solid::build_solid_with_origins(topo, selected, cap_planes)
+}

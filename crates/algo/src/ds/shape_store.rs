@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeId};
-use brepkit_topology::face::Face;
+use brepkit_topology::face::{Face, FaceId};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
@@ -29,6 +29,9 @@ pub struct GfaShapeStore {
     pub solid_a: SolidId,
     /// Store-local SolidId for the deep-copied solid B.
     pub solid_b: SolidId,
+    /// Maps a store-local input face index back to the caller's original face
+    /// index, for both operands — shape-evolution provenance across the copy.
+    pub input_face_to_caller: HashMap<usize, usize>,
 }
 
 impl GfaShapeStore {
@@ -40,13 +43,21 @@ impl GfaShapeStore {
     pub fn new(source: &Topology, orig_a: SolidId, orig_b: SolidId) -> Result<Self, AlgoError> {
         let mut topo = Topology::default();
 
-        let solid_a = deep_copy_solid(source, &mut topo, orig_a)?;
-        let solid_b = deep_copy_solid(source, &mut topo, orig_b)?;
+        let (solid_a, map_a) = deep_copy_solid(source, &mut topo, orig_a)?;
+        let (solid_b, map_b) = deep_copy_solid(source, &mut topo, orig_b)?;
+
+        // Invert the caller-index -> store-face maps into store-face-index ->
+        // caller-face-index so a store input face resolves to its caller origin.
+        let mut input_face_to_caller = HashMap::new();
+        for (caller_idx, store_face) in map_a.into_iter().chain(map_b) {
+            input_face_to_caller.insert(store_face.index(), caller_idx);
+        }
 
         Ok(Self {
             topo,
             solid_a,
             solid_b,
+            input_face_to_caller,
         })
     }
 
@@ -63,6 +74,21 @@ impl GfaShapeStore {
         target: &mut Topology,
         solid_id: SolidId,
     ) -> Result<SolidId, AlgoError> {
+        Ok(deep_copy_solid(&self.topo, target, solid_id)?.0)
+    }
+
+    /// Like [`Self::export_solid`], but also returns the map from each store
+    /// result-face index to the new caller face it was copied to, for
+    /// translating shape-evolution provenance out of the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if any topology lookup fails.
+    pub fn export_solid_with_face_map(
+        &self,
+        target: &mut Topology,
+        solid_id: SolidId,
+    ) -> Result<(SolidId, HashMap<usize, FaceId>), AlgoError> {
         deep_copy_solid(&self.topo, target, solid_id)
     }
 }
@@ -78,7 +104,7 @@ fn deep_copy_solid(
     source: &Topology,
     target: &mut Topology,
     solid_id: SolidId,
-) -> Result<SolidId, AlgoError> {
+) -> Result<(SolidId, HashMap<usize, FaceId>), AlgoError> {
     // ── Snapshot phase ──────────────────────────────────────────────
 
     let solid = source.solid(solid_id)?;
@@ -107,6 +133,7 @@ fn deep_copy_solid(
         closed: bool,
     }
     struct FaceSnap {
+        old_index: usize,
         outer_wire_index: usize,
         inner_wire_indices: Vec<usize>,
         surface: brepkit_topology::face::FaceSurface,
@@ -185,6 +212,7 @@ fn deep_copy_solid(
             }
 
             face_snaps.push(FaceSnap {
+                old_index: face_id.index(),
                 outer_wire_index,
                 inner_wire_indices,
                 surface,
@@ -228,6 +256,8 @@ fn deep_copy_solid(
     }
 
     let mut new_shell_ids = Vec::new();
+    // Provenance: source face index -> the new face it was copied to.
+    let mut face_map: HashMap<usize, FaceId> = HashMap::new();
     for ssnap in &shell_snaps {
         let mut new_face_ids = Vec::new();
         for fsnap in &ssnap.faces {
@@ -241,7 +271,9 @@ fn deep_copy_solid(
             if fsnap.reversed {
                 new_face.set_reversed(true);
             }
-            new_face_ids.push(target.add_face(new_face));
+            let new_fid = target.add_face(new_face);
+            face_map.insert(fsnap.old_index, new_fid);
+            new_face_ids.push(new_fid);
         }
         let new_shell = Shell::new(new_face_ids)?;
         new_shell_ids.push(target.add_shell(new_shell));
@@ -252,7 +284,7 @@ fn deep_copy_solid(
         .ok_or_else(|| AlgoError::AssemblyFailed("solid has no shells to copy".into()))?;
     let new_inner: Vec<_> = new_shell_ids[1..].to_vec();
 
-    Ok(target.add_solid(Solid::new(new_outer, new_inner)))
+    Ok((target.add_solid(Solid::new(new_outer, new_inner)), face_map))
 }
 
 #[cfg(test)]

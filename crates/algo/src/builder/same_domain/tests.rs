@@ -27,6 +27,7 @@ fn rect_sub_face(
     let face_id = make_face_from_wire(topo, wire).unwrap();
     SubFace {
         face_id,
+        source_face: face_id,
         classification: FaceClass::Unknown,
         rank,
         interior_point: Some(interior),
@@ -667,6 +668,7 @@ fn cylinder_patch(
     let zm = 0.5 * (z0 + z1);
     SubFace {
         face_id,
+        source_face: face_id,
         classification: FaceClass::Unknown,
         rank,
         interior_point: Some(pt(um, zm)),
@@ -738,6 +740,7 @@ fn cone_patch(
     let zm = 0.5 * (z0 + z1);
     SubFace {
         face_id,
+        source_face: face_id,
         classification: FaceClass::Unknown,
         rank,
         interior_point: Some(pt(um, zm)),

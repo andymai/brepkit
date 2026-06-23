@@ -19,6 +19,8 @@ use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::wire::{OrientedEdge, WireId};
 
+use super::FaceProvenance;
+
 use crate::bop::SelectedFace;
 use crate::error::AlgoError;
 
@@ -41,6 +43,23 @@ pub fn build_solid(
     selected: &[SelectedFace],
     cap_planes: &[CapPlane],
 ) -> Result<SolidId, AlgoError> {
+    Ok(build_solid_with_origins(topo, selected, cap_planes)?.0)
+}
+
+/// Like [`build_solid`], but also returns each result face's provenance:
+/// `(result face, Some(input source face) | None for a synthesised face)`.
+///
+/// `face_origins` is maintained as a vector parallel to `face_ids` —
+/// the in-place edge/vertex rebuilds (`&mut [FaceId]`) replace faces by
+/// position so the parallel entries stay aligned; only the length-changing
+/// steps (sliver-retain, doubled-face removal, cap synthesis) sync it
+/// explicitly. This is purely additive: it never changes `face_ids`, so the
+/// assembled geometry is identical to [`build_solid`].
+pub fn build_solid_with_origins(
+    topo: &mut Topology,
+    selected: &[SelectedFace],
+    cap_planes: &[CapPlane],
+) -> Result<(SolidId, FaceProvenance), AlgoError> {
     if selected.is_empty() {
         return Err(AlgoError::AssemblyFailed("no faces selected".into()));
     }
@@ -48,6 +67,8 @@ pub fn build_solid(
 
     // Step 0: Create reversed copies for Cut B-faces
     let mut face_ids: Vec<FaceId> = Vec::with_capacity(selected.len());
+    // Provenance parallel to `face_ids`: the input face each entry derives from.
+    let mut sources: Vec<Option<FaceId>> = Vec::with_capacity(selected.len());
     for sf in selected {
         if sf.reversed {
             let face = topo.face(sf.face_id)?;
@@ -59,6 +80,7 @@ pub fn build_solid(
         } else {
             face_ids.push(sf.face_id);
         }
+        sources.push(Some(sf.source_face));
     }
 
     // Step 0a-pre: Drop degenerate sliver faces — all-Line outer wires with
@@ -67,7 +89,9 @@ pub fn build_solid(
     // Keeping them turns their edges non-manifold in an otherwise valid
     // result. Faces with curved edges are exempt (two half-circles bound a
     // real disc with only 2 vertices).
-    face_ids.retain(|&fid| !is_degenerate_line_sliver(topo, fid));
+    retain_aligned(&mut face_ids, &mut sources, |&fid| {
+        !is_degenerate_line_sliver(topo, fid)
+    });
     if face_ids.is_empty() {
         return Err(AlgoError::AssemblyFailed(
             "all faces degenerate slivers".into(),
@@ -117,7 +141,7 @@ pub fn build_solid(
     // both reference the same three edges). Keeping them makes every shared edge
     // incident to 3+ faces (non-manifold). Removing the whole group is sound:
     // coincident faces with one identical boundary cancel.
-    remove_doubled_faces(topo, &mut face_ids);
+    remove_doubled_faces(topo, &mut face_ids, &mut sources);
 
     if face_ids.is_empty() {
         return Err(AlgoError::AssemblyFailed(
@@ -131,7 +155,16 @@ pub fn build_solid(
     // discarded both faces of such an overlap, leaving a closed planar loop of
     // free edges where the larger face's overhang remainder should be. Cap each
     // such loop with a planar face that reuses the existing edges.
-    cap_partial_overlap_free_loops(topo, &mut face_ids, cap_planes)?;
+    cap_partial_overlap_free_loops(topo, &mut face_ids, &mut sources, cap_planes)?;
+
+    // Snapshot provenance now that face_ids / sources are final and parallel:
+    // map each result-bound face to the input face it derives from (None for a
+    // synthesised cap). Queried after assembly against the actual result faces.
+    let face_source: std::collections::HashMap<FaceId, Option<FaceId>> = face_ids
+        .iter()
+        .copied()
+        .zip(sources.iter().copied())
+        .collect();
 
     // Phase 2: Build shells via connectivity flood-fill
     let shells = perform_loops(topo, &face_ids)?;
@@ -150,7 +183,36 @@ pub fn build_solid(
     }
 
     // Phase 4: Assemble
-    assemble(topo, growth, holes)
+    let solid_id = assemble(topo, growth, holes)?;
+    let origins = brepkit_topology::explorer::solid_faces(topo, solid_id)?
+        .into_iter()
+        .map(|f| (f, face_source.get(&f).copied().flatten()))
+        .collect();
+    Ok((solid_id, origins))
+}
+
+/// Retain entries of `items` for which `keep` is true, dropping the same
+/// positions from the parallel `aligned` vector. The predicate runs exactly
+/// once per element (a precomputed mask), so side effects are not duplicated.
+fn retain_aligned<T, U>(
+    items: &mut Vec<T>,
+    aligned: &mut Vec<U>,
+    mut keep: impl FnMut(&T) -> bool,
+) {
+    debug_assert_eq!(items.len(), aligned.len());
+    let mask: Vec<bool> = items.iter().map(&mut keep).collect();
+    let mut idx = 0;
+    items.retain(|_| {
+        let k = mask.get(idx).copied().unwrap_or(true);
+        idx += 1;
+        k
+    });
+    let mut idx = 0;
+    aligned.retain(|_| {
+        let k = mask.get(idx).copied().unwrap_or(true);
+        idx += 1;
+        k
+    });
 }
 
 // ── Phase 1 ──────────────────────────────────────────────────────────
@@ -1969,7 +2031,11 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
 /// pair with one identical boundary always cancels, so dropping the whole group
 /// is sound. Inner wires are ignored — a doubled hole boundary is not a
 /// manifold defect on its own and removing the holed face would be unsafe.
-fn remove_doubled_faces(topo: &Topology, face_ids: &mut Vec<FaceId>) {
+fn remove_doubled_faces(
+    topo: &Topology,
+    face_ids: &mut Vec<FaceId>,
+    sources: &mut Vec<Option<FaceId>>,
+) {
     use brepkit_topology::edge::EdgeId;
     use brepkit_topology::wire::OrientedEdge;
 
@@ -2009,12 +2075,17 @@ fn remove_doubled_faces(topo: &Topology, face_ids: &mut Vec<FaceId>) {
         drop_idx.len()
     );
     let mut keep = Vec::with_capacity(face_ids.len() - drop_idx.len());
+    let mut keep_sources = Vec::with_capacity(keep.capacity());
     for (fi, &fid) in face_ids.iter().enumerate() {
         if !drop_idx.contains(&fi) {
             keep.push(fid);
+            // `sources` is parallel to `face_ids`, so `fi` is always in bounds;
+            // index directly (panics loudly in debug if the invariant breaks).
+            keep_sources.push(sources[fi]);
         }
     }
     *face_ids = keep;
+    *sources = keep_sources;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -2129,6 +2200,7 @@ pub struct CapPlane {
 fn cap_partial_overlap_free_loops(
     topo: &mut Topology,
     face_ids: &mut Vec<FaceId>,
+    sources: &mut Vec<Option<FaceId>>,
     cap_planes: &[CapPlane],
 ) -> Result<(), AlgoError> {
     use brepkit_topology::edge::EdgeId;
@@ -2322,6 +2394,8 @@ fn cap_partial_overlap_free_loops(
     for f in new_faces {
         let fid = topo.add_face(f);
         face_ids.push(fid);
+        // A synthesised cap has no input source — it is a generated face.
+        sources.push(None);
     }
     Ok(())
 }

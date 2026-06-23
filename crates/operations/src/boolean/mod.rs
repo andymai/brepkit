@@ -890,13 +890,18 @@ pub fn compound_cut(
     Ok(result)
 }
 
-/// Perform a boolean operation and return an [`crate::evolution::EvolutionMap`] tracking face
-/// provenance.
+/// Perform a boolean operation and return an [`crate::evolution::EvolutionMap`]
+/// tracking face provenance.
 ///
-/// This wraps [`boolean`] and uses a heuristic (normal + centroid similarity)
-/// to match output faces back to their input faces. Faces whose best match
-/// score exceeds the similarity threshold are classified as "modified";
-/// unmatched input faces are classified as "deleted".
+/// Prefers **faithful** provenance from the GFA builder — each result face
+/// records the input face it was split/derived from
+/// (`brepkit_algo::gfa::boolean_with_face_origins`). Because that path runs the
+/// GFA directly, it can take a different route than [`boolean`] (which
+/// short-circuits some cases via AABB/containment fast paths), so its result is
+/// validated; on a GFA error or an invalid result — and for identical operands
+/// — it falls back to [`boolean`] with the geometry heuristic (normal +
+/// centroid). Either way, unmatched input faces are classified as "deleted";
+/// synthesised result faces with no input origin are left unattributed.
 ///
 /// # Errors
 ///
@@ -907,7 +912,64 @@ pub fn boolean_with_evolution(
     a: SolidId,
     b: SolidId,
 ) -> Result<(SolidId, crate::evolution::EvolutionMap), crate::OperationsError> {
-    // Collect input face normals + centroids before the operation mutates topology.
+    use brepkit_topology::explorer::solid_faces;
+
+    // Faithful path: the GFA reports each result face's true input source.
+    // Identical operands take a non-GFA fast path, so skip them here.
+    if a != b {
+        let input_indices: Vec<usize> = solid_faces(topo, a)?
+            .into_iter()
+            .chain(solid_faces(topo, b)?)
+            .map(brepkit_topology::arena::Id::index)
+            .collect();
+        let algo_op = match op {
+            BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
+            BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
+            BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
+        };
+        if let Ok((result, origins)) =
+            brepkit_algo::gfa::boolean_with_face_origins(topo, algo_op, a, b)
+        {
+            // Apply the face-id-preserving result heals so the evolution result
+            // is as correct as the standard boolean (manifold, no #801 wire
+            // spurs). These rewrite wires in place, so the provenance — keyed by
+            // face ID — survives. `unify_faces` is intentionally NOT run here:
+            // it merges coplanar faces into new entities, discarding the
+            // per-face provenance this path exists to track.
+            // A heal failure here is not fatal: fall through to boolean()'s
+            // full pipeline rather than propagating (the result solid stays as
+            // orphaned topology, which is harmless in the arena).
+            let tol = brepkit_math::tolerance::Tolerance::default();
+            let healed_ok = crate::heal::remove_degenerate_edges(topo, result, tol.linear).is_ok()
+                && crate::heal::remove_wire_spurs(topo, result).is_ok();
+
+            // Trust the faithful path only if its result is valid; otherwise
+            // fall through to boolean()'s full pipeline (fast paths + mesh
+            // fallback + validation), matching boolean()'s contract.
+            if healed_ok && validate_boolean_result(topo, result).is_ok() {
+                let mut evo = crate::evolution::EvolutionMap::new();
+                let mut sourced: std::collections::HashSet<usize> =
+                    std::collections::HashSet::new();
+                for (out_idx, src) in origins {
+                    if let Some(in_idx) = src {
+                        evo.add_modified(in_idx, out_idx);
+                        sourced.insert(in_idx);
+                    }
+                }
+                for in_idx in input_indices {
+                    if !sourced.contains(&in_idx) {
+                        evo.add_deleted(in_idx);
+                    }
+                }
+                return Ok((result, evo));
+            }
+        }
+    }
+
+    // Fallback: geometry heuristic over the standard boolean result. Reached
+    // for identical operands, a GFA error, or a GFA result that failed
+    // validation — the EvolutionMap is then approximate, not faithful.
+    log::debug!("boolean_with_evolution: faithful GFA provenance unavailable, using heuristic");
     let input_faces_a = collect_face_signatures(topo, a)?;
     let input_faces_b = collect_face_signatures(topo, b)?;
 

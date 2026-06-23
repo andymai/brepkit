@@ -283,6 +283,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 rebuild_face_with_cb_edges(topo, expanded, &cb_qpair_edges, &vv_vertex_seed, tol);
             sub_faces.push(SubFace {
                 face_id: rebuilt.unwrap_or(expanded),
+                source_face: face_id,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -311,6 +312,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
             sub_faces.push(SubFace {
                 face_id: expanded,
+                source_face: face_id,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -342,6 +344,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
             sub_faces.push(SubFace {
                 face_id: expanded,
+                source_face: face_id,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -412,6 +415,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 
             sub_faces.push(SubFace {
                 face_id: new_face_id.unwrap_or(face_id),
+                source_face: face_id,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: Some(pt),
