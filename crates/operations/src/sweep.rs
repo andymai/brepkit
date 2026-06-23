@@ -397,6 +397,113 @@ pub fn densify_path_points(points: &[Point3]) -> Vec<Point3> {
     out
 }
 
+/// Interior samples used to confirm a path is a straight segment.
+const STRAIGHT_SAMPLES: usize = 8;
+
+/// Approximate the centroid of a planar profile's outer boundary by sampling
+/// its edges.
+///
+/// Sampling (rather than averaging stored vertices) is needed for a single
+/// closed circle, whose start and end vertex coincide at the seam — the seam
+/// point is not the center.
+fn profile_outer_centroid(
+    topo: &Topology,
+    profile: FaceId,
+) -> Result<Point3, crate::OperationsError> {
+    let face = topo.face(profile)?;
+    let wire = topo.wire(face.outer_wire())?;
+    let (mut sx, mut sy, mut sz) = (0.0_f64, 0.0_f64, 0.0_f64);
+    let mut count = 0_usize;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        // Four samples per edge span a closed circle's full sweep.
+        for k in 0..4 {
+            let t = t0 + (t1 - t0) * (f64::from(k) / 4.0);
+            let p = edge.curve().evaluate_with_endpoints(t, start, end);
+            sx += p.x();
+            sy += p.y();
+            sz += p.z();
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep profile has no outer-wire edges".into(),
+        });
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let n = count as f64;
+    Ok(Point3::new(sx / n, sy / n, sz / n))
+}
+
+/// Fast exact path for a straight, perpendicular sweep: it is a prism, so
+/// delegate to [`crate::extrude::extrude`], which builds exact analytic side
+/// faces (a circular profile becomes a true cylinder matching π·r²·L). The
+/// general sweep inscribes a curved profile as a polygon and undercounts its
+/// volume by ~2% (gh #965).
+///
+/// Returns `Ok(None)` — fall back to the general sweep — when the path is not
+/// straight or the profile plane is not perpendicular to it (an oblique sweep
+/// is not a prism and has different semantics).
+fn try_straight_extrude(
+    topo: &mut Topology,
+    profile: FaceId,
+    path: &NurbsCurve,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let tol = Tolerance::new();
+
+    let normal = match topo.face(profile)?.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => return Ok(None),
+    };
+
+    let start = path.evaluate(0.0);
+    let end = path.evaluate(1.0);
+    let chord = end - start;
+    let length = chord.length();
+    if length < tol.linear {
+        return Ok(None); // closed or degenerate path
+    }
+    let Ok(dir) = chord.normalize() else {
+        return Ok(None);
+    };
+
+    // Confirm straightness: every interior sample stays on the start→end line
+    // and advances monotonically along it.
+    for k in 1..STRAIGHT_SAMPLES {
+        #[allow(clippy::cast_precision_loss)]
+        let t = k as f64 / STRAIGHT_SAMPLES as f64;
+        let v = path.evaluate(t) - start;
+        let along = v.dot(dir);
+        let perp = (v - dir * along).length();
+        if perp > tol.linear * 100.0 || along < -tol.linear || along > length + tol.linear {
+            return Ok(None);
+        }
+    }
+
+    // The profile must be perpendicular to the path (normal parallel to the
+    // direction); an oblique profile is not a prism.
+    if normal.dot(dir).abs() < 1.0 - 1e-6 {
+        return Ok(None);
+    }
+
+    // Position a copy of the profile so its centroid lands on the path start —
+    // matching the general sweep's frame[0] placement — then extrude.
+    let centroid = profile_outer_centroid(topo, profile)?;
+    let moved = crate::copy::copy_face(topo, profile)?;
+    let shift = start - centroid;
+    crate::transform::transform_face(
+        topo,
+        moved,
+        &Mat4::translation(shift.x(), shift.y(), shift.z()),
+    )?;
+
+    Ok(Some(crate::extrude::extrude(topo, moved, dir, length)?))
+}
+
 /// Sweep a face along a path curve to produce a solid.
 ///
 /// Creates a solid by moving a planar profile along a NURBS curve, with the
@@ -420,6 +527,11 @@ pub fn sweep(
         return Err(crate::OperationsError::InvalidInput {
             reason: "sweep path must have at least 2 control points".into(),
         });
+    }
+
+    // A straight perpendicular sweep is a prism — build it exactly via extrude.
+    if let Some(solid) = try_straight_extrude(topo, profile, path)? {
+        return Ok(solid);
     }
 
     let face_data = topo.face(profile)?;
@@ -1085,6 +1197,16 @@ pub fn sweep_with_options(
             });
         }
         return sweep(topo, profile, path);
+    }
+
+    // A straight perpendicular sweep is a prism — build it exactly via extrude.
+    // Only when no scale law or guide spine applies, since either makes the
+    // result non-prismatic.
+    if options.scale_law.is_none()
+        && options.aux_spine.is_none()
+        && let Some(solid) = try_straight_extrude(topo, profile, path)?
+    {
+        return Ok(solid);
     }
 
     let input_wire = topo.wire(input_wire_id)?;

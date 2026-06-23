@@ -287,9 +287,57 @@ fn sweep_guided_handles_guide_meeting_spine() {
 }
 
 #[test]
+fn sweep_circle_along_straight_line_is_exact_cylinder() {
+    // gh #965: sweeping a circle along a straight spine must produce an exact
+    // cylinder (π·r²·L), not an inscribed polygonal prism (~2% low). The
+    // straight-sweep fast path delegates to extrude, which builds a true
+    // cylinder side face.
+    use brepkit_math::vec::Vec3;
+    use brepkit_topology::builder::make_circle_edge;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let tol = 1e-7;
+    let mut topo = Topology::new();
+    let circle = make_circle_edge(
+        &mut topo,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        2.0,
+        tol,
+    )
+    .unwrap();
+    let wid = topo.add_wire(Wire::new(vec![OrientedEdge::new(circle, true)], true).unwrap());
+    let profile = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let path = straight_z_path(20.0);
+
+    let solid = sweep(&mut topo, profile, &path).unwrap();
+
+    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+    let expected = std::f64::consts::PI * 4.0 * 20.0;
+    assert!(
+        (vol - expected).abs() / expected < 1e-6,
+        "expected exact cylinder volume {expected}, got {vol}"
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+}
+
+#[test]
 fn sweep_square_along_line() {
-    // Sweeping along a straight line should produce a box-like solid,
-    // similar to extrude.
+    // A straight perpendicular sweep is a prism: a unit square swept along a
+    // length-2 line is a 1×1×2 box — 6 planar faces, volume 2 — built exactly
+    // via the extrude fast path (not a faceted multi-ring solid).
     let mut topo = Topology::new();
     let face = make_unit_square_face(&mut topo);
     let path = straight_z_path(2.0);
@@ -299,20 +347,21 @@ fn sweep_square_along_line() {
     let solid_data = topo.solid(solid).unwrap();
     let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
-    // 4 segments (from max(2*2, 4)) × 4 profile edges = 16 side faces
-    // + 2 caps = 18 faces total.
-    let num_segs = (path.control_points().len() * 2).max(4);
-    let expected_faces = num_segs * 4 + 2;
-    assert_eq!(shell.faces().len(), expected_faces);
+    assert_eq!(shell.faces().len(), 6, "a straight square sweep is a box");
 
-    // Verify all faces are planar.
     for &fid in shell.faces() {
         let f = topo.face(fid).unwrap();
         assert!(
             matches!(f.surface(), FaceSurface::Plane { .. }),
-            "all sweep V1 faces should be planar"
+            "all box faces should be planar"
         );
     }
+
+    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+    assert!(
+        (vol - 2.0).abs() < 1e-9,
+        "expected box volume 2.0, got {vol}"
+    );
 }
 
 #[test]
