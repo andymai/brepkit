@@ -1328,3 +1328,78 @@ fn sweep_edge_on_profile_is_auto_oriented() {
         "edge-on profile should sweep to a 1×1×5 prism (volume 5), got {vol}"
     );
 }
+
+#[test]
+fn sweep_smooth_nonplanar_saddle_is_valid_solid() {
+    // sweep_smooth previously gated non-planar profiles; with the rail fix,
+    // auto-orientation, and boundary-fill caps it now sweeps them. A saddle
+    // (~4×4) swept 6 along +Z is a prism of volume ~96 (the bilinear caps fill
+    // the non-planar end rings).
+    let mut topo = Topology::new();
+    let profile = crate::test_helpers::make_saddle_profile(&mut topo, 2.0);
+    assert!(!topo.face(profile).unwrap().surface().is_planar());
+    let solid = sweep_smooth(&mut topo, profile, &straight_z_path(6.0)).unwrap();
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "non-planar smooth sweep must be a valid solid"
+    );
+    let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+    assert!(
+        (vol - 96.0).abs() / 96.0 < 0.05,
+        "non-planar smooth sweep volume should be ~96, got {vol}"
+    );
+}
+
+#[test]
+fn sweep_with_options_nonplanar_saddle_is_valid_solid() {
+    let mut topo = Topology::new();
+    let profile = crate::test_helpers::make_saddle_profile(&mut topo, 2.0);
+    let solid = sweep_with_options(
+        &mut topo,
+        profile,
+        &straight_z_path(6.0),
+        &SweepOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "non-planar sweep_with_options must be a valid solid"
+    );
+    let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+    assert!(
+        (vol - 96.0).abs() / 96.0 < 0.05,
+        "non-planar sweep_with_options volume should be ~96, got {vol}"
+    );
+}
+
+#[test]
+fn multi_section_sweep_nonplanar_sections_is_valid_solid() {
+    // multi_section places each section perpendicular to the spine and lofts
+    // them; loft handles non-planar sections, so saddle sections now work
+    // (previously gated by "multi-section sweep profiles must be planar").
+    let mut topo = Topology::new();
+    let a = crate::test_helpers::make_saddle_profile(&mut topo, 2.0);
+    let b = crate::test_helpers::make_saddle_profile(&mut topo, 2.0);
+    let solid = multi_section_sweep(
+        &mut topo,
+        &straight_z_path(6.0),
+        &[(a, 0.0), (b, 1.0)],
+        true,
+    )
+    .unwrap();
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "non-planar multi-section sweep must be a valid solid"
+    );
+    let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+    assert!(
+        vol > 80.0 && vol < 110.0,
+        "non-planar multi-section sweep volume should be ~96, got {vol}"
+    );
+}
