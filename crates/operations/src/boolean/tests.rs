@@ -5122,15 +5122,35 @@ fn build_perforated_panel(topo: &mut Topology, g: usize) -> (SolidId, SolidId) {
     (slab, tool)
 }
 
-/// Complexity-regression guard (issue #987): the boolean hot paths that were
-/// O(N²) must stay sub-quadratic. Counting *work* (not wall-clock) makes this
-/// deterministic — a reintroduced per-item full scan turns a linear count into
-/// a quadratic one, tripping the bound with no timing flakiness. Runs only with
+/// Complexity-regression guard (issue #987): the five boolean hot paths that
+/// PR #990 made near-linear must stay sub-quadratic. Counting *work* (not
+/// wall-clock) makes this deterministic — a reintroduced per-item full scan or
+/// per-sub-face rebuild turns a linear count into a quadratic (or constant into
+/// linear) one, tripping a bound with no timing flakiness. Runs only with
 /// `--features perf-counters`; a dedicated CI step exercises it.
+///
+/// Cutting a `g×g` grid of disjoint prisms through a slab. Going from `g=9`
+/// (81 holes) to `g=18` (324 holes) is a 4× input increase, so a linear path
+/// scales ~4× and a quadratic one ~16×. Each counter's bound was chosen by
+/// reverting the corresponding #990 fix and observing the counter explode:
+///
+/// | counter | fix in | fix reverted | bound |
+/// |---|---|---|---|
+/// | `pave_vertex_probes` | 0 | tens of thousands | absolute `< 5_000` |
+/// | `sd_poly_clips` | 0 | thousands | absolute `< 2_000` |
+/// | `ray_geom_builds` | 2 (once per solid) | 656 (per sub-face) | absolute `< 64` |
+/// | `face_split_probes` | ~4.1× | ~15.5× | ratio `< 8.0` |
+/// | `local_vertex_inserts` | ~4.0× | ~15.8× | ratio `< 8.0` |
+///
+/// `ray_geom_builds` regresses to O(N), not O(N²) — a *constant* becoming
+/// linear — so a ratio bound (still ~4×) would miss it; the absolute bound
+/// catches it. The two ratio-guarded paths conversely regress to O(N²), where
+/// a ratio bound is the sharp test. The `> 0` sanity checks ensure the path is
+/// actually exercised, so silently deleted instrumentation can't pass as 0→0.
 #[cfg(feature = "perf-counters")]
 #[test]
 fn scaling_perforated_cut_is_subquadratic() {
-    let cut_counts = |g: usize| -> (u64, u64) {
+    let cut_counts = |g: usize| -> brepkit_algo::perf::PerfSnapshot {
         let mut topo = Topology::new();
         let (slab, tool) = build_perforated_panel(&mut topo, g);
         brepkit_algo::perf::reset();
@@ -5139,27 +5159,78 @@ fn scaling_perforated_cut_is_subquadratic() {
         brepkit_algo::perf::snapshot()
     };
 
-    // The fixes make these once-O(N²) hot paths do near-constant work on this
-    // case: empty pave-vertex lookups examine no grid entries, and the bbox gate
-    // skips the polygon clip for every touching/side-by-side coplanar pair. A
-    // reintroduced per-item full scan turns each into O(N²) — many thousands of
-    // probes/clips at 324 holes — so a generous absolute bound at the larger
-    // size catches the regression with no timing flakiness. The smaller size is
-    // measured too, for the diagnostic trend.
-    let (probes_1x, clips_1x) = cut_counts(9); // 81 holes
-    let (probes_4x, clips_4x) = cut_counts(18); // 324 holes (4× input)
+    let s1 = cut_counts(9); // 81 holes
+    let s4 = cut_counts(18); // 324 holes (4× input)
+    let ratio = |a: u64, b: u64| {
+        if a == 0 {
+            f64::from(b == 0)
+        } else {
+            b as f64 / a as f64
+        }
+    };
+    let fsp_ratio = ratio(s1.face_split_probes, s4.face_split_probes);
+    let lvi_ratio = ratio(s1.local_vertex_inserts, s4.local_vertex_inserts);
     eprintln!(
-        "scaling guard @ 81→324 holes: pave_probes {probes_1x}->{probes_4x}, sd_clips {clips_1x}->{clips_4x}"
+        "scaling guard @ 81→324 holes (4× input → linear ~4×, quadratic ~16×): \
+         pave_probes {}->{}, sd_clips {}->{}, ray_geom_builds {}->{}, \
+         face_split_probes {}->{} ({fsp_ratio:.1}×), local_vtx_inserts {}->{} ({lvi_ratio:.1}×)",
+        s1.pave_vertex_probes,
+        s4.pave_vertex_probes,
+        s1.sd_poly_clips,
+        s4.sd_poly_clips,
+        s1.ray_geom_builds,
+        s4.ray_geom_builds,
+        s1.face_split_probes,
+        s4.face_split_probes,
+        s1.local_vertex_inserts,
+        s4.local_vertex_inserts,
     );
 
+    // PaveFiller endpoint→vertex snap: spatial hash keeps lookups near-constant;
+    // a per-pave-block linear scan would be tens of thousands of probes.
     assert!(
-        probes_4x < 5_000,
-        "pave-vertex lookup regressed to O(N²): {probes_4x} probes at 324 holes \
-         (current ~40; a per-pave-block linear scan would be tens of thousands+)"
+        s4.pave_vertex_probes < 5_000,
+        "pave-vertex lookup regressed to O(N²): {} probes at 324 holes",
+        s4.pave_vertex_probes
+    );
+    // Same-domain polygon clip: the bbox gate skips every disjoint coplanar
+    // pair; an ungated clip-every-pair would be thousands.
+    assert!(
+        s4.sd_poly_clips < 2_000,
+        "same-domain polygon clip regressed to O(N²): {} clips at 324 holes",
+        s4.sd_poly_clips
+    );
+    // Classify sub-faces: ray-cast geometry is built once per argument solid (2
+    // total). Rebuilding it per sub-face makes this O(sub-faces) — hundreds.
+    assert!(
+        s4.ray_geom_builds < 64,
+        "ray-cast geometry rebuilt per sub-face (was once per solid): {} builds at 324 holes",
+        s4.ray_geom_builds
+    );
+    // Face-splitter section/loop scans: grid pruning keeps per-section candidate
+    // work near-linear; a reverted full scan is O(sections²) (~16×).
+    assert!(
+        s4.face_split_probes > 0,
+        "face-split probe instrumentation not exercised"
     );
     assert!(
-        clips_4x < 2_000,
-        "same-domain polygon clip regressed to O(N²): {clips_4x} clips at 324 holes \
-         (current ~0; an ungated clip-every-candidate-pair would be thousands)"
+        fsp_ratio < 8.0,
+        "face-splitter candidate scan regressed toward O(N²): {fsp_ratio:.1}× for 4× input \
+         ({}->{} probes)",
+        s1.face_split_probes,
+        s4.face_split_probes
+    );
+    // build_topology_face vertex pool: layered lookup materializes only new
+    // vertices per sub-face; re-seeding from the shared pools is O(pool·sub-faces).
+    assert!(
+        s4.local_vertex_inserts > 0,
+        "vertex-insert instrumentation not exercised"
+    );
+    assert!(
+        lvi_ratio < 8.0,
+        "per-sub-face vertex materialization regressed toward O(N²): {lvi_ratio:.1}× for 4× input \
+         ({}->{} inserts)",
+        s1.local_vertex_inserts,
+        s4.local_vertex_inserts
     );
 }

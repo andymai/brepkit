@@ -2377,6 +2377,7 @@ fn layered_vertex(
         return v;
     }
     let v = fallback();
+    crate::perf::bump_local_vertex_insert();
     local.insert(key, v);
     v
 }

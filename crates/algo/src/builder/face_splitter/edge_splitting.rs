@@ -95,6 +95,7 @@ pub(super) fn find_splits_on_line(
     }
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
+        crate::perf::bump_face_split_probe();
         let to_pt = sp - edge.start_3d;
         let t = to_pt.dot(edge_dir) / edge_len_sq;
         if t <= tol || t >= 1.0 - tol {
@@ -132,6 +133,7 @@ pub(super) fn find_splits_on_circle(
     }
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
+        crate::perf::bump_face_split_probe();
         let angle = circle.project(sp);
         let closest = circle.evaluate(angle);
         if (sp - closest).length() > tol {
@@ -164,6 +166,7 @@ pub(super) fn find_splits_on_ellipse(
     }
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
+        crate::perf::bump_face_split_probe();
         let angle = ellipse.project(sp);
         let closest = ellipse.evaluate(angle);
         if (sp - closest).length() > tol {

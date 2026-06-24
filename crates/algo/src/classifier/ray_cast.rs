@@ -258,6 +258,7 @@ fn wire_polygon(
 
 /// Collect per-face ray-cast geometry from a solid.
 fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, AlgoError> {
+    crate::perf::bump_ray_geom_build();
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     let mut result = Vec::with_capacity(faces.len());
 
