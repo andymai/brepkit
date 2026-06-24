@@ -5069,7 +5069,7 @@ fn flatten_plane_normal_matches_nurbs_du_cross_dv() {
 fn perforated_panel_cut_is_correct_and_manifold() {
     let n_grid = 5_usize;
     let n = n_grid * n_grid;
-    let span = n_grid as f64 * 2.4; // pitch == 2.4 (see build_perforated_panel)
+    let span = (n_grid + 1) as f64 * 2.4; // pitch == 2.4 (see build_perforated_panel)
     let mut topo = Topology::new();
 
     let (slab, tool) = build_perforated_panel(&mut topo, n_grid);
@@ -5082,36 +5082,38 @@ fn perforated_panel_cut_is_correct_and_manifold() {
     assert_eq!(free, 0, "perforated panel must have no free edges");
     assert_eq!(over, 0, "perforated panel must have no over-shared edges");
 
-    // Each prism contributes 4 wall faces; the slab keeps its 6 faces but the
-    // top/bottom merge into the panel: 4N + 4 faces total.
+    // With every hole strictly interior: the slab keeps its 6 outer faces (the
+    // top/bottom caps now holed) and each prism adds 4 wall faces — 4N + 6.
     let faces = brepkit_topology::explorer::solid_faces(&topo, result)
         .unwrap()
         .len();
-    assert_eq!(faces, 4 * n + 4, "perforated panel face count");
+    assert_eq!(faces, 4 * n + 6, "perforated panel face count");
 
     // Volume = slab minus the N prism columns piercing it (each 1×1×2 thick).
+    // All-planar, so the volume is exact; the relative-tolerance helper guards
+    // against platform float noise.
     let expected = span * span * 2.0 - (n as f64) * (1.0 * 1.0 * 2.0);
-    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
-    assert!(
-        (vol - expected).abs() < 1e-6,
-        "perforated panel volume {vol} != expected {expected}"
-    );
+    assert_volume_near(&topo, result, expected, 1e-9);
 }
 
-/// Build the issue-#987 perforated panel: a `g×g` grid of unit prisms merged
-/// into one tool, ready to cut from a slab. Returns `(slab, tool)`.
+/// Build the issue-#987 perforated panel: a `g×g` grid of 1×1 prisms that pierce
+/// a slab, merged into one tool, ready to cut. The grid is inset by one `pitch`
+/// and the slab spans `(g+1)·pitch`, so every hole is strictly interior — the
+/// result is then an unambiguous `4·g² + 6` faces (2 holed caps + 4 sides + 4
+/// walls per hole). Returns `(slab, tool)`.
 #[cfg(test)]
 fn build_perforated_panel(topo: &mut Topology, g: usize) -> (SolidId, SolidId) {
     use brepkit_math::mat::Mat4;
     let pitch = 2.4;
-    let span = g as f64 * pitch;
+    let span = (g + 1) as f64 * pitch;
     let slab = crate::primitives::make_box(topo, span, span, 2.0).unwrap();
     crate::transform::transform_solid(topo, slab, &Mat4::translation(0.0, 0.0, 1.0)).unwrap();
     let mut tools = Vec::new();
     for j in 0..g {
         for i in 0..g {
             let h = crate::primitives::make_box(topo, 1.0, 1.0, 4.0).unwrap();
-            let m = Mat4::translation(i as f64 * pitch, j as f64 * pitch, 0.0);
+            // Inset by one pitch so no hole touches the slab boundary.
+            let m = Mat4::translation((i + 1) as f64 * pitch, (j + 1) as f64 * pitch, 0.0);
             crate::transform::transform_solid(topo, h, &m).unwrap();
             tools.push(h);
         }

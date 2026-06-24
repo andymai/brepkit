@@ -1249,9 +1249,16 @@ fn arrangement_regions_from_inputs(
             if i == j {
                 continue;
             }
-            let (jlx, jly, jhx, jhy) = chord_boxes[j];
-            if ilx > jhx || jlx > ihx || ily > jhy || jly > ihy {
-                continue; // chord boxes disjoint → no crossing, no T-junction
+            // Box pruning is exact only when neither edge bulges past its
+            // chord — i.e. both are lines. An arc can cross or be T-junctioned
+            // outside its chord's box, so never prune a pair involving one
+            // (arcs are rare: rounded corners). The honeycomb cap is all lines,
+            // so this keeps the near-linear win where it matters.
+            if !i_is_arc && !other.is_arc {
+                let (jlx, jly, jhx, jhy) = chord_boxes[j];
+                if ilx > jhx || jlx > ihx || ily > jhy || jly > ihy {
+                    continue; // chord boxes disjoint → no crossing, no T-junction
+                }
             }
             let (b0, b1) = (other.a, other.b);
             // Proper interior crossing. For an arc input, only honour the break

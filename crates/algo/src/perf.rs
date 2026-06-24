@@ -21,17 +21,18 @@ static PAVE_VERTEX_PROBES: AtomicU64 = AtomicU64::new(0);
 static SD_POLY_CLIPS: AtomicU64 = AtomicU64::new(0);
 
 /// Count one pave-vertex distance comparison (per candidate examined while
-/// snapping an intersection endpoint to a coincident vertex).
+/// snapping an intersection endpoint to a coincident vertex). Crate-internal:
+/// only `reset`/`snapshot` cross the crate boundary (for the scaling guard).
 #[inline]
-pub fn bump_pave_vertex_probe() {
+pub(crate) fn bump_pave_vertex_probe() {
     #[cfg(feature = "perf-counters")]
     PAVE_VERTEX_PROBES.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Count one same-domain polygon-intersection clip (the expensive narrow-phase
-/// in `planar_faces_overlap`).
+/// in `planar_faces_overlap`). Crate-internal, like `bump_pave_vertex_probe`.
 #[inline]
-pub fn bump_sd_poly_clip() {
+pub(crate) fn bump_sd_poly_clip() {
     #[cfg(feature = "perf-counters")]
     SD_POLY_CLIPS.fetch_add(1, Ordering::Relaxed);
 }

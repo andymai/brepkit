@@ -88,7 +88,7 @@ pub fn ray_cast_inside_votes(
 /// Pre-collected ray-cast geometry for a solid, built once and reused across
 /// many point classifications.
 ///
-/// [`collect_face_geoms`] samples every face's wire into a polygon (and chains
+/// Collecting the geometry samples every face's wire into a polygon (and chains
 /// the polylines), which is the dominant cost of a single classification. When
 /// classifying many points against the same solid — every sub-face of a boolean
 /// against the opposing solid — rebuilding it per point is O(faces) × O(points).
