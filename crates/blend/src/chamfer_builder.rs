@@ -344,6 +344,12 @@ fn compute_chamfer_stripe(
         return Ok(result);
     }
 
+    log::debug!(
+        target: "brepkit_approx",
+        "chamfer: analytic path unavailable for {}+{} — v1 has no walker fallback, returning UnsupportedSurface",
+        surf1.type_tag(),
+        surf2.type_tag()
+    );
     // v1: no walker fallback for non-analytic surface pairs.
     Err(BlendError::UnsupportedSurface {
         face: face1,

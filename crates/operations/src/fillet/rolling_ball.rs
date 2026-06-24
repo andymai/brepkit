@@ -1960,6 +1960,10 @@ pub fn fillet_rolling_ball(
         }
 
         // Fallback: flat planar blend for non-triangular or degenerate cases.
+        log::debug!(
+            target: "brepkit_approx",
+            "fillet(rolling-ball): corner patch fell back to flat planar blend (non-triangular/degenerate corner)"
+        );
         let blend_d = dot_normal_point(blend_normal, ordered_points[0]);
         all_specs.push(FaceSpec::Planar {
             vertices: ordered_points,

@@ -256,6 +256,10 @@ fn offset_nurbs_face(
     ) {
         Ok(trimmed) => trimmed,
         Err(e) => {
+            log::debug!(
+                target: "brepkit_approx",
+                "offset_face: raw-offset-surface fallback (SSI trim failed: {e})"
+            );
             log::warn!(
                 "offset_face: self-intersection trimming failed ({e}), \
                  using raw offset surface"

@@ -133,6 +133,10 @@ pub fn build_offset_faces(
             }
 
             FaceSurface::Nurbs(nurbs) => {
+                log::debug!(
+                    target: "brepkit_approx",
+                    "offset: NURBS face {face_id:?} offset via {NURBS_GRID_SIZE}x{NURBS_GRID_SIZE} sampled-NURBS refit (degree {NURBS_DEGREE}) — not an exact analytic offset"
+                );
                 let (u_min, u_max) = nurbs.domain_u();
                 let (v_min, v_max) = nurbs.domain_v();
 

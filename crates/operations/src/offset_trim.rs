@@ -76,6 +76,10 @@ pub fn trim_offset_self_intersections(
         return trim_via_ssi(original, offset, offset_distance, tolerance, &ssi_curves);
     }
 
+    log::debug!(
+        target: "brepkit_approx",
+        "offset_trim: SSI curve detection found nothing — falling back to grid-sampling trim ({DETECTION_GRID}x{DETECTION_GRID})"
+    );
     trim_via_sampling(original, offset, offset_distance, tolerance)
 }
 

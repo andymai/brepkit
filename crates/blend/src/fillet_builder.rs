@@ -697,6 +697,14 @@ fn compute_stripe_for_edge(
         }
     }
 
+    log::debug!(
+        target: "brepkit_approx",
+        "fillet: analytic fast-path unavailable for {}+{} ({} radius) — using Newton-Raphson walker (approximate NURBS blend surface)",
+        surf1.type_tag(),
+        surf2.type_tag(),
+        if matches!(law, RadiusLaw::Constant(_)) { "constant" } else { "variable" }
+    );
+
     // Build ParametricSurface references via PlaneAdapter for planes.
     // When a face is reversed, the outward normal is flipped. For PlaneAdapter,
     // we negate the normal. For analytic/NURBS surfaces the ParametricSurface
