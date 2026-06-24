@@ -63,10 +63,12 @@ pub(crate) fn bump_ray_geom_build() {
     RAY_GEOM_BUILDS.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Count one candidate endpoint examined by a face-splitter grid query (the
-/// per-section / per-loop "is there a point near this edge" scan). The grid
-/// returns only nearby points, so this is near-constant per query; a reverted
-/// full scan returns every endpoint per query → O(sections²). Crate-internal.
+/// Count one unit of face-splitter candidate work — either an endpoint examined
+/// by a per-section / per-loop grid query (the "is there a point near this edge"
+/// scan), or a chord pair that survives the arrangement's bbox broad-phase and
+/// runs the real crossing / T-junction test. Each broad-phase keeps its work
+/// near-constant per query/edge; reverting either makes it O(sections²).
+/// Crate-internal.
 #[inline]
 pub(crate) fn bump_face_split_probe() {
     #[cfg(feature = "perf-counters")]
@@ -96,7 +98,8 @@ pub struct PerfSnapshot {
     pub sd_poly_clips: u64,
     /// Ray-cast geometry collections (`collect_face_geoms` calls).
     pub ray_geom_builds: u64,
-    /// Face-splitter grid-query candidate endpoints examined.
+    /// Face-splitter candidate work: grid-query endpoints examined plus
+    /// arrangement chord pairs that survive the bbox broad-phase.
     pub face_split_probes: u64,
     /// Sub-face-local vertex materializations in `build_topology_face`.
     pub local_vertex_inserts: u64,
