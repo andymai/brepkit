@@ -2,9 +2,9 @@ name: Benchmark
 
 # Broad boolean-perf regression tracking (complements the deterministic O(N²)
 # complexity guard in the Test job). On `main` it records a baseline and renders
-# a trend chart on the gh-pages branch; on a PR it compares against that baseline
-# and comments only on a clear regression. Shared CI runners are noisy, so the
-# alert threshold is loose and a regression never fails the build — it informs.
+# a trend on the gh-pages branch; on a PR it compares against that baseline and
+# comments only on a clear regression. Shared CI runners are noisy, so the alert
+# threshold is loose and a regression never fails the build — it informs.
 
 on:
   push:
@@ -28,9 +28,40 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # github-action-benchmark stores its history on the gh-pages branch and
+      # fails hard (`couldn't find remote ref gh-pages`) if it is missing. Detect
+      # it, and create an empty one on the first push to main so the action can
+      # bootstrap. A PR that runs before that simply skips the compare step
+      # below — there is no baseline to compare against yet.
+      - name: Detect benchmark baseline
+        id: baseline
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create gh-pages baseline branch
+        if: github.event_name == 'push' && steps.baseline.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tmp="$(mktemp -d)"
+          git -C "$tmp" init -q -b gh-pages
+          : > "$tmp/.nojekyll"
+          git -C "$tmp" add .nojekyll
+          git -C "$tmp" \
+            -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m 'Initialize gh-pages for benchmark tracking'
+          git -C "$tmp" push -q \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Run boolean tracking benchmarks
         # `--output-format bencher` emits the libtest `bench:` lines (stdout)
         # that the `cargo` parser below understands; build noise stays on stderr.
@@ -39,7 +70,12 @@ jobs:
         run: |
           set -o pipefail
           cargo bench -p brepkit-operations --bench boolean_tracking -- --output-format bencher | tee bench-output.txt
+
+      # Runs on every push to main (record/update the baseline) and on a PR only
+      # once a baseline exists (compare). Skipping the PR case during bootstrap
+      # keeps the job green instead of failing on the missing gh-pages ref.
       - name: Compare / store results
+        if: github.event_name == 'push' || steps.baseline.outputs.exists == 'true'
         uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
         with:
           name: Boolean perf
