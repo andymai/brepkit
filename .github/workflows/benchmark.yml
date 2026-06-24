@@ -34,7 +34,11 @@ jobs:
       - name: Run boolean tracking benchmarks
         # `--output-format bencher` emits the libtest `bench:` lines (stdout)
         # that the `cargo` parser below understands; build noise stays on stderr.
-        run: cargo bench -p brepkit-operations --bench boolean_tracking -- --output-format bencher | tee bench-output.txt
+        # `pipefail` so a bench failure fails the step despite the `tee` (the
+        # default `bash -e` shell does NOT set it).
+        run: |
+          set -o pipefail
+          cargo bench -p brepkit-operations --bench boolean_tracking -- --output-format bencher | tee bench-output.txt
       - name: Compare / store results
         uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
         with:
