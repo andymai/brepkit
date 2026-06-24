@@ -1260,6 +1260,9 @@ fn arrangement_regions_from_inputs(
                     continue; // chord boxes disjoint → no crossing, no T-junction
                 }
             }
+            // A pair that survives the broad-phase does the real crossing /
+            // T-junction work below — the cost the bbox prune keeps near-linear.
+            crate::perf::bump_face_split_probe();
             let (b0, b1) = (other.a, other.b);
             // Proper interior crossing. For an arc input, only honour the break
             // when the crossing point is on the real arc (not just its chord).
@@ -3055,10 +3058,13 @@ fn plane_internal_line_loops(
         for cx in lo.0..=hi.0 {
             for cy in lo.1..=hi.1 {
                 for cz in lo.2..=hi.2 {
-                    if let Some(pts) = ep_grid.get(&(cx, cy, cz))
-                        && pts.iter().copied().any(subdivided)
-                    {
-                        return false;
+                    if let Some(pts) = ep_grid.get(&(cx, cy, cz)) {
+                        for &p in pts {
+                            crate::perf::bump_face_split_probe();
+                            if subdivided(p) {
+                                return false;
+                            }
+                        }
                     }
                 }
             }
