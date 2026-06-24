@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.120.0](https://github.com/andymai/brepkit/compare/v2.119.3...v2.120.0) (2026-06-24)
+
+
+### Features
+
+* **operations:** non-planar profiles in smooth, options, and multi-section sweeps ([#988](https://github.com/andymai/brepkit/issues/988)) ([2f4cec5](https://github.com/andymai/brepkit/commit/2f4cec5d9afce16e9d701c03d4963c82fe829e4d))
+
+
+### Performance
+
+* **algo:** make Cut producing many holes near-linear ([#987](https://github.com/andymai/brepkit/issues/987)) ([#990](https://github.com/andymai/brepkit/issues/990)) ([f0bb20f](https://github.com/andymai/brepkit/commit/f0bb20fe1a60ed151e3d12ddaa49d48f65e26f74))
+
 ## [2.119.3](https://github.com/andymai/brepkit/compare/v2.119.2...v2.119.3) (2026-06-23)
 
 
