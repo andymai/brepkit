@@ -14,12 +14,12 @@ on:
 permissions:
   contents: write # store the baseline on gh-pages (push to main only)
   pull-requests: write # comment on a regression
-  deployments: write
 
-# A newer commit supersedes an in-flight run on the same ref.
 concurrency:
   group: benchmark-${{ github.ref }}
-  cancel-in-progress: true
+  # Supersede an in-flight run on a PR (only the latest commit matters), but let
+  # every push to main finish so the baseline trend has no gaps.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   benchmark:

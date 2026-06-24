@@ -42,7 +42,8 @@ fn merge_disjoint(topo: &mut Topology, solids: &[SolidId]) -> SolidId {
     topo.add_solid(Solid::new(outer, vec![]))
 }
 
-/// Two overlapping unit boxes offset along the diagonal.
+/// Two unit boxes overlapping on the diagonal (a non-trivial intersection
+/// region for all three boolean ops).
 fn two_boxes(topo: &mut Topology) -> (SolidId, SolidId) {
     let a = make_box(topo, 1.0, 1.0, 1.0).unwrap();
     let b = make_box(topo, 1.0, 1.0, 1.0).unwrap();
@@ -58,21 +59,19 @@ fn bench_booleans(c: &mut Criterion) {
         .warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(2));
 
-    group.bench_function("cut_box_box", |bencher| {
-        bencher.iter(|| {
-            let mut topo = Topology::new();
-            let (a, b) = two_boxes(&mut topo);
-            black_box(boolean(&mut topo, BooleanOp::Cut, a, b).unwrap())
+    for (name, op) in [
+        ("cut_box_box", BooleanOp::Cut),
+        ("fuse_box_box", BooleanOp::Fuse),
+        ("intersect_box_box", BooleanOp::Intersect),
+    ] {
+        group.bench_function(name, |bencher| {
+            bencher.iter(|| {
+                let mut topo = Topology::new();
+                let (a, b) = two_boxes(&mut topo);
+                black_box(boolean(&mut topo, op, a, b).unwrap())
+            });
         });
-    });
-
-    group.bench_function("fuse_box_box", |bencher| {
-        bencher.iter(|| {
-            let mut topo = Topology::new();
-            let (a, b) = two_boxes(&mut topo);
-            black_box(boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap())
-        });
-    });
+    }
 
     group.bench_function("cut_cylinder_through_box", |bencher| {
         bencher.iter(|| {
