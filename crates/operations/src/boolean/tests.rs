@@ -5161,12 +5161,16 @@ fn scaling_perforated_cut_is_subquadratic() {
 
     let s1 = cut_counts(9); // 81 holes
     let s4 = cut_counts(18); // 324 holes (4× input)
+    // Assert the baseline is exercised rather than dividing by it: a 0→nonzero
+    // ratio would otherwise read as 0.0 and silently pass the bound, disabling
+    // the scaling guard if a fixture/instrumentation change stops hitting the
+    // path at the smaller size.
     let ratio = |a: u64, b: u64| {
-        if a == 0 {
-            f64::from(b == 0)
-        } else {
-            b as f64 / a as f64
-        }
+        assert!(
+            a > 0,
+            "scaling-ratio baseline counter was not exercised at g=9"
+        );
+        b as f64 / a as f64
     };
     let fsp_ratio = ratio(s1.face_split_probes, s4.face_split_probes);
     let lvi_ratio = ratio(s1.local_vertex_inserts, s4.local_vertex_inserts);
