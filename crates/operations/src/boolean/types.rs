@@ -33,22 +33,6 @@ pub(super) const DEFAULT_BOOLEAN_DEFLECTION: f64 = 0.1;
 /// sufficient for correct ray-crossing parity.
 pub(super) const CLASSIFIER_CYL_SEGMENTS: usize = 16;
 
-/// Per-solid face count above which the chord-based tessellated path is
-/// too expensive. If EITHER solid exceeds this, fall back to mesh boolean.
-///
-/// This catches individual complex solids (e.g. shelled geometry with merged
-/// faces from `unify_faces`) that would cause O(N²) intersection computation.
-/// Matches the v2.6.0 behavior that prevented hangs on gridfinity bins.
-pub(super) const MESH_BOOLEAN_PER_SOLID_THRESHOLD: usize = 100;
-
-/// Combined face count (A + B) above which the chord-based tessellated
-/// path is too expensive. Falls back to the mesh boolean (co-refinement
-/// on triangle meshes, O(N log N)).
-///
-/// Checked BEFORE `collect_face_data` to avoid expensive NURBS
-/// tessellation when the mesh boolean will be used anyway.
-pub(super) const MESH_BOOLEAN_FACE_THRESHOLD: usize = 500;
-
 /// Threshold: use CDT batch splitting for faces with this many or more chords.
 ///
 /// Below this threshold, the iterative approach is fast enough and avoids the
