@@ -9,6 +9,7 @@ mod curve;
 mod face_info;
 mod interference;
 mod pave;
+mod pave_vertex_index;
 mod shape_index;
 pub mod shape_store;
 
@@ -18,6 +19,7 @@ pub use curve::IntersectionCurveDS;
 pub use face_info::FaceInfo;
 pub use interference::Interference;
 pub use pave::{Pave, PaveBlock, PaveBlockId};
+pub use pave_vertex_index::PaveVertexIndex;
 // CommonBlock infrastructure — used by ForceInterfEE + MakeSplitEdges (used by ForceInterfEE + MakeSplitEdges)
 #[allow(unused_imports)]
 pub use pave::{CommonBlock, CommonBlockId};

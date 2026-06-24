@@ -93,15 +93,104 @@ fn split_sections_at_t_junctions(
     wire_pts: &[Point3],
     tol: f64,
 ) {
-    // Every distinct section endpoint (3D) is a candidate split point.
+    // Every distinct section endpoint (3D) is a candidate split point. Dedup
+    // with a fine grid (cell = tol), then index the unique points in a COARSE
+    // grid (cell = mean section length) so the per-section search below probes
+    // only nearby candidates — near-linear instead of O(sections²) on a
+    // perforated cap's many disjoint hole edges. The coarse query reproduces the
+    // former all-endpoints scan: an endpoint on a section lies within `tol` of
+    // it, hence in a coarse cell its bounding box (expanded by `tol`) overlaps.
+    let fine = tol.max(f64::MIN_POSITIVE);
+    let fine_inv = 1.0 / fine;
+    let fine_cell = |p: Point3| -> (i64, i64, i64) {
+        #[allow(clippy::cast_possible_truncation)]
+        (
+            (p.x() * fine_inv).floor() as i64,
+            (p.y() * fine_inv).floor() as i64,
+            (p.z() * fine_inv).floor() as i64,
+        )
+    };
     let mut endpoints: Vec<Point3> = Vec::new();
+    let mut fine_grid: std::collections::HashMap<(i64, i64, i64), Vec<Point3>> =
+        std::collections::HashMap::new();
+    let mut len_sum = 0.0_f64;
+    let mut len_cnt = 0.0_f64;
     for e in &all_edges[section_start..] {
+        len_sum += (e.end_3d - e.start_3d).length();
+        len_cnt += 1.0;
         for p in [e.start_3d, e.end_3d] {
-            if !endpoints.iter().any(|q| (*q - p).length() < tol) {
+            let (cx, cy, cz) = fine_cell(p);
+            let dup = (-1..=1).any(|dx| {
+                (-1..=1).any(|dy| {
+                    (-1..=1).any(|dz| {
+                        fine_grid
+                            .get(&(cx + dx, cy + dy, cz + dz))
+                            .is_some_and(|pts| pts.iter().any(|q| (*q - p).length() < tol))
+                    })
+                })
+            });
+            if !dup {
                 endpoints.push(p);
+                fine_grid.entry((cx, cy, cz)).or_default().push(p);
             }
         }
     }
+    // Coarse query grid: cell sized to the mean section length so a section
+    // spans O(1) cells. Each endpoint is stored once.
+    let coarse = if len_cnt > 0.0 {
+        (len_sum / len_cnt).max(fine)
+    } else {
+        fine
+    };
+    let coarse_inv = 1.0 / coarse;
+    let coarse_cell = |x: f64, y: f64, z: f64| -> (i64, i64, i64) {
+        #[allow(clippy::cast_possible_truncation)]
+        (
+            (x * coarse_inv).floor() as i64,
+            (y * coarse_inv).floor() as i64,
+            (z * coarse_inv).floor() as i64,
+        )
+    };
+    let mut coarse_grid: std::collections::HashMap<(i64, i64, i64), Vec<Point3>> =
+        std::collections::HashMap::new();
+    for &p in &endpoints {
+        coarse_grid
+            .entry(coarse_cell(p.x(), p.y(), p.z()))
+            .or_default()
+            .push(p);
+    }
+    // Candidate endpoints near a section edge's bounding box (expanded by tol).
+    // A box spanning more cells than there are endpoints can't gain from the
+    // grid, so fall back to the full set there (keeps the result identical).
+    let candidates_near = |s3: Point3, e3: Point3| -> Vec<Point3> {
+        let lo = coarse_cell(
+            s3.x().min(e3.x()) - tol,
+            s3.y().min(e3.y()) - tol,
+            s3.z().min(e3.z()) - tol,
+        );
+        let hi = coarse_cell(
+            s3.x().max(e3.x()) + tol,
+            s3.y().max(e3.y()) + tol,
+            s3.z().max(e3.z()) + tol,
+        );
+        let span = (hi.0 - lo.0 + 1)
+            .saturating_mul(hi.1 - lo.1 + 1)
+            .saturating_mul(hi.2 - lo.2 + 1);
+        if span < 0 || span as usize > endpoints.len() {
+            return endpoints.clone();
+        }
+        let mut out = Vec::new();
+        for cx in lo.0..=hi.0 {
+            for cy in lo.1..=hi.1 {
+                for cz in lo.2..=hi.2 {
+                    if let Some(pts) = coarse_grid.get(&(cx, cy, cz)) {
+                        out.extend_from_slice(pts);
+                    }
+                }
+            }
+        }
+        out
+    };
 
     let boundary: Vec<OrientedPCurveEdge> = all_edges[..section_start].to_vec();
     let sections: Vec<OrientedPCurveEdge> = all_edges[section_start..].to_vec();
@@ -131,15 +220,21 @@ fn split_sections_at_t_junctions(
 
     let mut new_sections: Vec<OrientedPCurveEdge> = Vec::with_capacity(sections.len());
     for edge in sections {
-        // `find_splits_on_*` already exclude the edge's own endpoints.
         let splits = match &edge.curve_3d {
+            // Arc sections bulge beyond their chord, so an endpoint can lie on
+            // the arc yet outside the chord's bounding box — the grid filter
+            // (keyed on chord extent) would miss it. Arcs are rare (rounded
+            // corners), so scan the full endpoint set for them; the
+            // O(sections²) pressure comes from the many Line sections, which the
+            // grid prunes. `find_splits_on_*` exclude the edge's own endpoints.
             EdgeCurve::Circle(circle) => find_splits_on_circle(circle, &edge, &endpoints, tol),
             EdgeCurve::Ellipse(ellipse) => find_splits_on_ellipse(ellipse, &edge, &endpoints, tol),
-            // Lines split on the chord; a NURBS section (rare here) has no
-            // specialized splitter, so the chord-based line search is the
-            // closest available approximation.
+            // Only endpoints near a line section's bounding box can land on it;
+            // the grid query returns exactly that subset, preserving the former
+            // full scan's result. A NURBS section (rare here) has no specialized
+            // splitter, so the chord-based line search is the closest match.
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
-                find_splits_on_line(&edge, &endpoints, tol)
+                find_splits_on_line(&edge, &candidates_near(edge.start_3d, edge.end_3d), tol)
             }
         };
         if splits.is_empty() {
@@ -1118,6 +1213,24 @@ fn arrangement_regions_from_inputs(
             <= tol
     };
 
+    // Per-input chord bounding box (expanded by `tol`) for broad-phase pruning
+    // of the pairwise subdivision below. Two chords whose boxes are disjoint can
+    // neither cross nor host the other's endpoint on their interior, so the
+    // O(inputs²) inner scan skips them — near-linear on an arrangement of many
+    // disjoint loops (a perforated cap's hole edges). `ts` is sorted+deduped
+    // after collection, so pruning never changes the emitted sub-segments.
+    let chord_boxes: Vec<(f64, f64, f64, f64)> = inputs
+        .iter()
+        .map(|inp| {
+            (
+                inp.a.x().min(inp.b.x()) - tol,
+                inp.a.y().min(inp.b.y()) - tol,
+                inp.a.x().max(inp.b.x()) + tol,
+                inp.a.y().max(inp.b.y()) + tol,
+            )
+        })
+        .collect();
+
     // Undirected sub-segments keyed by endpoint vertex pair, each tagged with
     // its source input index and whether it spans that whole input.
     let mut sub_edges: Vec<ArrSubEdge> = Vec::new();
@@ -1129,11 +1242,16 @@ fn arrangement_regions_from_inputs(
             continue;
         }
         let i_is_arc = inputs[i].is_arc;
+        let (ilx, ily, ihx, ihy) = chord_boxes[i];
         // Break parameters along this chord (t in [0,1]).
         let mut ts: Vec<f64> = vec![0.0, 1.0];
         for (j, other) in inputs.iter().enumerate() {
             if i == j {
                 continue;
+            }
+            let (jlx, jly, jhx, jhy) = chord_boxes[j];
+            if ilx > jhx || jlx > ihx || ily > jhy || jly > ihy {
+                continue; // chord boxes disjoint → no crossing, no T-junction
             }
             let (b0, b1) = (other.a, other.b);
             // Proper interior crossing. For an arc input, only honour the break
@@ -2150,14 +2268,39 @@ pub fn split_face_2d(
     // above).
     let mut n_boundary_edges = n_boundary_edges;
     if is_plane && all_edges.len() > n_boundary_edges {
+        // Dedup section endpoints with a grid (cell = tol) so a cap with many
+        // hole edges costs O(sections) here, not O(sections²). Probing the 3×3×3
+        // neighbourhood reproduces the former within-`tol` linear scan exactly.
+        let cell = tol.linear.max(f64::MIN_POSITIVE);
+        let inv = 1.0 / cell;
+        let cell_of = |p: Point3| -> (i64, i64, i64) {
+            #[allow(clippy::cast_possible_truncation)]
+            (
+                (p.x() * inv).floor() as i64,
+                (p.y() * inv).floor() as i64,
+                (p.z() * inv).floor() as i64,
+            )
+        };
+        let mut ep_grid: std::collections::HashMap<(i64, i64, i64), Vec<Point3>> =
+            std::collections::HashMap::new();
         let mut section_endpoints: Vec<Point3> = Vec::new();
         for e in &all_edges[n_boundary_edges..] {
             for p in [e.start_3d, e.end_3d] {
-                if !section_endpoints
-                    .iter()
-                    .any(|q| (*q - p).length() < tol.linear)
-                {
+                let (cx, cy, cz) = cell_of(p);
+                let dup = (-1..=1).any(|dx| {
+                    (-1..=1).any(|dy| {
+                        (-1..=1).any(|dz| {
+                            ep_grid
+                                .get(&(cx + dx, cy + dy, cz + dz))
+                                .is_some_and(|pts| {
+                                    pts.iter().any(|q| (*q - p).length() < tol.linear)
+                                })
+                        })
+                    })
+                });
+                if !dup {
                     section_endpoints.push(p);
+                    ep_grid.entry((cx, cy, cz)).or_default().push(p);
                 }
             }
         }
@@ -2841,7 +2984,37 @@ fn plane_internal_line_loops(
     // subdivides (collinear, strictly interior) — the sub-segments carry
     // the same geometry. If the sub-segments turn out incomplete, the
     // degree check below rejects and the generic path takes over.
+    //
+    // A subdividing endpoint must lie ON the segment, hence inside its
+    // bounding box. Index the endpoints in a coarse grid and probe only the
+    // cells the segment spans, so a face with many sections (a perforated
+    // panel's cap) costs O(sections) here instead of O(sections²).
     let endpoints: Vec<Point3> = deduped.iter().flat_map(|s| [s.start, s.end]).collect();
+    let grid_cell = {
+        let mut sum = 0.0;
+        let mut cnt = 0.0;
+        for s in &deduped {
+            if matches!(s.curve_3d, EdgeCurve::Line) {
+                sum += (s.end - s.start).length();
+                cnt += 1.0;
+            }
+        }
+        if cnt > 0.0 { sum / cnt } else { margin }
+    }
+    .max(margin);
+    let grid_inv = 1.0 / grid_cell;
+    let cell_of = |p: Point3| -> QPt {
+        #[allow(clippy::cast_possible_truncation)]
+        (
+            (p.x() * grid_inv).floor() as i64,
+            (p.y() * grid_inv).floor() as i64,
+            (p.z() * grid_inv).floor() as i64,
+        )
+    };
+    let mut ep_grid: HashMap<QPt, Vec<Point3>> = HashMap::new();
+    for &p in &endpoints {
+        ep_grid.entry(cell_of(p)).or_default().push(p);
+    }
     deduped.retain(|s| {
         if !matches!(s.curve_3d, EdgeCurve::Line) {
             return true;
@@ -2851,7 +3024,17 @@ fn plane_internal_line_loops(
         if len2 < margin * margin {
             return true;
         }
-        !endpoints.iter().any(|&p| {
+        let lo = cell_of(Point3::new(
+            s.start.x().min(s.end.x()) - margin,
+            s.start.y().min(s.end.y()) - margin,
+            s.start.z().min(s.end.z()) - margin,
+        ));
+        let hi = cell_of(Point3::new(
+            s.start.x().max(s.end.x()) + margin,
+            s.start.y().max(s.end.y()) + margin,
+            s.start.z().max(s.end.z()) + margin,
+        ));
+        let subdivided = |p: Point3| -> bool {
             if (p - s.start).length() < margin || (p - s.end).length() < margin {
                 return false;
             }
@@ -2861,7 +3044,19 @@ fn plane_internal_line_loops(
             }
             let foot = s.start + dir * t;
             (p - foot).length() < margin
-        })
+        };
+        for cx in lo.0..=hi.0 {
+            for cy in lo.1..=hi.1 {
+                for cz in lo.2..=hi.2 {
+                    if let Some(pts) = ep_grid.get(&(cx, cy, cz))
+                        && pts.iter().copied().any(subdivided)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
     });
 
     let mut degree: HashMap<QPt, u32> = HashMap::new();

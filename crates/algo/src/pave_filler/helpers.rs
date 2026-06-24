@@ -13,19 +13,25 @@ use crate::ds::{GfaArena, Pave};
 
 /// Find a vertex near the given point among all pave block vertices.
 ///
-/// Iterates every pave block in the arena and checks start/end vertices
-/// (resolved through same-domain mapping) against `point`. Returns the
-/// first vertex within `tol.linear`.
+/// Returns the resolved (same-domain canonical) vertex first encountered within
+/// `tol.linear` of `point`, scanning pave blocks in `edge_pave_blocks` order
+/// (ascending `EdgeId`, start-before-end). When the arena's spatial index is
+/// available (built after Phase VV) the lookup is O(1) and returns the exact
+/// same vertex; otherwise it falls back to the linear scan.
 pub(super) fn find_nearby_pave_vertex(
     topo: &Topology,
     arena: &GfaArena,
     point: Point3,
     tol: Tolerance,
 ) -> Option<VertexId> {
+    if let Some(index) = &arena.pave_vertex_index {
+        return index.find_within(point, tol.linear);
+    }
     for pbs in arena.edge_pave_blocks.values() {
         for &pb_id in pbs {
             if let Some(pb) = arena.pave_blocks.get(pb_id) {
                 for vid in [pb.start.vertex, pb.end.vertex] {
+                    crate::perf::bump_pave_vertex_probe();
                     let resolved = arena.resolve_vertex(vid);
                     if let Ok(v) = topo.vertex(resolved)
                         && (v.point() - point).length() <= tol.linear

@@ -36,6 +36,10 @@ pub struct GfaArena {
     pub common_blocks: Arena<CommonBlock>,
     /// Reverse map: PaveBlock → its CommonBlock (if any).
     pub pb_to_cb: BTreeMap<PaveBlockId, CommonBlockId>,
+    /// Spatial index over pave-block endpoint vertices, for O(1) coincidence
+    /// lookup during intersection (built after VV, when `edge_pave_blocks` and
+    /// the same-domain mapping are fixed). `None` falls back to a linear scan.
+    pub pave_vertex_index: Option<super::PaveVertexIndex>,
 }
 
 impl GfaArena {
@@ -51,7 +55,35 @@ impl GfaArena {
             edge_pave_blocks: BTreeMap::new(),
             common_blocks: Arena::new(),
             pb_to_cb: BTreeMap::new(),
+            pave_vertex_index: None,
         }
+    }
+
+    /// Build [`Self::pave_vertex_index`] over the current pave-block endpoint
+    /// vertices, for O(1) coincidence lookups during intersection.
+    ///
+    /// Call once after Phase VV, when `edge_pave_blocks` (fixed at init) and the
+    /// same-domain mapping (set only by VV) no longer change. The build walks
+    /// the blocks in `edge_pave_blocks` ascending-`EdgeId` order, start-before-
+    /// end within each block, recording each vertex's position as `rank` so the
+    /// index reproduces the linear scan's first-match tie-break exactly.
+    pub fn build_pave_vertex_index(&mut self, topo: &brepkit_topology::Topology, cell: f64) {
+        let mut entries: Vec<(u32, VertexId, brepkit_math::vec::Point3)> = Vec::new();
+        let mut rank: u32 = 0;
+        for pbs in self.edge_pave_blocks.values() {
+            for &pb_id in pbs {
+                if let Some(pb) = self.pave_blocks.get(pb_id) {
+                    for vid in [pb.start.vertex, pb.end.vertex] {
+                        let resolved = self.resolve_vertex(vid);
+                        if let Ok(v) = topo.vertex(resolved) {
+                            entries.push((rank, resolved, v.point()));
+                        }
+                        rank = rank.saturating_add(1);
+                    }
+                }
+            }
+        }
+        self.pave_vertex_index = Some(super::PaveVertexIndex::build(cell, entries.into_iter()));
     }
 
     /// Resolves a vertex to its same-domain canonical vertex.

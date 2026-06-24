@@ -5060,3 +5060,104 @@ fn flatten_plane_normal_matches_nurbs_du_cross_dv() {
         normal.dot(nurbs_n)
     );
 }
+
+/// Perforated panel (issue #987): cutting a grid of disjoint prisms through a
+/// slab leaves the slab's top/bottom faces each with N inner wires. Guards both
+/// the result's correctness (face count, volume, manifold) and — implicitly, by
+/// not timing out — the near-linear scaling the O(N²) fixes restored.
+#[test]
+fn perforated_panel_cut_is_correct_and_manifold() {
+    let n_grid = 5_usize;
+    let n = n_grid * n_grid;
+    let span = n_grid as f64 * 2.4; // pitch == 2.4 (see build_perforated_panel)
+    let mut topo = Topology::new();
+
+    let (slab, tool) = build_perforated_panel(&mut topo, n_grid);
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, slab, tool)
+            .unwrap();
+
+    // Manifold: the result is a clean analytic solid, not a mesh-fallback shell.
+    let (free, over) = quantized_edge_use(&topo, result);
+    assert_eq!(free, 0, "perforated panel must have no free edges");
+    assert_eq!(over, 0, "perforated panel must have no over-shared edges");
+
+    // Each prism contributes 4 wall faces; the slab keeps its 6 faces but the
+    // top/bottom merge into the panel: 4N + 4 faces total.
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result)
+        .unwrap()
+        .len();
+    assert_eq!(faces, 4 * n + 4, "perforated panel face count");
+
+    // Volume = slab minus the N prism columns piercing it (each 1×1×2 thick).
+    let expected = span * span * 2.0 - (n as f64) * (1.0 * 1.0 * 2.0);
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() < 1e-6,
+        "perforated panel volume {vol} != expected {expected}"
+    );
+}
+
+/// Build the issue-#987 perforated panel: a `g×g` grid of unit prisms merged
+/// into one tool, ready to cut from a slab. Returns `(slab, tool)`.
+#[cfg(test)]
+fn build_perforated_panel(topo: &mut Topology, g: usize) -> (SolidId, SolidId) {
+    use brepkit_math::mat::Mat4;
+    let pitch = 2.4;
+    let span = g as f64 * pitch;
+    let slab = crate::primitives::make_box(topo, span, span, 2.0).unwrap();
+    crate::transform::transform_solid(topo, slab, &Mat4::translation(0.0, 0.0, 1.0)).unwrap();
+    let mut tools = Vec::new();
+    for j in 0..g {
+        for i in 0..g {
+            let h = crate::primitives::make_box(topo, 1.0, 1.0, 4.0).unwrap();
+            let m = Mat4::translation(i as f64 * pitch, j as f64 * pitch, 0.0);
+            crate::transform::transform_solid(topo, h, &m).unwrap();
+            tools.push(h);
+        }
+    }
+    let tool = crate::compound_ops::merge_disjoint_solids(topo, &tools).unwrap();
+    (slab, tool)
+}
+
+/// Complexity-regression guard (issue #987): the boolean hot paths that were
+/// O(N²) must stay sub-quadratic. Counting *work* (not wall-clock) makes this
+/// deterministic — a reintroduced per-item full scan turns a linear count into
+/// a quadratic one, tripping the bound with no timing flakiness. Runs only with
+/// `--features perf-counters`; a dedicated CI step exercises it.
+#[cfg(feature = "perf-counters")]
+#[test]
+fn scaling_perforated_cut_is_subquadratic() {
+    let cut_counts = |g: usize| -> (u64, u64) {
+        let mut topo = Topology::new();
+        let (slab, tool) = build_perforated_panel(&mut topo, g);
+        brepkit_algo::perf::reset();
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, slab, tool)
+            .unwrap();
+        brepkit_algo::perf::snapshot()
+    };
+
+    // The fixes make these once-O(N²) hot paths do near-constant work on this
+    // case: empty pave-vertex lookups examine no grid entries, and the bbox gate
+    // skips the polygon clip for every touching/side-by-side coplanar pair. A
+    // reintroduced per-item full scan turns each into O(N²) — many thousands of
+    // probes/clips at 324 holes — so a generous absolute bound at the larger
+    // size catches the regression with no timing flakiness. The smaller size is
+    // measured too, for the diagnostic trend.
+    let (probes_1x, clips_1x) = cut_counts(9); // 81 holes
+    let (probes_4x, clips_4x) = cut_counts(18); // 324 holes (4× input)
+    eprintln!(
+        "scaling guard @ 81→324 holes: pave_probes {probes_1x}->{probes_4x}, sd_clips {clips_1x}->{clips_4x}"
+    );
+
+    assert!(
+        probes_4x < 5_000,
+        "pave-vertex lookup regressed to O(N²): {probes_4x} probes at 324 holes \
+         (current ~40; a per-pave-block linear scan would be tens of thousands+)"
+    );
+    assert!(
+        clips_4x < 2_000,
+        "same-domain polygon clip regressed to O(N²): {clips_4x} clips at 324 holes \
+         (current ~0; an ungated clip-every-candidate-pair would be thousands)"
+    );
+}

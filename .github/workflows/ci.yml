@@ -50,6 +50,11 @@ jobs:
       - run: cargo nextest run --workspace
       # nextest doesn't run doc tests, so run them separately
       - run: cargo test --workspace --doc
+      # Complexity-regression guards: deterministic work-counter tests that fail
+      # if a boolean hot path regresses to O(N²) (issue #987). Gated behind the
+      # `perf-counters` feature, so they need an explicit run.
+      - name: Complexity guards
+        run: cargo nextest run -p brepkit-operations --features perf-counters -E 'test(scaling_)'
 
   coverage:
     name: Coverage

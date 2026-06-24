@@ -10,8 +10,9 @@ mod ray_cast;
 
 pub use analytic::{AnalyticClassifier, classify_analytic, try_build_analytic_classifier};
 pub use ray_cast::{
-    classify_ray_cast, compute_solid_bbox, planar_face_polygons, point_in_face_3d,
-    point_in_planar_region, ray_cast_inside_votes,
+    RayCastGeoms, classify_ray_cast, classify_ray_cast_cached, compute_solid_bbox,
+    planar_face_polygons, point_in_face_3d, point_in_planar_region, ray_cast_inside_votes,
+    ray_cast_inside_votes_cached,
 };
 pub(crate) use ray_cast::{largest_u_gap, u_in_gap};
 
@@ -43,6 +44,34 @@ pub fn classify_point(
     }
 
     classify_ray_cast(topo, solid, point)
+}
+
+/// Like [`classify_point`], but reuses pre-collected ray-cast geometry for the
+/// solid when available (`Some`).
+///
+/// The analytic fast path is tried first exactly as in [`classify_point`]; only
+/// the ray-cast fallback consults the cache. Passing `None` reproduces
+/// [`classify_point`] verbatim (geometry collected per call), so a caller that
+/// failed to build the cache degrades to identical behaviour.
+///
+/// # Errors
+///
+/// Returns [`AlgoError::ClassificationFailed`] if classification is
+/// indeterminate.
+pub fn classify_point_cached(
+    topo: &Topology,
+    solid: SolidId,
+    geoms: Option<&ray_cast::RayCastGeoms>,
+    point: Point3,
+) -> Result<FaceClass, AlgoError> {
+    if let Some(class) = classify_analytic(topo, solid, point) {
+        return Ok(class);
+    }
+
+    match geoms {
+        Some(g) => ray_cast::classify_ray_cast_cached(g, point),
+        None => classify_ray_cast(topo, solid, point),
+    }
 }
 
 /// Classify a planar sub-face that is coincident-coplanar with a face of the
@@ -79,6 +108,7 @@ pub fn classify_point(
 pub fn classify_coincident_coplanar(
     topo: &Topology,
     opposing_solid: SolidId,
+    geoms: Option<&ray_cast::RayCastGeoms>,
     sub_face_id: brepkit_topology::face::FaceId,
     sub_normal: Vec3,
     sub_d: f64,
@@ -176,8 +206,18 @@ pub fn classify_coincident_coplanar(
             {
                 continue;
             }
-            let av = ray_cast_inside_votes(topo, opposing_solid, probe_xy + np * probe)?;
-            let bv = ray_cast_inside_votes(topo, opposing_solid, probe_xy - np * probe)?;
+            let probe_a = probe_xy + np * probe;
+            let probe_b = probe_xy - np * probe;
+            let (av, bv) = match geoms {
+                Some(g) => (
+                    ray_cast::ray_cast_inside_votes_cached(g, probe_a)?,
+                    ray_cast::ray_cast_inside_votes_cached(g, probe_b)?,
+                ),
+                None => (
+                    ray_cast_inside_votes(topo, opposing_solid, probe_a)?,
+                    ray_cast_inside_votes(topo, opposing_solid, probe_b)?,
+                ),
+            };
             decided = Some(if av < 2 && bv < 2 {
                 FaceClass::Outside
             } else {
