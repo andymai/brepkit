@@ -86,6 +86,11 @@ impl<'a> PaveFiller<'a> {
         self.init_pave_blocks(arena)?;
 
         phase_vv::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
+        // VV is the only phase that registers same-domain vertices, and
+        // `edge_pave_blocks` is fixed at init — so the pave-vertex coincidence
+        // index is stable for the remaining phases. Build it once here instead
+        // of linear-scanning every pave block per intersection endpoint.
+        arena.build_pave_vertex_index(self.topo, self.tol.linear);
         phase_ve::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
         phase_ee::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
         phase_vf::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;

@@ -297,6 +297,14 @@ impl Builder {
                 cross.chain(within).collect()
             };
 
+        // Collect ray-cast geometry for each argument solid ONCE. Each sub-face
+        // is classified against the opposing solid; rebuilding the opposing
+        // solid's face geometry per sub-face was O(faces) × O(sub-faces). A
+        // collection failure leaves `None`, which falls back to the per-call
+        // path (identical behaviour, just not memoised).
+        let geoms_a = classifier::RayCastGeoms::new(&self.topo, self.solid_a).ok();
+        let geoms_b = classifier::RayCastGeoms::new(&self.topo, self.solid_b).ok();
+
         for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
             if !sd_indices.is_empty() && sd_indices.contains(&idx) {
                 // Same-domain faces are coincident by construction; the
@@ -318,6 +326,10 @@ impl Builder {
             let opposing_solid = match sf.rank {
                 Rank::A => self.solid_b,
                 Rank::B => self.solid_a,
+            };
+            let opposing_geoms = match sf.rank {
+                Rank::A => geoms_b.as_ref(),
+                Rank::B => geoms_a.as_ref(),
             };
 
             let sample = if let Some(pt) = sf.interior_point {
@@ -341,6 +353,7 @@ impl Builder {
                             classifier::classify_coincident_coplanar(
                                 &self.topo,
                                 opposing_solid,
+                                opposing_geoms,
                                 sf.face_id,
                                 *normal,
                                 *d,
@@ -351,7 +364,12 @@ impl Builder {
                         };
                     sf.classification = match coincident {
                         Some(class) => class,
-                        None => classifier::classify_point(&self.topo, opposing_solid, point)?,
+                        None => classifier::classify_point_cached(
+                            &self.topo,
+                            opposing_solid,
+                            opposing_geoms,
+                            point,
+                        )?,
                     };
                     log::trace!(
                         "classify_sub_faces: idx={idx} face={:?} rank={:?} pt={point:?} class={:?}",

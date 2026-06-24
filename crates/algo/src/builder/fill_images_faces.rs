@@ -2351,9 +2351,42 @@ fn cb_quantize_pair(
 ///
 /// For boundary edges (without `pave_block_id`): falls back to position-based
 /// cache lookup, creating new vertices only when none exists at the position.
+/// Resolve a quantized vertex key against the layered vertex pools without
+/// copying the shared pools into a per-sub-face map.
+///
+/// Lookup order reproduces the former seeded-cache semantics exactly: a vertex
+/// already created during THIS sub-face (`local`) wins, then the VV-merged
+/// `seed`, then the rank `pool`; only a genuine miss runs `fallback` (which
+/// creates or registry-resolves the vertex) and records it in `local`. Cloning
+/// `seed` and copying `pool` into a fresh map for every sub-face was O(pool)
+/// per call — quadratic on faces that end up with many inner wires (holes).
+fn layered_vertex(
+    local: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
+    key: (i64, i64, i64),
+    fallback: impl FnOnce() -> brepkit_topology::vertex::VertexId,
+) -> brepkit_topology::vertex::VertexId {
+    if let Some(&v) = local.get(&key) {
+        return v;
+    }
+    if let Some(&v) = seed.get(&key) {
+        return v;
+    }
+    if let Some(&v) = pool.and_then(|p| p.get(&key)) {
+        return v;
+    }
+    let v = fallback();
+    local.insert(key, v);
+    v
+}
+
+#[allow(clippy::too_many_arguments)]
 fn resolve_edge_vertices(
     topo: &mut Topology,
-    cache: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    local: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     edge: &super::split_types::OrientedPCurveEdge,
     arena: &crate::ds::GfaArena,
@@ -2405,23 +2438,23 @@ fn resolve_edge_vertices(
                         // vertex exists. This prevents topology connections
                         // between the GFA result and the PaveFiller's
                         // intermediate split edges.
-                        let vs = *cache
-                            .entry(qs)
-                            .or_insert_with(|| *pb_registry.entry(qs).or_insert(se_start));
-                        let ve = *cache
-                            .entry(qe)
-                            .or_insert_with(|| *pb_registry.entry(qe).or_insert(se_end));
+                        let vs = layered_vertex(local, seed, pool, qs, || {
+                            *pb_registry.entry(qs).or_insert(se_start)
+                        });
+                        let ve = layered_vertex(local, seed, pool, qe, || {
+                            *pb_registry.entry(qe).or_insert(se_end)
+                        });
                         return (vs, ve);
                     }
                     if rev_match {
                         let qs = quantize(edge.start_3d);
                         let qe = quantize(edge.end_3d);
-                        let vs = *cache
-                            .entry(qs)
-                            .or_insert_with(|| *pb_registry.entry(qs).or_insert(se_end));
-                        let ve = *cache
-                            .entry(qe)
-                            .or_insert_with(|| *pb_registry.entry(qe).or_insert(se_start));
+                        let vs = layered_vertex(local, seed, pool, qs, || {
+                            *pb_registry.entry(qs).or_insert(se_end)
+                        });
+                        let ve = layered_vertex(local, seed, pool, qe, || {
+                            *pb_registry.entry(qe).or_insert(se_start)
+                        });
                         return (vs, ve);
                     }
                 }
@@ -2435,7 +2468,7 @@ fn resolve_edge_vertices(
     // cross-face vertex sharing.
     let start_vid = {
         let key = quantize(edge.start_3d);
-        *cache.entry(key).or_insert_with(|| {
+        layered_vertex(local, seed, pool, key, || {
             pb_registry
                 .get(&key)
                 .copied()
@@ -2444,7 +2477,7 @@ fn resolve_edge_vertices(
     };
     let end_vid = {
         let key = quantize(edge.end_3d);
-        *cache.entry(key).or_insert_with(|| {
+        layered_vertex(local, seed, pool, key, || {
             pb_registry
                 .get(&key)
                 .copied()
@@ -2476,16 +2509,13 @@ fn build_topology_face(
     }
 
     // Step 1: Create/find vertices for each unique 3D endpoint.
-    // Seed from VV-merged vertices, then from this rank's fresh-vertex
-    // pool. The rank pool provides per-solid shared fresh vertices at
-    // PaveBlock endpoint positions, avoiding cross-solid contamination.
-    let mut vertex_cache: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
-        vv_vertex_seed.clone();
-    if let Some(pool) = rank_pool {
-        for (&key, &vid) in pool {
-            vertex_cache.entry(key).or_insert(vid);
-        }
-    }
+    // Existing vertices are resolved by reference from the VV-merged seed and
+    // this rank's fresh-vertex pool (see `layered_vertex`); only vertices
+    // created during THIS sub-face land in `local_vertices`. Seeding a fresh
+    // per-sub-face map from those shared pools was O(pool) × O(sub-faces) —
+    // quadratic on a face that ends up with many inner wires (holes).
+    let mut local_vertices: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
+        BTreeMap::new();
 
     let quantize = |p: Point3| -> (i64, i64, i64) {
         (
@@ -2504,7 +2534,9 @@ fn build_topology_face(
         // 2. Position-based cache (boundary edges, degenerate edges)
         let (start_vid, end_vid) = resolve_edge_vertices(
             topo,
-            &mut vertex_cache,
+            &mut local_vertices,
+            vv_vertex_seed,
+            rank_pool,
             pb_vertex_registry,
             pcurve_edge,
             arena,
@@ -2552,7 +2584,9 @@ fn build_topology_face(
         for pcurve_edge in inner {
             let (start_vid, end_vid) = resolve_edge_vertices(
                 topo,
-                &mut vertex_cache,
+                &mut local_vertices,
+                vv_vertex_seed,
+                rank_pool,
                 pb_vertex_registry,
                 pcurve_edge,
                 arena,

@@ -682,23 +682,55 @@ fn planar_faces_overlap(
     // fraction of the smaller face so a sliver of numerical overlap along a
     // shared edge does not pair disjoint faces.
     if face_j.inner_wires().is_empty() && face_i.inner_wires().is_empty() {
-        let inter = brepkit_math::polygon_boolean::polygon_boolean(
-            &poly_i,
-            &poly_j,
-            brepkit_math::polygon_boolean::BooleanOp::Intersection,
-            tol.linear,
-        );
-        let overlap = inter.area().abs();
         let area_i = super::classify_2d::signed_area_2d(&poly_i).abs();
         let area_j = super::classify_2d::signed_area_2d(&poly_j).abs();
         let smaller = area_i.min(area_j);
-        // `smaller` and `overlap` are areas, so the degenerate-face guard
-        // compares against the squared linear tolerance (area), not `linear`.
-        if smaller > tol.linear_sq() && overlap > smaller * 0.5 {
-            return true;
+        // The polygon intersection is contained in the overlap of the two 2D
+        // bounding boxes, so `area(poly∩poly) ≤ area(bbox∩bbox)`. The exact
+        // (and costly) polygon clip can only clear the 50%-of-smaller threshold
+        // below when the box overlap already does — so gate the clip on the
+        // cheap box test. This skips the clip for the common touching /
+        // side-by-side coplanar pairs (e.g. stacked wall-piece bands) without
+        // changing the result. `smaller`/`overlap` are areas, so the degenerate
+        // guard compares against the squared linear tolerance.
+        if smaller > tol.linear_sq() && bbox2d_overlap_area(&poly_i, &poly_j) > smaller * 0.5 {
+            crate::perf::bump_sd_poly_clip();
+            let inter = brepkit_math::polygon_boolean::polygon_boolean(
+                &poly_i,
+                &poly_j,
+                brepkit_math::polygon_boolean::BooleanOp::Intersection,
+                tol.linear,
+            );
+            if inter.area().abs() > smaller * 0.5 {
+                return true;
+            }
         }
     }
     false
+}
+
+/// Area of the overlap of two 2D point sets' axis-aligned bounding boxes.
+///
+/// A conservative (over-)estimate of the polygons' intersection area: the
+/// intersection lies inside both boxes, so its area never exceeds this. Used to
+/// skip the exact polygon clip when no meaningful overlap is possible.
+fn bbox2d_overlap_area(a: &[brepkit_math::vec::Point2], b: &[brepkit_math::vec::Point2]) -> f64 {
+    let bounds = |poly: &[brepkit_math::vec::Point2]| {
+        let (mut lo_x, mut lo_y) = (f64::MAX, f64::MAX);
+        let (mut hi_x, mut hi_y) = (f64::MIN, f64::MIN);
+        for p in poly {
+            lo_x = lo_x.min(p.x());
+            lo_y = lo_y.min(p.y());
+            hi_x = hi_x.max(p.x());
+            hi_y = hi_y.max(p.y());
+        }
+        (lo_x, lo_y, hi_x, hi_y)
+    };
+    let (alx, aly, ahx, ahy) = bounds(a);
+    let (blx, bly, bhx, bhy) = bounds(b);
+    let ox = (ahx.min(bhx) - alx.max(blx)).max(0.0);
+    let oy = (ahy.min(bhy) - aly.max(bly)).max(0.0);
+    ox * oy
 }
 
 /// Approximate projected outer-wire area of a planar sub-face, in its own

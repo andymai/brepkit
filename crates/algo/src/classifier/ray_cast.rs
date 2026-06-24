@@ -82,7 +82,65 @@ pub fn ray_cast_inside_votes(
     point: Point3,
 ) -> Result<u8, AlgoError> {
     let face_data = collect_face_geoms(topo, solid)?;
+    votes_from_geoms(&face_data, point)
+}
 
+/// Pre-collected ray-cast geometry for a solid, built once and reused across
+/// many point classifications.
+///
+/// Collecting the geometry samples every face's wire into a polygon (and chains
+/// the polylines), which is the dominant cost of a single classification. When
+/// classifying many points against the same solid — every sub-face of a boolean
+/// against the opposing solid — rebuilding it per point is O(faces) × O(points).
+/// Building it once turns that into a single O(faces) pass.
+pub struct RayCastGeoms {
+    faces: Vec<FaceGeom>,
+}
+
+impl RayCastGeoms {
+    /// Collect the ray-cast geometry for `solid` once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if a topology lookup fails.
+    pub fn new(topo: &Topology, solid: SolidId) -> Result<Self, AlgoError> {
+        Ok(Self {
+            faces: collect_face_geoms(topo, solid)?,
+        })
+    }
+}
+
+/// Inside-vote count for `point` using pre-collected geometry.
+///
+/// Identical to [`ray_cast_inside_votes`] but skips the per-call geometry
+/// collection.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if no face geometry was collected.
+pub fn ray_cast_inside_votes_cached(geoms: &RayCastGeoms, point: Point3) -> Result<u8, AlgoError> {
+    votes_from_geoms(&geoms.faces, point)
+}
+
+/// Ray-cast classification for `point` using pre-collected geometry.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if no face geometry was collected.
+pub fn classify_ray_cast_cached(
+    geoms: &RayCastGeoms,
+    point: Point3,
+) -> Result<FaceClass, AlgoError> {
+    if votes_from_geoms(&geoms.faces, point)? >= 2 {
+        Ok(FaceClass::Inside)
+    } else {
+        Ok(FaceClass::Outside)
+    }
+}
+
+/// Count the inside votes (of three cardinal rays) for a point against
+/// pre-collected face geometry.
+fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoError> {
     if face_data.is_empty() {
         return Err(AlgoError::ClassificationFailed(
             "no face polygons collected for ray-cast".into(),
@@ -99,7 +157,7 @@ pub fn ray_cast_inside_votes(
     let mut inside_votes = 0u8;
     for ray_dir in &ray_dirs {
         let mut crossings = 0i32;
-        for geom in &face_data {
+        for geom in face_data {
             crossings += ray_geom_crossings(point, *ray_dir, geom, tol);
         }
         if crossings % 2 != 0 {
