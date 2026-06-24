@@ -1,0 +1,52 @@
+name: Benchmark
+
+# Broad boolean-perf regression tracking (complements the deterministic O(N²)
+# complexity guard in the Test job). On `main` it records a baseline and renders
+# a trend chart on the gh-pages branch; on a PR it compares against that baseline
+# and comments only on a clear regression. Shared CI runners are noisy, so the
+# alert threshold is loose and a regression never fails the build — it informs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: write # store the baseline on gh-pages (push to main only)
+  pull-requests: write # comment on a regression
+  deployments: write
+
+# A newer commit supersedes an in-flight run on the same ref.
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Boolean perf
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Run boolean tracking benchmarks
+        # `--output-format bencher` emits the libtest `bench:` lines (stdout)
+        # that the `cargo` parser below understands; build noise stays on stderr.
+        run: cargo bench -p brepkit-operations --bench boolean_tracking -- --output-format bencher | tee bench-output.txt
+      - name: Compare / store results
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba # v1.22.1
+        with:
+          name: Boolean perf
+          tool: cargo
+          output-file-path: bench-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Record the baseline only on main; PRs compare without pushing.
+          auto-push: ${{ github.event_name == 'push' }}
+          # Alert only on a clear 2x regression, and never fail the build on it —
+          # comment for visibility instead (shared runners are noisy).
+          alert-threshold: '200%'
+          comment-on-alert: true
+          fail-on-alert: false
+          summary-always: true
