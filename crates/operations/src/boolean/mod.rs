@@ -812,6 +812,10 @@ pub fn boolean(
     }
 
     // Mesh boolean fallback (no recursion).
+    log::debug!(
+        target: "brepkit_approx",
+        "boolean {op:?}: GFA unusable — using mesh (co-refinement) fallback; analytic surface types will be lost"
+    );
     let opts = BooleanOptions::default();
     let raw = match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
         Ok(raw) => raw,

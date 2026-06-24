@@ -12,6 +12,7 @@ brepkit-geometry.workspace = true
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
 
+log.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
