@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.120.1](https://github.com/andymai/brepkit/compare/v2.120.0...v2.120.1) (2026-06-25)
+
+
+### Bug Fixes
+
+* **algo:** keep cylinder slot-cut analytic (closed-circle section AABB) ([#997](https://github.com/andymai/brepkit/issues/997)) ([c53af2f](https://github.com/andymai/brepkit/commit/c53af2f637bf7d93c1c3039157294547c93cf41a))
+
 ## [2.120.0](https://github.com/andymai/brepkit/compare/v2.119.3...v2.120.0) (2026-06-24)
 
 
