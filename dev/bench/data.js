@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782362383710,
+  "lastUpdate": 1782370387200,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -701,6 +701,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21087655,
             "range": "± 424014",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "78887da7756da191be667986daad745ec4a16372",
+          "message": "fix(operations): assemble and render sphere−cyl Cut analytically (#1005)\n\n## What\n\nMakes `Cut(sphere, through-cylinder)` — and the bored-quadric family —\nproduce an **exact analytic, watertight, correctly-rendered** result\ninstead of the mesh fallback. Census: `sphere − cyl` **484ms / 1392\nplanar faces → 0.84ms / 3 analytic faces**.\n\nSecond PR in the campaign to close the four remaining boolean→mesh\nfallbacks (after #1003, the surface-aware face-AABB keystone).\n\n## The boolean fix (the sphere was being dropped)\n\nGFA returned 3 cyl faces with the sphere entirely gone. Root-caused to\n**five coupled gaps**, each unblocking the next:\n\n1. **math** — no exact `(Sphere, Cylinder)` intersection arm: the\ngeneric marcher returned `NurbsCurve`, so the closed-circle FF split\nnever fired. Added `exact_sphere_cylinder` (coaxial `z = ±√(R²−r²)`\ncircles).\n2. **phase_ff** — emit the section as `EdgeCurve::Circle`.\n3. **face_splitter** — route an all-closed-circle-section hemisphere to\n`split_face_with_internal_loops` (cap + band-with-hole) instead of\nunsplitting; aim the sphere-band interior point toward the hole's\nlatitude.\n4. **same_domain** — don't fuse two curved same-surface faces that share\nan outer-wire edge set but cover **distinct regions** (the two\nhemisphere bands of a bored sphere share the equator polygon) —\ndiscriminate by interior sample.\n5. **measure/check** — the annular spherical band over-integrates the\nremoved polar cap; route bored-quadric volume to the orientation-aware,\nhole-clipped analytic integrator.\n\nResult: 2 spherical bands-with-hole + 1 inner cylinder wall, watertight,\nvolume = `V_sphere − V_bore`.\n\n## The tessellation fix (so it renders correctly)\n\nA sphere/torus band between two constant-`v` latitude circles is\ndegenerate in UV (each latitude projects to a zero-area segment), so the\nCDT path filled the removed polar cap (mesh area 646 vs 587.7, tunnel\nmouth skinned over, not watertight). Added\n`tessellate_latitude_band_shared` — the curved analogue of the\ncylinder/cone band path: reuses the shared rim vertices at the two\nlatitudes for watertight stitching, and inserts intermediate latitude\nrows for the surface curvature. Gated conservatively to full-revolution\nlatitude bands; every other sphere/torus face takes the unchanged path.\n**Mesh area 646 → 586 (→587.9 at fine deflection), watertight, tunnel\nmouth open.**\n\n## Verification\n\n- Raw GFA: 3 analytic faces (2 sphere bands + cyl wall), free edges 0,\nmanifold.\n- Census: `sphere − cyl 0.84ms faces=3 exact analytic` (was 484ms/1392\nFALLBACK); the other 8 boolean cases unchanged (no regression).\n- Volume = **587.671** = `V_sphere − V_bore`.\n- Tessellation: watertight at deflections 0.5→0.01, area converges to\nthe analytic 587.7.\n- Full workspace suite: **2454 passed, 9 skipped**; clippy clean; fmt\nclean; layer boundaries valid.\n- Regression fixtures:\n`cut_sphere_by_through_cylinder_is_analytic_watertight` (boolean) +\n`bored_sphere_band_area_and_watertight` (tessellation).\n\n## Known tech debt (not introduced here, flagged for follow-up)\n\n`solid_volume` for a holed sphere routes to\n`analytic_sphere_signed_volume`, a **pre-existing** analytic function\nwhose cap-vs-band logic is wrong for bored spheres (it caps only one of\nthe two bands). This PR routes bored-quadric volume around it via the\nhole-clipped Gauss integrator (the `analytic_faces_solid_volume` fast\npath). Fixing `analytic_sphere_signed_volume` directly is a separate,\ndeeper cleanup (three volume paths converge there) and is left for a\ndedicated PR.\n\n## Does not touch\n\n`box ∩ sphere` (different root — disjoint great-circle arcs), `cyl ∪\ncyl`, `torus − box` remain fallback; their analytic splits are later\nPRs. The curved-band tessellation here will be reused by `torus − box`.",
+          "timestamp": "2026-06-24T23:51:04-07:00",
+          "tree_id": "e36c992ec3c1f7e376836ea0f9a7db8c06864e86",
+          "url": "https://github.com/andymai/brepkit/commit/78887da7756da191be667986daad745ec4a16372"
+        },
+        "date": 1782370386850,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1348220,
+            "range": "± 4293",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1436089,
+            "range": "± 2520",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11832,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 593183,
+            "range": "± 1797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20778966,
+            "range": "± 35345",
             "unit": "ns/iter"
           }
         ]
