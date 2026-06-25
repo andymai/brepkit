@@ -565,7 +565,8 @@ fn remaining_paths() -> Result<(), Box<dyn Error>> {
                         let ms = t.elapsed().as_secs_f64() * 1000.0;
                         let mut ev = drain();
                         match res {
-                            Ok(_) => report("offset_face", label, ms, 0, &ev),
+                            // offset_face returns a single face (not a solid).
+                            Ok(_) => report("offset_face", label, ms, 1, &ev),
                             Err(e) => {
                                 ev.push(format!("err: {e}"));
                                 report("offset_face", &format!("{label} [ERR]"), ms, 0, &ev);
