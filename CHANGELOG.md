@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.120.5](https://github.com/andymai/brepkit/compare/v2.120.4...v2.120.5) (2026-06-25)
+
+
+### Bug Fixes
+
+* **operations:** close box∩sphere boolean analytically (seam split + collar render/volume) ([#1006](https://github.com/andymai/brepkit/issues/1006)) ([6b4e781](https://github.com/andymai/brepkit/commit/6b4e781988f377a3decc5b5c441f95a955bd13d7))
+
 ## [2.120.4](https://github.com/andymai/brepkit/compare/v2.120.3...v2.120.4) (2026-06-25)
 
 
