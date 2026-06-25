@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782401173954,
+  "lastUpdate": 1782401474654,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -863,6 +863,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21609153,
             "range": "± 81112",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e59959d0a9a17946cbfea18bf446de82d6e9b9ca",
+          "message": "chore(main): release 2.120.5 (#1007)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.120.5](https://github.com/andymai/brepkit/compare/v2.120.4...v2.120.5)\n(2026-06-25)\n\n\n### Bug Fixes\n\n* **operations:** close box∩sphere boolean analytically (seam split +\ncollar render/volume)\n([#1006](https://github.com/andymai/brepkit/issues/1006))\n([6b4e781](https://github.com/andymai/brepkit/commit/6b4e781988f377a3decc5b5c441f95a955bd13d7))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-25T15:29:08Z",
+          "tree_id": "b85e9a0203bee9801c8f26b856bd37dd458e33da",
+          "url": "https://github.com/andymai/brepkit/commit/e59959d0a9a17946cbfea18bf446de82d6e9b9ca"
+        },
+        "date": 1782401474162,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1402162,
+            "range": "± 77487",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1495280,
+            "range": "± 1918",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13115,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 589205,
+            "range": "± 1608",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21522289,
+            "range": "± 30572",
             "unit": "ns/iter"
           }
         ]
