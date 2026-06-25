@@ -70,7 +70,7 @@ pub fn integrate_face(
             let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
             let inner_loops =
                 build_face_uv_inner_loops(topo, face_id, |p| s.project_point(p), true)?;
-            Ok(integrate_with_trimming(
+            integrate_with_trimming(
                 s,
                 u_range,
                 v_range,
@@ -80,7 +80,7 @@ pub fn integrate_face(
                 true,
                 &[],
                 &inner_loops,
-            ))
+            )
         }
         FaceSurface::Cone(s) => {
             let full = (
@@ -91,7 +91,7 @@ pub fn integrate_face(
             let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
             let inner_loops =
                 build_face_uv_inner_loops(topo, face_id, |p| s.project_point(p), true)?;
-            Ok(integrate_with_trimming(
+            integrate_with_trimming(
                 s,
                 u_range,
                 v_range,
@@ -101,7 +101,7 @@ pub fn integrate_face(
                 true,
                 &[],
                 &inner_loops,
-            ))
+            )
         }
         FaceSurface::Sphere(s) => {
             let full = (
@@ -111,7 +111,7 @@ pub fn integrate_face(
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
             let hole_vs = full_revolution_hole_vs(topo, face_id, s);
-            Ok(integrate_with_trimming(
+            integrate_with_trimming(
                 s,
                 u_range,
                 v_range,
@@ -121,13 +121,13 @@ pub fn integrate_face(
                 true,
                 &hole_vs,
                 &[],
-            ))
+            )
         }
         FaceSurface::Torus(s) => {
             let full = ((0.0, std::f64::consts::TAU), (0.0, std::f64::consts::TAU));
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, true, full)?;
             let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
-            Ok(integrate_with_trimming(
+            integrate_with_trimming(
                 s,
                 u_range,
                 v_range,
@@ -137,7 +137,7 @@ pub fn integrate_face(
                 true,
                 &[],
                 &[],
-            ))
+            )
         }
         FaceSurface::Nurbs(s) => {
             let full = (s.domain_u(), s.domain_v());
@@ -147,7 +147,7 @@ pub fn integrate_face(
                 face_uv_bounds(topo, face_id, s, periodic_u, periodic_v, full)?;
             let uv_boundary =
                 build_face_uv_boundary(topo, face_id, |p| s.project_point(p), periodic_u)?;
-            Ok(integrate_with_trimming(
+            integrate_with_trimming(
                 s,
                 u_range,
                 v_range,
@@ -157,7 +157,7 @@ pub fn integrate_face(
                 periodic_u,
                 &[],
                 &[],
-            ))
+            )
         }
     }
 }
@@ -764,6 +764,40 @@ fn covered_angular_span(u_iter: impl Iterator<Item = f64>) -> f64 {
     tau - max_gap
 }
 
+/// Whether the boundary u-samples wrap a FULL revolution, judged by SAMPLING
+/// density rather than a fixed angular slack.
+///
+/// The boundary of a full-revolution wall (two cap circles, each sampled at a
+/// fixed step) leaves only sampling-sized gaps that are all roughly equal; a
+/// PARTIAL face leaves ONE genuine uncovered arc far larger than the rest. So
+/// compare the LARGEST gap to the MEDIAN of the OTHER gaps: a full wall has
+/// `largest ≈ median` (ratio ~1, even if two rim circles double a step), a
+/// partial has `largest ≫ median`. This is density-adaptive — a fixed 1-rad
+/// slack would instead misclassify a face covering 2π − 0.5 as full and
+/// overcount the uncovered arc. Returns `false` for fewer than 4 distinct
+/// samples (cannot judge a step distribution).
+fn is_full_revolution_boundary(u_iter: impl Iterator<Item = f64>) -> bool {
+    let tau = std::f64::consts::TAU;
+    let mut us: Vec<f64> = u_iter.map(|u| u.rem_euclid(tau)).collect();
+    us.sort_by(f64::total_cmp);
+    us.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    if us.len() < 4 {
+        return false;
+    }
+    let mut gaps: Vec<f64> = us.windows(2).map(|w| w[1] - w[0]).collect();
+    gaps.push(us[0] + tau - us[us.len() - 1]); // wrap gap
+    gaps.sort_by(f64::total_cmp);
+    let largest = *gaps.last().unwrap_or(&tau);
+    // Median of the gaps EXCLUDING the largest — the typical sampling step,
+    // robust even if a couple of steps are doubled where two rim circles align.
+    let rest = &gaps[..gaps.len() - 1];
+    let typical = rest[rest.len() / 2];
+    // Full iff the largest gap is at most ~2× the typical step (a small absolute
+    // floor keeps perfectly-uniform sampling classified full despite float
+    // noise). A real 0.5-rad uncovered arc on a ~0.2-rad step (ratio 2.7) fails.
+    largest <= (typical * 2.0).max(0.02)
+}
+
 /// Whether the combined even-odd vertical-ray hole-clip is correct for these
 /// inner loops.
 ///
@@ -834,6 +868,14 @@ fn polygon_area(poly: &[(f64, f64)]) -> f64 {
 
 /// Dispatch to trimmed or untrimmed parametric integration based on whether
 /// a UV boundary polygon is available.
+///
+/// A HOLED face (`!inner_loops.is_empty()`) can only be integrated correctly via
+/// the lens-clipping early return; every other branch ignores the inner wires
+/// and would OVERCOUNT (return a hole-less, too-large volume). So a holed face
+/// that does not match the clippable signature DECLINES with
+/// [`CheckError::IntegrationFailed`], letting the caller fall back to
+/// tessellation rather than return a wrong number. Hole-less faces always
+/// succeed (their behaviour is unchanged).
 #[allow(clippy::too_many_arguments)]
 fn integrate_with_trimming<S: ParametricSurface>(
     surface: &S,
@@ -845,9 +887,23 @@ fn integrate_with_trimming<S: ParametricSurface>(
     u_periodic: bool,
     hole_vs: &[f64],
     inner_loops: &[Vec<(f64, f64)>],
-) -> FaceContribution {
+) -> Result<FaceContribution, CheckError> {
     if uv_boundary.len() < 3 {
-        return integrate_parametric(surface, u_range, v_range, gauss_order, sign);
+        // No usable boundary polygon. A hole-less face integrates over its
+        // analytic domain; a holed one cannot have its holes subtracted here, so
+        // it must decline rather than overcount.
+        if inner_loops.is_empty() {
+            return Ok(integrate_parametric(
+                surface,
+                u_range,
+                v_range,
+                gauss_order,
+                sign,
+            ));
+        }
+        return Err(CheckError::IntegrationFailed(
+            "holed analytic face has no usable UV boundary for hole subtraction".into(),
+        ));
     }
 
     // The dense boundary polygon is the reliable signal for a face's true
@@ -882,24 +938,17 @@ fn integrate_with_trimming<S: ParametricSurface>(
             d - tau * ((d + std::f64::consts::PI) / tau).floor()
         })
         .sum();
-    // The u-extent the boundary actually COVERS. A wall bounded by two full
-    // cap circles (each projecting across the whole 0..2π period) plus a seam
-    // line nets a winding of ~0 — the two circles wind oppositely — so the
-    // winding test alone misses it. A bare max−min is fragile too: a PARTIAL
-    // face whose boundary straddles the seam can have max−min ≈ 2π without
-    // covering the full period. The robust signal is the complement of the
-    // LARGEST angular gap between sorted boundary u-samples: a full revolution
-    // has no large gap (covered span ≈ 2π); a partial face's gap is its
-    // uncovered arc.
-    // `u_covered` (gap-complement) is robust to a boundary that straddles the
-    // seam, where a bare max−min would read ≈2π for a partial face. The
-    // tolerance (covered ≥ 2π − 1, i.e. largest gap < 1 rad) admits the discrete
-    // boundary SAMPLING gap of a genuine full-revolution wall (its two cap
-    // circles cover every u) while a truly partial face leaves a large
-    // uncovered arc. The winding term still catches a single-loop band (a cone
-    // lateral face) whose boundary winds a full ±2π.
-    let u_covered = covered_angular_span(uv_boundary.iter().map(|p| p.0));
-    let full_revolution = u_periodic && (winding.abs() >= tau - 1e-3 || u_covered >= tau - 1.0);
+    // Full-revolution detection. The winding term catches a single-loop band (a
+    // cone lateral face winding a full ±2π); the boundary-gap term catches a
+    // two-cap-circle wall whose winding cancels (~0). The gap test is SAMPLING-
+    // DENSITY-ADAPTIVE (`is_full_revolution_boundary`): full only when the
+    // largest boundary u-gap is no bigger than a small multiple of the typical
+    // sampling step. A fixed angular slack (e.g. 1 rad) would misclassify a face
+    // covering 2π − 0.5 as full and add the uncovered 0.5 arc to the band
+    // integral — exactly the overcount this avoids.
+    let full_revolution = u_periodic
+        && (winding.abs() >= tau - 1e-3
+            || is_full_revolution_boundary(uv_boundary.iter().map(|p| p.0)));
     let v_degenerate = (v_max - v_min) <= 1e-9;
 
     // A full-revolution wall (cylinder/cone tube) carrying the STEINMETZ LENS
@@ -908,20 +957,30 @@ fn integrate_with_trimming<S: ParametricSurface>(
     // arrangement. Integrate the whole revolution over the wall's v-extent with
     // those lens v-intervals clipped out. Gated TIGHTLY to that signature:
     // ordinary INDEPENDENT holes (each a local u-arc) would be mis-handled by
-    // the combined even-odd test (it would subtract spurious merged intervals),
-    // so they fall through to the standard paths below.
+    // the combined even-odd test, so they DECLINE below.
     if u_periodic && !v_degenerate && full_revolution && combined_evenodd_holes_safe(inner_loops) {
-        return integrate_band_excluding_holes(
+        return Ok(integrate_band_excluding_holes(
             surface,
             (u_min, u_min + tau),
             (v_min, v_max),
             gauss_order,
             sign,
             inner_loops,
-        );
+        ));
     }
 
-    if full_revolution && v_degenerate {
+    // Past this point no branch subtracts inner wires, so a HOLED face that did
+    // NOT match the clippable lens signature above (an unsafe interleaving-holes
+    // arrangement, or a partial/near-full holed face) cannot be integrated
+    // correctly here. DECLINE so the caller defers to tessellation rather than
+    // returning a hole-less (overcounting) band integral.
+    if !inner_loops.is_empty() {
+        return Err(CheckError::IntegrationFailed(
+            "holed analytic face is not a clippable lens; defer to tessellation".into(),
+        ));
+    }
+
+    Ok(if full_revolution && v_degenerate {
         // Polar cap (e.g. a sphere hemisphere bounded only by one latitude
         // circle): the cap runs from that latitude to a pole. The winding sign
         // (CCW vs CW boundary) selects which pole — the boundary's interior
@@ -965,7 +1024,7 @@ fn integrate_with_trimming<S: ParametricSurface>(
             uv_boundary,
             u_periodic,
         )
-    }
+    })
 }
 
 /// Integrate a parametric surface with UV boundary trimming.
@@ -1138,7 +1197,12 @@ where
 #[cfg(test)]
 mod gate_tests {
     #![allow(clippy::unwrap_used, clippy::float_cmp)]
-    use super::{combined_evenodd_holes_safe, covered_angular_span};
+    use super::{
+        combined_evenodd_holes_safe, covered_angular_span, integrate_with_trimming,
+        is_full_revolution_boundary,
+    };
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_math::vec::{Point3, Vec3};
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
     fn ellipse_uv(v_mid: f64, amp: f64, phase: f64, n: usize) -> Vec<(f64, f64)> {
@@ -1213,5 +1277,151 @@ mod gate_tests {
         )]));
         // No holes → not applicable.
         assert!(!combined_evenodd_holes_safe(&[]));
+    }
+
+    #[test]
+    fn full_revolution_boundary_density_adaptive() {
+        // A full revolution sampled uniformly (32 steps): largest gap ≈ the
+        // median step → classified full.
+        let full = (0..32).map(|k| TAU * f64::from(k) / 32.0);
+        assert!(is_full_revolution_boundary(full), "uniform full → full");
+
+        // Near-full but with a 0.5-rad uncovered arc (covering 0..2π−0.5 at the
+        // same density): the largest gap (0.5) dwarfs the step → NOT full. A
+        // fixed 1-rad slack would wrongly call this full and overcount.
+        let near_full = {
+            let span = TAU - 0.5;
+            (0..32).map(move |k| span * f64::from(k) / 31.0)
+        };
+        assert!(
+            !is_full_revolution_boundary(near_full),
+            "a 0.5-rad gap is a partial face, not full"
+        );
+
+        // A half revolution: clearly partial.
+        let half = (0..16).map(|k| PI * f64::from(k) / 15.0);
+        assert!(!is_full_revolution_boundary(half));
+    }
+
+    /// A full cylinder wall boundary (two cap circles at v0/v1 + seam), sampled
+    /// like `wire_polygon` would: 32 points per circle.
+    fn cyl_wall_boundary(v0: f64, v1: f64) -> Vec<(f64, f64)> {
+        let mut b = Vec::new();
+        for k in 0..32 {
+            b.push((TAU * f64::from(k) / 32.0, v0));
+        }
+        for k in 0..32 {
+            b.push((TAU * f64::from(k) / 32.0, v1));
+        }
+        b
+    }
+
+    #[test]
+    fn integrate_declines_unsafe_overlapping_holes() {
+        // A full-revolution cylinder wall with two OVERLAPPING-in-u&v compact
+        // holes (not the lens): the combined even-odd cannot resolve them, so
+        // `integrate_with_trimming` must DECLINE rather than return a hole-less
+        // (overcounting) band integral.
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        let boundary = cyl_wall_boundary(0.0, 10.0);
+        let holes = vec![local_loop(1.0, 5.0, 0.4, 24), local_loop(1.3, 5.1, 0.4, 24)];
+        let r = integrate_with_trimming(
+            &cyl,
+            (0.0, TAU),
+            (0.0, 10.0),
+            4,
+            1.0,
+            &boundary,
+            true,
+            &[],
+            &holes,
+        );
+        assert!(r.is_err(), "unsafe interleaving holes must decline");
+    }
+
+    #[test]
+    fn integrate_declines_near_full_partial_holed_face() {
+        // A NEAR-FULL partial cylinder wall — a rectangular patch covering
+        // u∈[0, 2π−0.5] (a 0.5-rad uncovered arc) — that also carries a hole.
+        // It is not a full-revolution lens, and the trimmed path ignores holes,
+        // so it must DECLINE rather than integrate the full band (which would add
+        // the uncovered 0.5 arc) or trim without subtracting the hole.
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        let span = TAU - 0.5;
+        // A proper closed rectangular boundary loop (winding ~0, gap 0.5),
+        // sampled at the same density a real cap arc would be (~32 steps over
+        // the full period ⇒ step ~0.2 rad), so the 0.5-rad uncovered arc reads
+        // as a genuine gap, not sampling noise.
+        let n_u = 30;
+        let mut boundary = Vec::new();
+        for k in 0..=n_u {
+            boundary.push((span * f64::from(k) / f64::from(n_u), 0.0));
+        }
+        for k in 1..=4 {
+            boundary.push((span, 10.0 * f64::from(k) / 4.0));
+        }
+        for k in 0..=n_u {
+            boundary.push((span * f64::from(n_u - k) / f64::from(n_u), 10.0));
+        }
+        for k in 1..4 {
+            boundary.push((0.0, 10.0 * f64::from(4 - k) / 4.0));
+        }
+        let holes = vec![local_loop(1.5, 5.0, 0.3, 24)];
+        let r = integrate_with_trimming(
+            &cyl,
+            (0.0, span),
+            (0.0, 10.0),
+            4,
+            1.0,
+            &boundary,
+            true,
+            &[],
+            &holes,
+        );
+        assert!(r.is_err(), "a near-full partial holed face must decline");
+    }
+
+    #[test]
+    fn integrate_succeeds_for_lens_and_holeless() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        let boundary = cyl_wall_boundary(0.0, 20.0);
+        // Hole-less full wall integrates fine.
+        let r0 = integrate_with_trimming(
+            &cyl,
+            (0.0, TAU),
+            (0.0, 20.0),
+            4,
+            1.0,
+            &boundary,
+            true,
+            &[],
+            &[],
+        );
+        assert!(r0.is_ok(), "hole-less full wall integrates");
+
+        // The Steinmetz lens (two full-u-wrapping envelopes) integrates via the
+        // clip — does NOT decline.
+        let lens = vec![
+            ellipse_uv(10.0, 3.0, 0.0, 48),
+            ellipse_uv(10.0, -3.0, 0.0, 48),
+        ];
+        let r1 = integrate_with_trimming(
+            &cyl,
+            (0.0, TAU),
+            (0.0, 20.0),
+            4,
+            1.0,
+            &boundary,
+            true,
+            &[],
+            &lens,
+        );
+        assert!(r1.is_ok(), "the lens is clippable, not declined");
     }
 }
