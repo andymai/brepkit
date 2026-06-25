@@ -2086,12 +2086,12 @@ fn emit_split_circle_arcs(
                 // seam vertex), so endpoint-only bounds collapse to a line at
                 // the seam and the face's radial extent is lost — which then
                 // wrongly rejects every in-face section-arc midpoint.
-                for i in 0..=8 {
-                    let p = edge.curve().evaluate_with_endpoints(
-                        t0 + (t1 - t0) * (f64::from(i) / 8.0),
-                        sp,
-                        ep,
-                    );
+                let n = 8;
+                for i in 0..=n {
+                    let frac = f64::from(i) / f64::from(n);
+                    let p = edge
+                        .curve()
+                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep);
                     min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
                     max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
                     any = true;
