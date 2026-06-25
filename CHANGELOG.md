@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.120.3](https://github.com/andymai/brepkit/compare/v2.120.2...v2.120.3) (2026-06-25)
+
+
+### Bug Fixes
+
+* **offset:** restrict torus-wire rebuild to full untrimmed torus faces ([#1001](https://github.com/andymai/brepkit/issues/1001)) ([2a8d97d](https://github.com/andymai/brepkit/commit/2a8d97dc1e2fae79c5960b135dc41657c9ec1d67))
+
 ## [2.120.2](https://github.com/andymai/brepkit/compare/v2.120.1...v2.120.2) (2026-06-25)
 
 
