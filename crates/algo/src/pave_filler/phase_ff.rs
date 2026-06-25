@@ -2076,15 +2076,25 @@ fn emit_split_circle_arcs(
         let mut any = false;
         for oe in wire.edges() {
             if let Ok(edge) = topo.edge(oe.edge()) {
-                for vid in [edge.start(), edge.end()] {
-                    if let Ok(v) = topo.vertex(vid) {
-                        let p = v.point();
-                        min =
-                            Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
-                        max =
-                            Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
-                        any = true;
-                    }
+                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                    continue;
+                };
+                let (sp, ep) = (sv.point(), ev.point());
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                // Sample along the curve, not just endpoints: a cylinder/cone
+                // lateral face's circular edges are closed (start == end at the
+                // seam vertex), so endpoint-only bounds collapse to a line at
+                // the seam and the face's radial extent is lost — which then
+                // wrongly rejects every in-face section-arc midpoint.
+                for i in 0..=8 {
+                    let p = edge.curve().evaluate_with_endpoints(
+                        t0 + (t1 - t0) * (f64::from(i) / 8.0),
+                        sp,
+                        ep,
+                    );
+                    min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
+                    max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
+                    any = true;
                 }
             }
         }

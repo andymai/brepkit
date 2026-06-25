@@ -5238,3 +5238,69 @@ fn scaling_perforated_cut_is_subquadratic() {
         s4.local_vertex_inserts
     );
 }
+
+#[test]
+fn cut_cylinder_by_box_slot_perpendicular_walls_is_watertight() {
+    // Regression: a box cutting a slot into a cylinder's side has two faces
+    // PERPENDICULAR to the cylinder axis (the slot's z=5 / z=9 top/bottom
+    // walls). Each intersects the cylinder in a closed circle, and the in-face
+    // arc of that circle was dropped because `emit_split_circle_arcs`'s face
+    // AABB used endpoint-only bounds — collapsing the cylinder lateral face to
+    // its seam line, so every arc midpoint fell outside the AABB. The two slot
+    // walls were then never created, leaving 8 free edges and forcing the mesh
+    // fallback. Now the face AABB samples the curved edges, so the result is
+    // analytic and watertight.
+    let mut topo = Topology::new();
+    let cyl = crate::primitives::make_cylinder(&mut topo, 6.0, 20.0).unwrap();
+    let bx = crate::primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        bx,
+        &brepkit_math::mat::Mat4::translation(-2.0, -8.0, 5.0),
+    )
+    .unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Cut, cyl, bx).unwrap();
+
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "cyl - box slot must be closed-manifold"
+    );
+    assert!(
+        !has_free_edges(&topo, result).unwrap(),
+        "cyl - box slot must be watertight (no free edges)"
+    );
+    // Analytic: the cylinder lateral face survives. A mesh fallback leaves 0
+    // cylinder faces and hundreds of planar facets.
+    assert!(
+        count_cylinder_faces(&topo, result) >= 1,
+        "cyl - box slot must keep the analytic cylinder face (no mesh fallback)"
+    );
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result)
+        .unwrap()
+        .len();
+    assert!(
+        faces < 20,
+        "expected a compact analytic result, got {faces} faces (mesh fallback?)"
+    );
+    // The slot material is actually carved out: a point inside the slot
+    // classifies Outside while the cylinder body classifies Inside. (Volume
+    // measure is tessellation-based and unreliable on arc-edged faces, so the
+    // cut is verified geometrically via the robust ray-cast classifier.)
+    let slot_pt = Point3::new(0.0, -5.0, 7.0);
+    let body_pt = Point3::new(0.0, 0.0, 10.0);
+    assert!(
+        matches!(
+            crate::classify::classify_point(&topo, result, slot_pt, 0.01, 1e-7).unwrap(),
+            crate::classify::PointClassification::Outside
+        ),
+        "a point inside the carved slot must be Outside the result"
+    );
+    assert!(
+        matches!(
+            crate::classify::classify_point(&topo, result, body_pt, 0.01, 1e-7).unwrap(),
+            crate::classify::PointClassification::Inside
+        ),
+        "the cylinder body must remain Inside the result"
+    );
+}
