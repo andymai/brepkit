@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782347588295,
+  "lastUpdate": 1782351479561,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -323,6 +323,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20740358,
             "range": "± 147393",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c53af2f637bf7d93c1c3039157294547c93cf41a",
+          "message": "fix(algo): keep cylinder slot-cut analytic (closed-circle section AABB) (#997)\n\n## What\n\nFixes the first of the boolean→mesh fallbacks surfaced by the\napproximation census: **a box cutting a slot into a cylinder's side**\nnow stays analytic and watertight instead of dropping to a 62-facet\nmesh.\n\n## Root cause\n\nA box has two faces **perpendicular to the cylinder axis** (the slot's\ntop/bottom walls). Each intersects the cylinder lateral surface in a\n**closed circle**; only a small arc of that circle lies within the box\nface, so phase_ff splits the closed circle at its boundary crossings and\nemits the in-face arc (`emit_split_circle_arcs`).\n\nThat emit step rejects each candidate arc whose midpoint falls outside\n*either* face's AABB. The face-AABB helper built its bounds from edge\n**endpoint vertices only** — but a cylinder lateral face's circular\nedges are *closed* (start == end at the seam vertex), so its AABB\ncollapsed to a thin line at the seam. Every slot-arc midpoint then\ntested \"outside\" the cylinder AABB → **all arcs dropped → the\nperpendicular box faces were never created → 8 free edges → mesh\nfallback.**\n\n(The box faces *parallel* to the axis intersect in line segments via a\ndifferent, correct path, which is why only the perpendicular walls were\nlost.)\n\n## Fix\n\n`emit_split_circle_arcs`'s face-AABB now **samples along each edge\ncurve** (8 points), exactly as the engine's primary `compute_face_bbox`\nalready does, so a closed circular edge contributes its full radial\nextent instead of just the seam point. One-function change in\n`phase_ff.rs`; the sphere-hemisphere surface-union path is untouched.\n\n## Verification\n\n- New regression test\n`cut_cylinder_by_box_slot_perpendicular_walls_is_watertight`: asserts\nthe result is closed-manifold, free-edge-free, keeps the analytic\ncylinder face, is compact (<20 faces), **and** — via the robust ray-cast\nclassifier — that a point in the slot is `Outside` and the cylinder body\nis `Inside` (the cut geometry is correct, not just topologically\nclosed).\n- Census: `cyl − box (slot)` went from **62 faces / mesh fallback** to\n**8 faces / exact analytic / 0.71 ms**. No other census case changed\n(box∩sphere, sphere−cyl, cyl∪cyl still fall back — separate root\ncauses).\n- `cargo clippy --all-targets` clean; full `cargo test --workspace`\ngreen.\n\n## Note\n\nThe tessellation-based volume measure reads ~+1.4% high on the resulting\narc-edged notched cylinder (a known, separate limitation — it diverges\nupward with finer deflection), so the test verifies the cut\ngeometrically via classification rather than by volume.",
+          "timestamp": "2026-06-25T01:35:41Z",
+          "tree_id": "8ba649ec118e169ada8dd2f04b8a0ff71906bea8",
+          "url": "https://github.com/andymai/brepkit/commit/c53af2f637bf7d93c1c3039157294547c93cf41a"
+        },
+        "date": 1782351479207,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1343142,
+            "range": "± 2291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1431030,
+            "range": "± 1440",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12058,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 594777,
+            "range": "± 2596",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20819649,
+            "range": "± 62034",
             "unit": "ns/iter"
           }
         ]
