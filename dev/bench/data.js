@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782351764541,
+  "lastUpdate": 1782353710364,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -431,6 +431,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20492468,
             "range": "± 115858",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6327ebe977f9d7a12ef0b503422bca20a085b811",
+          "message": "fix(offset): assemble torus offsets analytically (doubly-periodic seam wire) (#999)\n\n## What\n\nFixes the torus-offset failure the approximation census surfaced:\n`offset(torus)` errored with **\"no faces could be assembled for the\noffset solid\"**. Offsetting a torus now produces a clean analytic torus.\n\n## Root cause\n\nA torus face is doubly-periodic — it has a *fundamental-polygon*\nboundary wire (`a · b · a⁻¹ · b⁻¹`) built from **two degenerate `v0→v0`\nseam `Line` edges** and a single vertex (see `make_torus`). The offset\nwire-builder (`loops.rs::build_loops_for_face`) only knows three\nstrategies — circle+seam (cylinder/cone/sphere), direct vertex chaining,\nand line-line corner intersection — none of which can reconstruct a wire\nfrom degenerate seam lines. So the torus face got **empty wires**, the\nassembler skipped it, and with no faces left it errored out.\n\nCylinder/cone/sphere offsets already worked because their lateral faces\nuse Circle edges (handled by the circle+seam strategy); the torus is the\nonly primitive with a doubly-periodic seam.\n\n## Fix\n\nThe offset of a torus is a **concentric torus** (same center/major/axis,\nminor ± distance) with the identical seam structure. So\n`build_loops_for_face` now detects a torus offset face and rebuilds its\nfundamental-polygon wire directly from the offset `ToroidalSurface` —\none seam vertex at `evaluate(0,0)`, two degenerate seam edges, wire `a ·\nb · a⁻¹ · b⁻¹` — mirroring `make_torus`. ~25 lines in `loops.rs`, no\nchange to the generic strategies.\n\n## Verification\n\n- New regression test `offset_torus_stays_analytic` (outward, inward,\nlarger): asserts the result is a single analytic `Torus` face.\n- Census: `offset torus` went from **error** to a **1-face analytic\ntorus**.\n- `cargo clippy --all-targets` clean; full `cargo test --workspace`\ngreen.",
+          "timestamp": "2026-06-25T02:13:20Z",
+          "tree_id": "632ce2e0f0d06608f705abde8f1321e5c6d16bf8",
+          "url": "https://github.com/andymai/brepkit/commit/6327ebe977f9d7a12ef0b503422bca20a085b811"
+        },
+        "date": 1782353709446,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1090236,
+            "range": "± 2148",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1166668,
+            "range": "± 2853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10317,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 457056,
+            "range": "± 920",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16839137,
+            "range": "± 269082",
             "unit": "ns/iter"
           }
         ]
