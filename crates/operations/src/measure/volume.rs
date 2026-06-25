@@ -104,15 +104,14 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         return None;
     }
 
-    // A cylinder/cone face with interior holes goes through the integrator's
-    // combined even-odd hole-clip, which is correct ONLY for the Steinmetz lens
-    // (two mutually-trimmed equal cylinders). Recognise that case by its whole-
-    // solid signature (below); ANY other holed cyl/cone solid (an ordinary
-    // drilled bore, etc.) is deferred to tessellation — its prior, correct
-    // behaviour, since the combined even-odd test would mis-handle independent
-    // holes. Computed once so the per-face loop can accept holed walls only when
-    // the solid is the lens fuse.
-    let is_steinmetz = solid_is_steinmetz_lens_fuse(topo, &faces);
+    // The Steinmetz lens fuse — two mutually-trimmed equal cylinders, whose
+    // walls keep the lens ellipses as holes — has an EXACT closed-form volume
+    // (computed directly below). The hole-unaware tessellation paths over-count
+    // the lens, and a general holed-cylinder integrator was too broad to be
+    // correct; the closed form is exact and needs no special integration.
+    if solid_is_steinmetz_lens_fuse(topo, &faces) {
+        return steinmetz_lens_fuse_volume(topo, &faces);
+    }
 
     let mut has_bored_quadric = false;
     for &fid in &faces {
@@ -134,15 +133,12 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                 }
                 has_bored_quadric = true;
             }
-            // A holed cylinder/cone wall is accepted ONLY when the whole solid
-            // is the Steinmetz lens fuse; the integrator then clips the lens
-            // v-intervals out via the combined even-odd arrangement (exact),
-            // where the hole-unaware tessellation paths over-count the lens.
+            // A holed cylinder/cone wall that is NOT the Steinmetz lens fuse
+            // (handled above) cannot be integrated correctly here — the
+            // integrator does not subtract its holes — so defer the whole solid
+            // to tessellation.
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_) if !face.inner_wires().is_empty() => {
-                if !is_steinmetz {
-                    return None;
-                }
-                has_bored_quadric = true;
+                return None;
             }
             FaceSurface::Torus(_) if !face.inner_wires().is_empty() => return None,
             _ => {}
@@ -162,6 +158,61 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     Some(total.abs())
 }
 
+/// Exact volume of the STEINMETZ LENS FUSE — two equal-radius `r` cylinders with
+/// perpendicular intersecting axes, fused.
+///
+/// `V = π·r²·(h₁ + h₂) − (16/3)·r³`: the two cylinder volumes (heights `h₁`,
+/// `h₂` are each wall's cap-to-cap extent along its axis) minus their Steinmetz
+/// intersection `16·r³/3`. Reads `r` and the two heights from the two holed
+/// cylindrical walls (already verified to exist by
+/// [`solid_is_steinmetz_lens_fuse`]). Returns `None` only on a topology lookup
+/// failure or a malformed wall.
+fn steinmetz_lens_fuse_volume(topo: &Topology, faces: &[FaceId]) -> Option<f64> {
+    use std::f64::consts::PI;
+
+    let mut r: Option<f64> = None;
+    let mut heights: Vec<f64> = Vec::new();
+    for &fid in faces {
+        let face = topo.face(fid).ok()?;
+        let FaceSurface::Cylinder(cyl) = face.surface() else {
+            continue;
+        };
+        if face.inner_wires().is_empty() {
+            continue; // Only the two holed walls.
+        }
+        // Equal radii: confirm the second wall matches the first.
+        match r {
+            None => r = Some(cyl.radius()),
+            Some(r0) if (r0 - cyl.radius()).abs() > 1e-6 * r0.max(1.0) => return None,
+            Some(_) => {}
+        }
+        // Cap-to-cap height = the axial (v) extent of the wall's outer wire.
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        let mut v_min = f64::INFINITY;
+        let mut v_max = f64::NEG_INFINITY;
+        for oe in wire.edges() {
+            let e = topo.edge(oe.edge()).ok()?;
+            for vid in [e.start(), e.end()] {
+                let p = topo.vertex(vid).ok()?.point();
+                let (_, v) = cyl.project_point(p);
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
+        }
+        if !v_min.is_finite() || !v_max.is_finite() || v_max <= v_min {
+            return None;
+        }
+        heights.push(v_max - v_min);
+    }
+    let r = r?;
+    if heights.len() != 2 {
+        return None;
+    }
+    let v_cyls = PI * r * r * (heights[0] + heights[1]);
+    let v_steinmetz = 16.0 / 3.0 * r * r * r;
+    Some(v_cyls - v_steinmetz)
+}
+
 /// Whether the solid is the STEINMETZ LENS FUSE — two mutually-trimmed equal
 /// cylinders — by its whole-solid topology signature, which no other holed
 /// cyl/cone solid shares:
@@ -171,10 +222,10 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
 ///   * the holed walls' inner-wire EDGES are SHARED between the two walls
 ///     (the same seam ellipses bound both).
 ///
-/// An ordinary drilled cylinder has ONE holed wall (its bore rim is not shared
-/// with a second cylindrical wall), so it returns `false` and the solid defers
-/// to tessellation — the integrator's combined even-odd hole-clip is correct
-/// only for the lens, not for independent bores.
+/// When this matches, the volume has the EXACT closed form
+/// [`steinmetz_lens_fuse_volume`]. An ordinary drilled cylinder has ONE holed
+/// wall (its bore rim is not shared with a second cylindrical wall), so it
+/// returns `false` and the solid defers to tessellation.
 fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
     use std::collections::HashSet;
 
@@ -1444,5 +1495,79 @@ mod regression_tests {
             crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
         let vol = solid_volume(&topo, solid, 0.01).unwrap();
         assert!((vol - 30.0).abs() < 1e-6, "expected 30.0, got {vol}");
+    }
+
+    /// Build the census Steinmetz fuse: two equal r=3, h=20 cylinders with
+    /// perpendicular intersecting axes (one along z, one along x), fused.
+    fn steinmetz_fuse_census() -> (Topology, SolidId) {
+        use brepkit_math::mat::Mat4;
+        let mut topo = Topology::new();
+        let c1 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, c1, &Mat4::translation(0.0, 0.0, -10.0))
+            .unwrap();
+        let c2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            c2,
+            &Mat4::rotation_y(std::f64::consts::FRAC_PI_2),
+        )
+        .unwrap();
+        crate::transform::transform_solid(&mut topo, c2, &Mat4::translation(-10.0, 0.0, 0.0))
+            .unwrap();
+        let res =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, c1, c2).unwrap();
+        (topo, res)
+    }
+
+    #[test]
+    fn steinmetz_lens_fuse_closed_form_volume() {
+        let (topo, res) = steinmetz_fuse_census();
+        // The gate fires, and the closed form gives the EXACT volume:
+        // V = π·9·(20+20) − (16/3)·27 = 1130.97 − 144 = 986.97.
+        let faces = brepkit_topology::explorer::solid_faces(&topo, res).unwrap();
+        assert!(
+            solid_is_steinmetz_lens_fuse(&topo, &faces),
+            "the perpendicular cyl∪cyl fuse must be detected as the lens fuse"
+        );
+        let v = steinmetz_lens_fuse_volume(&topo, &faces).expect("closed form");
+        let expect = std::f64::consts::PI * 9.0 * 40.0 - 16.0 / 3.0 * 27.0;
+        assert!(
+            (v - expect).abs() < 1e-9,
+            "closed-form lens volume {v} should equal {expect} (986.97)"
+        );
+        // The public `solid_volume` returns the same exact value.
+        let vol = solid_volume(&topo, res, 0.01).unwrap();
+        assert!(
+            (vol - expect).abs() < 1e-6,
+            "solid_volume {vol} should match closed form {expect}"
+        );
+    }
+
+    #[test]
+    fn steinmetz_gate_does_not_fire_on_plain_or_coaxial_cylinders() {
+        use brepkit_math::mat::Mat4;
+        // A plain cylinder (one wall, no holes) is NOT the lens fuse.
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, cyl).unwrap();
+        assert!(
+            !solid_is_steinmetz_lens_fuse(&topo, &faces),
+            "a plain cylinder is not the lens fuse"
+        );
+
+        // A coaxial cyl∩cyl (two collinear cylinders, no mutually-trimmed lens
+        // walls) is NOT the lens fuse.
+        let mut topo2 = Topology::new();
+        let a = crate::primitives::make_cylinder(&mut topo2, 5.0, 20.0).unwrap();
+        let b = crate::primitives::make_cylinder(&mut topo2, 5.0, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo2, b, &Mat4::translation(0.0, 0.0, 10.0))
+            .unwrap();
+        let inter = crate::boolean::boolean(&mut topo2, crate::boolean::BooleanOp::Intersect, a, b)
+            .unwrap();
+        let f2 = brepkit_topology::explorer::solid_faces(&topo2, inter).unwrap();
+        assert!(
+            !solid_is_steinmetz_lens_fuse(&topo2, &f2),
+            "coaxial cyl∩cyl is not the lens fuse"
+        );
     }
 }
