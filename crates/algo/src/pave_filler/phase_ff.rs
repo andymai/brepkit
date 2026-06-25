@@ -1146,12 +1146,11 @@ fn sphere_region_axis(
 ) -> Option<Vec3> {
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
-    let mut axis = Vec3::new(0.0, 0.0, 0.0);
-    // The cross products have units of length^2, so the degeneracy threshold is
-    // derived from the input magnitudes rather than a bare linear tolerance:
-    // `scale` sums each term's bound (|mid − center| · |chord|); a truly
-    // cancelling wire leaves `axis` small relative to it.
-    let mut scale = 0.0;
+    // Sample the outer wire into an oriented closed polyline. Endpoint-only
+    // sampling fails for a boundary built from a single closed `Circle` edge
+    // (start == end, so every chord is zero); sampling along each edge recovers
+    // the loop shape so the winding below still yields the pole-side axis.
+    let mut pts: Vec<Point3> = Vec::new();
     for oe in wire.edges() {
         let Ok(edge) = topo.edge(oe.edge()) else {
             continue;
@@ -1159,14 +1158,40 @@ fn sphere_region_axis(
         let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
             continue;
         };
-        let (sp, ep) = if oe.is_forward() {
-            (sv.point(), ev.point())
-        } else {
-            (ev.point(), sv.point())
-        };
-        let mid = sp + (ep - sp) * 0.5;
+        let (sp, ep) = (sv.point(), ev.point());
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        // Sample in the edge's natural direction (omit the endpoint — it is the
+        // next edge's start), then flip for a reversed orientation.
+        let n = 8;
+        let mut edge_pts: Vec<Point3> = (0..n)
+            .map(|i| {
+                let t = t0 + (t1 - t0) * (f64::from(i) / f64::from(n));
+                edge.curve().evaluate_with_endpoints(t, sp, ep)
+            })
+            .collect();
+        if !oe.is_forward() {
+            edge_pts.reverse();
+        }
+        pts.append(&mut edge_pts);
+    }
+    if pts.len() < 3 {
+        return None;
+    }
+    // Summed (midpoint − center) × chord around the closed loop ≈ 2·(area
+    // vector): its direction is the face's outward pole axis (negated for a
+    // reversed face). The cross products have units of length^2, so the
+    // degeneracy threshold is derived from the input magnitudes: `scale` sums
+    // each term's bound (|mid − center| · |chord|); a near-planar-through-center
+    // loop (ambiguous side) leaves `axis` small relative to it.
+    let mut axis = Vec3::new(0.0, 0.0, 0.0);
+    let mut scale = 0.0;
+    let count = pts.len();
+    for i in 0..count {
+        let a = pts[i];
+        let b = pts[(i + 1) % count];
+        let mid = a + (b - a) * 0.5;
         let radial = mid - center;
-        let chord = ep - sp;
+        let chord = b - a;
         scale += radial.length() * chord.length();
         axis += radial.cross(chord);
     }
@@ -2727,7 +2752,7 @@ fn clip_line_to_polygon_general(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     #[test]
@@ -2751,6 +2776,36 @@ mod tests {
         // A closed curve entirely in-both returns the whole span (0, m).
         let inb = [true, true, true, true, true];
         assert_eq!(longest_inboth_run(&inb, true), (0, 4));
+    }
+
+    #[test]
+    fn sphere_region_axis_closed_circle_boundary() {
+        // A sphere face bounded by a single closed `Circle` edge has start ==
+        // end, so endpoint-only winding gives a zero chord and no axis. Sampling
+        // along the edge must recover the circle's plane normal as the pole axis
+        // (otherwise the broad-phase falls back to the loose full-sphere box).
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::default();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(6.0, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 6.0).unwrap();
+        let edge = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(circle)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)));
+        let axis = sphere_region_axis(
+            &topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Tolerance::default(),
+        )
+        .expect("closed-circle boundary should yield a pole axis");
+        // The equatorial circle's plane normal is ±z; sampling recovers it.
+        assert!(axis.z().abs() > 0.99, "axis not aligned with z: {axis:?}");
+        assert!(axis.x().abs() < 0.05 && axis.y().abs() < 0.05);
     }
 
     #[test]
