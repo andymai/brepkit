@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782370655647,
+  "lastUpdate": 1782401173954,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -809,6 +809,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 12824645,
             "range": "± 22428",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6b4e781988f377a3decc5b5c441f95a955bd13d7",
+          "message": "fix(operations): close box∩sphere boolean analytically (seam split + collar render/volume) (#1006)\n\n## What\n\nMakes `Intersect(box, sphere)` produce an **exact analytic, watertight,\ncorrectly-rendered, correctly-measured** result instead of a 956-face\nmesh fallback. Census: **190ms / 956 mesh → 1.94ms / 8 analytic faces**\n(6 plane disks + 2 spherical collar patches).\n\nThird PR in the campaign to close the four remaining boolean→mesh\nfallbacks (after #1003 keystone AABB, #1005 sphere−cyl). This is the\nhardest case — the centered sphere's collars are full-longitude-wrap\nbands with a *scalloped* floor.\n\n## The fix — four coupled layers\n\n**1. Section-circle split (`algo/phase_ff::emit_split_circle_arcs`)** —\nsplit arcs strictly *below* π. A span of exactly π is a diametric\nsemicircle whose two halves share both endpoints, so the assembler's\nendpoint-keyed `merge_duplicate_edges` collapsed the distinct\nnorth/south arcs into one edge (failing the Euler gate). Forcing a\nmidpoint vertex for any span ≥ π gives the two arcs distinct endpoints —\n**no merge-key change**, so the reversed-vertex merge of\ngenuinely-shared arcs is untouched (this is what makes it\nregression-safe where a merge-key discriminator was not).\n\n**2. Seam crossings (`algo/phase_ff::sphere_seam_plane_crossings`)** — a\nbox face's great-circle section must cross the sphere's *faceted*\nequator to split, but testing against the inscribed chords missed the\ncrossings by the polygon sagitta. Fit the seam plane (Newell) and solve\ncircle∩plane analytically — facet-independent.\n\n**3. Arrangement walk\n(`algo/face_splitter::split_noseam_by_arrangement`)** — the disjoint\ngreat-circle arcs share no endpoints, so the generic wire builder (which\nU-turns on the degenerate v=0 seam confluence) can't chain them. A\ndedicated DCEL arrangement walk assembles the box-face disks + the two\ncollar patches, selecting the collar by longitude winding.\n\n**4. Collar render + volume:**\n- **Render** (`operations/tessellate`): generalize the revolution-band\nmesher to a *varying-v* collar — outer ring = scalloped\ngreat-circle/seam floor, inner ring = latitude-cap hole — with\ncolumn-aligned curvature rows and a single whole-run orientation (the\nper-triangle normal flip is unstable on the thin stitch triangles).\nWatertight: 304 → 0 boundary edges.\n- **Volume** (`operations/measure`): a scalloped collar's analytic\nintegral is a deferred u-dependent lune trim, so its volume comes from\nthe (now watertight) whole-solid mesh via the divergence theorem. The\nconstant-v bored-quadric fast path (#1005 sphere−cyl) is gated to stay\nanalytic and is unchanged.\n\n## Verification\n\n- Raw GFA: F=8 (6 disks + 2 collars), free edges 0, manifold.\n- Census: `box ∩ sphere 1.94ms faces=8 exact analytic`; the other 8\nboolean cases unchanged.\n- Render: tessellated mesh watertight (0 boundary edges) at deflections\n0.05 and 0.005; area matches analytic (no cap-fill).\n- Volume: `solid_volume` = 797.4 (analytic 797.97, <0.1%), convergent\nacross deflections.\n- No regression: `sphere − cyl` still 587.671 analytic/watertight; plain\nsphere/cyl/cone/torus tessellate unchanged.\n- Full suite: **2456 passed, 9 skipped**; clippy clean; fmt clean; layer\nboundaries valid.\n- Fixtures: `intersect_box_centered_sphere_is_analytic_collar` (boolean)\n+ `box_centered_sphere_collar_tessellates_watertight` (tessellation).\n\n## Reused by `torus − box` (PR5)\n\nLayer 1 (split) and the Layer-4 collar render/volume machinery are\nsurface-agnostic / already dispatch for `Torus`, so the toroidal collar\nof `torus − box` will reuse them; only its analytic *split* (the\nplane×torus quartic) remains case-specific work.",
+          "timestamp": "2026-06-25T08:24:03-07:00",
+          "tree_id": "45693599f03507f8c4fa03cb9aa2b0dd65608869",
+          "url": "https://github.com/andymai/brepkit/commit/6b4e781988f377a3decc5b5c441f95a955bd13d7"
+        },
+        "date": 1782401173022,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1455604,
+            "range": "± 79401",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1495281,
+            "range": "± 3944",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13184,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 589424,
+            "range": "± 1775",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21609153,
+            "range": "± 81112",
             "unit": "ns/iter"
           }
         ]
