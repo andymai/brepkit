@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782346726605,
+  "lastUpdate": 1782347588295,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -269,6 +269,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21719304,
             "range": "± 171542",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "35a98cf744df7efad4a499be1d1f99e957c17199",
+          "message": "chore(observability): report faces=1 for single-face offset_face in census (#996)\n\nAddresses a Copilot review nit on #995: the census printed `faces=0` for\n`offset_face` success rows, which reads like an empty result.\n`offset_face` returns a single `FaceId` (not a solid), so report\n`faces=1` instead.\n\nExample-only, one-line change. Verified: the `offset_face` rows now\nprint `faces=1` on success; `cargo fmt`/`clippy` clean via pre-commit.",
+          "timestamp": "2026-06-25T00:31:12Z",
+          "tree_id": "da4e6351e7794208b82cf136225cd1fdb1bd1818",
+          "url": "https://github.com/andymai/brepkit/commit/35a98cf744df7efad4a499be1d1f99e957c17199"
+        },
+        "date": 1782347587984,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1350597,
+            "range": "± 1989",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1436577,
+            "range": "± 5761",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11890,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 607722,
+            "range": "± 10581",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20740358,
+            "range": "± 147393",
             "unit": "ns/iter"
           }
         ]
