@@ -2143,6 +2143,24 @@ fn closed_circle_boundary_crossings(
 
     let mut hits: Vec<(f64, Point3)> = Vec::new();
     for &fid in &faces_to_check {
+        // A sphere hemisphere's boundary is a polygon inscribed in the seam
+        // (equator) circle. A section circle that genuinely crosses the seam
+        // does so at points that lie ON the seam circle but OUTSIDE the
+        // inscribed chords (by the polygon sagitta, which is ~5e-2 for 24
+        // facets ≫ tol), so the chord-based `face_hits` misses them entirely.
+        // Compute those crossings analytically against the seam *plane*
+        // instead — exact and independent of the boundary's facet count.
+        if matches!(surface_of(fid), Some(FaceSurface::Sphere(_))) {
+            for (t, p) in sphere_seam_plane_crossings(topo, fid, circle, tol) {
+                let dup = hits
+                    .iter()
+                    .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
+                if !dup {
+                    hits.push((t, p));
+                }
+            }
+            continue;
+        }
         let fh = face_hits(fid);
         // The boundary is coincident with the section circle when its
         // segments are chords of an *inscribed* polygon: every vertex lands
@@ -2176,6 +2194,116 @@ fn closed_circle_boundary_crossings(
     );
 
     hits
+}
+
+/// Crossings of a section `circle` with a sphere face's seam (boundary) plane.
+///
+/// A sphere hemisphere produced by the primitive builder is bounded by a
+/// polygon inscribed in its seam circle. Testing a section circle against
+/// those chords misses the true seam crossings by the polygon sagitta, so this
+/// computes the crossings analytically: fit the seam plane to the boundary
+/// vertices (independent of facet count and sphere orientation), then solve for
+/// the circle parameters `t` where the circle pierces that plane.
+///
+/// Returns the `(t, point)` crossings (0, 1 for a tangent, or 2) where the
+/// circle meets the seam plane and the crossing point lies on the sphere.
+fn sphere_seam_plane_crossings(
+    topo: &Topology,
+    fid: FaceId,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> Vec<(f64, Point3)> {
+    let Ok(face) = topo.face(fid) else {
+        return Vec::new();
+    };
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return Vec::new();
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return Vec::new();
+    };
+
+    // Seam-plane normal + a point on it, from the boundary polygon (Newell's
+    // method), so the result is independent of facet count and orientation.
+    let verts: Vec<Point3> = wire
+        .edges()
+        .iter()
+        .filter_map(|oe| {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let start = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            topo.vertex(start)
+                .ok()
+                .map(brepkit_topology::vertex::Vertex::point)
+        })
+        .collect();
+    if verts.len() < 3 {
+        return Vec::new();
+    }
+    let mut normal = Vec3::new(0.0, 0.0, 0.0);
+    let mut centroid = Vec3::new(0.0, 0.0, 0.0);
+    let n = verts.len();
+    for i in 0..n {
+        let a = verts[i];
+        let b = verts[(i + 1) % n];
+        normal += Vec3::new(
+            (a.y() - b.y()) * (a.z() + b.z()),
+            (a.z() - b.z()) * (a.x() + b.x()),
+            (a.x() - b.x()) * (a.y() + b.y()),
+        );
+        centroid += Vec3::new(a.x(), a.y(), a.z());
+    }
+    let Ok(plane_n) = normal.normalize() else {
+        return Vec::new();
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let inv_n = 1.0 / n as f64;
+    let plane_pt = Point3::new(
+        centroid.x() * inv_n,
+        centroid.y() * inv_n,
+        centroid.z() * inv_n,
+    );
+
+    // Solve A·cos t + B·sin t = -D for the circle parameter t, where the circle
+    // is C(t) = center + r(u·cos t + v·sin t) and the plane is
+    // (P - plane_pt)·plane_n = 0.
+    let cc = circle.center();
+    let r = circle.radius();
+    let a = r * circle.u_axis().dot(plane_n);
+    let b = r * circle.v_axis().dot(plane_n);
+    let d = (cc - plane_pt).dot(plane_n);
+    let amp = (a * a + b * b).sqrt();
+    if amp < tol.linear {
+        // Circle lies in (or parallel to) the seam plane — not a transversal
+        // crossing; defer to the chord-based path / interior treatment.
+        return Vec::new();
+    }
+    let rhs = -d / amp;
+    if rhs.abs() > 1.0 + 1e-9 {
+        return Vec::new();
+    }
+    let rhs = rhs.clamp(-1.0, 1.0);
+    let phase = b.atan2(a);
+    let alpha = rhs.acos();
+    let mut out: Vec<(f64, Point3)> = Vec::new();
+    for &t in &[phase + alpha, phase - alpha] {
+        let p = circle.evaluate(t);
+        let on_sphere =
+            ((p - sphere.center()).length() - sphere.radius()).abs() < tol.linear * 100.0;
+        if !on_sphere {
+            continue;
+        }
+        if !out
+            .iter()
+            .any(|(_, q)| (*q - p).length() < tol.linear * 10.0)
+        {
+            out.push((t.rem_euclid(std::f64::consts::TAU), p));
+        }
+    }
+    out
 }
 
 /// Whether boundary/circle hits describe an inscribed polygon (the boundary

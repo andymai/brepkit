@@ -1093,6 +1093,70 @@ fn intersect_box_sphere_succeeds() {
 }
 
 #[test]
+/// Intersect a 10³ box with a sphere of r=6 centered inside it (sphere fully
+/// enclosed in x/y/z extent but poking out each face). Each box face cuts a
+/// disc; the sphere becomes two annular "collar" patches (a scalloped
+/// great-circle/equator floor + a latitude-cap hole) — the analytic result is
+/// 6 plane discs + 2 sphere collars, watertight, with the lens volume.
+fn intersect_box_centered_sphere_is_analytic_collar() {
+    let mut topo = Topology::new();
+    let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let sp = crate::primitives::make_sphere(&mut topo, 6.0, 24).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        sp,
+        &brepkit_math::mat::Mat4::translation(5.0, 5.0, 5.0),
+    )
+    .unwrap();
+    let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp).unwrap();
+
+    let face_ids = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let (mut planes, mut spheres, mut others) = (0usize, 0usize, 0usize);
+    for fid in &face_ids {
+        match topo.face(*fid).unwrap().surface() {
+            brepkit_topology::face::FaceSurface::Plane { .. } => planes += 1,
+            brepkit_topology::face::FaceSurface::Sphere(_) => spheres += 1,
+            _ => others += 1,
+        }
+    }
+    assert_eq!(
+        face_ids.len(),
+        8,
+        "expected 6 plane discs + 2 sphere collars, got {}",
+        face_ids.len()
+    );
+    assert_eq!(planes, 6, "expected 6 plane discs, got {planes}");
+    assert_eq!(
+        spheres, 2,
+        "expected 2 sphere collar patches, got {spheres}"
+    );
+    assert_eq!(others, 0, "no non-analytic faces expected, got {others}");
+
+    // Watertight: every edge shared by exactly two faces (analytic B-rep, not a
+    // mesh fallback).
+    let adj = brepkit_topology::adjacency::AdjacencyIndex::build(&topo, result).unwrap();
+    assert_eq!(
+        adj.boundary_edges().len(),
+        0,
+        "result must be watertight (0 free edges)"
+    );
+    assert!(adj.is_manifold(), "result must be manifold");
+
+    // Volume = V_sphere − 6 spherical caps (each cut at distance 5 from the
+    // r=6 sphere centre: cap height h=1, V_cap = π·h²·(3r−h)/3).
+    let r: f64 = 6.0;
+    let h: f64 = 1.0;
+    let v_sphere = 4.0 / 3.0 * std::f64::consts::PI * r.powi(3);
+    let v_cap = std::f64::consts::PI * h * h * (3.0 * r - h) / 3.0;
+    let expected = v_sphere - 6.0 * v_cap;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 0.01,
+        "volume {vol:.3} should be within 1% of analytic {expected:.3}"
+    );
+}
+
+#[test]
 /// Fuse a 10³ box with a sphere of r=7.
 ///
 /// By inclusion-exclusion: V(A∪B) = V(A) + V(B) - V(A∩B).
