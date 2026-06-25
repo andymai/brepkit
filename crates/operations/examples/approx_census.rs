@@ -13,11 +13,10 @@
 //!   cargo run --release --example approx_census -p brepkit-operations
 //!
 //! The boolean matrix uses overlapping primitives; offset/fillet/chamfer run on
-//! every analytic primitive to show they stay exact (no probe fires). The
-//! NURBS-faced and non-analytic-pair fallbacks (sampled-NURBS offset, fillet
-//! walker, chamfer UnsupportedSurface) are exercised by the `brepkit-offset` and
-//! `brepkit-blend` test suites, not reproducible from primitives alone (no
-//! primitive has a NURBS face).
+//! every analytic primitive to show they stay exact (no probe fires). A final
+//! "remaining paths" section then constructs the inputs the primitive matrix
+//! cannot reach — a NURBS-faced loft, a torus, and a 4-valence pyramid apex — so
+//! that all seven approximation paths fire at least once.
 
 #![allow(clippy::print_stdout, deprecated, missing_docs)]
 
@@ -28,11 +27,12 @@ use std::time::Instant;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::OperationsError;
-use brepkit_operations::blend_ops::fillet_v2;
+use brepkit_operations::blend_ops::{chamfer_v2, fillet_v2};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::fillet::fillet_rolling_ball;
 use brepkit_operations::loft::loft_smooth;
+use brepkit_operations::offset_face::offset_face;
 use brepkit_operations::offset_v2::{offset_solid_v2, shell_v2};
 use brepkit_operations::primitives;
 use brepkit_operations::transform::transform_solid;
@@ -40,7 +40,8 @@ use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
-use brepkit_topology::solid::SolidId;
+use brepkit_topology::shell::Shell;
+use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
@@ -407,6 +408,205 @@ fn blend_matrix() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn first_nurbs_face(topo: &Topology, solid: SolidId) -> Option<FaceId> {
+    solid_faces(topo, solid).ok()?.into_iter().find(|&f| {
+        topo.face(f)
+            .is_ok_and(|fc| matches!(fc.surface(), FaceSurface::Nurbs(_)))
+    })
+}
+
+/// Build a triangular planar side face from three pre-made oriented edges; the
+/// outward normal is `(b-a)×(c-a)` for the wire `a→b→c`.
+fn tri_side(
+    topo: &mut Topology,
+    oriented: [OrientedEdge; 3],
+    a: Point3,
+    b: Point3,
+    c: Point3,
+) -> Result<FaceId, Box<dyn Error>> {
+    let normal = (b - a).cross(c - a).normalize()?;
+    let d = normal.x() * a.x() + normal.y() * a.y() + normal.z() * a.z();
+    let wire = topo.add_wire(Wire::new(oriented.to_vec(), true)?);
+    Ok(topo.add_face(Face::new(wire, vec![], FaceSurface::Plane { normal, d })))
+}
+
+/// Square pyramid: a base square at z=0 and an apex at (0,0,h). The apex is a
+/// 4-valence vertex (four edges meet), which is what drives the rolling-ball
+/// fillet's non-triangular corner → planar-blend fallback.
+fn make_pyramid(topo: &mut Topology, s: f64, h: f64) -> Result<SolidId, Box<dyn Error>> {
+    let tol = 1e-7;
+    let p0 = Point3::new(-s, -s, 0.0);
+    let p1 = Point3::new(s, -s, 0.0);
+    let p2 = Point3::new(s, s, 0.0);
+    let p3 = Point3::new(-s, s, 0.0);
+    let pa = Point3::new(0.0, 0.0, h);
+    let v0 = topo.add_vertex(Vertex::new(p0, tol));
+    let v1 = topo.add_vertex(Vertex::new(p1, tol));
+    let v2 = topo.add_vertex(Vertex::new(p2, tol));
+    let v3 = topo.add_vertex(Vertex::new(p3, tol));
+    let va = topo.add_vertex(Vertex::new(pa, tol));
+    let e01 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e12 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e23 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e30 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+    let a0 = topo.add_edge(Edge::new(v0, va, EdgeCurve::Line));
+    let a1 = topo.add_edge(Edge::new(v1, va, EdgeCurve::Line));
+    let a2 = topo.add_edge(Edge::new(v2, va, EdgeCurve::Line));
+    let a3 = topo.add_edge(Edge::new(v3, va, EdgeCurve::Line));
+    // Base, outward normal -z: wire v0→v3→v2→v1.
+    let base_wire = topo.add_wire(Wire::new(
+        vec![
+            OrientedEdge::new(e30, false),
+            OrientedEdge::new(e23, false),
+            OrientedEdge::new(e12, false),
+            OrientedEdge::new(e01, false),
+        ],
+        true,
+    )?);
+    let base = topo.add_face(Face::new(
+        base_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    ));
+    let s01 = tri_side(
+        topo,
+        [
+            OrientedEdge::new(e01, true),
+            OrientedEdge::new(a1, true),
+            OrientedEdge::new(a0, false),
+        ],
+        p0,
+        p1,
+        pa,
+    )?;
+    let s12 = tri_side(
+        topo,
+        [
+            OrientedEdge::new(e12, true),
+            OrientedEdge::new(a2, true),
+            OrientedEdge::new(a1, false),
+        ],
+        p1,
+        p2,
+        pa,
+    )?;
+    let s23 = tri_side(
+        topo,
+        [
+            OrientedEdge::new(e23, true),
+            OrientedEdge::new(a3, true),
+            OrientedEdge::new(a2, false),
+        ],
+        p2,
+        p3,
+        pa,
+    )?;
+    let s30 = tri_side(
+        topo,
+        [
+            OrientedEdge::new(e30, true),
+            OrientedEdge::new(a0, true),
+            OrientedEdge::new(a3, false),
+        ],
+        p3,
+        p0,
+        pa,
+    )?;
+    let shell = topo.add_shell(Shell::new(vec![base, s01, s12, s23, s30])?);
+    Ok(topo.add_solid(Solid::new(shell, vec![])))
+}
+
+/// Trigger the four fallbacks that the primitive matrix does not reach: chamfer
+/// has no walker fallback (errors), offset-trim grid-sampling and offset-face
+/// raw-surface need a NURBS face, and the rolling-ball planar corner needs a
+/// 4-valence vertex.
+fn remaining_paths() -> Result<(), Box<dyn Error>> {
+    println!("\nREMAINING paths (targeted triggers):");
+
+    // chamfer v2 on a torus: analytic chamfer declines Torus pairs and v1 has
+    // no walker → UnsupportedSurface (probe fires, op errors).
+    {
+        let mut topo = Topology::new();
+        let s = primitives::make_torus(&mut topo, 10.0, 3.0, 32)?;
+        let edges = solid_edges(&topo, s)?;
+        let _ = drain();
+        let t = Instant::now();
+        let res = chamfer_v2(&mut topo, s, &edges, 0.5, 0.5);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let mut ev = drain();
+        match res {
+            Ok(r) => report("chamfer-v2", "torus", ms, face_count(&topo, r.solid), &ev),
+            Err(e) => {
+                ev.push(format!("err: {e}"));
+                report("chamfer-v2", "torus [ERR]", ms, 0, &ev);
+            }
+        }
+    }
+
+    // offset_face on a NURBS face: a gentle offset has no self-intersection so
+    // SSI detection finds nothing → grid-sampling trim; a large offset self-
+    // intersects past the limit → trim errors → raw offset surface.
+    {
+        // A sharply waisted loft (8→1→8) folds under a large inward offset.
+        let mut topo = Topology::new();
+        let p0 = make_square_at(&mut topo, 8.0, 0.0)?;
+        let p1 = make_square_at(&mut topo, 1.0, 1.5)?;
+        let p2 = make_square_at(&mut topo, 8.0, 3.0)?;
+        match loft_smooth(&mut topo, &[p0, p1, p2]) {
+            Ok(solid) => match first_nurbs_face(&topo, solid) {
+                Some(nf) => {
+                    for (label, dist) in [("gentle +0.3", 0.3_f64), ("inward -3.0", -3.0)] {
+                        let _ = drain();
+                        let t = Instant::now();
+                        let res = offset_face(&mut topo, nf, dist, 16);
+                        let ms = t.elapsed().as_secs_f64() * 1000.0;
+                        let mut ev = drain();
+                        match res {
+                            Ok(_) => report("offset_face", label, ms, 0, &ev),
+                            Err(e) => {
+                                ev.push(format!("err: {e}"));
+                                report("offset_face", &format!("{label} [ERR]"), ms, 0, &ev);
+                            }
+                        }
+                    }
+                }
+                None => println!("  (no NURBS face found on loft solid)"),
+            },
+            Err(e) => println!("  loft_smooth construction failed: {e}"),
+        }
+    }
+
+    // rolling-ball fillet on a square pyramid: the 4-valence apex yields a
+    // non-triangular corner → flat planar-blend fallback.
+    {
+        let mut topo = Topology::new();
+        let pyr = make_pyramid(&mut topo, 5.0, 8.0)?;
+        let edges = solid_edges(&topo, pyr)?;
+        let _ = drain();
+        let t = Instant::now();
+        let res = fillet_rolling_ball(&mut topo, pyr, &edges, 0.8);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let mut ev = drain();
+        match res {
+            Ok(r) => report(
+                "fillet-rb",
+                "pyramid (4-valence apex)",
+                ms,
+                face_count(&topo, r),
+                &ev,
+            ),
+            Err(e) => {
+                ev.push(format!("err: {e}"));
+                report("fillet-rb", "pyramid [ERR]", ms, 0, &ev);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     log::set_logger(&LOGGER)?;
     log::set_max_level(log::LevelFilter::Debug);
@@ -418,6 +618,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     offset_matrix()?;
     nurbs_section()?;
     blend_matrix()?;
+    remaining_paths()?;
 
     println!("\nLegend: 'exact analytic' = no degradation; 'FALLBACK' = an");
     println!("approximation path fired (see the brepkit_approx probe text).");
