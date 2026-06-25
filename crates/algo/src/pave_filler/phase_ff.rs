@@ -612,6 +612,13 @@ fn face_circumferential_u_gap(
     face_id: FaceId,
     surface: &FaceSurface,
 ) -> Option<(f64, f64)> {
+    // Sample densely so a FULL-revolution rim circle (one closed edge spanning
+    // the whole period) leaves only a tiny per-step gap, well under the
+    // `largest_u_gap` threshold — otherwise a 16-step pass (~0.39 rad/step)
+    // spuriously reports a gap on a full cylinder wall, wrongly excluding genuine
+    // on-surface points near that u. A real partial-arc face (a rounded-rect
+    // corner) still shows its large angular gap.
+    const N_GAP: usize = 64;
     if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
         return None;
     }
@@ -623,9 +630,9 @@ fn face_circumferential_u_gap(
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        for i in 0..=16 {
+        for i in 0..=N_GAP {
             #[allow(clippy::cast_precision_loss)]
-            let f = i as f64 / 16.0;
+            let f = i as f64 / N_GAP as f64;
             let t = t0 + (t1 - t0) * f;
             let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
             if let Some((u, _)) = surface.project_point(pt) {
@@ -721,71 +728,78 @@ fn restrict_curves_to_faces(
         if b1 - b0 < 2 {
             continue;
         }
-        // A closed loop with nearly every sample in-both is a genuinely
-        // fully-shared seam (e.g. the closed ellipse where two equal
-        // perpendicular cylinders cross — both lateral faces contain the whole
-        // loop). The few out-samples sit at the periodic seam (where sample N
-        // coincides with sample 0) and at the v-extremes, where projecting the
-        // point onto the partner cylinder lands marginally outside the trimmed
-        // band; these scatter the longest CONTIGUOUS run well below N even
-        // though the loop is whole, so count TOTAL in-both samples instead.
-        // Keep such a loop WHOLE: the downstream splitter routes a closed
-        // interior loop to `split_face_with_internal_loops` (carving cap +
-        // band-with-hole). Trimming it instead drops the wrap end-parameter past
-        // the curve's domain (a clamped NURBS extrapolates to a garbage 3D
-        // point), so the carved loop never closes and the wall collapses. The
-        // gridfinity lip knife-edge ellipses (genuine partial overlaps) have at
-        // most ~8/24 samples in-both — far below this near-whole threshold — so
-        // they still trim to their in-both arc.
-        let in_both_count = inb.iter().take(N).filter(|&&x| x).count();
-        let near_whole = in_both_count >= N.saturating_sub(3);
-        // A closed ellipse/NURBS loop is otherwise trimmed to its in-both arc:
-        // when just an arc is in-both, keeping the whole curve leaves a spurious
-        // closed self-loop section edge (the splitter only trims OPEN curves and
-        // only adopts closed CIRCLES via seam adoption / link_existing), so a
-        // full ellipse from an inner tapered wall meeting an outer corner (the
-        // gridfinity lip knife-edge) survives as a degenerate loop and
-        // over-connects the rim. Circles are left whole (seam adoption handles
+        // A closed ellipse/NURBS loop whose in-both run covers the WHOLE curve
+        // (`b1 - b0 == N`) is a genuinely fully-shared seam — e.g. the closed
+        // ellipse where two equal perpendicular cylinders cross, every sample of
+        // which lies on both lateral faces. Keep it WHOLE: the downstream
+        // splitter routes a closed interior loop to
+        // `split_face_with_internal_loops` (carving cap + band-with-hole). Only
+        // a PARTIAL in-both run (`b1 - b0 < N`, a real out-of-face arc) is
+        // trimmed to its in-both arc below: keeping a partial whole would leave a
+        // spurious closed self-loop section edge (the splitter only trims OPEN
+        // curves and only adopts closed CIRCLES via seam adoption), so a full
+        // ellipse from an inner tapered wall meeting an outer corner (the
+        // gridfinity lip knife-edge) would survive as a degenerate loop and
+        // over-connect the rim. Circles are left whole (seam adoption handles
         // them); open curves are left whole (the splitter clips them).
-        if closed && b1 - b0 < N && !near_whole && !matches!(raw.curve, EdgeCurve::Circle(_)) {
-            #[allow(clippy::cast_precision_loss)]
-            let frac = |i: usize| i as f64 / N as f64;
-            let span = raw.t_range.1 - raw.t_range.0;
-            let raw_t0 = raw.t_range.0 + span * frac(b0);
-            let raw_t1 = raw.t_range.0 + span * frac(b1);
-            // A wrapping in-both run reports `b1 > N`, so `raw_t1` maps PAST the
-            // curve's domain end. A periodic curve (Ellipse/Circle) evaluates
-            // such an out-of-domain parameter correctly (cos/sin wrap), so the
-            // seam-wrapping arc must keep its unwrapped parameters. A clamped
-            // NURBS, by contrast, does NOT extrapolate gracefully (it evaluates
-            // to a garbage 3D point well outside the model), so for NURBS only,
-            // clamp the trim endpoints into the curve's parameter range first.
-            let (t0, t1) = if matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
-                (
-                    raw_t0.clamp(raw.t_range.0, raw.t_range.1),
-                    raw_t1.clamp(raw.t_range.0, raw.t_range.1),
-                )
-            } else {
-                (raw_t0, raw_t1)
-            };
-            let p0 = raw
-                .curve
-                .evaluate_with_endpoints(t0, raw.p_start, raw.p_end);
-            let p1 = raw
-                .curve
-                .evaluate_with_endpoints(t1, raw.p_start, raw.p_end);
-            out.push(RawCurve {
-                curve: raw.curve,
-                bbox: raw.bbox,
-                t_range: (t0, t1),
-                p_start: p0,
-                p_end: p1,
-            });
+        if closed && b1 - b0 < N && !matches!(raw.curve, EdgeCurve::Circle(_)) {
+            out.extend(trim_closed_curve_to_inboth_arc(&raw, b0, b1, N));
             continue;
         }
         out.push(raw);
     }
     out
+}
+
+/// Trim a CLOSED section curve (Ellipse or NURBS) to its in-both arc
+/// `[b0, b1]` of `N` samples, where `b1` may exceed `N` for a run that WRAPS the
+/// periodic seam (the closed curve's sample `N` coincides with sample `0`).
+///
+/// - **Periodic curve (Ellipse):** emit ONE open arc with the unwrapped
+///   parameters `[t0, t1]` (where `t1` may be past the domain end). The curve's
+///   `cos/sin` evaluation handles out-of-domain parameters, so a single arc
+///   spans the wrapping run correctly.
+/// - **NURBS curve:** a clamped NURBS evaluates an out-of-domain parameter to a
+///   garbage point, so a wrapping run cannot be one arc. Emit TWO in-domain
+///   arcs — `[t0, domain_end]` and `[domain_start, t1 − span]` — which meet at
+///   the seam (where the closed curve's endpoints coincide), preserving BOTH
+///   pieces of the wrapping run instead of dropping the head. A non-wrapping
+///   NURBS run (`b1 ≤ N`) is a single in-domain arc.
+fn trim_closed_curve_to_inboth_arc(
+    raw: &RawCurve,
+    b0: usize,
+    b1: usize,
+    n: usize,
+) -> Vec<RawCurve> {
+    #[allow(clippy::cast_precision_loss)]
+    let frac = |i: usize| i as f64 / n as f64;
+    let span = raw.t_range.1 - raw.t_range.0;
+    let t0 = raw.t_range.0 + span * frac(b0);
+    let t1 = raw.t_range.0 + span * frac(b1);
+    let point_at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+
+    let one_arc = |ta: f64, tb: f64| RawCurve {
+        curve: raw.curve.clone(),
+        bbox: raw.bbox,
+        t_range: (ta, tb),
+        p_start: point_at(ta),
+        p_end: point_at(tb),
+    };
+
+    let wraps = b1 > n; // the in-both run crosses the periodic seam.
+    if matches!(raw.curve, EdgeCurve::NurbsCurve(_)) && wraps {
+        // Split at the domain end / start so neither arc leaves the domain.
+        let t1_wrapped = t1 - span; // = raw.t_range.0 + span * frac(b1 - n)
+        vec![
+            one_arc(t0, raw.t_range.1),
+            one_arc(raw.t_range.0, t1_wrapped),
+        ]
+    } else {
+        // Periodic curve (any run) or non-wrapping NURBS: a single arc. For a
+        // periodic curve `t1` may exceed the domain — that is intentional and
+        // evaluates correctly.
+        vec![one_arc(t0, t1)]
+    }
 }
 
 /// Trim a closed `Ellipse` section (the intersection of a thin planar tread
@@ -2999,6 +3013,80 @@ mod tests {
         // A closed curve entirely in-both returns the whole span (0, m).
         let inb = [true, true, true, true, true];
         assert_eq!(longest_inboth_run(&inb, true), (0, 4));
+    }
+
+    #[test]
+    fn trim_partial_ellipse_to_single_open_arc() {
+        // A closed Ellipse whose in-both run is a genuine NON-wrapping partial
+        // (b0..b1 strictly inside [0, N]) trims to ONE open arc with those exact
+        // parameters — NOT kept whole. Domain [0, 2π], N=24, run = samples 6..18.
+        use brepkit_math::curves::Ellipse3D;
+        let e = Ellipse3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            4.0,
+            3.0,
+        )
+        .unwrap();
+        let raw = RawCurve {
+            curve: EdgeCurve::Ellipse(e),
+            bbox: Aabb3 {
+                min: Point3::new(-4.0, -3.0, 0.0),
+                max: Point3::new(4.0, 3.0, 0.0),
+            },
+            t_range: (0.0, std::f64::consts::TAU),
+            p_start: Point3::new(0.0, 0.0, 0.0),
+            p_end: Point3::new(0.0, 0.0, 0.0),
+        };
+        let out = trim_closed_curve_to_inboth_arc(&raw, 6, 18, 24);
+        assert_eq!(out.len(), 1, "non-wrapping partial → one open arc");
+        let tau = std::f64::consts::TAU;
+        assert!((out[0].t_range.0 - tau * 6.0 / 24.0).abs() < 1e-9);
+        assert!((out[0].t_range.1 - tau * 18.0 / 24.0).abs() < 1e-9);
+        // The arc is OPEN (endpoints differ), so the splitter trims it rather
+        // than treating it as a closed internal loop.
+        assert!((out[0].p_start - out[0].p_end).length() > 1e-6);
+    }
+
+    #[test]
+    fn trim_wrapping_nurbs_preserves_both_pieces() {
+        // A closed NURBS whose in-both run WRAPS the seam (b1 > N) must emit TWO
+        // in-domain arcs (head [t0, domain_end] + tail [domain_start, t1−span]),
+        // NOT a clamp-dropped single arc, since a clamped NURBS can't evaluate
+        // past its domain. Run = samples 22..28 (i.e. 22,23,0,1,2,3,4 wrapping),
+        // N=24, domain [0, 1].
+        use brepkit_math::nurbs::fitting::interpolate;
+        // A closed NURBS through 8 points around a circle (start == end).
+        let mut pts: Vec<Point3> = (0..8)
+            .map(|k| {
+                let a = std::f64::consts::TAU * f64::from(k) / 8.0;
+                Point3::new(3.0 * a.cos(), 3.0 * a.sin(), 0.0)
+            })
+            .collect();
+        pts.push(pts[0]);
+        let nurbs = interpolate(&pts, 3).unwrap();
+        let (d0, d1) = nurbs.domain();
+        let raw = RawCurve {
+            curve: EdgeCurve::NurbsCurve(nurbs),
+            bbox: Aabb3 {
+                min: Point3::new(-3.0, -3.0, 0.0),
+                max: Point3::new(3.0, 3.0, 0.0),
+            },
+            t_range: (d0, d1),
+            p_start: pts[0],
+            p_end: pts[0],
+        };
+        let out = trim_closed_curve_to_inboth_arc(&raw, 22, 28, 24);
+        assert_eq!(out.len(), 2, "wrapping NURBS run → two in-domain arcs");
+        // Both arcs stay within the curve's domain (no out-of-domain garbage).
+        for arc in &out {
+            assert!(arc.t_range.0 >= d0 - 1e-9 && arc.t_range.0 <= d1 + 1e-9);
+            assert!(arc.t_range.1 >= d0 - 1e-9 && arc.t_range.1 <= d1 + 1e-9);
+        }
+        // Head ends at the domain end; tail starts at the domain start — they
+        // join at the seam where the closed curve's endpoints coincide.
+        assert!((out[0].t_range.1 - d1).abs() < 1e-9);
+        assert!((out[1].t_range.0 - d0).abs() < 1e-9);
     }
 
     #[test]
