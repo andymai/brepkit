@@ -1385,21 +1385,42 @@ pub(super) fn split_face_with_internal_loops(
 /// kept wall well clear of every lens. Returns `None` if the surface evaluator
 /// or boundary v-range is unusable, so the caller keeps the unset interior.
 fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> {
-    // Densely sample every hole loop into 3D points once.
+    use std::f64::consts::TAU;
+    // Densely sample every hole loop into 3D points AND project each to a (u, v)
+    // polyline so candidate interior points can be tested for face containment
+    // (outside every hole). Endpoint UVs are unusable here — a lens hole is one
+    // closed edge whose start/end UV coincide — so sample the curve.
     let mut hole_pts: Vec<Point3> = Vec::new();
+    // Inner-loop (u, v) segments (split at the seam), for the even-odd
+    // vertical-ray hole-containment test below.
+    let mut hole_segs: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let n = 48;
     for hole in &remainder.inner_wires {
+        let mut prev_uv: Option<(f64, f64)> = None;
         for edge in hole {
             let (t0, t1) = edge
                 .curve_3d
                 .domain_with_endpoints(edge.start_3d, edge.end_3d);
-            let n = 24;
-            for k in 0..n {
+            for k in 0..=n {
                 #[allow(clippy::cast_precision_loss)]
                 let t = t0 + (t1 - t0) * (k as f64 / f64::from(n));
-                hole_pts.push(
-                    edge.curve_3d
-                        .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d),
-                );
+                let p = edge
+                    .curve_3d
+                    .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d);
+                hole_pts.push(p);
+                if let Some((u, v)) = remainder.surface.project_point(p) {
+                    if let Some((pu, pv)) = prev_uv
+                        && (u - pu).abs() < TAU * 0.5
+                    {
+                        let (a_u, a_v, b_u, b_v) = if pu <= u {
+                            (pu, pv, u, v)
+                        } else {
+                            (u, v, pu, pv)
+                        };
+                        hole_segs.push((a_u, a_v, b_u, b_v));
+                    }
+                    prev_uv = Some((u, v));
+                }
             }
         }
     }
@@ -1441,7 +1462,11 @@ fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> 
     let (u_lo, u_span) = covered_u_interval(&u_samples);
 
     // Grid-search (u, v) for the wall point maximising the minimum 3D distance
-    // to the hole loops, over the face's actual extent only.
+    // to the hole loops, over the face's actual extent only, accepting ONLY
+    // candidates that are face-CONTAINED (inside the covered u/v extent — by
+    // construction — AND outside every lens hole). A point outside the sub-face
+    // fed to classification would drop valid curved wall faces, so an
+    // uncontained best is rejected.
     let mut best: Option<(f64, Point3)> = None;
     let n_u = 48;
     let n_v = 5;
@@ -1451,6 +1476,9 @@ fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> 
         for iv in 1..n_v {
             #[allow(clippy::cast_precision_loss)]
             let v = v_min + (v_max - v_min) * (iv as f64) / f64::from(n_v);
+            if point_in_hole_loops_uv(&hole_segs, u, v) {
+                continue; // Inside a lens hole — not the kept region.
+            }
             let Some(p) = remainder.surface.evaluate(u, v) else {
                 continue;
             };
@@ -1463,7 +1491,44 @@ fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> 
             }
         }
     }
+    // No contained candidate found → report (keep the interior unset) rather
+    // than return a point outside the sub-face.
     best.map(|(_, p)| p)
+}
+
+/// Whether `(u, v)` lies inside the region bounded by the combined inner-loop
+/// `(u, v)` segments — an even-odd vertical-ray test. Each segment is tested in
+/// every 2π `u`-translate so a seam-wrapping lens loop is matched. A wall
+/// interior point must be OUTSIDE every hole (this returns `false`) to lie in
+/// the kept remainder region.
+fn point_in_hole_loops_uv(hole_segs: &[(f64, f64, f64, f64)], u: f64, v: f64) -> bool {
+    use std::f64::consts::TAU;
+    let seg_u_min = hole_segs.iter().map(|s| s.0).fold(f64::INFINITY, f64::min);
+    let seg_u_max = hole_segs
+        .iter()
+        .map(|s| s.2)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !seg_u_min.is_finite() {
+        return false;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let k0 = ((seg_u_min - u) / TAU).floor() as i64;
+    #[allow(clippy::cast_possible_truncation)]
+    let k1 = ((seg_u_max - u) / TAU).ceil() as i64;
+    let mut crossings = 0u32;
+    for k in k0..=k1 {
+        #[allow(clippy::cast_precision_loss)]
+        let uu = u + (k as f64) * TAU;
+        for &(a_u, a_v, b_u, b_v) in hole_segs {
+            if uu >= a_u && uu < b_u && (b_u - a_u) > 1e-15 {
+                let t = (uu - a_u) / (b_u - a_u);
+                if a_v + t * (b_v - a_v) > v {
+                    crossings += 1;
+                }
+            }
+        }
+    }
+    crossings % 2 == 1
 }
 
 /// Given angular samples (radians, any 2π window), return `(u_lo, u_span)` —
@@ -1785,7 +1850,7 @@ pub(super) fn try_split_crossing_plane_face(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
-    use super::{OrientedPCurveEdge, arc_covers_segment};
+    use super::{OrientedPCurveEdge, arc_covers_segment, point_in_hole_loops_uv};
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::surfaces::CylindricalSurface;
@@ -1884,5 +1949,106 @@ mod tests {
             let b = surface.evaluate(wrapped, 3.0).unwrap();
             assert!((a - b).length() < 1e-9);
         }
+    }
+
+    #[test]
+    fn hole_containment_even_odd_inside_vs_outside() {
+        // A square hole loop in (u, v) around (u=1.0, v=10.0), as the segment
+        // list `cylinder_cone_remainder_interior` builds. The remainder
+        // interior-point search rejects any candidate INSIDE this hole.
+        let (uc, vc, h) = (1.0_f64, 10.0_f64, 0.5_f64);
+        let corners = [
+            (uc - h, vc - h),
+            (uc + h, vc - h),
+            (uc + h, vc + h),
+            (uc - h, vc + h),
+        ];
+        let mut segs: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for i in 0..4 {
+            let (mut a_u, mut a_v) = corners[i];
+            let (mut b_u, mut b_v) = corners[(i + 1) % 4];
+            if a_u > b_u {
+                std::mem::swap(&mut a_u, &mut b_u);
+                std::mem::swap(&mut a_v, &mut b_v);
+            }
+            segs.push((a_u, a_v, b_u, b_v));
+        }
+        // Centre of the hole → inside.
+        assert!(
+            point_in_hole_loops_uv(&segs, uc, vc),
+            "hole centre is inside"
+        );
+        // Well outside the hole (different u and v) → outside.
+        assert!(
+            !point_in_hole_loops_uv(&segs, uc + 2.0, vc),
+            "a point clear of the hole in u is outside"
+        );
+        assert!(
+            !point_in_hole_loops_uv(&segs, uc, vc + 2.0),
+            "a point clear of the hole in v is outside"
+        );
+        // No segments → never inside.
+        assert!(!point_in_hole_loops_uv(&[], uc, vc));
+    }
+
+    #[test]
+    fn remainder_interior_point_is_outside_the_lens_hole() {
+        // A full cylinder wall (z-axis, r=3, v∈[0,20]) with one closed-circle
+        // hole on the wall near (u=0, v=10): the chosen interior point must be
+        // OUTSIDE the hole (Finding B — an uncontained point would drop the
+        // wall face at classification).
+        use super::super::super::split_types::SplitSubFace;
+        use crate::ds::Rank;
+        use brepkit_topology::topology::Topology;
+
+        // A real FaceId for the `parent` field (never read by the function under
+        // test, but the struct requires a valid handle).
+        let mut dummy_topo = Topology::new();
+        let parent = brepkit_topology::test_utils::make_unit_square_face(&mut dummy_topo);
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+
+        // Outer wire: bottom rim (v=0), seam up (u=0), top rim (v=20), seam down.
+        let bot = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let top =
+            Circle3D::new(Point3::new(0.0, 0.0, 20.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let outer = vec![
+            arc_edge(&bot, 0.0, TAU, true),
+            line_chord(Point3::new(3.0, 0.0, 0.0), Point3::new(3.0, 0.0, 20.0)),
+            arc_edge(&top, 0.0, TAU, true),
+            line_chord(Point3::new(3.0, 0.0, 20.0), Point3::new(3.0, 0.0, 0.0)),
+        ];
+
+        // Hole: a small circle ON the cylinder wall near (u≈0, v=10). Centre on
+        // the surface at (3,0,10); the hole loop is a circle of radius 1 in the
+        // tangent plane (u,z) — small enough to stay on the wall band.
+        let hole_center = Point3::new(3.0, 0.0, 10.0);
+        let hole_normal = Vec3::new(1.0, 0.0, 0.0); // wall outward normal at u=0
+        let hole = Circle3D::new(hole_center, hole_normal, 1.0).unwrap();
+        let inner = vec![vec![arc_edge(&hole, 0.0, TAU, true)]];
+
+        let sub = SplitSubFace {
+            surface,
+            outer_wire: outer,
+            inner_wires: inner,
+            reversed: false,
+            parent,
+            rank: Rank::A,
+            precomputed_interior: None,
+        };
+
+        let p = super::cylinder_cone_remainder_interior(&sub).unwrap();
+        // The point is ON the cylinder (radius 3 from the axis).
+        let radial = (p.x() * p.x() + p.y() * p.y()).sqrt();
+        assert!((radial - 3.0).abs() < 1e-6, "interior point on the wall");
+        // The point is CLEAR of the hole (well outside its 1-unit circle).
+        assert!(
+            (p - hole_center).length() > 1.5,
+            "interior point must be clear of the hole, got dist {}",
+            (p - hole_center).length()
+        );
     }
 }

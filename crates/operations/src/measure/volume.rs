@@ -213,19 +213,23 @@ fn steinmetz_lens_fuse_volume(topo: &Topology, faces: &[FaceId]) -> Option<f64> 
     Some(v_cyls - v_steinmetz)
 }
 
-/// Whether the solid is the STEINMETZ LENS FUSE — two mutually-trimmed equal
-/// cylinders — by its whole-solid topology signature, which no other holed
-/// cyl/cone solid shares:
-///   * exactly two cylindrical faces, each carrying inner wires (the two seam
-///     ellipses as holes);
-///   * every other face planar (the four end caps);
-///   * the holed walls' inner-wire EDGES are SHARED between the two walls
-///     (the same seam ellipses bound both).
+/// Whether the solid is the STEINMETZ LENS FUSE — two equal-radius cylinders
+/// with PERPENDICULAR, INTERSECTING axes, fused — for which the volume has the
+/// EXACT closed form [`steinmetz_lens_fuse_volume`].
 ///
-/// When this matches, the volume has the EXACT closed form
-/// [`steinmetz_lens_fuse_volume`]. An ordinary drilled cylinder has ONE holed
-/// wall (its bore rim is not shared with a second cylindrical wall), so it
-/// returns `false` and the solid defers to tessellation.
+/// Validated by both topology AND geometry, so a different equal-radius two-
+/// cylinder fuse with the same topology (e.g. oblique or parallel-offset axes,
+/// whose intersection is NOT `16r³/3`) is rejected and defers to tessellation:
+///   * exactly two cylindrical faces, each carrying inner wires (the two seam
+///     ellipses as holes); every other face planar (the four end caps);
+///   * the two holed walls SHARE their inner-wire edges (the same seam ellipses
+///     bound both);
+///   * the two cylinders are EQUAL RADIUS, their axes PERPENDICULAR
+///     (`|a₁·a₂| ≈ 0`) and INTERSECTING (closest-approach of the two axis lines
+///     ≈ 0). The closed form holds only for that right-angle configuration.
+///
+/// An ordinary drilled cylinder has ONE holed wall (its bore rim is not shared
+/// with a second cylindrical wall), so it returns `false`.
 fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
     use std::collections::HashSet;
 
@@ -261,7 +265,54 @@ fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
     };
     let a = inner_edges(holed_cyl_walls[0]);
     let b = inner_edges(holed_cyl_walls[1]);
-    !a.is_empty() && a == b
+    if a.is_empty() || a != b {
+        return false;
+    }
+
+    // Geometry: equal radius, perpendicular + intersecting axes.
+    let (Ok(f0), Ok(f1)) = (topo.face(holed_cyl_walls[0]), topo.face(holed_cyl_walls[1])) else {
+        return false;
+    };
+    let (FaceSurface::Cylinder(c0), FaceSurface::Cylinder(c1)) = (f0.surface(), f1.surface())
+    else {
+        return false;
+    };
+    cylinders_perpendicular_and_intersecting(c0, c1)
+}
+
+/// Whether two cylinders are equal-radius with perpendicular, intersecting axes
+/// — the geometric precondition for the right-angle Steinmetz closed form.
+fn cylinders_perpendicular_and_intersecting(
+    c0: &brepkit_math::surfaces::CylindricalSurface,
+    c1: &brepkit_math::surfaces::CylindricalSurface,
+) -> bool {
+    let r0 = c0.radius();
+    if (r0 - c1.radius()).abs() > 1e-6 * r0.max(1.0) {
+        return false; // Unequal radius.
+    }
+    let a0 = c0.axis();
+    let a1 = c1.axis();
+    if a0.dot(a1).abs() > 1e-6 {
+        return false; // Not perpendicular.
+    }
+    // Closest approach of the two axis lines (perpendicular ⇒ the system
+    // decouples): s* = −(w0·a0), t* = w0·a1, where w0 = o0 − o1.
+    let o0 = c0.origin();
+    let o1 = c1.origin();
+    let w0 = Vec3::new(o0.x() - o1.x(), o0.y() - o1.y(), o0.z() - o1.z());
+    let s = -w0.dot(a0);
+    let t = w0.dot(a1);
+    let p0 = Point3::new(
+        o0.x() + a0.x() * s,
+        o0.y() + a0.y() * s,
+        o0.z() + a0.z() * s,
+    );
+    let p1 = Point3::new(
+        o1.x() + a1.x() * t,
+        o1.y() + a1.y() * t,
+        o1.z() + a1.z() * t,
+    );
+    (p0 - p1).length() <= 1e-6 * r0.max(1.0)
 }
 
 /// Try to compute the volume of a solid analytically by detecting known
@@ -1569,5 +1620,34 @@ mod regression_tests {
             !solid_is_steinmetz_lens_fuse(&topo2, &f2),
             "coaxial cyl∩cyl is not the lens fuse"
         );
+    }
+
+    #[test]
+    fn cyl_perp_intersecting_predicate() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        let cyl = |o: Point3, a: Vec3, r: f64| CylindricalSurface::new(o, a, r).unwrap();
+        let z = cyl(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0);
+
+        // The census config: z⊥x, axes meet at the origin, equal r → TRUE.
+        let x = cyl(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 3.0);
+        assert!(cylinders_perpendicular_and_intersecting(&z, &x));
+
+        // Unequal radius → false.
+        let x_big = cyl(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 4.0);
+        assert!(!cylinders_perpendicular_and_intersecting(&z, &x_big));
+
+        // Non-perpendicular (45°), intersecting, equal r → false (its
+        // intersection is NOT 16r³/3, so the closed form would be wrong).
+        let diag = cyl(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 1.0), 3.0);
+        assert!(!cylinders_perpendicular_and_intersecting(&z, &diag));
+
+        // Parallel-offset equal r (both along z) → false (not perpendicular).
+        let z_off = cyl(Point3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0);
+        assert!(!cylinders_perpendicular_and_intersecting(&z, &z_off));
+
+        // Perpendicular but SKEW (x-axis shifted in y so its line never meets
+        // the z-axis) → false (not intersecting).
+        let x_skew = cyl(Point3::new(0.0, 5.0, 8.0), Vec3::new(1.0, 0.0, 0.0), 3.0);
+        assert!(!cylinders_perpendicular_and_intersecting(&z, &x_skew));
     }
 }
