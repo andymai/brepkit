@@ -23,6 +23,79 @@ use super::helpers::{collect_solid_vertex_points, compute_angular_range};
 /// tessellation-based volume. Returns `None` (defer to tessellation) when no
 /// bored quadric is present, when any face is NURBS, or when a face fails to
 /// integrate.
+/// Whether a sphere face's outer wire lies on a single constant-`v` latitude
+/// (the simple bored-quadric band) rather than a scalloped, varying-`v` collar
+/// floor. Projects the outer wire's vertices to `(u, v)` and tests the `v`
+/// spread.
+fn sphere_outer_wire_constant_v(
+    topo: &Topology,
+    face_id: FaceId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> bool {
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return false;
+    };
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            return false;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return false;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        // Sample ALONG each edge, not just its start vertex: a great-circle arc
+        // has both endpoints on the seam latitude yet bulges away from it, so
+        // endpoint-only sampling would mis-read a scalloped collar floor as a
+        // constant-v band and wrongly take the analytic fast path.
+        for i in 0..=8 {
+            let t = t0 + (t1 - t0) * (f64::from(i) / 8.0);
+            let (_, v) = sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
+            v_min = v_min.min(v);
+            v_max = v_max.max(v);
+        }
+    }
+    // Latitude-flatness threshold sized to the linear-tolerance magnitude: a
+    // real band's v-spread is ~fp-noise; a collar's is a large fraction of a
+    // radian.
+    (v_max - v_min) <= 1e-7
+}
+
+/// Whether the solid has at least one sphere face that is a scalloped collar
+/// (a bored quadric whose outer wire varies in `v`, e.g. a box ∩ sphere patch).
+fn solid_has_scalloped_sphere_collar(topo: &Topology, solid: SolidId) -> bool {
+    let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, solid) else {
+        return false;
+    };
+    faces.iter().any(|&fid| {
+        topo.face(fid).is_ok_and(|f| match f.surface() {
+            FaceSurface::Sphere(s) => {
+                !f.inner_wires().is_empty() && !sphere_outer_wire_constant_v(topo, fid, s)
+            }
+            _ => false,
+        })
+    })
+}
+
+/// Count mesh edges incident to a number of triangles other than 2 (boundary or
+/// non-manifold edges). Zero means a closed 2-manifold.
+fn mesh_boundary_edge_count(mesh: &tessellate::TriangleMesh) -> usize {
+    use brepkit_math::det_hash::DetHashMap;
+    let mut counts: DetHashMap<(u32, u32), usize> = DetHashMap::default();
+    for tri in mesh.indices.chunks_exact(3) {
+        for &(i, j) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            let key = if i < j { (i, j) } else { (j, i) };
+            *counts.entry(key).or_insert(0) += 1;
+        }
+    }
+    counts.values().filter(|&&c| c != 2).count()
+}
+
 fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     use brepkit_topology::explorer::solid_faces;
 
@@ -40,7 +113,15 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
             // for spheres. A bored torus would pass `hole_vs = []` and
             // over-integrate, so defer it to tessellation until torus
             // hole-clipping lands (with the torus−box analytic split).
-            FaceSurface::Sphere(_) if !face.inner_wires().is_empty() => {
+            FaceSurface::Sphere(s) if !face.inner_wires().is_empty() => {
+                // The integrator's hole-clipping models a band between two
+                // constant-v latitudes. A collar whose OUTER wire varies in v
+                // (great-circle/seam arcs, e.g. a box ∩ sphere patch) is not
+                // that shape — its scalloped floor and lune bites would be
+                // mis-integrated, so defer the whole solid to tessellation.
+                if !sphere_outer_wire_constant_v(topo, fid, s) {
+                    return None;
+                }
                 has_bored_quadric = true;
             }
             FaceSurface::Torus(_) if !face.inner_wires().is_empty() => return None,
@@ -358,6 +439,20 @@ pub fn solid_volume(
     // extent — never coarsening a finer request — so the volume is accurate
     // regardless of the (preview-tuned) deflection the caller passes.
     let deflection = volume_tessellation_deflection(topo, solid, deflection);
+
+    // A scalloped sphere collar (box ∩ sphere) cannot be per-face tessellated
+    // watertight (its band path needs the solid's shared boundary vertices), and
+    // its analytic integral is the hard u-dependent lune trim we defer. The
+    // whole-solid mesh IS watertight, so take the divergence-theorem volume off
+    // that closed mesh.
+    if solid_has_scalloped_sphere_collar(topo, solid) {
+        let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
+        if !mesh.indices.is_empty() && mesh_boundary_edge_count(&mesh) == 0 {
+            return Ok(signed_volume_from_mesh(&mesh));
+        }
+        // Non-watertight mesh: fall through to the generic paths below rather
+        // than return a leaky volume.
+    }
 
     // Fast path: for solids made entirely of planar triangular faces
     // (e.g. mesh imports), compute volume directly from face geometry.

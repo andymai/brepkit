@@ -720,6 +720,54 @@ fn bored_sphere_band_area_and_watertight() {
     );
 }
 
+/// A box ∩ centered-sphere produces two annular sphere "collar" patches whose
+/// outer wire varies in v (a scalloped great-circle/equator floor) plus a
+/// latitude-cap hole. This is the varying-v generalization of the bored-sphere
+/// band: the collar must tessellate watertight (the CDT path leaves 98+ free
+/// edges) and its area must match the analytic box∩sphere boundary.
+#[test]
+fn box_centered_sphere_collar_tessellates_watertight() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let sp = crate::primitives::make_sphere(&mut topo, 6.0, 24).unwrap();
+    crate::transform::transform_solid(&mut topo, sp, &Mat4::translation(5.0, 5.0, 5.0)).unwrap();
+    let result =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Intersect, bx, sp).unwrap();
+
+    // Analytic boundary area: 6 plane discs (radius² = R²−5² = 11) + the sphere
+    // minus 6 spherical caps (each cap zone area = 2πRh, h=1).
+    let r: f64 = 6.0;
+    let disc_area = 6.0 * std::f64::consts::PI * 11.0;
+    let cap_zone = 2.0 * std::f64::consts::PI * r * 1.0;
+    let sphere_patch = 4.0 * std::f64::consts::PI * r * r - 6.0 * cap_zone;
+    let analytic_area = disc_area + sphere_patch;
+
+    for &defl in &[0.05_f64, 0.005] {
+        let mesh = tessellate_solid(&topo, result, defl).unwrap();
+        assert!(
+            is_watertight(&mesh),
+            "box∩sphere collar must tessellate watertight at deflection {defl}: bd={} nm={}",
+            boundary_edge_count(&mesh),
+            non_manifold_edge_count(&mesh)
+        );
+        let mut area = 0.0;
+        for t in 0..mesh.indices.len() / 3 {
+            let a = mesh.positions[mesh.indices[t * 3 + 1] as usize]
+                - mesh.positions[mesh.indices[t * 3] as usize];
+            let b = mesh.positions[mesh.indices[t * 3 + 2] as usize]
+                - mesh.positions[mesh.indices[t * 3] as usize];
+            area += 0.5 * a.cross(b).length();
+        }
+        // Inscribed mesh area is below analytic; within ~3% at these deflections.
+        assert!(
+            area <= analytic_area + 1.0 && area > analytic_area * 0.97,
+            "collar mesh area {area} should be ~{analytic_area} (no cap-fill) at deflection {defl}"
+        );
+    }
+}
+
 #[test]
 fn tessellate_solid_box_correct_area() {
     let mut topo = Topology::new();

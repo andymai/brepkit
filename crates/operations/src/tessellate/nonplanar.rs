@@ -215,76 +215,258 @@ pub(super) fn tessellate_latitude_band_shared(
         _ => return Ok(false),
     };
 
-    // Build one boundary ring per wire (outer first, then the single inner).
-    // Each must be a closed full-revolution loop at a single constant v.
-    let mut wire_ids = vec![face_data.outer_wire()];
-    wire_ids.extend_from_slice(face_data.inner_wires());
-    let mut rings: Vec<(f64, LatRing)> = Vec::with_capacity(2);
-    for &wid in &wire_ids {
-        let Some((v_level, ring)) =
-            collect_constant_v_ring(topo, wid, project.as_ref(), edge_global_indices, merged)?
-        else {
-            return Ok(false);
-        };
-        rings.push((v_level, ring));
-    }
-
-    // Order by v so we sweep from the lower latitude to the upper.
-    rings.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let (v_lo, ring_lo) = &rings[0];
-    let (v_hi, ring_hi) = &rings[1];
-    let (v_lo, v_hi) = (*v_lo, *v_hi);
-    if (v_hi - v_lo).abs() < 1e-9 {
-        return Ok(false);
-    }
-
-    // Number of intermediate latitude rows from the chord error across the band
-    // in v. The bulge radius is the sphere radius (torus: minor radius).
     let band_radius = match face_data.surface() {
         FaceSurface::Sphere(s) => s.radius(),
         FaceSurface::Torus(t) => t.minor_radius(),
         _ => return Ok(false),
     };
-    let n_v =
-        segments_for_chord_deviation_a(band_radius, v_hi - v_lo, deflection, angular_tol, true)
-            .max(1);
-
-    // Column count for the interior rows. Use the full-circle chord-deviation
-    // count at the band radius, but never fewer columns than the denser of the
-    // two boundary rings, so interior rows never undercut the boundary sampling.
-    let n_u_interior = ring_lo
-        .len()
-        .max(ring_hi.len())
-        .max(segments_for_chord_deviation_a(
-            band_radius,
-            std::f64::consts::TAU,
-            deflection,
-            angular_tol,
-            true,
-        ));
-
     let emit = make_band_emit(project.as_ref(), surf_normal.as_ref());
+    let full_circle_cols = segments_for_chord_deviation_a(
+        band_radius,
+        std::f64::consts::TAU,
+        deflection,
+        angular_tol,
+        true,
+    );
 
-    // Build interior rows (new face-local vertices on the full u ring), then
-    // stitch boundary_lo -> interior rows... -> boundary_hi.
-    let mut prev_ring: LatRing = ring_lo.clone();
+    let outer_wid = face_data.outer_wire();
+    let inner_wid = face_data.inner_wires()[0];
+
+    // Case 1 — both boundaries are single constant-v latitude circles (the
+    // bored-quadric band, e.g. sphere − through-cylinder). Sweep constant-v
+    // interior rows between them.
+    let outer_const = collect_constant_v_ring(
+        topo,
+        outer_wid,
+        project.as_ref(),
+        edge_global_indices,
+        merged,
+    )?;
+    let inner_const = collect_constant_v_ring(
+        topo,
+        inner_wid,
+        project.as_ref(),
+        edge_global_indices,
+        merged,
+    )?;
+
+    if let (Some((v_outer, ring_outer)), Some((v_inner, ring_inner))) = (&outer_const, &inner_const)
+    {
+        let mut rings = [
+            (*v_outer, ring_outer.clone()),
+            (*v_inner, ring_inner.clone()),
+        ];
+        rings.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let (v_lo, ring_lo) = (&rings[0].0, &rings[0].1);
+        let (v_hi, ring_hi) = (&rings[1].0, &rings[1].1);
+        let (v_lo, v_hi) = (*v_lo, *v_hi);
+        if (v_hi - v_lo).abs() < 1e-9 {
+            return Ok(false);
+        }
+        let n_v =
+            segments_for_chord_deviation_a(band_radius, v_hi - v_lo, deflection, angular_tol, true)
+                .max(1);
+        let n_u_interior = ring_lo.len().max(ring_hi.len()).max(full_circle_cols);
+        let mut prev_ring: LatRing = ring_lo.clone();
+        for iv in 1..n_v {
+            #[allow(clippy::cast_precision_loss)]
+            let t = iv as f64 / n_v as f64;
+            let v = v_lo + (v_hi - v_lo) * t;
+            let row = build_interior_row(
+                v,
+                n_u_interior,
+                surf_eval.as_ref(),
+                surf_normal.as_ref(),
+                merged,
+                point_to_global,
+            );
+            stitch_rings(merged, &prev_ring, &row, &emit);
+            prev_ring = row;
+        }
+        stitch_rings(merged, &prev_ring, ring_hi, &emit);
+        return Ok(true);
+    }
+
+    // Case 2 — a COLLAR: the inner wire is a constant-v cap circle, the outer
+    // wire is a full-longitude-wrap "floor" at varying v (great-circle/seam
+    // arcs, e.g. a box ∩ sphere patch). Sweep interior rows whose per-column v
+    // interpolates from the scalloped floor up to the cap.
+    let Some((v_cap, cap_ring)) = inner_const else {
+        return Ok(false);
+    };
+    let Some(floor) = collect_var_v_ring(
+        topo,
+        outer_wid,
+        project.as_ref(),
+        edge_global_indices,
+        merged,
+    )?
+    else {
+        return Ok(false);
+    };
+    // The collar must straddle the cap (the floor sits on the far side of the
+    // cap latitude). Reject a near-flat outer wire (would be Case 1).
+    let floor_v_min = floor.iter().map(|r| r.1).fold(f64::INFINITY, f64::min);
+    let floor_v_max = floor.iter().map(|r| r.1).fold(f64::NEG_INFINITY, f64::max);
+    if (floor_v_max - floor_v_min) <= 1e-6 {
+        return Ok(false); // constant-v outer — Case 1 already tried it
+    }
+    let floor_v_near = if (v_cap - floor_v_max).abs() >= (v_cap - floor_v_min).abs() {
+        floor_v_max
+    } else {
+        floor_v_min
+    };
+    if (v_cap - floor_v_near).abs() < 1e-9 {
+        return Ok(false);
+    }
+
+    // The outer (scalloped) ring is the lower boundary; sweep up to the cap.
+    // Use the absolute band height: the floor can sit above the cap latitude
+    // (a southern collar), and a negative range trips the chord-deviation
+    // helper's `<= 0` fallback (a fixed count) instead of scaling with height.
+    let n_v = segments_for_chord_deviation_a(
+        band_radius,
+        (v_cap - floor_v_near).abs(),
+        deflection,
+        angular_tol,
+        true,
+    )
+    .max(1);
+
+    // Lower boundary ring as a LatRing (drop the v component; the gid carries
+    // the shared scalloped-floor vertex).
+    let floor_ring: LatRing = floor.iter().map(|&(u, _, g)| (u, g)).collect();
+
+    // Emit the collar's triangles in the rings' consistent walk order WITHOUT a
+    // per-triangle normal flip, then orient the whole collar once below. (The
+    // per-triangle normal fix that the bored-band path uses is unstable for the
+    // thin stitch triangles bridging the clustered floor to the even cap — it
+    // flips neighbours inconsistently. A single decision keeps the collar a
+    // coherent 2-manifold.)
+    let collar_idx_start = merged.indices.len();
+    let emit_raw = |merged: &mut TriangleMesh, a: u32, b: u32, c: u32| {
+        if a == b || b == c || a == c {
+            return;
+        }
+        let (pa, pb, pc) = (
+            merged.positions[a as usize],
+            merged.positions[b as usize],
+            merged.positions[c as usize],
+        );
+        if (pb - pa).cross(pc - pa).length() < 1e-20 {
+            return;
+        }
+        merged.indices.extend_from_slice(&[a, b, c]);
+    };
+
+    // Connect the floor to each interior row as COLUMN-ALIGNED quad strips
+    // (same longitudes, same count), then zipper only the topmost interior row
+    // to the cap (different longitude sampling) with `stitch_rings`.
+    let mut prev_ring: LatRing = floor_ring;
     for iv in 1..n_v {
+        #[allow(clippy::cast_precision_loss)]
         let t = iv as f64 / n_v as f64;
-        let v = v_lo + (v_hi - v_lo) * t;
-        let row = build_interior_row(
-            v,
-            n_u_interior,
+        let row = build_collar_row(
+            &floor,
+            v_cap,
+            t,
             surf_eval.as_ref(),
             surf_normal.as_ref(),
             merged,
             point_to_global,
         );
-        stitch_rings(merged, &prev_ring, &row, &emit);
+        emit_aligned_quad_strip(merged, &prev_ring, &row, &emit_raw);
         prev_ring = row;
     }
-    stitch_rings(merged, &prev_ring, ring_hi, &emit);
+    stitch_rings(merged, &prev_ring, &cap_ring, &emit_raw);
+
+    // Orient the collar as a whole: pick the best-conditioned triangle (largest
+    // area), compare its geometric normal to the surface outward normal at its
+    // centroid, and flip every collar triangle's winding if they disagree.
+    orient_triangle_run(
+        merged,
+        collar_idx_start,
+        project.as_ref(),
+        surf_normal.as_ref(),
+    );
 
     Ok(true)
+}
+
+/// Make a contiguous run of triangles (added from `idx_start` onward) wind
+/// consistently outward. The run is already wound coherently (one orientation)
+/// by construction; this only decides whether that single orientation needs a
+/// global flip, using the largest-area triangle (most reliable normal) against
+/// the surface outward normal at its centroid.
+fn orient_triangle_run(
+    merged: &mut TriangleMesh,
+    idx_start: usize,
+    project: &dyn Fn(Point3) -> (f64, f64),
+    surf_normal: &dyn Fn(f64, f64) -> Vec3,
+) {
+    let mut best_area = 0.0_f64;
+    let mut flip = false;
+    let mut t = idx_start;
+    while t + 3 <= merged.indices.len() {
+        let (a, b, c) = (
+            merged.indices[t],
+            merged.indices[t + 1],
+            merged.indices[t + 2],
+        );
+        let (pa, pb, pc) = (
+            merged.positions[a as usize],
+            merged.positions[b as usize],
+            merged.positions[c as usize],
+        );
+        let geo = (pb - pa).cross(pc - pa);
+        let area = geo.length();
+        if area > best_area {
+            best_area = area;
+            let centroid = Point3::new(
+                (pa.x() + pb.x() + pc.x()) / 3.0,
+                (pa.y() + pb.y() + pc.y()) / 3.0,
+                (pa.z() + pb.z() + pc.z()) / 3.0,
+            );
+            let (u, v) = project(centroid);
+            flip = geo.dot(surf_normal(u, v)) < 0.0;
+        }
+        t += 3;
+    }
+    if flip {
+        let mut t = idx_start;
+        while t + 3 <= merged.indices.len() {
+            merged.indices.swap(t + 1, t + 2);
+            t += 3;
+        }
+    }
+}
+
+/// Connect two column-aligned rings (identical longitude order and count) as a
+/// quad strip: column `i` of `lo` joins column `i` of `hi`. Each quad is split
+/// into two triangles via the supplied `emit` closure. The collar path passes
+/// `emit_raw` (no per-triangle winding correction — the whole run is oriented
+/// once afterward by [`orient_triangle_run`], which is stable for the thin
+/// stitch triangles). Watertight by construction when the rings share columns.
+fn emit_aligned_quad_strip(
+    merged: &mut TriangleMesh,
+    lo: &LatRing,
+    hi: &LatRing,
+    emit: &impl Fn(&mut TriangleMesh, u32, u32, u32),
+) {
+    let n = lo.len();
+    if n < 2 || hi.len() != n {
+        // Counts diverged (a merged-away duplicate column) — fall back to the
+        // longitude zipper, which tolerates unequal counts.
+        stitch_rings(merged, lo, hi, emit);
+        return;
+    }
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (l0, l1) = (lo[i].1, lo[j].1);
+        let (h0, h1) = (hi[i].1, hi[j].1);
+        emit(merged, l0, l1, h1);
+        emit(merged, l0, h1, h0);
+    }
 }
 
 /// Collect a wire's shared boundary vertices as a `(v_level, ring)` pair, or
@@ -360,6 +542,68 @@ fn collect_constant_v_ring(
     Ok(Some((v_level, ring)))
 }
 
+/// A boundary ring whose latitude varies with longitude: `(u_angle, v, gid)`
+/// sorted ascending by `u_angle`. Used for a collar's scalloped outer wire (the
+/// great-circle/seam-arc "floor" of a box∩sphere patch), which encircles
+/// longitude fully but at a non-constant `v`.
+type VarRing = Vec<(f64, f64, u32)>;
+
+/// Collect a wire's shared boundary vertices as a longitude-sorted [`VarRing`],
+/// or `None` if the wire is not a closed full-revolution loop (built only from
+/// `Line`/`Circle` edges). Unlike [`collect_constant_v_ring`], the latitude may
+/// vary with longitude.
+fn collect_var_v_ring(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    project: &dyn Fn(Point3) -> (f64, f64),
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &TriangleMesh,
+) -> Result<Option<VarRing>, crate::OperationsError> {
+    let wire = topo.wire(wire_id)?;
+    let mut gids: Vec<u32> = Vec::new();
+    for oe in wire.edges() {
+        let e = topo.edge(oe.edge())?;
+        match e.curve() {
+            EdgeCurve::Line | EdgeCurve::Circle(_) => {}
+            _ => return Ok(None),
+        }
+        let Some(edge_gids) = edge_global_indices.get(&oe.edge().index()) else {
+            return Ok(None);
+        };
+        gids.extend_from_slice(edge_gids);
+    }
+    if gids.len() < 3 {
+        return Ok(None);
+    }
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    let mut ring: VarRing = Vec::with_capacity(gids.len());
+    for g in gids {
+        if !seen.insert(g) {
+            continue;
+        }
+        let (u, v) = project(merged.positions[g as usize]);
+        ring.push((u, v, g));
+    }
+    if ring.len() < 3 {
+        return Ok(None);
+    }
+    ring.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Full-revolution check: the largest longitude gap (including wrap-around)
+    // must be under a full turn — else it is a partial arc, not a closed loop.
+    let max_gap = ring
+        .windows(2)
+        .map(|w| w[1].0 - w[0].0)
+        .chain(std::iter::once(
+            ring[0].0 + std::f64::consts::TAU - ring[ring.len() - 1].0,
+        ))
+        .fold(0.0_f64, f64::max);
+    if max_gap > std::f64::consts::PI {
+        return Ok(None);
+    }
+    Ok(Some(ring))
+}
+
 /// Build an interior latitude row of `n` evenly-spaced new vertices at constant
 /// `v`, returning them as a ring sorted by longitude.
 fn build_interior_row(
@@ -373,6 +617,37 @@ fn build_interior_row(
     let mut row: LatRing = Vec::with_capacity(n);
     for i in 0..n {
         let u = std::f64::consts::TAU * (i as f64) / (n as f64);
+        let p = surf_eval(u, v);
+        let key = point_merge_key(p, MERGE_GRID);
+        let gid = *point_to_global.entry(key).or_insert_with(|| {
+            let idx = merged.positions.len() as u32;
+            merged.positions.push(p);
+            merged.normals.push(surf_normal(u, v));
+            idx
+        });
+        row.push((u, gid));
+    }
+    row
+}
+
+/// Build a collar interior row at the floor ring's exact longitudes — one
+/// column per floor vertex — each column's `v` interpolated a fraction `t` from
+/// that floor vertex's `v` up to the constant cap latitude `v_cap`. Keeping the
+/// interior rows column-aligned with the scalloped floor lets them connect as
+/// clean quad strips (no longitude zippering, so the scallop corners — where
+/// the floor dips to the seam — produce no flipped slivers).
+fn build_collar_row(
+    floor: &VarRing,
+    v_cap: f64,
+    t: f64,
+    surf_eval: &dyn Fn(f64, f64) -> Point3,
+    surf_normal: &dyn Fn(f64, f64) -> Vec3,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> LatRing {
+    let mut row: LatRing = Vec::with_capacity(floor.len());
+    for &(u, v_floor, _) in floor {
+        let v = v_floor + (v_cap - v_floor) * t;
         let p = surf_eval(u, v);
         let key = point_merge_key(p, MERGE_GRID);
         let gid = *point_to_global.entry(key).or_insert_with(|| {
@@ -407,8 +682,16 @@ fn make_band_emit<'a>(
         if geo.length() < 1e-20 {
             return;
         }
-        let (u, v) = project(pa);
-        let outward = surf_normal(u, v);
+        // Reference the outward normal at all three vertices (averaged), not just
+        // `pa`: a thin stitch triangle bridging a clustered ring to an even one
+        // can sit nearly tangent to the surface, where the single-vertex normal
+        // makes `geo.dot(outward)` sign-unstable and flips the triangle relative
+        // to its neighbours. The averaged normal is stable across the triangle.
+        let n_at = |p: Point3| -> Vec3 {
+            let (u, v) = project(p);
+            surf_normal(u, v)
+        };
+        let outward = n_at(pa) + n_at(pb) + n_at(pc);
         let mut tri = [a, b, c];
         if geo.dot(outward) < 0.0 {
             tri.swap(1, 2);
