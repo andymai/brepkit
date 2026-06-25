@@ -2366,11 +2366,17 @@ fn emit_split_circle_arcs(
             continue;
         }
 
-        // Split spans > π into 2+ sub-arcs by inserting midpoint vertices
-        // at evenly spaced t-values. Each sub-arc then has span ≤ π so
-        // downstream "shorter arc" interpretation matches the intended arc.
+        // Split into sub-arcs each spanning STRICTLY less than π by inserting
+        // midpoint vertices at evenly spaced t-values. A span of exactly π is a
+        // diametric semicircle: its two endpoints cannot distinguish it from its
+        // complement, so the downstream "shorter arc" interpretation is
+        // ambiguous AND the assembler's endpoint-keyed edge merge would collapse
+        // two distinct semicircles (e.g. the north/south halves of a sphere's
+        // section circle) into one edge. Dividing by a hair under π forces a
+        // midpoint vertex for any span ≥ π, giving each piece distinct
+        // endpoints.
         let arc_span = t1 - t0;
-        let n_sub = (arc_span / std::f64::consts::PI).ceil().max(1.0) as usize;
+        let n_sub = (arc_span / (std::f64::consts::PI * 0.999)).ceil().max(1.0) as usize;
         let step = arc_span / n_sub as f64;
         let mut points: Vec<(f64, Point3, Option<usize>)> = Vec::with_capacity(n_sub + 1);
         points.push((t0, crossings[i].1, Some(i)));
