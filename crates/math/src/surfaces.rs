@@ -518,6 +518,37 @@ impl SphericalSurface {
         }
     }
 
+    /// Axis-aligned bounding box of the hemisphere on the `pole`-axis side —
+    /// the half-ball `{center + radius·d : d·pole ≥ 0}`. A tight, sound superset
+    /// of any spherical patch lying on that side; the boolean broad-phase uses
+    /// it so that one hemisphere face's box does not admit the other's sections
+    /// (the full-sphere `aabb` would). Falls back to the full sphere when `pole`
+    /// is degenerate (side ambiguous).
+    #[must_use]
+    pub fn aabb_region(&self, pole: Vec3) -> Aabb3 {
+        let Ok(n) = pole.normalize() else {
+            return self.aabb();
+        };
+        let c = self.center;
+        let r = self.radius;
+        // For world axis ê, the extreme of d·ê over {d·n ≥ 0, |d| = 1} is 1 when
+        // ê·n ≥ 0 (the axis itself is in the half-space), else the equator-plane
+        // projection √(1 − (ê·n)²); the minimum is the mirror image.
+        let span = |en: f64| -> (f64, f64) {
+            let s = (1.0 - en * en).max(0.0).sqrt();
+            let hi = if en >= 0.0 { 1.0 } else { s };
+            let lo = if en <= 0.0 { -1.0 } else { -s };
+            (lo, hi)
+        };
+        let (lx, hx) = span(n.x());
+        let (ly, hy) = span(n.y());
+        let (lz, hz) = span(n.z());
+        Aabb3 {
+            min: Point3::new(c.x() + r * lx, c.y() + r * ly, c.z() + r * lz),
+            max: Point3::new(c.x() + r * hx, c.y() + r * hy, c.z() + r * hz),
+        }
+    }
+
     /// Project a 3D point onto the sphere, returning (u, v) parameters.
     ///
     /// `u` is the longitudinal angle [0, 2π), `v` is the latitude [-π/2, π/2].

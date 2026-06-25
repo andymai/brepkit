@@ -53,8 +53,8 @@ pub fn perform(
     let faces_b = brepkit_topology::explorer::solid_faces(topo, solid_b)?;
 
     // Pre-compute face AABBs for rejection
-    let bboxes_a = compute_face_bboxes(topo, &faces_a)?;
-    let bboxes_b = compute_face_bboxes(topo, &faces_b)?;
+    let bboxes_a = compute_face_bboxes(topo, &faces_a, tol)?;
+    let bboxes_b = compute_face_bboxes(topo, &faces_b, tol)?;
 
     // Collect all surface data upfront so we don't borrow topo immutably
     // while mutating it later.
@@ -1078,7 +1078,7 @@ fn longest_inboth_run(inb: &[bool], closed: bool) -> (usize, usize) {
 }
 
 /// Compute AABB for a face by sampling its boundary edges.
-fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoError> {
+fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result<Aabb3, AlgoError> {
     let edges = brepkit_topology::explorer::face_edges(topo, face_id)?;
     let mut points = Vec::new();
 
@@ -1096,34 +1096,123 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
         }
     }
 
-    let boundary_bbox = if points.is_empty() {
-        // Degenerate face with no edges -- use a zero-volume box at origin
-        Aabb3 {
-            min: Point3::new(0.0, 0.0, 0.0),
-            max: Point3::new(0.0, 0.0, 0.0),
-        }
-    } else {
-        Aabb3::from_points(points)
-    };
-
     // A sphere or torus face bulges beyond its boundary edges (a hemisphere's
-    // only boundary is its equatorial circle; a full torus's are degenerate
+    // only boundary is its equatorial circle; a full torus's are two degenerate
     // seam points), so the boundary-sampled bbox underestimates the true extent
     // and the broad-phase would wrongly reject genuinely intersecting pairs.
-    // Union with the surface's closed-form extent to keep the bbox a sound
-    // superset. Cylinder/cone/plane boundary edges already bound their faces.
-    Ok(match topo.face(face_id)?.surface() {
-        FaceSurface::Sphere(s) => boundary_bbox.union(s.aabb()),
-        FaceSurface::Torus(t) => boundary_bbox.union(t.aabb()),
-        _ => boundary_bbox,
+    // Recover the missing extent from the surface, kept as tight as possible so
+    // the box stays a sound superset without admitting unrelated geometry.
+    let surface_bbox = match topo.face(face_id)?.surface() {
+        // Bound to the hemisphere the face occupies (pole side from the boundary
+        // winding) — the full-sphere box would let one hemisphere admit the
+        // other's sections. Ambiguous winding falls back to the full sphere.
+        FaceSurface::Sphere(s) => Some(match sphere_region_axis(topo, face_id, s.center(), tol) {
+            Some(axis) => s.aabb_region(axis),
+            None => s.aabb(),
+        }),
+        // Only a full, untrimmed torus needs the surface box — its boundary is
+        // the degenerate fundamental-polygon seam, which collapses to a point. A
+        // trimmed torus patch is bounded by its real edges; widening it to the
+        // whole torus would admit geometry on omitted angular bands.
+        FaceSurface::Torus(t) if face_boundary_all_degenerate(topo, face_id, tol)? => {
+            Some(t.aabb())
+        }
+        _ => None,
+    };
+
+    Ok(match (points.is_empty(), surface_bbox) {
+        (false, Some(sb)) => Aabb3::from_points(points).union(sb),
+        (false, None) => Aabb3::from_points(points),
+        (true, Some(sb)) => sb,
+        // Degenerate face with no edges and no surface box -- zero-volume box.
+        (true, None) => Aabb3 {
+            min: Point3::new(0.0, 0.0, 0.0),
+            max: Point3::new(0.0, 0.0, 0.0),
+        },
     })
 }
 
+/// Pole-side axis of a spherical face, from its boundary winding: the summed
+/// `(midpoint − center) × chord` over the outer wire points from the sphere
+/// center into the face's hemisphere (negated for a reversed face). Returns
+/// `None` when the wire is degenerate or near-planar through the center, so the
+/// side is ambiguous. Shared by the broad-phase AABB and the section in-both
+/// filter so the two stay consistent.
+fn sphere_region_axis(
+    topo: &Topology,
+    face_id: FaceId,
+    center: Point3,
+    tol: Tolerance,
+) -> Option<Vec3> {
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut axis = Vec3::new(0.0, 0.0, 0.0);
+    // The cross products have units of length^2, so the degeneracy threshold is
+    // derived from the input magnitudes rather than a bare linear tolerance:
+    // `scale` sums each term's bound (|mid − center| · |chord|); a truly
+    // cancelling wire leaves `axis` small relative to it.
+    let mut scale = 0.0;
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (sp, ep) = if oe.is_forward() {
+            (sv.point(), ev.point())
+        } else {
+            (ev.point(), sv.point())
+        };
+        let mid = sp + (ep - sp) * 0.5;
+        let radial = mid - center;
+        let chord = ep - sp;
+        scale += radial.length() * chord.length();
+        axis += radial.cross(chord);
+    }
+    if face.is_reversed() {
+        axis = axis * -1.0;
+    }
+    let len = axis.length();
+    if scale < tol.linear * tol.linear || len < scale * tol.linear {
+        return None;
+    }
+    Some(axis * (1.0 / len))
+}
+
+/// True when every edge of the face is degenerate (zero length in 3D) — the
+/// signature of a full, untrimmed torus, whose boundary is the doubly-periodic
+/// fundamental-polygon seam built from `Line(v0, v0)` edges. A trimmed torus
+/// patch has real boundary edges and returns `false`.
+fn face_boundary_all_degenerate(
+    topo: &Topology,
+    face_id: FaceId,
+    tol: Tolerance,
+) -> Result<bool, AlgoError> {
+    let edges = brepkit_topology::explorer::face_edges(topo, face_id)?;
+    if edges.is_empty() {
+        return Ok(false);
+    }
+    for eid in edges {
+        let edge = topo.edge(eid)?;
+        let sp = topo.vertex(edge.start())?.point();
+        let ep = topo.vertex(edge.end())?.point();
+        if (ep - sp).length() > tol.linear {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Compute AABBs for a list of faces.
-fn compute_face_bboxes(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Aabb3>, AlgoError> {
+fn compute_face_bboxes(
+    topo: &Topology,
+    faces: &[FaceId],
+    tol: Tolerance,
+) -> Result<Vec<Aabb3>, AlgoError> {
     let mut bboxes = Vec::with_capacity(faces.len());
     for &fid in faces {
-        bboxes.push(compute_face_bbox(topo, fid)?);
+        bboxes.push(compute_face_bbox(topo, fid, tol)?);
     }
     Ok(bboxes)
 }
@@ -2146,41 +2235,7 @@ fn emit_split_circle_arcs(
             return None;
         };
         let center = s.center();
-        let wire = topo.wire(face.outer_wire()).ok()?;
-        let mut axis = Vec3::new(0.0, 0.0, 0.0);
-        // The accumulated cross products have units of length^2, so the
-        // degeneracy threshold must be derived from the input magnitudes
-        // rather than compared against a bare linear tolerance. `scale`
-        // sums each term's magnitude bound (|mid - center| * |ep - sp|);
-        // a true near-parallel/cancelling wire leaves `axis` small
-        // relative to it.
-        let mut scale = 0.0;
-        for oe in wire.edges() {
-            let Ok(edge) = topo.edge(oe.edge()) else {
-                continue;
-            };
-            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-                continue;
-            };
-            let (sp, ep) = if oe.is_forward() {
-                (sv.point(), ev.point())
-            } else {
-                (ev.point(), sv.point())
-            };
-            let mid = sp + (ep - sp) * 0.5;
-            let radial = mid - center;
-            let chord = ep - sp;
-            scale += radial.length() * chord.length();
-            axis += radial.cross(chord);
-        }
-        if face.is_reversed() {
-            axis = axis * -1.0;
-        }
-        let len = axis.length();
-        if scale < tol.linear * tol.linear || len < scale * tol.linear {
-            return None;
-        }
-        Some((center, axis * (1.0 / len)))
+        sphere_region_axis(topo, fid, center, tol).map(|axis| (center, axis))
     };
     let side_a = sphere_side(face_a);
     let side_b = sphere_side(face_b);
