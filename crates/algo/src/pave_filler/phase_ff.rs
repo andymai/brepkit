@@ -2151,15 +2151,24 @@ fn closed_circle_boundary_crossings(
         // Compute those crossings analytically against the seam *plane*
         // instead — exact and independent of the boundary's facet count.
         if matches!(surface_of(fid), Some(FaceSurface::Sphere(_))) {
-            for (t, p) in sphere_seam_plane_crossings(topo, fid, circle, tol) {
-                let dup = hits
-                    .iter()
-                    .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
-                if !dup {
-                    hits.push((t, p));
+            let seam = sphere_seam_plane_crossings(topo, fid, circle, tol);
+            // Only take the analytic-seam path (and skip the chord-based
+            // `face_hits`) when the section actually crosses this face's seam —
+            // i.e. a hemisphere whose faceted equator's chords miss the true
+            // crossings by the sagitta. A section that doesn't cross the seam (a
+            // latitude-circle, or a non-hemisphere sphere face) falls through to
+            // the normal `face_hits` path below.
+            if !seam.is_empty() {
+                for (t, p) in seam {
+                    let dup = hits
+                        .iter()
+                        .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
+                    if !dup {
+                        hits.push((t, p));
+                    }
                 }
+                continue;
             }
-            continue;
         }
         let fh = face_hits(fid);
         // The boundary is coincident with the section circle when its

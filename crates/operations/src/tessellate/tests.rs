@@ -720,12 +720,12 @@ fn bored_sphere_band_area_and_watertight() {
     );
 }
 
-#[test]
 /// A box ∩ centered-sphere produces two annular sphere "collar" patches whose
 /// outer wire varies in v (a scalloped great-circle/equator floor) plus a
 /// latitude-cap hole. This is the varying-v generalization of the bored-sphere
 /// band: the collar must tessellate watertight (the CDT path leaves 98+ free
 /// edges) and its area must match the analytic box∩sphere boundary.
+#[test]
 fn box_centered_sphere_collar_tessellates_watertight() {
     use brepkit_math::mat::Mat4;
 

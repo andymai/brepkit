@@ -1092,12 +1092,12 @@ fn intersect_box_sphere_succeeds() {
     );
 }
 
-#[test]
 /// Intersect a 10³ box with a sphere of r=6 centered inside it (sphere fully
 /// enclosed in x/y/z extent but poking out each face). Each box face cuts a
 /// disc; the sphere becomes two annular "collar" patches (a scalloped
 /// great-circle/equator floor + a latitude-cap hole) — the analytic result is
 /// 6 plane discs + 2 sphere collars, watertight, with the lens volume.
+#[test]
 fn intersect_box_centered_sphere_is_analytic_collar() {
     let mut topo = Topology::new();
     let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();

@@ -44,14 +44,26 @@ fn sphere_outer_wire_constant_v(
         let Ok(edge) = topo.edge(oe.edge()) else {
             return false;
         };
-        let Ok(vtx) = topo.vertex(edge.start()) else {
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
             return false;
         };
-        let (_, v) = sphere.project_point(vtx.point());
-        v_min = v_min.min(v);
-        v_max = v_max.max(v);
+        let (sp, ep) = (sv.point(), ev.point());
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        // Sample ALONG each edge, not just its start vertex: a great-circle arc
+        // has both endpoints on the seam latitude yet bulges away from it, so
+        // endpoint-only sampling would mis-read a scalloped collar floor as a
+        // constant-v band and wrongly take the analytic fast path.
+        for i in 0..=8 {
+            let t = t0 + (t1 - t0) * (f64::from(i) / 8.0);
+            let (_, v) = sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
+            v_min = v_min.min(v);
+            v_max = v_max.max(v);
+        }
     }
-    (v_max - v_min) <= 1e-6
+    // Latitude-flatness threshold sized to the linear-tolerance magnitude: a
+    // real band's v-spread is ~fp-noise; a collar's is a large fraction of a
+    // radian.
+    (v_max - v_min) <= 1e-7
 }
 
 /// Whether the solid has at least one sphere face that is a scalloped collar

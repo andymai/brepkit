@@ -321,10 +321,12 @@ pub(super) fn tessellate_latitude_band_shared(
     }
 
     // The outer (scalloped) ring is the lower boundary; sweep up to the cap.
-    let _ = full_circle_cols;
+    // Use the absolute band height: the floor can sit above the cap latitude
+    // (a southern collar), and a negative range trips the chord-deviation
+    // helper's `<= 0` fallback (a fixed count) instead of scaling with height.
     let n_v = segments_for_chord_deviation_a(
         band_radius,
-        v_cap - floor_v_near,
+        (v_cap - floor_v_near).abs(),
         deflection,
         angular_tol,
         true,
@@ -441,8 +443,10 @@ fn orient_triangle_run(
 
 /// Connect two column-aligned rings (identical longitude order and count) as a
 /// quad strip: column `i` of `lo` joins column `i` of `hi`. Each quad is split
-/// into two triangles via [`emit`] (which fixes per-triangle winding from the
-/// surface normal). Watertight by construction when the rings share columns.
+/// into two triangles via the supplied `emit` closure. The collar path passes
+/// `emit_raw` (no per-triangle winding correction — the whole run is oriented
+/// once afterward by [`orient_triangle_run`], which is stable for the thin
+/// stitch triangles). Watertight by construction when the rings share columns.
 fn emit_aligned_quad_strip(
     merged: &mut TriangleMesh,
     lo: &LatRing,
