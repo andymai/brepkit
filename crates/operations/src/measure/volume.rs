@@ -9,6 +9,58 @@ use crate::tessellate;
 
 use super::helpers::{collect_solid_vertex_points, compute_angular_range};
 
+/// Volume of a solid that contains a bored quadric — a sphere (or torus) face
+/// carrying a full-revolution latitude-circle hole (a drilled tunnel rim) — via
+/// exact per-face Gauss quadrature on the analytic surfaces.
+///
+/// The tessellation paths below cannot bound such an annular band: both of its
+/// boundary loops are constant-v latitude circles, so the band's UV outline is
+/// degenerate and the mesh fills the removed polar cap, over-counting. The
+/// per-face analytic integrator (orientation-aware, hole-clipped) is exact.
+///
+/// Scope is deliberately narrow — only solids whose tessellated volume is known
+/// to be wrong — so every other analytic solid keeps its existing
+/// tessellation-based volume. Returns `None` (defer to tessellation) when no
+/// bored quadric is present, when any face is NURBS, or when a face fails to
+/// integrate.
+fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
+    use brepkit_topology::explorer::solid_faces;
+
+    let faces = solid_faces(topo, solid).ok()?;
+    if faces.is_empty() {
+        return None;
+    }
+
+    let mut has_bored_quadric = false;
+    for &fid in &faces {
+        let face = topo.face(fid).ok()?;
+        match face.surface() {
+            FaceSurface::Nurbs(_) => return None,
+            // Sphere only: the per-face integrator's hole-clipping is wired up
+            // for spheres. A bored torus would pass `hole_vs = []` and
+            // over-integrate, so defer it to tessellation until torus
+            // hole-clipping lands (with the torus−box analytic split).
+            FaceSurface::Sphere(_) if !face.inner_wires().is_empty() => {
+                has_bored_quadric = true;
+            }
+            FaceSurface::Torus(_) if !face.inner_wires().is_empty() => return None,
+            _ => {}
+        }
+    }
+    if !has_bored_quadric {
+        return None;
+    }
+
+    let gauss_order = brepkit_check::properties::PropertiesOptions::default().gauss_order;
+    let mut total = 0.0;
+    for &fid in &faces {
+        total += brepkit_check::properties::face_integrator::integrate_face(topo, fid, gauss_order)
+            .ok()?
+            .volume;
+    }
+    Some(total.abs())
+}
+
 /// Try to compute the volume of a solid analytically by detecting known
 /// primitive shapes (sphere, cylinder, cone/frustum, torus).
 ///
@@ -286,6 +338,16 @@ pub fn solid_volume(
 ) -> Result<f64, crate::OperationsError> {
     // Fast path: exact analytic formula for known primitives.
     if let Some(v) = try_analytic_solid_volume(topo, solid) {
+        return Ok(v);
+    }
+
+    // Fast path: a solid whose faces are ALL analytic (planes + quadrics,
+    // no NURBS) integrates exactly via per-face Gauss quadrature on the
+    // analytic surfaces — orientation-aware and immune to the inscribed-mesh
+    // undercount and the degenerate-UV annular-band over-count that the
+    // tessellation paths below suffer on bored quadrics (e.g. a cylinder
+    // drilled through a sphere).
+    if let Some(v) = analytic_faces_solid_volume(topo, solid) {
         return Ok(v);
     }
 

@@ -1427,6 +1427,45 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Sphere(sphere), FaceSurface::Cylinder(cyl))
+        | (FaceSurface::Cylinder(cyl), FaceSurface::Sphere(sphere)) => {
+            // A coaxial sphere and cylinder meet at one or two circles (the
+            // tunnel rims of a sphere-with-bore). Emit them as exact Circles
+            // so the closed-circle FF split carves each hemisphere into a
+            // band-with-hole + cap; the marcher would return NURBS fragments
+            // the splitter cannot recognise, dropping the spherical faces.
+            // Non-coaxial (None) falls through to the general marcher.
+            match analytic_intersection::exact_sphere_cylinder(sphere, cyl)? {
+                Some(exacts) => {
+                    let mut results = Vec::new();
+                    for exact in exacts {
+                        if let analytic_intersection::ExactIntersectionCurve::Circle(circle) = exact
+                        {
+                            let bbox = circle_bbox(&circle);
+                            let domain = (0.0, std::f64::consts::TAU);
+                            let p_start = ParametricCurve::evaluate(&circle, domain.0);
+                            let p_end = ParametricCurve::evaluate(&circle, domain.1);
+                            results.push(RawCurve {
+                                curve: EdgeCurve::Circle(circle),
+                                bbox,
+                                t_range: domain,
+                                p_start,
+                                p_end,
+                            });
+                        }
+                    }
+                    Ok(results)
+                }
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
         (a, b) if a.as_analytic().is_some() && b.as_analytic().is_some() => {
             if let (Some(aa), Some(ab)) = (a.as_analytic(), b.as_analytic()) {
                 analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)

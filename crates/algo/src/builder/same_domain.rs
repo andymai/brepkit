@@ -200,6 +200,16 @@ pub fn detect_same_domain<S: BuildHasher>(
                 };
 
                 if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
+                    // Two curved faces of the same underlying surface can share an
+                    // outer-wire edge set yet cover DIFFERENT regions — e.g. the
+                    // two hemisphere bands of a bored sphere share the equator
+                    // polygon but lie on opposite halves. A genuine same-domain
+                    // duplicate is coincident (same region → same interior
+                    // sample); distinct glued patches have far-apart interiors.
+                    // Skip the union when their interior samples disagree.
+                    if !planar(surf_i) && distinct_curved_regions(sub_faces, i, j, tol) {
+                        continue;
+                    }
                     uf.union(i, j);
                     let key = (i.min(j), i.max(j));
                     pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
@@ -1275,6 +1285,29 @@ impl UnionFind {
                 self.rank[rx] += 1;
             }
         }
+    }
+}
+
+/// Whether a surface is planar (the planar SD passes have their own geometric
+/// containment tests, so the curved-region guard only applies to non-planes).
+fn planar(surf: &FaceSurface) -> bool {
+    matches!(surf, FaceSurface::Plane { .. })
+}
+
+/// Whether two curved sub-faces of the same underlying surface, paired by a
+/// shared outer-wire edge set, actually cover DIFFERENT regions of that
+/// surface (so they are glued neighbours, not coincident duplicates).
+///
+/// The discriminator is their precomputed interior sample: a genuine
+/// same-domain duplicate is coincident (identical region → coincident
+/// interior), whereas the two hemisphere bands of a bored sphere share the
+/// equator boundary yet have interiors on opposite halves. Returns `false`
+/// (defer to the edge-set union) when either interior is unavailable, keeping
+/// the conservative pre-existing behaviour.
+fn distinct_curved_regions(sub_faces: &[SubFace], i: usize, j: usize, tol: Tolerance) -> bool {
+    match (sub_faces[i].interior_point, sub_faces[j].interior_point) {
+        (Some(pi), Some(pj)) => (pi - pj).length() > tol.linear * 100.0,
+        _ => false,
     }
 }
 

@@ -11,6 +11,8 @@ use super::{MERGE_GRID, TriangleMesh, point_merge_key};
 
 /// Maps a 3D point to its `(u, v)` surface parameters.
 type ProjectFn = Box<dyn Fn(Point3) -> (f64, f64)>;
+/// Maps `(u, v)` surface parameters to a 3D surface point.
+type EvalFn = Box<dyn Fn(f64, f64) -> Point3>;
 /// Maps `(u, v)` surface parameters to the outward surface normal.
 type NormalFn = Box<dyn Fn(f64, f64) -> Vec3>;
 
@@ -148,6 +150,334 @@ pub(super) fn tessellate_revolution_band_shared(
     }
 
     Ok(true)
+}
+
+/// A boundary ring of a latitude band: each entry is `(u_angle, global_id)`,
+/// with `u_angle ∈ [0, 2π)`. Sorted ascending by angle so two rings align by
+/// longitude during stitching.
+type LatRing = Vec<(f64, u32)>;
+
+/// Tessellate a sphere/torus latitude band (the annular region between two
+/// constant-`v` full-revolution boundaries) as a structured UV grid.
+///
+/// The CDT path cannot bound this band: each constant-`v` latitude boundary
+/// projects to a back-and-forth horizontal segment of zero UV area, so the
+/// 2D polygon degenerates and the triangulation fills the removed polar cap
+/// (the tunnel mouth on a bored sphere is skinned over). Like the cylinder/cone
+/// `tessellate_revolution_band_shared`, this builds the band directly from the
+/// shared boundary vertices instead.
+///
+/// Unlike the ruled cylinder/cone band (whose two rims connect directly because
+/// the surface is straight in `v`), a sphere/torus band bulges between its two
+/// latitudes, so intermediate latitude rows are inserted until the chord error
+/// in `v` stays within `deflection`. The two boundary rows reuse the shared rim
+/// global vertex IDs (watertight by construction); interior-row vertices are new
+/// face-local points evaluated on the surface across the full `u` ring.
+///
+/// Returns `Ok(true)` when the face is such a band and was handled here, else
+/// `Ok(false)` (the caller then takes the CDT/snap path). Detection is
+/// deliberately conservative: a face qualifies only if its surface is a sphere
+/// or torus, it has exactly one inner wire, and both the outer and inner wires
+/// are closed full-revolution loops, each at a single constant `v`, built only
+/// from `Line`/`Circle` edges, at two distinct `v` levels.
+#[allow(clippy::too_many_lines)]
+pub(super) fn tessellate_latitude_band_shared(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<bool, crate::OperationsError> {
+    if face_data.inner_wires().len() != 1 {
+        return Ok(false);
+    }
+
+    let (project, surf_eval, surf_normal): (ProjectFn, EvalFn, NormalFn) = match face_data.surface()
+    {
+        FaceSurface::Sphere(s) => {
+            let (s1, s2, s3) = (s.clone(), s.clone(), s.clone());
+            (
+                Box::new(move |p| s1.project_point(p)),
+                Box::new(move |u, v| s2.evaluate(u, v)),
+                Box::new(move |u, v| s3.normal(u, v)),
+            )
+        }
+        FaceSurface::Torus(t) => {
+            let (t1, t2, t3) = (t.clone(), t.clone(), t.clone());
+            (
+                Box::new(move |p| t1.project_point(p)),
+                Box::new(move |u, v| t2.evaluate(u, v)),
+                Box::new(move |u, v| t3.normal(u, v)),
+            )
+        }
+        _ => return Ok(false),
+    };
+
+    // Build one boundary ring per wire (outer first, then the single inner).
+    // Each must be a closed full-revolution loop at a single constant v.
+    let mut wire_ids = vec![face_data.outer_wire()];
+    wire_ids.extend_from_slice(face_data.inner_wires());
+    let mut rings: Vec<(f64, LatRing)> = Vec::with_capacity(2);
+    for &wid in &wire_ids {
+        let Some((v_level, ring)) =
+            collect_constant_v_ring(topo, wid, project.as_ref(), edge_global_indices, merged)?
+        else {
+            return Ok(false);
+        };
+        rings.push((v_level, ring));
+    }
+
+    // Order by v so we sweep from the lower latitude to the upper.
+    rings.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let (v_lo, ring_lo) = &rings[0];
+    let (v_hi, ring_hi) = &rings[1];
+    let (v_lo, v_hi) = (*v_lo, *v_hi);
+    if (v_hi - v_lo).abs() < 1e-9 {
+        return Ok(false);
+    }
+
+    // Number of intermediate latitude rows from the chord error across the band
+    // in v. The bulge radius is the sphere radius (torus: minor radius).
+    let band_radius = match face_data.surface() {
+        FaceSurface::Sphere(s) => s.radius(),
+        FaceSurface::Torus(t) => t.minor_radius(),
+        _ => return Ok(false),
+    };
+    let n_v =
+        segments_for_chord_deviation_a(band_radius, v_hi - v_lo, deflection, angular_tol, true)
+            .max(1);
+
+    // Column count for the interior rows. Use the full-circle chord-deviation
+    // count at the band radius, but never fewer columns than the denser of the
+    // two boundary rings, so interior rows never undercut the boundary sampling.
+    let n_u_interior = ring_lo
+        .len()
+        .max(ring_hi.len())
+        .max(segments_for_chord_deviation_a(
+            band_radius,
+            std::f64::consts::TAU,
+            deflection,
+            angular_tol,
+            true,
+        ));
+
+    let emit = make_band_emit(project.as_ref(), surf_normal.as_ref());
+
+    // Build interior rows (new face-local vertices on the full u ring), then
+    // stitch boundary_lo -> interior rows... -> boundary_hi.
+    let mut prev_ring: LatRing = ring_lo.clone();
+    for iv in 1..n_v {
+        let t = iv as f64 / n_v as f64;
+        let v = v_lo + (v_hi - v_lo) * t;
+        let row = build_interior_row(
+            v,
+            n_u_interior,
+            surf_eval.as_ref(),
+            surf_normal.as_ref(),
+            merged,
+            point_to_global,
+        );
+        stitch_rings(merged, &prev_ring, &row, &emit);
+        prev_ring = row;
+    }
+    stitch_rings(merged, &prev_ring, ring_hi, &emit);
+
+    Ok(true)
+}
+
+/// Collect a wire's shared boundary vertices as a `(v_level, ring)` pair, or
+/// `None` if the wire is not a closed full-revolution loop at a single constant
+/// `v` (built only from `Line`/`Circle` edges).
+fn collect_constant_v_ring(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    project: &dyn Fn(Point3) -> (f64, f64),
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &TriangleMesh,
+) -> Result<Option<(f64, LatRing)>, crate::OperationsError> {
+    let wire = topo.wire(wire_id)?;
+    let mut gids: Vec<u32> = Vec::new();
+    for oe in wire.edges() {
+        let e = topo.edge(oe.edge())?;
+        match e.curve() {
+            EdgeCurve::Line | EdgeCurve::Circle(_) => {}
+            _ => return Ok(None),
+        }
+        let Some(edge_gids) = edge_global_indices.get(&oe.edge().index()) else {
+            return Ok(None);
+        };
+        for &g in edge_gids {
+            gids.push(g);
+        }
+    }
+    if gids.len() < 3 {
+        return Ok(None);
+    }
+
+    // Deduplicate to unique global IDs and check they all sit at one constant v
+    // while their longitudes cover the full circle (a full revolution).
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    let mut ring: LatRing = Vec::with_capacity(gids.len());
+    let mut v_sum = 0.0;
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for g in gids {
+        if !seen.insert(g) {
+            continue;
+        }
+        let p = merged.positions[g as usize];
+        let (u, v) = project(p);
+        v_sum += v;
+        v_min = v_min.min(v);
+        v_max = v_max.max(v);
+        ring.push((u, g));
+    }
+    if ring.len() < 3 {
+        return Ok(None);
+    }
+    if (v_max - v_min) > 1e-6 {
+        return Ok(None);
+    }
+    ring.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Full-revolution check: the largest angular gap between consecutive
+    // longitudes (including the wrap-around) must be well under a full turn —
+    // otherwise this is a partial arc, not a closed latitude loop.
+    let max_gap = ring
+        .windows(2)
+        .map(|w| w[1].0 - w[0].0)
+        .chain(std::iter::once(
+            ring[0].0 + std::f64::consts::TAU - ring[ring.len() - 1].0,
+        ))
+        .fold(0.0_f64, f64::max);
+    if max_gap > std::f64::consts::PI {
+        return Ok(None);
+    }
+
+    let v_level = v_sum / ring.len() as f64;
+    Ok(Some((v_level, ring)))
+}
+
+/// Build an interior latitude row of `n` evenly-spaced new vertices at constant
+/// `v`, returning them as a ring sorted by longitude.
+fn build_interior_row(
+    v: f64,
+    n: usize,
+    surf_eval: &dyn Fn(f64, f64) -> Point3,
+    surf_normal: &dyn Fn(f64, f64) -> Vec3,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> LatRing {
+    let mut row: LatRing = Vec::with_capacity(n);
+    for i in 0..n {
+        let u = std::f64::consts::TAU * (i as f64) / (n as f64);
+        let p = surf_eval(u, v);
+        let key = point_merge_key(p, MERGE_GRID);
+        let gid = *point_to_global.entry(key).or_insert_with(|| {
+            let idx = merged.positions.len() as u32;
+            merged.positions.push(p);
+            merged.normals.push(surf_normal(u, v));
+            idx
+        });
+        row.push((u, gid));
+    }
+    row
+}
+
+/// Emit a default-oriented (non-reversed) triangle, mirroring the orientation
+/// convention of [`tessellate_revolution_band_shared`]: the geometric normal is
+/// flipped to match the surface outward normal. The caller applies the global
+/// `is_reversed` winding flip afterward.
+fn make_band_emit<'a>(
+    project: &'a dyn Fn(Point3) -> (f64, f64),
+    surf_normal: &'a dyn Fn(f64, f64) -> Vec3,
+) -> impl Fn(&mut TriangleMesh, u32, u32, u32) + 'a {
+    move |merged: &mut TriangleMesh, a: u32, b: u32, c: u32| {
+        if a == b || b == c || a == c {
+            return;
+        }
+        let (pa, pb, pc) = (
+            merged.positions[a as usize],
+            merged.positions[b as usize],
+            merged.positions[c as usize],
+        );
+        let geo = (pb - pa).cross(pc - pa);
+        if geo.length() < 1e-20 {
+            return;
+        }
+        let (u, v) = project(pa);
+        let outward = surf_normal(u, v);
+        let mut tri = [a, b, c];
+        if geo.dot(outward) < 0.0 {
+            tri.swap(1, 2);
+        }
+        merged.indices.extend_from_slice(&tri);
+    }
+}
+
+/// Triangulate the band between two coaxial latitude rings, both sorted by
+/// longitude in `[0, 2π)`, whose vertex counts/phases may differ. Walks both
+/// rings forward in longitude, at each step advancing whichever ring's next
+/// vertex has the smaller longitude (relative to a monotonically increasing
+/// base) and emitting one triangle per advance. Watertight by construction:
+/// every interior quad diagonal is shared by exactly two triangles, and after
+/// `nl + nh` advances each ring has been traversed once back to its start.
+fn stitch_rings(
+    merged: &mut TriangleMesh,
+    lo: &LatRing,
+    hi: &LatRing,
+    emit: &impl Fn(&mut TriangleMesh, u32, u32, u32),
+) {
+    if lo.len() < 2 || hi.len() < 2 {
+        return;
+    }
+    let (nl, nh) = (lo.len(), hi.len());
+    // Precompute the unwrapped (strictly increasing) longitude reached after
+    // `k` forward steps on each ring, k = 0..=len. Step 0 is the ring's first
+    // longitude; step len returns to it plus one full turn.
+    let unwrap_ring = |ring: &LatRing| -> Vec<f64> {
+        let mut acc = Vec::with_capacity(ring.len() + 1);
+        let mut prev = ring[0].0;
+        acc.push(prev);
+        for k in 1..=ring.len() {
+            let raw = ring[k % ring.len()].0;
+            // Forward gap to the next vertex, in (0, 2π]: a full turn on the
+            // wrap-around step (k == len), the spacing otherwise.
+            let mut gap = (raw - prev).rem_euclid(std::f64::consts::TAU);
+            if gap <= 0.0 {
+                gap = std::f64::consts::TAU;
+            }
+            prev += gap;
+            acc.push(prev);
+        }
+        acc
+    };
+    let lo_ang = unwrap_ring(lo);
+    let hi_ang = unwrap_ring(hi);
+
+    // Each ring is advanced exactly once around (nl + nh advances total). Once a
+    // ring has completed its revolution (`i == nl` / `j == nh`) it must not
+    // advance again, so its "next longitude" is treated as +inf.
+    let (mut i, mut j) = (0usize, 0usize);
+    for _ in 0..(nl + nh) {
+        let li = lo[i % nl].1;
+        let hj = hi[j % nh].1;
+        let lo_next = if i < nl { lo_ang[i + 1] } else { f64::INFINITY };
+        let hi_next = if j < nh { hi_ang[j + 1] } else { f64::INFINITY };
+        // Advance whichever ring's next vertex comes first in longitude; the new
+        // triangle's apex stays on the ring that did not advance.
+        if lo_next <= hi_next {
+            let li_next = lo[(i + 1) % nl].1;
+            emit(merged, li, li_next, hj);
+            i += 1;
+        } else {
+            let hj_next = hi[(j + 1) % nh].1;
+            emit(merged, li, hj_next, hj);
+            j += 1;
+        }
+    }
 }
 
 /// CDT-based tessellation for non-planar faces with exact boundary constraints.
