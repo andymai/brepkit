@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.120.4](https://github.com/andymai/brepkit/compare/v2.120.3...v2.120.4) (2026-06-25)
+
+
+### Bug Fixes
+
+* **algo:** bound sphere/torus faces by surface extent in boolean broad-phase ([#1003](https://github.com/andymai/brepkit/issues/1003)) ([e034ed0](https://github.com/andymai/brepkit/commit/e034ed0013a8c01c779647b9a7f9b690e243a7ca))
+* **operations:** assemble and render sphere−cyl Cut analytically ([#1005](https://github.com/andymai/brepkit/issues/1005)) ([78887da](https://github.com/andymai/brepkit/commit/78887da7756da191be667986daad745ec4a16372))
+
 ## [2.120.3](https://github.com/andymai/brepkit/compare/v2.120.2...v2.120.3) (2026-06-25)
 
 
