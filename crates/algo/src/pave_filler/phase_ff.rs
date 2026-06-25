@@ -751,13 +751,23 @@ fn restrict_curves_to_faces(
             #[allow(clippy::cast_precision_loss)]
             let frac = |i: usize| i as f64 / N as f64;
             let span = raw.t_range.1 - raw.t_range.0;
-            // A wrapping run reports `b1 > N`; the raw fraction then maps past
-            // the curve's domain end. A clamped NURBS does not extrapolate
-            // gracefully (it evaluates to a garbage 3D point well outside the
-            // model), so clamp the trim endpoints to the curve's parameter
-            // range before evaluating.
-            let t0 = (raw.t_range.0 + span * frac(b0)).clamp(raw.t_range.0, raw.t_range.1);
-            let t1 = (raw.t_range.0 + span * frac(b1)).clamp(raw.t_range.0, raw.t_range.1);
+            let raw_t0 = raw.t_range.0 + span * frac(b0);
+            let raw_t1 = raw.t_range.0 + span * frac(b1);
+            // A wrapping in-both run reports `b1 > N`, so `raw_t1` maps PAST the
+            // curve's domain end. A periodic curve (Ellipse/Circle) evaluates
+            // such an out-of-domain parameter correctly (cos/sin wrap), so the
+            // seam-wrapping arc must keep its unwrapped parameters. A clamped
+            // NURBS, by contrast, does NOT extrapolate gracefully (it evaluates
+            // to a garbage 3D point well outside the model), so for NURBS only,
+            // clamp the trim endpoints into the curve's parameter range first.
+            let (t0, t1) = if matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
+                (
+                    raw_t0.clamp(raw.t_range.0, raw.t_range.1),
+                    raw_t1.clamp(raw.t_range.0, raw.t_range.1),
+                )
+            } else {
+                (raw_t0, raw_t1)
+            };
             let p0 = raw
                 .curve
                 .evaluate_with_endpoints(t0, raw.p_start, raw.p_end);

@@ -741,6 +741,81 @@ fn integrate_band_excluding_holes<S: ParametricSurface>(
     }
 }
 
+/// Angular span (radians) covered by a set of `u` samples, computed as `2π`
+/// minus the LARGEST gap between consecutive sorted samples (the wrap gap
+/// included). A full revolution returns `≈ 2π`; a partial arc returns its true
+/// (shorter) span — robust to a boundary that straddles the seam, unlike a bare
+/// max−min of unwrapped values.
+fn covered_angular_span(u_iter: impl Iterator<Item = f64>) -> f64 {
+    let tau = std::f64::consts::TAU;
+    let mut us: Vec<f64> = u_iter.map(|u| u.rem_euclid(tau)).collect();
+    if us.len() < 2 {
+        return 0.0;
+    }
+    us.sort_by(f64::total_cmp);
+    us.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    if us.len() < 2 {
+        return 0.0;
+    }
+    let mut max_gap = us[0] + tau - us[us.len() - 1]; // wrap-around gap
+    for w in us.windows(2) {
+        max_gap = max_gap.max(w[1] - w[0]);
+    }
+    tau - max_gap
+}
+
+/// Whether the combined even-odd vertical-ray hole-clip is correct for these
+/// inner loops.
+///
+/// The clip pairs ALL inner-loop crossings at a given `u` even-odd into removed
+/// v-intervals. That is exact for the Steinmetz lens (its two seam ellipses give
+/// a single clean v-interval per `u`) AND for independent holes whose v-ranges
+/// are disjoint at every shared `u` (each hole's own crossings pair within its
+/// own interval). It is WRONG only when two INDEPENDENT compact holes overlap in
+/// BOTH `u` and `v` (their crossings interleave, and even-odd would merge/spawn
+/// spurious intervals). Detect and EXCLUDE only that case: a pair of loops that
+/// both stay local in `u` (neither wraps the full period — so they are not lens
+/// envelopes) yet overlap in both their `u` and `v` bounding boxes. Everything
+/// else (the lens; disjoint holes) is safe.
+fn combined_evenodd_holes_safe(inner_loops: &[Vec<(f64, f64)>]) -> bool {
+    let tau = std::f64::consts::TAU;
+    if inner_loops.is_empty() {
+        return false;
+    }
+    // (u_lo, u_hi unwrapped, v_lo, v_hi, wraps_full_period) per loop.
+    let boxes: Vec<(f64, f64, f64, f64, bool)> = inner_loops
+        .iter()
+        .filter(|l| l.len() >= 2)
+        .map(|l| {
+            let u_lo = l.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+            let u_hi = l.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+            let v_lo = l.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+            let v_hi = l.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+            let wraps = covered_angular_span(l.iter().map(|p| p.0)) >= tau - 1.0;
+            (u_lo, u_hi, v_lo, v_hi, wraps)
+        })
+        .collect();
+    if boxes.len() < 2 {
+        return true; // A single hole pairs cleanly.
+    }
+    for i in 0..boxes.len() {
+        for j in (i + 1)..boxes.len() {
+            let (a, b) = (boxes[i], boxes[j]);
+            // Lens envelopes wrap the period; skip the dangerous-overlap test
+            // for them (their interleaving IS the lens the clip handles).
+            if a.4 || b.4 {
+                continue;
+            }
+            let u_overlap = a.0.max(b.0) < a.1.min(b.1);
+            let v_overlap = a.2.max(b.2) < a.3.min(b.3);
+            if u_overlap && v_overlap {
+                return false; // Two independent compact holes interleave — defer.
+            }
+        }
+    }
+    true
+}
+
 /// Absolute shoelace area of a UV polygon. Near-zero means the boundary has
 /// collapsed onto a line or point (a degenerate seam/pole projection).
 fn polygon_area(poly: &[(f64, f64)]) -> f64 {
@@ -807,27 +882,35 @@ fn integrate_with_trimming<S: ParametricSurface>(
             d - tau * ((d + std::f64::consts::PI) / tau).floor()
         })
         .sum();
-    // The u-extent the boundary actually covers. A wall bounded by two full
+    // The u-extent the boundary actually COVERS. A wall bounded by two full
     // cap circles (each projecting across the whole 0..2π period) plus a seam
     // line nets a winding of ~0 — the two circles wind oppositely — so the
-    // winding test alone misses it. The covered u-span is the robust signal:
-    // a tube wall spans the full period even when its winding cancels.
-    let u_span = {
-        let umax = uv_boundary
-            .iter()
-            .map(|p| p.0)
-            .fold(f64::NEG_INFINITY, f64::max);
-        umax - u_min
-    };
-    let full_revolution = u_periodic && (winding.abs() >= tau - 1e-3 || u_span >= tau - 1e-3);
+    // winding test alone misses it. A bare max−min is fragile too: a PARTIAL
+    // face whose boundary straddles the seam can have max−min ≈ 2π without
+    // covering the full period. The robust signal is the complement of the
+    // LARGEST angular gap between sorted boundary u-samples: a full revolution
+    // has no large gap (covered span ≈ 2π); a partial face's gap is its
+    // uncovered arc.
+    // `u_covered` (gap-complement) is robust to a boundary that straddles the
+    // seam, where a bare max−min would read ≈2π for a partial face. The
+    // tolerance (covered ≥ 2π − 1, i.e. largest gap < 1 rad) admits the discrete
+    // boundary SAMPLING gap of a genuine full-revolution wall (its two cap
+    // circles cover every u) while a truly partial face leaves a large
+    // uncovered arc. The winding term still catches a single-loop band (a cone
+    // lateral face) whose boundary winds a full ±2π.
+    let u_covered = covered_angular_span(uv_boundary.iter().map(|p| p.0));
+    let full_revolution = u_periodic && (winding.abs() >= tau - 1e-3 || u_covered >= tau - 1.0);
     let v_degenerate = (v_max - v_min) <= 1e-9;
 
-    // A full-revolution wall (cylinder/cone tube) carrying interior hole loops:
-    // its outer boundary cannot trim the holes (they are interior), and the
-    // winding may cancel to ~0, so handle it here before the winding-based
-    // branches. Integrate the whole revolution over the wall's v-extent with
-    // the lens holes rejected (the Steinmetz lens of two crossing cylinders).
-    if u_periodic && !v_degenerate && !inner_loops.is_empty() && u_span >= tau - 1e-3 {
+    // A full-revolution wall (cylinder/cone tube) carrying the STEINMETZ LENS
+    // (two mutually-trimmed cylinders): each lens loop is a full-u-wrapping
+    // sinusoid, and TOGETHER they enclose the lens by an even-odd combined
+    // arrangement. Integrate the whole revolution over the wall's v-extent with
+    // those lens v-intervals clipped out. Gated TIGHTLY to that signature:
+    // ordinary INDEPENDENT holes (each a local u-arc) would be mis-handled by
+    // the combined even-odd test (it would subtract spurious merged intervals),
+    // so they fall through to the standard paths below.
+    if u_periodic && !v_degenerate && full_revolution && combined_evenodd_holes_safe(inner_loops) {
         return integrate_band_excluding_holes(
             surface,
             (u_min, u_min + tau),
@@ -1050,4 +1133,85 @@ where
         loops.push(uv);
     }
     Ok(loops)
+}
+
+#[cfg(test)]
+mod gate_tests {
+    #![allow(clippy::unwrap_used, clippy::float_cmp)]
+    use super::{combined_evenodd_holes_safe, covered_angular_span};
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+
+    fn ellipse_uv(v_mid: f64, amp: f64, phase: f64, n: usize) -> Vec<(f64, f64)> {
+        // v = v_mid + amp·cos(u − phase) over a full revolution in u (a lens
+        // envelope's projected sinusoid).
+        (0..=n)
+            .map(|k| {
+                #[allow(clippy::cast_precision_loss)]
+                let u = TAU * (k as f64) / (n as f64);
+                (u, v_mid + amp * (u - phase).cos())
+            })
+            .collect()
+    }
+
+    fn local_loop(u_c: f64, v_c: f64, r: f64, n: usize) -> Vec<(f64, f64)> {
+        // A small compact circular hole centred at (u_c, v_c).
+        (0..=n)
+            .map(|k| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = TAU * (k as f64) / (n as f64);
+                (u_c + r * t.cos(), v_c + r * t.sin())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn covered_span_full_vs_partial() {
+        // A full revolution (32 evenly-spaced samples): covered span ≈ 2π.
+        let full = (0..32).map(|k| TAU * f64::from(k) / 32.0);
+        assert!((covered_angular_span(full) - TAU).abs() < 0.3);
+        // A quarter arc near the seam [-π/4, π/4]: covered span ≈ π/2, NOT 2π
+        // (a bare max−min of these seam-straddling values would read ≈2π via
+        // the rem_euclid wrap, but the gap-complement correctly reports ~π/2).
+        let quarter = (0..=8).map(|k| -FRAC_PI_4 + FRAC_PI_2 * f64::from(k) / 8.0);
+        assert!(
+            covered_angular_span(quarter) < PI,
+            "a quarter arc is not a full revolution"
+        );
+    }
+
+    #[test]
+    fn combined_evenodd_safe_for_lens_unsafe_for_overlapping_independent() {
+        // Steinmetz lens: two full-u-wrapping envelopes → SAFE.
+        let lens = vec![
+            ellipse_uv(10.0, 3.0, 0.0, 64),
+            ellipse_uv(10.0, -3.0, 0.0, 64),
+        ];
+        assert!(
+            combined_evenodd_holes_safe(&lens),
+            "lens envelopes are safe"
+        );
+
+        // Two independent compact holes that OVERLAP in both u and v → UNSAFE
+        // (combined even-odd would interleave them).
+        let overlapping = vec![local_loop(1.0, 5.0, 0.4, 32), local_loop(1.3, 5.1, 0.4, 32)];
+        assert!(
+            !combined_evenodd_holes_safe(&overlapping),
+            "overlapping independent holes must defer"
+        );
+
+        // Two independent compact holes that are DISJOINT in u → SAFE (each
+        // pairs within its own interval).
+        let disjoint = vec![local_loop(1.0, 5.0, 0.3, 32), local_loop(4.0, 5.0, 0.3, 32)];
+        assert!(
+            combined_evenodd_holes_safe(&disjoint),
+            "u-disjoint holes pair cleanly"
+        );
+
+        // A single hole is always safe.
+        assert!(combined_evenodd_holes_safe(&[local_loop(
+            1.0, 5.0, 0.3, 32
+        )]));
+        // No holes → not applicable.
+        assert!(!combined_evenodd_holes_safe(&[]));
+    }
 }

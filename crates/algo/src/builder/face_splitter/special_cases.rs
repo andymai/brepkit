@@ -1385,8 +1385,6 @@ pub(super) fn split_face_with_internal_loops(
 /// kept wall well clear of every lens. Returns `None` if the surface evaluator
 /// or boundary v-range is unusable, so the caller keeps the unset interior.
 fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> {
-    use std::f64::consts::TAU;
-
     // Densely sample every hole loop into 3D points once.
     let mut hole_pts: Vec<Point3> = Vec::new();
     for hole in &remainder.inner_wires {
@@ -1409,30 +1407,47 @@ fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> 
         return None;
     }
 
-    // Axial span (v) of the boundary wire — the wall lives between its
-    // bounding circles. Project boundary endpoints to the surface's v.
+    // Angular (u) and axial (v) extent the boundary wire actually covers —
+    // densely sampled so a partial-arc face (e.g. a rounded-rect corner
+    // quarter-cylinder) is searched only over its OWN span, not the full
+    // revolution (a 0..TAU grid could pick an interior point off the sub-face,
+    // mis-classifying it). A full-revolution wall covers the whole period and
+    // its boundary samples span it.
+    let mut u_samples: Vec<f64> = Vec::new();
     let mut v_min = f64::INFINITY;
     let mut v_max = f64::NEG_INFINITY;
     for e in &remainder.outer_wire {
-        for p in [e.start_3d, e.end_3d] {
-            if let Some((_, v)) = remainder.surface.project_point(p) {
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+        let n = 16;
+        for k in 0..=n {
+            #[allow(clippy::cast_precision_loss)]
+            let t = t0 + (t1 - t0) * (k as f64 / f64::from(n));
+            let p = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
+            if let Some((u, v)) = remainder.surface.project_point(p) {
+                u_samples.push(u);
                 v_min = v_min.min(v);
                 v_max = v_max.max(v);
             }
         }
     }
-    if !v_min.is_finite() || !v_max.is_finite() || (v_max - v_min) <= 0.0 {
+    if !v_min.is_finite() || !v_max.is_finite() || (v_max - v_min) <= 0.0 || u_samples.is_empty() {
         return None;
     }
 
+    // The covered u-interval `[u_lo, u_lo + u_span]`: the complement of the
+    // largest gap between sorted u-samples. `u_span ≈ TAU` is a full revolution
+    // (search the whole period); a smaller span restricts the grid to the arc
+    // the face occupies.
+    let (u_lo, u_span) = covered_u_interval(&u_samples);
+
     // Grid-search (u, v) for the wall point maximising the minimum 3D distance
-    // to the hole loops.
+    // to the hole loops, over the face's actual extent only.
     let mut best: Option<(f64, Point3)> = None;
     let n_u = 48;
     let n_v = 5;
     for iu in 0..n_u {
         #[allow(clippy::cast_precision_loss)]
-        let u = TAU * (iu as f64) / f64::from(n_u);
+        let u = u_lo + u_span * (iu as f64) / f64::from(n_u);
         for iv in 1..n_v {
             #[allow(clippy::cast_precision_loss)]
             let v = v_min + (v_max - v_min) * (iv as f64) / f64::from(n_v);
@@ -1449,6 +1464,33 @@ fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> 
         }
     }
     best.map(|(_, p)| p)
+}
+
+/// Given angular samples (radians, any 2π window), return `(u_lo, u_span)` —
+/// the contiguous interval the samples cover, computed as the complement of the
+/// largest angular gap between consecutive sorted samples. A full revolution
+/// returns `u_span ≈ TAU`; a partial arc returns its true (shorter) span.
+fn covered_u_interval(u_samples: &[f64]) -> (f64, f64) {
+    use std::f64::consts::TAU;
+    let mut us: Vec<f64> = u_samples.iter().map(|u| u.rem_euclid(TAU)).collect();
+    us.sort_by(f64::total_cmp);
+    us.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    if us.len() < 2 {
+        return (us.first().copied().unwrap_or(0.0), TAU);
+    }
+    // Largest gap between consecutive samples (including the wrap gap).
+    let mut max_gap = us[0] + TAU - us[us.len() - 1]; // wrap-around gap
+    let mut gap_after = us[us.len() - 1]; // the sample BEFORE the wrap gap
+    for w in us.windows(2) {
+        let gap = w[1] - w[0];
+        if gap > max_gap {
+            max_gap = gap;
+            gap_after = w[0];
+        }
+    }
+    // The covered interval starts just after the largest gap and spans the rest.
+    let u_lo = (gap_after + max_gap).rem_euclid(TAU);
+    (u_lo, TAU - max_gap)
 }
 
 /// Reorder and reverse boundary edges to form a closed chain.

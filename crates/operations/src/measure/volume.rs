@@ -104,6 +104,16 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         return None;
     }
 
+    // A cylinder/cone face with interior holes goes through the integrator's
+    // combined even-odd hole-clip, which is correct ONLY for the Steinmetz lens
+    // (two mutually-trimmed equal cylinders). Recognise that case by its whole-
+    // solid signature (below); ANY other holed cyl/cone solid (an ordinary
+    // drilled bore, etc.) is deferred to tessellation — its prior, correct
+    // behaviour, since the combined even-odd test would mis-handle independent
+    // holes. Computed once so the per-face loop can accept holed walls only when
+    // the solid is the lens fuse.
+    let is_steinmetz = solid_is_steinmetz_lens_fuse(topo, &faces);
+
     let mut has_bored_quadric = false;
     for &fid in &faces {
         let face = topo.face(fid).ok()?;
@@ -124,15 +134,14 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                 }
                 has_bored_quadric = true;
             }
-            // A cylinder/cone wall with interior hole loops — e.g. two
-            // perpendicular cylinders fused along their Steinmetz lens, where
-            // each wall keeps the closed lens ellipses as holes. The per-face
-            // integrator's full-revolution band branch integrates only the kept
-            // region (the lens v-intervals are clipped out), so the wall volume
-            // is exact. The (hole-unaware) tessellation paths instead render
-            // each wall as a full tube and over-count by the lens, so prefer the
-            // analytic integral here.
+            // A holed cylinder/cone wall is accepted ONLY when the whole solid
+            // is the Steinmetz lens fuse; the integrator then clips the lens
+            // v-intervals out via the combined even-odd arrangement (exact),
+            // where the hole-unaware tessellation paths over-count the lens.
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_) if !face.inner_wires().is_empty() => {
+                if !is_steinmetz {
+                    return None;
+                }
                 has_bored_quadric = true;
             }
             FaceSurface::Torus(_) if !face.inner_wires().is_empty() => return None,
@@ -151,6 +160,57 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
             .volume;
     }
     Some(total.abs())
+}
+
+/// Whether the solid is the STEINMETZ LENS FUSE — two mutually-trimmed equal
+/// cylinders — by its whole-solid topology signature, which no other holed
+/// cyl/cone solid shares:
+///   * exactly two cylindrical faces, each carrying inner wires (the two seam
+///     ellipses as holes);
+///   * every other face planar (the four end caps);
+///   * the holed walls' inner-wire EDGES are SHARED between the two walls
+///     (the same seam ellipses bound both).
+///
+/// An ordinary drilled cylinder has ONE holed wall (its bore rim is not shared
+/// with a second cylindrical wall), so it returns `false` and the solid defers
+/// to tessellation — the integrator's combined even-odd hole-clip is correct
+/// only for the lens, not for independent bores.
+fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
+    use std::collections::HashSet;
+
+    let mut holed_cyl_walls: Vec<FaceId> = Vec::new();
+    for &fid in faces {
+        let Ok(face) = topo.face(fid) else {
+            return false;
+        };
+        match face.surface() {
+            FaceSurface::Cylinder(_) if !face.inner_wires().is_empty() => holed_cyl_walls.push(fid),
+            FaceSurface::Cylinder(_) | FaceSurface::Plane { .. } => {}
+            // Any sphere/cone/torus/NURBS face, or a holed non-cylinder, is not
+            // the cyl∪cyl lens signature.
+            _ => return false,
+        }
+    }
+    if holed_cyl_walls.len() != 2 {
+        return false;
+    }
+    // The two holed walls must SHARE their inner-wire edges (the seam ellipses).
+    let inner_edges = |fid: FaceId| -> HashSet<usize> {
+        let mut s = HashSet::new();
+        if let Ok(face) = topo.face(fid) {
+            for &wid in face.inner_wires() {
+                if let Ok(wire) = topo.wire(wid) {
+                    for oe in wire.edges() {
+                        s.insert(oe.edge().index());
+                    }
+                }
+            }
+        }
+        s
+    };
+    let a = inner_edges(holed_cyl_walls[0]);
+    let b = inner_edges(holed_cyl_walls[1]);
+    !a.is_empty() && a == b
 }
 
 /// Try to compute the volume of a solid analytically by detecting known
