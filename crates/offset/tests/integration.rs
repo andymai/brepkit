@@ -3,7 +3,7 @@
 
 use brepkit_offset::{OffsetOptions, offset_solid};
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
+use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere, make_torus};
 use brepkit_topology::Topology;
 
 fn offset_opts() -> OffsetOptions {
@@ -209,4 +209,33 @@ fn offset_sphere_outward_produces_solid() {
         .shell(topo.solid(result).unwrap().outer_shell())
         .unwrap();
     assert!(!shell.faces().is_empty(), "offset sphere should have faces");
+}
+
+#[test]
+fn offset_torus_stays_analytic() {
+    // Regression: a torus face is doubly-periodic (a fundamental-polygon wire
+    // with degenerate v0->v0 seam edges). The offset wire-builder's circle/seam
+    // and chaining strategies couldn't rebuild it, so the offset solid ended up
+    // with no faces ("no faces could be assembled"). The offset of a torus is a
+    // concentric torus, so its fundamental-polygon wire is now rebuilt directly.
+    for distance in [0.5_f64, -0.5, 1.0] {
+        let mut topo = Topology::new();
+        let solid = make_torus(&mut topo, 10.0, 3.0, 32).unwrap();
+        let result = offset_solid(&mut topo, solid, distance, offset_opts()).unwrap();
+        let shell = topo
+            .shell(topo.solid(result).unwrap().outer_shell())
+            .unwrap();
+        assert_eq!(
+            shell.faces().len(),
+            1,
+            "offset torus by {distance} should be a single torus face"
+        );
+        assert!(
+            matches!(
+                topo.face(shell.faces()[0]).unwrap().surface(),
+                brepkit_topology::face::FaceSurface::Torus(_)
+            ),
+            "offset torus by {distance} must stay analytic (Torus surface)"
+        );
+    }
 }

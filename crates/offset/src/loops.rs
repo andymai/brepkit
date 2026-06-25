@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
-use brepkit_topology::face::FaceId;
-use brepkit_topology::vertex::VertexId;
+use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::data::{OffsetData, OffsetStatus, find_or_create_vertex};
@@ -71,6 +71,16 @@ fn build_loops_for_face(
     data: &OffsetData,
     face_id: FaceId,
 ) -> Result<Vec<WireId>, OffsetError> {
+    // Doubly-periodic torus face: its offset is a concentric torus with the
+    // same seam structure, so rebuild the fundamental-polygon wire directly.
+    // The generic strategies below can't handle its degenerate v0->v0 seam
+    // edges (they look for circle edges or chainable line corners).
+    if let Some(off) = data.offset_faces.get(&face_id)
+        && let FaceSurface::Torus(tor) = &off.surface
+    {
+        return build_torus_wire(topo, tor, data.options.tolerance.linear);
+    }
+
     let mut face_edges: Vec<EdgeId> = Vec::new();
     for intersection in &data.intersections {
         if intersection.face_a != face_id && intersection.face_b != face_id {
@@ -157,6 +167,29 @@ fn try_circle_seam_wire(
 
     // Mixed circle + non-circle: not handled by this strategy.
     Ok(None)
+}
+
+/// Build the fundamental-polygon wire for a torus face: 1 seam vertex, two
+/// degenerate seam edges, wire `a -> b -> a^-1 -> b^-1` (mirrors `make_torus`).
+fn build_torus_wire(
+    topo: &mut Topology,
+    tor: &brepkit_math::surfaces::ToroidalSurface,
+    tol: f64,
+) -> Result<Vec<WireId>, OffsetError> {
+    let seam = tor.evaluate(0.0, 0.0);
+    let v0 = topo.add_vertex(Vertex::new(seam, tol));
+    let ea = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+    let eb = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(ea, true),
+            OrientedEdge::new(eb, true),
+            OrientedEdge::new(ea, false),
+            OrientedEdge::new(eb, false),
+        ],
+        true,
+    )?;
+    Ok(vec![topo.add_wire(wire)])
 }
 
 /// Try to chain edges into closed loops using vertex adjacency.
