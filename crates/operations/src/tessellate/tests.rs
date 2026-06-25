@@ -630,6 +630,96 @@ fn tessellate_boolean_cut_cone_watertight() {
     );
 }
 
+/// A cylinder bored through a sphere yields two spherical latitude bands (each a
+/// `Sphere` face whose only inner wire is the tunnel rim, bounded by the equator)
+/// plus an inner cylinder wall. Those bands degenerate in UV (each constant-v
+/// latitude projects to a zero-area segment), so the CDT path used to fill the
+/// removed polar cap — skinning over the tunnel mouth and inflating the mesh area
+/// to ~648 vs the analytic band area ~587.67. The structured latitude-band path
+/// must instead leave the mouth open: area must approach the analytic value from
+/// below (inscribed), the mesh must be watertight, and no vertex may reach the
+/// sphere pole (|z| stays at the rim's z, ~5.196, well below the radius 6).
+#[test]
+fn bored_sphere_band_area_and_watertight() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let sphere = crate::primitives::make_sphere(&mut topo, 6.0, 24).unwrap();
+    let cyl = crate::primitives::make_cylinder(&mut topo, 3.0, 30.0).unwrap();
+    crate::transform::transform_solid(&mut topo, cyl, &Mat4::translation(0.0, 0.0, -15.0)).unwrap();
+    let result =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, sphere, cyl).unwrap();
+
+    // Analytic surface area: two spherical zones from the equator (z=0) to the
+    // rim (z=±sqrt(R²−r²)) plus the inner cylinder wall.
+    let r_sphere = 6.0_f64;
+    let z_rim = (r_sphere * r_sphere - 9.0).sqrt();
+    let zone = 2.0 * std::f64::consts::PI * r_sphere * z_rim; // one band
+    let cyl_wall = 2.0 * std::f64::consts::PI * 3.0 * (2.0 * z_rim);
+    let analytic = 2.0 * zone + cyl_wall;
+
+    // Area converges to the analytic value from below as deflection tightens.
+    let mut prev_area = 0.0_f64;
+    for &defl in &[0.1_f64, 0.02, 0.01] {
+        let mesh = tessellate_solid(&topo, result, defl).unwrap();
+
+        let mut area = 0.0;
+        for t in 0..mesh.indices.len() / 3 {
+            let a = mesh.positions[mesh.indices[t * 3 + 1] as usize]
+                - mesh.positions[mesh.indices[t * 3] as usize];
+            let b = mesh.positions[mesh.indices[t * 3 + 2] as usize]
+                - mesh.positions[mesh.indices[t * 3] as usize];
+            area += 0.5 * a.cross(b).length();
+        }
+
+        assert!(
+            is_watertight(&mesh),
+            "bored sphere must tessellate watertight at deflection {defl}: bd={} nm={}",
+            boundary_edge_count(&mesh),
+            non_manifold_edge_count(&mesh)
+        );
+
+        // The polar cap must be open: no vertex may approach the sphere pole.
+        let max_abs_z = mesh
+            .positions
+            .iter()
+            .map(|p| p.z().abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_abs_z < z_rim + 1e-6,
+            "tunnel mouth is filled: a vertex reached |z|={max_abs_z} (rim is {z_rim}, pole would be {r_sphere})"
+        );
+
+        // Inscribed band: area is below analytic and within deflection-scaled
+        // tolerance, and never below the previous (coarser) deflection.
+        assert!(
+            area <= analytic + 1.0,
+            "mesh area {area} exceeds analytic band area {analytic} (cap fill?) at deflection {defl}"
+        );
+        assert!(
+            area >= prev_area,
+            "area should not regress as deflection tightens: {area} < {prev_area}"
+        );
+        prev_area = area;
+    }
+
+    // At the default display deflection the area is close to analytic (and far
+    // from the ~648 cap-filled value the CDT path produced).
+    let mesh = tessellate_solid(&topo, result, 0.1).unwrap();
+    let mut area = 0.0;
+    for t in 0..mesh.indices.len() / 3 {
+        let a = mesh.positions[mesh.indices[t * 3 + 1] as usize]
+            - mesh.positions[mesh.indices[t * 3] as usize];
+        let b = mesh.positions[mesh.indices[t * 3 + 2] as usize]
+            - mesh.positions[mesh.indices[t * 3] as usize];
+        area += 0.5 * a.cross(b).length();
+    }
+    assert!(
+        (area - analytic).abs() < 5.0,
+        "default-deflection bored-sphere area {area} should be ~{analytic} (band), not ~648 (cap-filled)"
+    );
+}
+
 #[test]
 fn tessellate_solid_box_correct_area() {
     let mut topo = Topology::new();

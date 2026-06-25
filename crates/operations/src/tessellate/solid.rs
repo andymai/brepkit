@@ -11,7 +11,8 @@ use super::TriangleMesh;
 use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_deviation_a};
 use super::mesh_ops::{dedupe_coincident_triangles, weld_boundary_vertices};
 use super::nonplanar::{
-    tessellate_nonplanar_cdt, tessellate_nonplanar_snap, tessellate_revolution_band_shared,
+    tessellate_latitude_band_shared, tessellate_nonplanar_cdt, tessellate_nonplanar_snap,
+    tessellate_revolution_band_shared,
 };
 use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
@@ -883,41 +884,63 @@ pub(super) fn tessellate_face_with_shared_edges(
             }
         }
     } else {
-        let pos_save = merged.positions.len();
-        let nrm_save = merged.normals.len();
-        let idx_save = merged.indices.len();
-        let ptg_count_save = point_to_global.len();
-
-        let cdt_ok = tessellate_nonplanar_cdt(
+        // A sphere/torus latitude band (the annular region between two
+        // constant-v full-revolution boundaries, e.g. a cylinder bored through a
+        // sphere) degenerates in UV: each latitude projects to a zero-area
+        // back-and-forth segment, so the CDT below cannot bound the band and
+        // fills the removed polar cap. Tessellate such bands structurally from
+        // the shared boundary vertices instead. Returns false for any other
+        // sphere/torus face, which then takes the CDT/snap path unchanged.
+        let handled_band = matches!(
+            face_data.surface(),
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_)
+        ) && tessellate_latitude_band_shared(
             topo,
-            face_id,
             face_data,
             deflection,
             angular_tol,
-            circle_floor,
             edge_global_indices,
             merged,
             point_to_global,
-        );
-        let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
-        if !cdt_produced_tris {
-            merged.positions.truncate(pos_save);
-            merged.normals.truncate(nrm_save);
-            merged.indices.truncate(idx_save);
-            if point_to_global.len() > ptg_count_save {
-                point_to_global.retain(|_, v| (*v as usize) < pos_save);
-            }
+        )?;
 
-            tessellate_nonplanar_snap(
+        if !handled_band {
+            let pos_save = merged.positions.len();
+            let nrm_save = merged.normals.len();
+            let idx_save = merged.indices.len();
+            let ptg_count_save = point_to_global.len();
+
+            let cdt_ok = tessellate_nonplanar_cdt(
                 topo,
                 face_id,
                 face_data,
                 deflection,
                 angular_tol,
+                circle_floor,
                 edge_global_indices,
                 merged,
                 point_to_global,
-            )?;
+            );
+            let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
+            if !cdt_produced_tris {
+                merged.positions.truncate(pos_save);
+                merged.normals.truncate(nrm_save);
+                merged.indices.truncate(idx_save);
+                if point_to_global.len() > ptg_count_save {
+                    point_to_global.retain(|_, v| (*v as usize) < pos_save);
+                }
+
+                tessellate_nonplanar_snap(
+                    topo,
+                    face_id,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    edge_global_indices,
+                    merged,
+                    point_to_global,
+                )?;
+            }
         }
     }
 
