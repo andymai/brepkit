@@ -183,7 +183,14 @@ fn full_revolution_hole_vs<S: ParametricSurface>(
             let Ok(edge) = topo.edge(oe.edge()) else {
                 continue;
             };
-            let Ok(v) = topo.vertex(edge.start()) else {
+            // Oriented traversal: the wire-ordered start vertex is the edge's
+            // end when the oriented edge is reversed.
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            let Ok(v) = topo.vertex(vid) else {
                 continue;
             };
             let (u, vv) = surface.project_point(v.point());
@@ -199,16 +206,16 @@ fn full_revolution_hole_vs<S: ParametricSurface>(
         if v_max - v_min > 1e-6 {
             continue;
         }
-        // Full revolution in u: unwrapped span ≈ TAU. A single-edge closed
-        // circle has one vertex, so also accept holes whose sole edge is a
-        // closed circle curve.
+        // Full revolution in u: the unwrapped per-vertex deltas around the
+        // CLOSED loop (including the closing step back to the first vertex) sum
+        // to ≈ TAU. A single-edge closed circle has one vertex, so also accept
+        // holes whose sole edge is a closed circle curve.
         let unwrapped_span = {
-            let mut prev = us.first().copied().unwrap_or(0.0);
+            let n = us.len();
             let mut acc = 0.0;
-            for &u in us.iter().skip(1) {
-                let d = u - prev;
+            for i in 0..n {
+                let d = us[(i + 1) % n] - us[i];
                 acc += d - TAU * ((d + std::f64::consts::PI) / TAU).floor();
-                prev = u;
             }
             acc.abs()
         };
@@ -618,9 +625,9 @@ fn integrate_with_trimming<S: ParametricSurface>(
         let v_far = hole_vs
             .iter()
             .copied()
-            .filter(|&hv| {
-                (hv - v_min).signum() == (v_pole - v_min).signum() && (hv - v_min).abs() > 1e-9
-            })
+            // Same side of v_min as the pole (strict same sign → positive
+            // product), and not coincident with v_min.
+            .filter(|&hv| (hv - v_min) * (v_pole - v_min) > 0.0 && (hv - v_min).abs() > 1e-9)
             .min_by(|a, b| (a - v_min).abs().total_cmp(&(b - v_min).abs()))
             .unwrap_or(v_pole);
         let v_dom = (v_min.min(v_far), v_min.max(v_far));

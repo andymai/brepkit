@@ -36,9 +36,14 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         let face = topo.face(fid).ok()?;
         match face.surface() {
             FaceSurface::Nurbs(_) => return None,
-            FaceSurface::Sphere(_) | FaceSurface::Torus(_) if !face.inner_wires().is_empty() => {
+            // Sphere only: the per-face integrator's hole-clipping is wired up
+            // for spheres. A bored torus would pass `hole_vs = []` and
+            // over-integrate, so defer it to tessellation until torus
+            // hole-clipping lands (with the torus−box analytic split).
+            FaceSurface::Sphere(_) if !face.inner_wires().is_empty() => {
                 has_bored_quadric = true;
             }
+            FaceSurface::Torus(_) if !face.inner_wires().is_empty() => return None,
             _ => {}
         }
     }
