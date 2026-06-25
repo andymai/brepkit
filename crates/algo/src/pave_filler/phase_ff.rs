@@ -53,8 +53,8 @@ pub fn perform(
     let faces_b = brepkit_topology::explorer::solid_faces(topo, solid_b)?;
 
     // Pre-compute face AABBs for rejection
-    let bboxes_a = compute_face_bboxes(topo, &faces_a)?;
-    let bboxes_b = compute_face_bboxes(topo, &faces_b)?;
+    let bboxes_a = compute_face_bboxes(topo, &faces_a, tol)?;
+    let bboxes_b = compute_face_bboxes(topo, &faces_b, tol)?;
 
     // Collect all surface data upfront so we don't borrow topo immutably
     // while mutating it later.
@@ -1078,7 +1078,7 @@ fn longest_inboth_run(inb: &[bool], closed: bool) -> (usize, usize) {
 }
 
 /// Compute AABB for a face by sampling its boundary edges.
-fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoError> {
+fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result<Aabb3, AlgoError> {
     let edges = brepkit_topology::explorer::face_edges(topo, face_id)?;
     let mut points = Vec::new();
 
@@ -1096,22 +1096,158 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
         }
     }
 
-    if points.is_empty() {
-        // Degenerate face with no edges -- use a zero-volume box at origin
-        Ok(Aabb3 {
+    // A sphere or torus face bulges beyond its boundary edges (a hemisphere's
+    // only boundary is its equatorial circle; a full torus's are two degenerate
+    // seam points), so the boundary-sampled bbox underestimates the true extent
+    // and the broad-phase would wrongly reject genuinely intersecting pairs.
+    // Recover the missing extent from the surface, kept as tight as possible so
+    // the box stays a sound superset without admitting unrelated geometry.
+    let surface_bbox = match topo.face(face_id)?.surface() {
+        // Bound to the hemisphere the face occupies (pole side from the boundary
+        // winding) — the full-sphere box would let one hemisphere admit the
+        // other's sections. Ambiguous winding falls back to the full sphere.
+        FaceSurface::Sphere(s) => Some(match sphere_region_axis(topo, face_id, s.center(), tol) {
+            Some(axis) => s.aabb_region(axis),
+            None => s.aabb(),
+        }),
+        // Only a full, untrimmed torus needs the surface box — its boundary is
+        // the degenerate fundamental-polygon seam, which collapses to a point. A
+        // trimmed torus patch is bounded by its real edges; widening it to the
+        // whole torus would admit geometry on omitted angular bands.
+        FaceSurface::Torus(t) if face_boundary_all_degenerate(topo, face_id, tol)? => {
+            Some(t.aabb())
+        }
+        _ => None,
+    };
+
+    Ok(match (points.is_empty(), surface_bbox) {
+        (false, Some(sb)) => Aabb3::from_points(points).union(sb),
+        (false, None) => Aabb3::from_points(points),
+        (true, Some(sb)) => sb,
+        // Degenerate face with no edges and no surface box -- zero-volume box.
+        (true, None) => Aabb3 {
             min: Point3::new(0.0, 0.0, 0.0),
             max: Point3::new(0.0, 0.0, 0.0),
-        })
-    } else {
-        Ok(Aabb3::from_points(points))
+        },
+    })
+}
+
+/// Pole-side axis of a spherical face, from its boundary winding: the summed
+/// `(midpoint − center) × chord` over the outer wire points from the sphere
+/// center into the face's hemisphere (negated for a reversed face). Returns
+/// `None` when the wire is degenerate or near-planar through the center, so the
+/// side is ambiguous. Shared by the broad-phase AABB and the section in-both
+/// filter so the two stay consistent.
+fn sphere_region_axis(
+    topo: &Topology,
+    face_id: FaceId,
+    center: Point3,
+    tol: Tolerance,
+) -> Option<Vec3> {
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    // Sample the outer wire into an oriented closed polyline. Endpoint-only
+    // sampling fails for a boundary built from a single closed `Circle` edge
+    // (start == end, so every chord is zero); sampling along each edge recovers
+    // the loop shape so the winding below still yields the pole-side axis.
+    let mut pts: Vec<Point3> = Vec::new();
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        // Sample in the edge's natural direction (omit the endpoint — it is the
+        // next edge's start), then flip for a reversed orientation.
+        let n = 8;
+        let mut edge_pts: Vec<Point3> = (0..n)
+            .map(|i| {
+                let t = t0 + (t1 - t0) * (f64::from(i) / f64::from(n));
+                edge.curve().evaluate_with_endpoints(t, sp, ep)
+            })
+            .collect();
+        if !oe.is_forward() {
+            edge_pts.reverse();
+        }
+        pts.append(&mut edge_pts);
     }
+    if pts.len() < 3 {
+        return None;
+    }
+    // Summed (midpoint − center) × chord around the closed loop ≈ 2·(area
+    // vector): its direction is the face's outward pole axis (negated for a
+    // reversed face). The cross products have units of length^2, so the
+    // degeneracy threshold is derived from the input magnitudes: `scale` sums
+    // each term's bound (|mid − center| · |chord|); a near-planar-through-center
+    // loop (ambiguous side) leaves `axis` small relative to it.
+    let mut axis = Vec3::new(0.0, 0.0, 0.0);
+    let mut scale = 0.0;
+    let count = pts.len();
+    for i in 0..count {
+        let a = pts[i];
+        let b = pts[(i + 1) % count];
+        let mid = a + (b - a) * 0.5;
+        let radial = mid - center;
+        let chord = b - a;
+        scale += radial.length() * chord.length();
+        axis += radial.cross(chord);
+    }
+    if face.is_reversed() {
+        axis = axis * -1.0;
+    }
+    let len = axis.length();
+    if scale < tol.linear * tol.linear || len < scale * tol.linear {
+        return None;
+    }
+    Some(axis * (1.0 / len))
+}
+
+/// True when every edge of the face has zero spatial extent (a degenerate seam
+/// point) — the signature of a full, untrimmed torus, whose boundary is the
+/// doubly-periodic fundamental-polygon seam built from `Line(v0, v0)` edges.
+///
+/// Extent (not just endpoint coincidence) is the test: a closed `Circle` or
+/// closed NURBS edge also has `start == end`, yet it spans a real loop and
+/// bounds a *trimmed* patch — those must return `false` so the patch is not
+/// over-widened to the whole torus. Each edge is sampled along its curve and
+/// must stay within `tol` of its start point.
+fn face_boundary_all_degenerate(
+    topo: &Topology,
+    face_id: FaceId,
+    tol: Tolerance,
+) -> Result<bool, AlgoError> {
+    let edges = brepkit_topology::explorer::face_edges(topo, face_id)?;
+    if edges.is_empty() {
+        return Ok(false);
+    }
+    for eid in edges {
+        let edge = topo.edge(eid)?;
+        let sp = topo.vertex(edge.start())?.point();
+        let ep = topo.vertex(edge.end())?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        for frac in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let t = t0 + (t1 - t0) * frac;
+            let p = edge.curve().evaluate_with_endpoints(t, sp, ep);
+            if (p - sp).length() > tol.linear {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// Compute AABBs for a list of faces.
-fn compute_face_bboxes(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Aabb3>, AlgoError> {
+fn compute_face_bboxes(
+    topo: &Topology,
+    faces: &[FaceId],
+    tol: Tolerance,
+) -> Result<Vec<Aabb3>, AlgoError> {
     let mut bboxes = Vec::with_capacity(faces.len());
     for &fid in faces {
-        bboxes.push(compute_face_bbox(topo, fid)?);
+        bboxes.push(compute_face_bbox(topo, fid, tol)?);
     }
     Ok(bboxes)
 }
@@ -2134,41 +2270,7 @@ fn emit_split_circle_arcs(
             return None;
         };
         let center = s.center();
-        let wire = topo.wire(face.outer_wire()).ok()?;
-        let mut axis = Vec3::new(0.0, 0.0, 0.0);
-        // The accumulated cross products have units of length^2, so the
-        // degeneracy threshold must be derived from the input magnitudes
-        // rather than compared against a bare linear tolerance. `scale`
-        // sums each term's magnitude bound (|mid - center| * |ep - sp|);
-        // a true near-parallel/cancelling wire leaves `axis` small
-        // relative to it.
-        let mut scale = 0.0;
-        for oe in wire.edges() {
-            let Ok(edge) = topo.edge(oe.edge()) else {
-                continue;
-            };
-            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-                continue;
-            };
-            let (sp, ep) = if oe.is_forward() {
-                (sv.point(), ev.point())
-            } else {
-                (ev.point(), sv.point())
-            };
-            let mid = sp + (ep - sp) * 0.5;
-            let radial = mid - center;
-            let chord = ep - sp;
-            scale += radial.length() * chord.length();
-            axis += radial.cross(chord);
-        }
-        if face.is_reversed() {
-            axis = axis * -1.0;
-        }
-        let len = axis.length();
-        if scale < tol.linear * tol.linear || len < scale * tol.linear {
-            return None;
-        }
-        Some((center, axis * (1.0 / len)))
+        sphere_region_axis(topo, fid, center, tol).map(|axis| (center, axis))
     };
     let side_a = sphere_side(face_a);
     let side_b = sphere_side(face_b);
@@ -2660,7 +2762,7 @@ fn clip_line_to_polygon_general(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     #[test]
@@ -2684,6 +2786,81 @@ mod tests {
         // A closed curve entirely in-both returns the whole span (0, m).
         let inb = [true, true, true, true, true];
         assert_eq!(longest_inboth_run(&inb, true), (0, 4));
+    }
+
+    #[test]
+    fn sphere_region_axis_closed_circle_boundary() {
+        // A sphere face bounded by a single closed `Circle` edge has start ==
+        // end, so endpoint-only winding gives a zero chord and no axis. Sampling
+        // along the edge must recover the circle's plane normal as the pole axis
+        // (otherwise the broad-phase falls back to the loose full-sphere box).
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::default();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(6.0, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 6.0).unwrap();
+        let edge = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(circle)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)));
+        let axis = sphere_region_axis(
+            &topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Tolerance::default(),
+        )
+        .expect("closed-circle boundary should yield a pole axis");
+        // The equatorial circle's plane normal is ±z; sampling recovers it.
+        assert!(axis.z().abs() > 0.99, "axis not aligned with z: {axis:?}");
+        assert!(axis.x().abs() < 0.05 && axis.y().abs() < 0.05);
+    }
+
+    #[test]
+    fn closed_circle_torus_boundary_is_not_full_torus() {
+        // A torus patch bounded by a closed `Circle` edge has coincident
+        // endpoints but real spatial extent — it must NOT be treated as a full
+        // (untrimmed) torus, which would over-widen its AABB to the whole torus.
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::default();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(13.0, 0.0, 0.0), 1e-7));
+        // A tube cross-section circle at u=0: centered on the tube center
+        // (10,0,0), in the x-z plane, radius = minor radius 3.
+        let circle =
+            Circle3D::new(Point3::new(10.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 3.0).unwrap();
+        let edge = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(circle)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus)));
+        assert!(!face_boundary_all_degenerate(&topo, face, Tolerance::default()).unwrap());
+    }
+
+    #[test]
+    fn point_seam_boundary_is_full_torus() {
+        // Degenerate `Line(v0, v0)` seam edges (zero extent) are the full-torus
+        // signature and must return true.
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::default();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(13.0, 0.0, 0.0), 1e-7));
+        let e0 = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(e0, true), OrientedEdge::new(e1, true)],
+                true,
+            )
+            .unwrap(),
+        );
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus)));
+        assert!(face_boundary_all_degenerate(&topo, face, Tolerance::default()).unwrap());
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! intersection algorithms (e.g., plane-cylinder = ellipse) without sampling.
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::frame::Frame3;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
@@ -495,6 +496,59 @@ impl SphericalSurface {
         }
     }
 
+    /// Axis-aligned bounding box of the full sphere (`center ± radius` on every
+    /// axis). Orientation-independent and a sound superset of any spherical
+    /// patch — the boolean broad-phase uses it because a face's boundary-only
+    /// bbox misses the surface bulge between its boundary edges (a hemisphere's
+    /// only boundary is its equator).
+    #[must_use]
+    pub fn aabb(&self) -> Aabb3 {
+        let r = self.radius;
+        Aabb3 {
+            min: Point3::new(
+                self.center.x() - r,
+                self.center.y() - r,
+                self.center.z() - r,
+            ),
+            max: Point3::new(
+                self.center.x() + r,
+                self.center.y() + r,
+                self.center.z() + r,
+            ),
+        }
+    }
+
+    /// Axis-aligned bounding box of the hemisphere on the `pole`-axis side —
+    /// the half-ball `{center + radius·d : d·pole ≥ 0}`. A tight, sound superset
+    /// of any spherical patch lying on that side; the boolean broad-phase uses
+    /// it so that one hemisphere face's box does not admit the other's sections
+    /// (the full-sphere `aabb` would). Falls back to the full sphere when `pole`
+    /// is degenerate (side ambiguous).
+    #[must_use]
+    pub fn aabb_region(&self, pole: Vec3) -> Aabb3 {
+        let Ok(n) = pole.normalize() else {
+            return self.aabb();
+        };
+        let c = self.center;
+        let r = self.radius;
+        // For world axis ê, the extreme of d·ê over {d·n ≥ 0, |d| = 1} is 1 when
+        // ê·n ≥ 0 (the axis itself is in the half-space), else the equator-plane
+        // projection √(1 − (ê·n)²); the minimum is the mirror image.
+        let span = |en: f64| -> (f64, f64) {
+            let s = (1.0 - en * en).max(0.0).sqrt();
+            let hi = if en >= 0.0 { 1.0 } else { s };
+            let lo = if en <= 0.0 { -1.0 } else { -s };
+            (lo, hi)
+        };
+        let (lx, hx) = span(n.x());
+        let (ly, hy) = span(n.y());
+        let (lz, hz) = span(n.z());
+        Aabb3 {
+            min: Point3::new(c.x() + r * lx, c.y() + r * ly, c.z() + r * lz),
+            max: Point3::new(c.x() + r * hx, c.y() + r * hy, c.z() + r * hz),
+        }
+    }
+
     /// Project a 3D point onto the sphere, returning (u, v) parameters.
     ///
     /// `u` is the longitudinal angle [0, 2π), `v` is the latitude [-π/2, π/2].
@@ -695,6 +749,33 @@ impl ToroidalSurface {
         Self {
             center: self.center + offset,
             ..self.clone()
+        }
+    }
+
+    /// Axis-aligned bounding box of the full torus. The half-extent along each
+    /// world axis sums the ring's projection onto the plane perpendicular to the
+    /// torus axis (`(major+minor)·‖(x·ê, y·ê)‖`) and the tube's projection onto
+    /// the axis (`minor·|z·ê|`); `x/y/z_axis` are orthonormal. A sound superset
+    /// used by the boolean broad-phase — a full torus's boundary is degenerate
+    /// seam points, so a boundary-only bbox collapses to a point.
+    #[must_use]
+    pub fn aabb(&self) -> Aabb3 {
+        let rr = self.major_radius + self.minor_radius;
+        let r = self.minor_radius;
+        let hx = rr * self.x_axis.x().hypot(self.y_axis.x()) + r * self.z_axis.x().abs();
+        let hy = rr * self.x_axis.y().hypot(self.y_axis.y()) + r * self.z_axis.y().abs();
+        let hz = rr * self.x_axis.z().hypot(self.y_axis.z()) + r * self.z_axis.z().abs();
+        Aabb3 {
+            min: Point3::new(
+                self.center.x() - hx,
+                self.center.y() - hy,
+                self.center.z() - hz,
+            ),
+            max: Point3::new(
+                self.center.x() + hx,
+                self.center.y() + hy,
+                self.center.z() + hz,
+            ),
         }
     }
 

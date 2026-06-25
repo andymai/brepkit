@@ -271,6 +271,73 @@ fn torus_accessors() {
 }
 
 #[test]
+fn sphere_aabb_at_origin() {
+    let s = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0).unwrap();
+    let bb = s.aabb();
+    assert!(point_approx_eq(bb.min, Point3::new(-3.0, -3.0, -3.0)));
+    assert!(point_approx_eq(bb.max, Point3::new(3.0, 3.0, 3.0)));
+}
+
+#[test]
+fn sphere_aabb_offcenter() {
+    // The census case: sphere r=6 centered at (5,5,5).
+    let s = SphericalSurface::new(Point3::new(5.0, 5.0, 5.0), 6.0).unwrap();
+    let bb = s.aabb();
+    assert!(point_approx_eq(bb.min, Point3::new(-1.0, -1.0, -1.0)));
+    assert!(point_approx_eq(bb.max, Point3::new(11.0, 11.0, 11.0)));
+}
+
+#[test]
+fn sphere_aabb_region_north_hemisphere() {
+    // Pole +z: the box is the upper half-ball (flat at the equator z=0).
+    let s = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0).unwrap();
+    let bb = s.aabb_region(Vec3::new(0.0, 0.0, 1.0));
+    assert!(point_approx_eq(bb.min, Point3::new(-6.0, -6.0, 0.0)));
+    assert!(point_approx_eq(bb.max, Point3::new(6.0, 6.0, 6.0)));
+}
+
+#[test]
+fn sphere_aabb_region_south_hemisphere() {
+    let s = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0).unwrap();
+    let bb = s.aabb_region(Vec3::new(0.0, 0.0, -1.0));
+    assert!(point_approx_eq(bb.min, Point3::new(-6.0, -6.0, -6.0)));
+    assert!(point_approx_eq(bb.max, Point3::new(6.0, 6.0, 0.0)));
+}
+
+#[test]
+fn sphere_aabb_region_degenerate_pole_is_full_sphere() {
+    // A zero pole axis is ambiguous → fall back to the full-sphere box.
+    let s = SphericalSurface::new(Point3::new(1.0, 2.0, 3.0), 4.0).unwrap();
+    let bb = s.aabb_region(Vec3::new(0.0, 0.0, 0.0));
+    assert!(point_approx_eq(bb.min, Point3::new(-3.0, -2.0, -1.0)));
+    assert!(point_approx_eq(bb.max, Point3::new(5.0, 6.0, 7.0)));
+}
+
+#[test]
+fn torus_aabb_canonical() {
+    // Axis +z: radial reach R+r=13 in x/y, tube ±r=3 in z.
+    let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+    let bb = t.aabb();
+    assert!(point_approx_eq(bb.min, Point3::new(-13.0, -13.0, -3.0)));
+    assert!(point_approx_eq(bb.max, Point3::new(13.0, 13.0, 3.0)));
+}
+
+#[test]
+fn torus_aabb_x_axis() {
+    // Axis along +x: tube ±r=3 in x, radial reach R+r=13 in y/z.
+    let t = ToroidalSurface::with_axis(
+        Point3::new(0.0, 0.0, 0.0),
+        10.0,
+        3.0,
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let bb = t.aabb();
+    assert!(point_approx_eq(bb.min, Point3::new(-3.0, -13.0, -13.0)));
+    assert!(point_approx_eq(bb.max, Point3::new(3.0, 13.0, 13.0)));
+}
+
+#[test]
 fn revolution_with_x_axis() {
     // Tests the other candidate branch for revolution surfaces
     let rev = RevolutionSurface::new(
