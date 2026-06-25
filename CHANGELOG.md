@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.120.2](https://github.com/andymai/brepkit/compare/v2.120.1...v2.120.2) (2026-06-25)
+
+
+### Bug Fixes
+
+* **offset:** assemble torus offsets analytically (doubly-periodic seam wire) ([#999](https://github.com/andymai/brepkit/issues/999)) ([6327ebe](https://github.com/andymai/brepkit/commit/6327ebe977f9d7a12ef0b503422bca20a085b811))
+
 ## [2.120.1](https://github.com/andymai/brepkit/compare/v2.120.0...v2.120.1) (2026-06-25)
 
 
