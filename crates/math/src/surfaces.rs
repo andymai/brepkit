@@ -5,6 +5,7 @@
 //! intersection algorithms (e.g., plane-cylinder = ellipse) without sampling.
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::frame::Frame3;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
@@ -495,6 +496,28 @@ impl SphericalSurface {
         }
     }
 
+    /// Axis-aligned bounding box of the full sphere (`center ± radius` on every
+    /// axis). Orientation-independent and a sound superset of any spherical
+    /// patch — the boolean broad-phase uses it because a face's boundary-only
+    /// bbox misses the surface bulge between its boundary edges (a hemisphere's
+    /// only boundary is its equator).
+    #[must_use]
+    pub fn aabb(&self) -> Aabb3 {
+        let r = self.radius;
+        Aabb3 {
+            min: Point3::new(
+                self.center.x() - r,
+                self.center.y() - r,
+                self.center.z() - r,
+            ),
+            max: Point3::new(
+                self.center.x() + r,
+                self.center.y() + r,
+                self.center.z() + r,
+            ),
+        }
+    }
+
     /// Project a 3D point onto the sphere, returning (u, v) parameters.
     ///
     /// `u` is the longitudinal angle [0, 2π), `v` is the latitude [-π/2, π/2].
@@ -695,6 +718,33 @@ impl ToroidalSurface {
         Self {
             center: self.center + offset,
             ..self.clone()
+        }
+    }
+
+    /// Axis-aligned bounding box of the full torus. The half-extent along each
+    /// world axis sums the ring's projection onto the plane perpendicular to the
+    /// torus axis (`(major+minor)·‖(x·ê, y·ê)‖`) and the tube's projection onto
+    /// the axis (`minor·|z·ê|`); `x/y/z_axis` are orthonormal. A sound superset
+    /// used by the boolean broad-phase — a full torus's boundary is degenerate
+    /// seam points, so a boundary-only bbox collapses to a point.
+    #[must_use]
+    pub fn aabb(&self) -> Aabb3 {
+        let rr = self.major_radius + self.minor_radius;
+        let r = self.minor_radius;
+        let hx = rr * self.x_axis.x().hypot(self.y_axis.x()) + r * self.z_axis.x().abs();
+        let hy = rr * self.x_axis.y().hypot(self.y_axis.y()) + r * self.z_axis.y().abs();
+        let hz = rr * self.x_axis.z().hypot(self.y_axis.z()) + r * self.z_axis.z().abs();
+        Aabb3 {
+            min: Point3::new(
+                self.center.x() - hx,
+                self.center.y() - hy,
+                self.center.z() - hz,
+            ),
+            max: Point3::new(
+                self.center.x() + hx,
+                self.center.y() + hy,
+                self.center.z() + hz,
+            ),
         }
     }
 

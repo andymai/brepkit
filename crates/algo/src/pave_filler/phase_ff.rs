@@ -1096,15 +1096,27 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
         }
     }
 
-    if points.is_empty() {
+    let boundary_bbox = if points.is_empty() {
         // Degenerate face with no edges -- use a zero-volume box at origin
-        Ok(Aabb3 {
+        Aabb3 {
             min: Point3::new(0.0, 0.0, 0.0),
             max: Point3::new(0.0, 0.0, 0.0),
-        })
+        }
     } else {
-        Ok(Aabb3::from_points(points))
-    }
+        Aabb3::from_points(points)
+    };
+
+    // A sphere or torus face bulges beyond its boundary edges (a hemisphere's
+    // only boundary is its equatorial circle; a full torus's are degenerate
+    // seam points), so the boundary-sampled bbox underestimates the true extent
+    // and the broad-phase would wrongly reject genuinely intersecting pairs.
+    // Union with the surface's closed-form extent to keep the bbox a sound
+    // superset. Cylinder/cone/plane boundary edges already bound their faces.
+    Ok(match topo.face(face_id)?.surface() {
+        FaceSurface::Sphere(s) => boundary_bbox.union(s.aabb()),
+        FaceSurface::Torus(t) => boundary_bbox.union(t.aabb()),
+        _ => boundary_bbox,
+    })
 }
 
 /// Compute AABBs for a list of faces.
