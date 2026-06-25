@@ -1142,6 +1142,78 @@ fn cut_box_by_sphere_succeeds() {
 }
 
 #[test]
+/// Cut a sphere (r=6) with a coaxial cylinder (r=3) passing all the way
+/// through: a sphere-with-tunnel. The intersection is two latitude circles, so
+/// the result must be EXACT ANALYTIC — two spherical bands (each carrying the
+/// tunnel-rim hole) plus the inner cylinder wall — and watertight, NOT a 1392-
+/// face mesh fallback.
+fn cut_sphere_by_through_cylinder_is_analytic_watertight() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let s = crate::primitives::make_sphere(&mut topo, 6.0, 24).unwrap();
+    let c = crate::primitives::make_cylinder(&mut topo, 3.0, 30.0).unwrap();
+    crate::transform::transform_solid(&mut topo, c, &Mat4::translation(0.0, 0.0, -15.0)).unwrap();
+
+    let res = boolean(&mut topo, BooleanOp::Cut, s, c).unwrap();
+
+    // Exact analytic surface mix: spheres + the cylinder tunnel wall, no
+    // mesh-fallback plane explosion.
+    let faces = brepkit_topology::explorer::solid_faces(&topo, res).unwrap();
+    let mut spheres = 0;
+    let mut cylinders = 0;
+    for &fid in &faces {
+        match topo.face(fid).unwrap().surface() {
+            FaceSurface::Sphere(_) => spheres += 1,
+            FaceSurface::Cylinder(_) => cylinders += 1,
+            other => panic!("unexpected non-analytic-tunnel face {other:?}"),
+        }
+    }
+    assert_eq!(spheres, 2, "expected two spherical bands, got {spheres}");
+    assert_eq!(cylinders, 1, "expected one tunnel wall, got {cylinders}");
+    assert!(
+        faces.len() <= 6,
+        "analytic result must be a handful of faces, not a mesh fallback (got {})",
+        faces.len()
+    );
+
+    // Watertight: every edge shared by exactly two faces.
+    let mut edge_use: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for &fid in &faces {
+        let f = topo.face(fid).unwrap();
+        let mut wires = vec![f.outer_wire()];
+        wires.extend(f.inner_wires().iter().copied());
+        for w in wires {
+            for oe in topo.wire(w).unwrap().edges() {
+                *edge_use.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    let free = edge_use.values().filter(|&&c| c == 1).count();
+    let over = edge_use.values().filter(|&&c| c > 2).count();
+    assert_eq!(free, 0, "result must be watertight (free edges = {free})");
+    assert_eq!(
+        over, 0,
+        "result must be manifold (over-shared edges = {over})"
+    );
+
+    // Volume = sphere − (sphere ∩ cylinder through-bore).
+    let r = 3.0_f64;
+    let rr = 6.0_f64;
+    let z = (rr * rr - r * r).sqrt();
+    let v_sphere = 4.0 / 3.0 * std::f64::consts::PI * rr.powi(3);
+    let h_cap = rr - z;
+    let v_cap = std::f64::consts::PI * h_cap * h_cap * (rr - h_cap / 3.0);
+    let v_removed = std::f64::consts::PI * r * r * (2.0 * z) + 2.0 * v_cap;
+    let v_expect = v_sphere - v_removed;
+    let vol = crate::measure::solid_volume(&topo, res, 0.001).unwrap();
+    assert!(
+        (vol - v_expect).abs() < v_expect * 0.01,
+        "tunnel volume {vol:.3} should match sphere − bore {v_expect:.3}"
+    );
+}
+
+#[test]
 fn cut_box_by_translated_sphere() {
     // Matches brepjs test: box(10,10,10), sphere(r=3) translated to (5,5,5).
     let mut topo = Topology::new();

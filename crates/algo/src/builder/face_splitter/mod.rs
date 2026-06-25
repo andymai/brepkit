@@ -1869,7 +1869,16 @@ pub fn split_face_2d(
             // seam connections (e.g., torus), not true line boundaries.
             && (e.start_3d - e.end_3d).length() > tol.linear
     });
-    if all_boundary_line && !is_plane {
+    // `split_noseam_face_direct` carves cap+band from OPEN section arcs (it
+    // skips full-circle sections, relying on the FF boundary-crossing split to
+    // pre-open them). A hemisphere cut by a cylinder yields a CLOSED circle
+    // interior to the face (no equator crossing) — there are no open arcs, so
+    // that path would unsplit it. Defer those to the internal-loops path
+    // below, which carves the cap disc as a hole.
+    let has_open_section = sections
+        .iter()
+        .any(|s| (s.start - s.end).length() > tol.linear);
+    if all_boundary_line && !is_plane && has_open_section {
         return split_noseam_face_direct(
             &surface,
             &boundary_edges,
@@ -2857,13 +2866,37 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
             .fold(f64::NEG_INFINITY, f64::max);
         if (v_max - v_min) < 0.1 {
             let v_boundary = (v_min + v_max) * 0.5;
-            let v_pole = if v_boundary >= 0.0 {
-                std::f64::consts::FRAC_PI_2
-            } else {
-                -std::f64::consts::FRAC_PI_2
-            };
             let u_center = pts_2d.iter().map(|p| p.x()).sum::<f64>() / pts_2d.len() as f64;
-            interior_uv = Point2::new(u_center, (v_boundary + v_pole) * 0.5);
+
+            // A band sub-face's outer wire sits at the equator (v ≈ 0) for
+            // BOTH hemispheres, so its v-sign cannot say which hemisphere the
+            // band covers. The hole (the cut tunnel rim) carries that sign:
+            // aim the interior into the annular ring between the equator and
+            // the hole. Without a hole the strip is a polar cap whose own
+            // v-sign points at the enclosed pole.
+            let hole_v: Option<f64> = {
+                let vs: Vec<f64> = sub_face
+                    .inner_wires
+                    .iter()
+                    .flatten()
+                    .map(|e| 0.5 * (e.start_uv.y() + e.end_uv.y()))
+                    .collect();
+                vs.iter()
+                    .copied()
+                    .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+            };
+            let target_v = match hole_v {
+                Some(hv) if (hv - v_boundary).abs() > 1e-9 => 0.5 * (v_boundary + hv),
+                _ => {
+                    let v_pole = if v_boundary >= 0.0 {
+                        std::f64::consts::FRAC_PI_2
+                    } else {
+                        -std::f64::consts::FRAC_PI_2
+                    };
+                    0.5 * (v_boundary + v_pole)
+                }
+            };
+            interior_uv = Point2::new(u_center, target_v);
         }
     }
 

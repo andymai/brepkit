@@ -9,6 +9,7 @@ use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
 use crate::CheckError;
@@ -75,6 +76,7 @@ pub fn integrate_face(
                 sign,
                 &uv_boundary,
                 true,
+                &[],
             ))
         }
         FaceSurface::Cone(s) => {
@@ -92,6 +94,7 @@ pub fn integrate_face(
                 sign,
                 &uv_boundary,
                 true,
+                &[],
             ))
         }
         FaceSurface::Sphere(s) => {
@@ -101,6 +104,7 @@ pub fn integrate_face(
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let hole_vs = full_revolution_hole_vs(topo, face_id, s);
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -109,6 +113,7 @@ pub fn integrate_face(
                 sign,
                 &uv_boundary,
                 true,
+                &hole_vs,
             ))
         }
         FaceSurface::Torus(s) => {
@@ -123,6 +128,7 @@ pub fn integrate_face(
                 sign,
                 &uv_boundary,
                 true,
+                &[],
             ))
         }
         FaceSurface::Nurbs(s) => {
@@ -141,6 +147,7 @@ pub fn integrate_face(
                 sign,
                 &uv_boundary,
                 periodic_u,
+                &[],
             ))
         }
     }
@@ -148,6 +155,74 @@ pub fn integrate_face(
 
 /// UV domain bounds as `((u_min, u_max), (v_min, v_max))`.
 type UvBounds = ((f64, f64), (f64, f64));
+
+/// The v-positions of a face's full-revolution inner wires (holes) on a
+/// surface periodic in u.
+///
+/// A boolean that drills a cylinder through a sphere leaves each spherical
+/// band bounded by a latitude circle hole (the tunnel rim). Such a hole wraps
+/// the full u-period and sits at a single v, so the band runs from its outer
+/// latitude to the hole — not on to the pole. Collecting these lets the
+/// integrator clip the band instead of over-integrating the polar cap the hole
+/// removed. Each entry is the mean projected v of one full-revolution hole.
+fn full_revolution_hole_vs<S: ParametricSurface>(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &S,
+) -> Vec<f64> {
+    use std::f64::consts::TAU;
+    let Ok(face) = topo.face(face_id) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for &wid in face.inner_wires() {
+        let Ok(wire) = topo.wire(wid) else { continue };
+        let mut us = Vec::new();
+        let mut vs = Vec::new();
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let Ok(v) = topo.vertex(edge.start()) else {
+                continue;
+            };
+            let (u, vv) = surface.project_point(v.point());
+            us.push(u);
+            vs.push(vv);
+        }
+        if vs.is_empty() {
+            continue;
+        }
+        let v_min = vs.iter().copied().fold(f64::INFINITY, f64::min);
+        let v_max = vs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        // Constant-v latitude circle.
+        if v_max - v_min > 1e-6 {
+            continue;
+        }
+        // Full revolution in u: unwrapped span ≈ TAU. A single-edge closed
+        // circle has one vertex, so also accept holes whose sole edge is a
+        // closed circle curve.
+        let unwrapped_span = {
+            let mut prev = us.first().copied().unwrap_or(0.0);
+            let mut acc = 0.0;
+            for &u in us.iter().skip(1) {
+                let d = u - prev;
+                acc += d - TAU * ((d + std::f64::consts::PI) / TAU).floor();
+                prev = u;
+            }
+            acc.abs()
+        };
+        let single_closed_circle = wire.edges().len() == 1
+            && wire.edges().first().is_some_and(|oe| {
+                topo.edge(oe.edge())
+                    .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Circle(_)))
+            });
+        if unwrapped_span >= TAU - 1e-3 || single_closed_circle {
+            out.push(0.5 * (v_min + v_max));
+        }
+    }
+    out
+}
 
 /// Compute UV bounds for a parametric face by projecting boundary vertices
 /// onto the surface and taking the min/max of the resulting parameters.
@@ -481,6 +556,7 @@ fn polygon_area(poly: &[(f64, f64)]) -> f64 {
 
 /// Dispatch to trimmed or untrimmed parametric integration based on whether
 /// a UV boundary polygon is available.
+#[allow(clippy::too_many_arguments)]
 fn integrate_with_trimming<S: ParametricSurface>(
     surface: &S,
     u_range: (f64, f64),
@@ -489,6 +565,7 @@ fn integrate_with_trimming<S: ParametricSurface>(
     sign: f64,
     uv_boundary: &[(f64, f64)],
     u_periodic: bool,
+    hole_vs: &[f64],
 ) -> FaceContribution {
     if uv_boundary.len() < 3 {
         return integrate_parametric(surface, u_range, v_range, gauss_order, sign);
@@ -535,7 +612,18 @@ fn integrate_with_trimming<S: ParametricSurface>(
         // (CCW vs CW boundary) selects which pole — the boundary's interior
         // side — so the two hemispheres do not both integrate the whole sphere.
         let v_pole = if winding >= 0.0 { v_range.1 } else { v_range.0 };
-        let v_dom = (v_min.min(v_pole), v_min.max(v_pole));
+        // A full-revolution hole at a latitude between the outer circle and the
+        // pole (the drilled-tunnel rim) clips the cap into a band: integrate
+        // only from the outer latitude to the hole, not on to the pole.
+        let v_far = hole_vs
+            .iter()
+            .copied()
+            .filter(|&hv| {
+                (hv - v_min).signum() == (v_pole - v_min).signum() && (hv - v_min).abs() > 1e-9
+            })
+            .min_by(|a, b| (a - v_min).abs().total_cmp(&(b - v_min).abs()))
+            .unwrap_or(v_pole);
+        let v_dom = (v_min.min(v_far), v_min.max(v_far));
         integrate_parametric(surface, (u_min, u_min + tau), v_dom, gauss_order, sign)
     } else if full_revolution {
         // Full-revolution band (cone/cylinder): integrate the whole revolution

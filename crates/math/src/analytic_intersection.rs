@@ -1311,23 +1311,29 @@ fn algebraic_cone_cone(
     Ok(Some(curves))
 }
 
-/// Algebraic sphere-cylinder intersection.
+/// Exact coaxial sphere-cylinder intersection: returns the shared circle(s).
 ///
-/// For a sphere of radius R centered at C and a cylinder of radius r with
-/// axis through O in direction A, the intersection is found by:
+/// A sphere of radius `R` centered at `C` and a cylinder of radius `r` whose
+/// axis passes through `C` meet in concentric circles of radius `r` at the
+/// axial stations where `sqrt(R² − z²) = r`, i.e. `z = ±sqrt(R² − r²)`
+/// measured from `C` along the axis. A proper crossing yields two circles; a
+/// tangent contact (`r = R`) yields one; a cylinder wider than the sphere, or
+/// a non-coaxial configuration (quartic curve), yields none/defers.
 ///
-/// 1. Project the sphere center onto the cylinder axis.
-/// 2. Compute the perpendicular distance `d_perp` from center to axis.
-/// 3. If `d_perp + r > R` or `d_perp + R < r`: no intersection.
-/// 4. Otherwise, the intersection lies at axial positions where
-///    `sqrt(R² - z²) = r` for the coaxial case (d_perp = 0), giving
-///    two circles at `z = ±sqrt(R² - r²)`.
-/// 5. For the general case, solve a quartic for the axial position.
-///    Currently only handles the coaxial case analytically.
-fn algebraic_sphere_cylinder(
+/// Mirrors [`exact_cone_cylinder`] so phase FF can emit the section as an
+/// exact `Circle3D` (which the closed-circle split + seam adoption recognise)
+/// rather than the marcher's NURBS fragments.
+///
+/// Returns `Some(vec![..])` (0, 1, or 2 circles) for the coaxial case, and
+/// `None` (defer to the general marcher) when the axes are not coaxial.
+///
+/// # Errors
+///
+/// Returns [`MathError`] if a shared `Circle3D` cannot be constructed.
+pub fn exact_sphere_cylinder(
     sphere: &SphericalSurface,
     cyl: &CylindricalSurface,
-) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
     let sc = sphere.center();
     let r_sphere = sphere.radius();
     let co = cyl.origin();
@@ -1341,65 +1347,72 @@ fn algebraic_sphere_cylinder(
     let perp_vec = delta_vec - axis * along;
     let d_perp = perp_vec.length();
 
-    // Separation check.
-    if d_perp > r_sphere + r_cyl + 1e-10 {
-        return Ok(Some(vec![])); // Too far apart
-    }
-
-    // Currently only handle the coaxial/near-coaxial case.
     // Non-coaxial sphere-cylinder intersections produce quartic curves;
-    // fall back to the general marching approach for those.
+    // defer those to the general marcher.
     if d_perp > 1e-7 {
-        return Ok(None); // Fall through to marching
+        return Ok(None);
     }
 
-    // Coaxial case: sphere center is on the cylinder axis.
-    // The intersection is at z = ±sqrt(R² - r²) relative to sphere center.
+    // Coaxial: the sphere center lies on the cylinder axis. No real circle
+    // when the cylinder is wider than the sphere or they are tangent-internal.
     if r_cyl > r_sphere + 1e-10 {
-        return Ok(Some(vec![])); // Cylinder larger than sphere
+        return Ok(Some(vec![]));
     }
-
     let z_sq = r_sphere * r_sphere - r_cyl * r_cyl;
     if z_sq < 0.0 {
-        return Ok(Some(vec![])); // No real intersection
+        return Ok(Some(vec![]));
     }
-
     let z = z_sq.sqrt();
 
-    // The intersection circles are centered on the axis at height ±z
-    // from the sphere center, with radius = r_cyl.
+    // The sphere center projected onto the axis is the midpoint of the two
+    // section circles, each offset by ±z along the axis with radius `r_cyl`.
     let center_axis_pt = Point3::new(
         co.x() + axis.x() * along,
         co.y() + axis.y() * along,
         co.z() + axis.z() * along,
     );
 
-    let mut curves = Vec::new();
-
-    // Build reference frame perpendicular to axis.
-    let basis = Frame3::from_normal(center_axis_pt, axis)?;
-    let u_dir = basis.x;
-    let v_dir = basis.y;
-
-    for &z_offset in &[z, -z] {
+    let mut circles = Vec::new();
+    let offsets: &[f64] = if z < 1e-10 { &[0.0] } else { &[z, -z] };
+    for &z_offset in offsets {
         let center = Point3::new(
             center_axis_pt.x() + axis.x() * z_offset,
             center_axis_pt.y() + axis.y() * z_offset,
             center_axis_pt.z() + axis.z() * z_offset,
         );
+        let circle = Circle3D::new(center, axis, r_cyl)?;
+        circles.push(ExactIntersectionCurve::Circle(circle));
+    }
+    Ok(Some(circles))
+}
 
+/// Algebraic sphere-cylinder intersection (NURBS form for the general bounded
+/// path). Delegates to [`exact_sphere_cylinder`] and samples each exact circle
+/// into an interpolated NURBS `IntersectionCurve`. phase FF prefers the exact
+/// circle form directly (so the section edge links to the coincident boundary
+/// and the closed-circle splitter can carve the spherical band), but a caller
+/// of `intersect_analytic_analytic_bounded` still gets clean curves instead of
+/// the marcher's fragments.
+fn algebraic_sphere_cylinder(
+    sphere: &SphericalSurface,
+    cyl: &CylindricalSurface,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let Some(exacts) = exact_sphere_cylinder(sphere, cyl)? else {
+        return Ok(None);
+    };
+
+    let mut curves = Vec::new();
+    for exact in exacts {
+        let ExactIntersectionCurve::Circle(circle) = exact else {
+            continue;
+        };
         let n_samples = 33;
         let mut points = Vec::with_capacity(n_samples);
         let mut positions = Vec::with_capacity(n_samples);
         #[allow(clippy::cast_precision_loss)]
         for i in 0..n_samples {
             let theta = TAU * i as f64 / (n_samples - 1) as f64;
-            let (sin_t, cos_t) = theta.sin_cos();
-            let pt = Point3::new(
-                center.x() + (u_dir.x() * cos_t + v_dir.x() * sin_t) * r_cyl,
-                center.y() + (u_dir.y() * cos_t + v_dir.y() * sin_t) * r_cyl,
-                center.z() + (u_dir.z() * cos_t + v_dir.z() * sin_t) * r_cyl,
-            );
+            let pt = crate::traits::ParametricCurve::evaluate(&circle, theta);
             positions.push(pt);
             points.push(IntersectionPoint {
                 point: pt,
@@ -1407,15 +1420,9 @@ fn algebraic_sphere_cylinder(
                 param2: (0.0, 0.0),
             });
         }
-
         let degree = 3.min(positions.len() - 1);
         let curve = interpolate(&positions, degree)?;
         curves.push(IntersectionCurve { curve, points });
-    }
-
-    // If z is effectively 0, the two circles coincide (tangent case).
-    if z < 1e-10 {
-        curves.pop(); // Remove duplicate
     }
 
     Ok(Some(curves))
@@ -2146,6 +2153,50 @@ mod tests {
         // at the origin, should intersect (the cylinder passes through
         // the sphere).
         assert!(!curves.is_empty(), "sphere and cylinder should intersect");
+    }
+
+    #[test]
+    fn exact_sphere_cylinder_coaxial_two_circles() {
+        // Sphere r=6 at origin, coaxial cylinder r=3 along z: two latitude
+        // circles at z = ±sqrt(36-9) = ±sqrt(27), each of radius 3.
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0).unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        let circles = exact_sphere_cylinder(&sphere, &cyl)
+            .unwrap()
+            .expect("coaxial case returns Some");
+        assert_eq!(circles.len(), 2, "through-bore meets the sphere twice");
+        let mut zs: Vec<f64> = circles
+            .iter()
+            .filter_map(|c| match c {
+                ExactIntersectionCurve::Circle(circle) => {
+                    assert!(
+                        (circle.radius() - 3.0).abs() < 1e-9,
+                        "rim radius == cyl radius"
+                    );
+                    Some(circle.center().z())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(zs.len(), 2, "both sections must be exact circles");
+        zs.sort_by(f64::total_cmp);
+        let z = 27.0_f64.sqrt();
+        assert!((zs[0] + z).abs() < 1e-9 && (zs[1] - z).abs() < 1e-9);
+    }
+
+    #[test]
+    fn exact_sphere_cylinder_non_coaxial_defers() {
+        // Cylinder axis offset from the sphere center → quartic curve, deferred.
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0).unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        assert!(
+            exact_sphere_cylinder(&sphere, &cyl).unwrap().is_none(),
+            "non-coaxial sphere/cylinder defers to the marcher"
+        );
     }
 
     #[test]
