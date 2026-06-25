@@ -71,16 +71,6 @@ fn build_loops_for_face(
     data: &OffsetData,
     face_id: FaceId,
 ) -> Result<Vec<WireId>, OffsetError> {
-    // Doubly-periodic torus face: its offset is a concentric torus with the
-    // same seam structure, so rebuild the fundamental-polygon wire directly.
-    // The generic strategies below can't handle its degenerate v0->v0 seam
-    // edges (they look for circle edges or chainable line corners).
-    if let Some(off) = data.offset_faces.get(&face_id)
-        && let FaceSurface::Torus(tor) = &off.surface
-    {
-        return build_torus_wire(topo, tor, data.options.tolerance.linear);
-    }
-
     let mut face_edges: Vec<EdgeId> = Vec::new();
     for intersection in &data.intersections {
         if intersection.face_a != face_id && intersection.face_b != face_id {
@@ -91,6 +81,22 @@ fn build_loops_for_face(
 
     if let Some(boundary) = data.boundary_edges.get(&face_id) {
         face_edges.extend_from_slice(boundary);
+    }
+
+    // A full doubly-periodic torus offset face carries only degenerate v0->v0
+    // seam edges, which the generic strategies below can't use; rebuild its
+    // fundamental-polygon wire directly from the offset torus surface. Gate on
+    // the absence of any real (non-degenerate) edge so a TRIMMED torus patch
+    // (e.g. a fillet's torus face, which carries real boundary/intersection
+    // edges) still flows through the normal strategies.
+    let has_real_edge = face_edges
+        .iter()
+        .any(|&eid| topo.edge(eid).is_ok_and(|e| e.start() != e.end()));
+    if !has_real_edge
+        && let Some(off) = data.offset_faces.get(&face_id)
+        && let FaceSurface::Torus(tor) = &off.surface
+    {
+        return build_torus_wire(topo, tor, data.options.tolerance.linear);
     }
 
     if face_edges.is_empty() {
