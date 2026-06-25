@@ -1495,6 +1495,84 @@ fn intersect_two_equal_cylinders() {
     assert!(vol > 0.0, "intersection volume should be positive: {vol}");
 }
 
+/// Fuse two equal cylinders crossing perpendicularly (the classic Steinmetz
+/// solid). The intersection seam of two equal perpendicular cylinders is two
+/// closed planar ellipses; the result must be an exact analytic, watertight
+/// solid — two mutually-trimmed cylinder walls (each carrying the two lens
+/// ellipses as holes) plus four planar end caps — NOT a mesh fallback.
+#[test]
+fn fuse_perpendicular_cylinders_is_analytic_watertight() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let c1 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+    crate::transform::transform_solid(&mut topo, c1, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
+    let c2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        c2,
+        &Mat4::rotation_y(std::f64::consts::FRAC_PI_2),
+    )
+    .unwrap();
+    crate::transform::transform_solid(&mut topo, c2, &Mat4::translation(-10.0, 0.0, 0.0)).unwrap();
+
+    let res = boolean(&mut topo, BooleanOp::Fuse, c1, c2).unwrap();
+
+    // Analytic surface mix: two cylinder walls + four planar caps, not a mesh
+    // fallback plane explosion.
+    let faces = brepkit_topology::explorer::solid_faces(&topo, res).unwrap();
+    let mut cylinders = 0;
+    let mut planes = 0;
+    for &fid in &faces {
+        match topo.face(fid).unwrap().surface() {
+            FaceSurface::Cylinder(_) => cylinders += 1,
+            FaceSurface::Plane { .. } => planes += 1,
+            other => panic!("unexpected non-analytic face {other:?}"),
+        }
+    }
+    assert_eq!(
+        cylinders, 2,
+        "expected two mutually-trimmed walls, got {cylinders}"
+    );
+    assert_eq!(planes, 4, "expected four end caps, got {planes}");
+    assert!(
+        faces.len() <= 8,
+        "analytic result must be a handful of faces, not a mesh fallback (got {})",
+        faces.len()
+    );
+
+    // Watertight: every edge shared by exactly two faces.
+    let mut edge_use: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for &fid in &faces {
+        let f = topo.face(fid).unwrap();
+        let mut wires = vec![f.outer_wire()];
+        wires.extend(f.inner_wires().iter().copied());
+        for w in wires {
+            for oe in topo.wire(w).unwrap().edges() {
+                *edge_use.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    let free = edge_use.values().filter(|&&c| c == 1).count();
+    let over = edge_use.values().filter(|&&c| c > 2).count();
+    assert_eq!(free, 0, "result must be watertight (free edges = {free})");
+    assert_eq!(
+        over, 0,
+        "result must be manifold (over-shared edges = {over})"
+    );
+
+    // Volume = 2·V_cyl − V_Steinmetz; the intersection of two equal r=3
+    // perpendicular cylinders is the Steinmetz solid, 16·r³/3 = 144.
+    let v_cyl = std::f64::consts::PI * 9.0 * 20.0;
+    let v_steinmetz = 16.0 * 27.0 / 3.0;
+    let v_expect = 2.0 * v_cyl - v_steinmetz;
+    let vol = crate::measure::solid_volume(&topo, res, 0.01).unwrap();
+    assert!(
+        (vol - v_expect).abs() < v_expect * 0.01,
+        "fused volume {vol:.3} should match 2·V_cyl − V_Steinmetz {v_expect:.3} (within 1%)"
+    );
+}
+
 /// Fuse two overlapping cylinders (r=5,h=20 and r=3,h=20, offset x=2).
 ///
 /// Fused volume must be > max(V_cyl1, V_cyl2) and < V_cyl1 + V_cyl2.

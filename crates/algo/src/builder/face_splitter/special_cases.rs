@@ -1339,7 +1339,7 @@ pub(super) fn split_face_with_internal_loops(
     // outside sub-face — dropping them would leave the faces ringing those
     // holes with free edges.
     all_holes.extend(original_inner_wires.iter().cloned());
-    result.push(SplitSubFace {
+    let remainder = SplitSubFace {
         surface: surface.clone(),
         outer_wire: boundary_edges.to_vec(),
         inner_wires: all_holes,
@@ -1347,9 +1347,108 @@ pub(super) fn split_face_with_internal_loops(
         parent: face_id,
         rank,
         precomputed_interior: frame_interior,
-    });
+    };
+    // A curved analytic lateral remainder (cylinder/cone) keeps its hole loops
+    // as CURVED edges (e.g. the closed ellipses where two perpendicular
+    // cylinders cross), so the all-Line `frame_interior` heuristic above leaves
+    // `precomputed_interior` unset. Without it the classifier falls back to
+    // sampling the WHOLE parent face — which lands at the axial midpoint inside
+    // a lens hole and misclassifies the remainder (a Fuse then drops the entire
+    // wall). The generic UV hole-avoidance can't help either: each lens loop is
+    // a single closed edge with a degenerate start/end UV, so it forms no usable
+    // hole polygon. Sample the wall on a (u,v) grid and pick the point whose
+    // nearest 3D distance to every hole loop is greatest — guaranteed on the
+    // kept wall, away from every lens.
+    let mut remainder = remainder;
+    if remainder.precomputed_interior.is_none()
+        && matches!(
+            remainder.surface,
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+        )
+        && !remainder.inner_wires.is_empty()
+    {
+        remainder.precomputed_interior = cylinder_cone_remainder_interior(&remainder);
+    }
+    result.push(remainder);
 
     result
+}
+
+/// Interior point on a cylinder/cone lateral remainder face that carries
+/// CURVED hole loops (the lens loops where another quadric crosses the wall).
+///
+/// The generic UV hole-avoidance fails for these — each lens is a single closed
+/// edge whose start/end UV coincide, so it yields no point-in-polygon hole. This
+/// instead samples the wall on a `(u, v)` grid (`u` over the full revolution,
+/// `v` over the boundary's axial span) and returns the 3D point whose minimum
+/// distance to every hole loop is largest, which is guaranteed to lie on the
+/// kept wall well clear of every lens. Returns `None` if the surface evaluator
+/// or boundary v-range is unusable, so the caller keeps the unset interior.
+fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> {
+    use std::f64::consts::TAU;
+
+    // Densely sample every hole loop into 3D points once.
+    let mut hole_pts: Vec<Point3> = Vec::new();
+    for hole in &remainder.inner_wires {
+        for edge in hole {
+            let (t0, t1) = edge
+                .curve_3d
+                .domain_with_endpoints(edge.start_3d, edge.end_3d);
+            let n = 24;
+            for k in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let t = t0 + (t1 - t0) * (k as f64 / f64::from(n));
+                hole_pts.push(
+                    edge.curve_3d
+                        .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d),
+                );
+            }
+        }
+    }
+    if hole_pts.is_empty() {
+        return None;
+    }
+
+    // Axial span (v) of the boundary wire — the wall lives between its
+    // bounding circles. Project boundary endpoints to the surface's v.
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for e in &remainder.outer_wire {
+        for p in [e.start_3d, e.end_3d] {
+            if let Some((_, v)) = remainder.surface.project_point(p) {
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
+        }
+    }
+    if !v_min.is_finite() || !v_max.is_finite() || (v_max - v_min) <= 0.0 {
+        return None;
+    }
+
+    // Grid-search (u, v) for the wall point maximising the minimum 3D distance
+    // to the hole loops.
+    let mut best: Option<(f64, Point3)> = None;
+    let n_u = 48;
+    let n_v = 5;
+    for iu in 0..n_u {
+        #[allow(clippy::cast_precision_loss)]
+        let u = TAU * (iu as f64) / f64::from(n_u);
+        for iv in 1..n_v {
+            #[allow(clippy::cast_precision_loss)]
+            let v = v_min + (v_max - v_min) * (iv as f64) / f64::from(n_v);
+            let Some(p) = remainder.surface.evaluate(u, v) else {
+                continue;
+            };
+            let min_d = hole_pts
+                .iter()
+                .map(|h| (*h - p).length())
+                .fold(f64::INFINITY, f64::min);
+            if best.is_none_or(|(bd, _)| min_d > bd) {
+                best = Some((min_d, p));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// Reorder and reverse boundary edges to form a closed chain.

@@ -721,22 +721,43 @@ fn restrict_curves_to_faces(
         if b1 - b0 < 2 {
             continue;
         }
-        // A closed ellipse/NURBS loop is kept whole ONLY when the entire curve
-        // is in-both — a genuine shared rim. When just an arc is in-both,
-        // keeping the whole curve leaves a spurious closed self-loop section
-        // edge: the splitter only trims OPEN curves and only adopts closed
-        // CIRCLES (seam adoption / link_existing), so a full ellipse from an
-        // inner tapered wall meeting an outer corner (the gridfinity lip
-        // knife-edge) survives as a degenerate loop and over-connects the rim.
-        // Trim it to its in-both arc so it becomes an open edge the splitter
-        // can place. Circles are left whole (seam adoption handles them); open
-        // curves are left whole (the splitter clips them).
-        if closed && b1 - b0 < N && !matches!(raw.curve, EdgeCurve::Circle(_)) {
+        // A closed loop with nearly every sample in-both is a genuinely
+        // fully-shared seam (e.g. the closed ellipse where two equal
+        // perpendicular cylinders cross — both lateral faces contain the whole
+        // loop). The few out-samples sit at the periodic seam (where sample N
+        // coincides with sample 0) and at the v-extremes, where projecting the
+        // point onto the partner cylinder lands marginally outside the trimmed
+        // band; these scatter the longest CONTIGUOUS run well below N even
+        // though the loop is whole, so count TOTAL in-both samples instead.
+        // Keep such a loop WHOLE: the downstream splitter routes a closed
+        // interior loop to `split_face_with_internal_loops` (carving cap +
+        // band-with-hole). Trimming it instead drops the wrap end-parameter past
+        // the curve's domain (a clamped NURBS extrapolates to a garbage 3D
+        // point), so the carved loop never closes and the wall collapses. The
+        // gridfinity lip knife-edge ellipses (genuine partial overlaps) have at
+        // most ~8/24 samples in-both — far below this near-whole threshold — so
+        // they still trim to their in-both arc.
+        let in_both_count = inb.iter().take(N).filter(|&&x| x).count();
+        let near_whole = in_both_count >= N.saturating_sub(3);
+        // A closed ellipse/NURBS loop is otherwise trimmed to its in-both arc:
+        // when just an arc is in-both, keeping the whole curve leaves a spurious
+        // closed self-loop section edge (the splitter only trims OPEN curves and
+        // only adopts closed CIRCLES via seam adoption / link_existing), so a
+        // full ellipse from an inner tapered wall meeting an outer corner (the
+        // gridfinity lip knife-edge) survives as a degenerate loop and
+        // over-connects the rim. Circles are left whole (seam adoption handles
+        // them); open curves are left whole (the splitter clips them).
+        if closed && b1 - b0 < N && !near_whole && !matches!(raw.curve, EdgeCurve::Circle(_)) {
             #[allow(clippy::cast_precision_loss)]
             let frac = |i: usize| i as f64 / N as f64;
             let span = raw.t_range.1 - raw.t_range.0;
-            let t0 = raw.t_range.0 + span * frac(b0);
-            let t1 = raw.t_range.0 + span * frac(b1);
+            // A wrapping run reports `b1 > N`; the raw fraction then maps past
+            // the curve's domain end. A clamped NURBS does not extrapolate
+            // gracefully (it evaluates to a garbage 3D point well outside the
+            // model), so clamp the trim endpoints to the curve's parameter
+            // range before evaluating.
+            let t0 = (raw.t_range.0 + span * frac(b0)).clamp(raw.t_range.0, raw.t_range.1);
+            let t1 = (raw.t_range.0 + span * frac(b1)).clamp(raw.t_range.0, raw.t_range.1);
             let p0 = raw
                 .curve
                 .evaluate_with_endpoints(t0, raw.p_start, raw.p_end);

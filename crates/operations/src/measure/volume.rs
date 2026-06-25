@@ -124,6 +124,17 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                 }
                 has_bored_quadric = true;
             }
+            // A cylinder/cone wall with interior hole loops — e.g. two
+            // perpendicular cylinders fused along their Steinmetz lens, where
+            // each wall keeps the closed lens ellipses as holes. The per-face
+            // integrator's full-revolution band branch integrates only the kept
+            // region (the lens v-intervals are clipped out), so the wall volume
+            // is exact. The (hole-unaware) tessellation paths instead render
+            // each wall as a full tube and over-count by the lens, so prefer the
+            // analytic integral here.
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) if !face.inner_wires().is_empty() => {
+                has_bored_quadric = true;
+            }
             FaceSurface::Torus(_) if !face.inner_wires().is_empty() => return None,
             _ => {}
         }

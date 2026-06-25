@@ -68,6 +68,8 @@ pub fn integrate_face(
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let inner_loops =
+                build_face_uv_inner_loops(topo, face_id, |p| s.project_point(p), true)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -77,6 +79,7 @@ pub fn integrate_face(
                 &uv_boundary,
                 true,
                 &[],
+                &inner_loops,
             ))
         }
         FaceSurface::Cone(s) => {
@@ -86,6 +89,8 @@ pub fn integrate_face(
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let inner_loops =
+                build_face_uv_inner_loops(topo, face_id, |p| s.project_point(p), true)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -95,6 +100,7 @@ pub fn integrate_face(
                 &uv_boundary,
                 true,
                 &[],
+                &inner_loops,
             ))
         }
         FaceSurface::Sphere(s) => {
@@ -114,6 +120,7 @@ pub fn integrate_face(
                 &uv_boundary,
                 true,
                 &hole_vs,
+                &[],
             ))
         }
         FaceSurface::Torus(s) => {
@@ -128,6 +135,7 @@ pub fn integrate_face(
                 sign,
                 &uv_boundary,
                 true,
+                &[],
                 &[],
             ))
         }
@@ -147,6 +155,7 @@ pub fn integrate_face(
                 sign,
                 &uv_boundary,
                 periodic_u,
+                &[],
                 &[],
             ))
         }
@@ -545,6 +554,193 @@ fn integrate_parametric<S: ParametricSurface>(
     }
 }
 
+/// Integrate a full-revolution analytic band, excluding the region enclosed by
+/// the interior `hole_loops` (the UV loops of the face's inner wires).
+///
+/// Used for a cylinder/cone wall that another quadric bores through: the wall
+/// wraps the full `u` period (so the outer boundary can't trim it) yet carries
+/// closed lens loops that must be cut out of the volume integral. At each
+/// Gauss `u`-node the lens occupies one or more `v`-intervals (found exactly
+/// from where a vertical line crosses the inner-loop arrangement); the surface
+/// is integrated only over the complementary kept `v`-sub-intervals, so the
+/// curved lens boundary is resolved exactly rather than by coarse point
+/// rejection.
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+fn integrate_band_excluding_holes<S: ParametricSurface>(
+    surface: &S,
+    u_range: (f64, f64),
+    v_range: (f64, f64),
+    gauss_order: usize,
+    sign: f64,
+    hole_loops: &[Vec<(f64, f64)>],
+) -> FaceContribution {
+    const MAX_PATCHES: usize = 16;
+    let gauss_pts = gauss_legendre_points(gauss_order);
+    let patch = std::f64::consts::FRAC_PI_4;
+    let nu = (((u_range.1 - u_range.0).abs() / patch).ceil() as usize).clamp(1, MAX_PATCHES);
+    let du_patch = (u_range.1 - u_range.0) / nu as f64;
+    let u_scale = du_patch / 2.0;
+
+    // Collect every inner-loop edge as a (u, v) segment, keeping each segment's
+    // NATIVE (per-loop-unwrapped) u. The query u is later tested against each
+    // segment in every 2π translate, so the band's own u-origin need not match.
+    // The lens region is treated as "inside the combined arrangement of ALL
+    // these segments" via an even-odd vertical-ray test — NOT per-loop
+    // point-in-polygon. This is essential here: each lens ellipse where one
+    // cylinder bores through another is a full-u-wrapping sinusoid bounding NO
+    // area on its own, yet the two ellipses TOGETHER enclose the lens lobes,
+    // which the combined even-odd test resolves. The single wrap segment per
+    // loop (Δu ≈ a full period) is dropped; the dense sampling keeps the
+    // arrangement intact.
+    let tau = std::f64::consts::TAU;
+    let mut segs: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for loop_uv in hole_loops {
+        if loop_uv.len() < 2 {
+            continue;
+        }
+        for i in 0..loop_uv.len() {
+            let (u0, v0) = loop_uv[i];
+            let (u1, v1) = loop_uv[(i + 1) % loop_uv.len()];
+            if (u1 - u0).abs() > tau * 0.5 {
+                continue;
+            }
+            let (mut a_u, mut a_v, mut b_u, mut b_v) = (u0, v0, u1, v1);
+            if a_u > b_u {
+                std::mem::swap(&mut a_u, &mut b_u);
+                std::mem::swap(&mut a_v, &mut b_v);
+            }
+            segs.push((a_u, a_v, b_u, b_v));
+        }
+    }
+    let seg_u_min = segs.iter().map(|s| s.0).fold(f64::INFINITY, f64::min);
+    let seg_u_max = segs.iter().map(|s| s.2).fold(f64::NEG_INFINITY, f64::max);
+
+    // The v-values where a vertical line at `u` crosses the inner-loop
+    // arrangement, sorted ascending. Even-odd pairing of these gives the lens
+    // v-intervals at that u; the kept region is the complement within
+    // [v_range.0, v_range.1]. The query u is tested against each segment in
+    // every 2π translate that can land in the segments' u-extent, so a loop
+    // unwrapped to any window is matched regardless of the band's own u-origin.
+    // Exact crossing v's (not a coarse-grid point test) let the v-integration
+    // place its Gauss nodes only on the kept sub-intervals, integrating the
+    // curved lens boundary exactly.
+    let lens_v_crossings = |u: f64| -> Vec<f64> {
+        let mut vs: Vec<f64> = Vec::new();
+        // Smallest k so u + k*tau >= seg_u_min, then sweep up past seg_u_max.
+        let k0 = ((seg_u_min - u) / tau).floor() as i64;
+        let k1 = ((seg_u_max - u) / tau).ceil() as i64;
+        for k in k0..=k1 {
+            let uu = u + (k as f64) * tau;
+            for &(a_u, a_v, b_u, b_v) in &segs {
+                if uu >= a_u && uu < b_u && (b_u - a_u) > 1e-15 {
+                    let t = (uu - a_u) / (b_u - a_u);
+                    vs.push(a_v + t * (b_v - a_v));
+                }
+            }
+        }
+        vs.sort_by(f64::total_cmp);
+        vs
+    };
+
+    // Kept v-sub-intervals at `u`: [v0, v1] minus the lens intervals (the
+    // even-odd-paired crossing spans).
+    let kept_v_intervals = |u: f64, v0: f64, v1: f64| -> Vec<(f64, f64)> {
+        let crossings = lens_v_crossings(u);
+        // Lens spans = consecutive pairs (c[0],c[1]), (c[2],c[3]), ...
+        let mut kept = Vec::new();
+        let mut cursor = v0;
+        let mut i = 0;
+        while i + 1 < crossings.len() {
+            let lo = crossings[i].clamp(v0, v1);
+            let hi = crossings[i + 1].clamp(v0, v1);
+            if lo > cursor {
+                kept.push((cursor, lo));
+            }
+            cursor = cursor.max(hi);
+            i += 2;
+        }
+        if cursor < v1 {
+            kept.push((cursor, v1));
+        }
+        kept
+    };
+
+    let mut acc = FaceContribution {
+        area: 0.0,
+        volume: 0.0,
+        volume_moment_x: 0.0,
+        volume_moment_y: 0.0,
+        volume_moment_z: 0.0,
+        centroid_x: 0.0,
+        centroid_y: 0.0,
+        centroid_z: 0.0,
+    };
+
+    for iu in 0..nu {
+        let u_mid = du_patch.mul_add(iu as f64, u_range.0) + u_scale;
+        for gpu in gauss_pts {
+            let u = u_scale.mul_add(gpu.x, u_mid);
+            let w_u = gpu.w * u_scale;
+            // Integrate v only over the kept sub-intervals at this u, each with
+            // its own Gauss rule so the lens-clipped limits are exact.
+            for (kv0, kv1) in kept_v_intervals(u, v_range.0, v_range.1) {
+                // Sub-tile a long kept interval so one Gauss rule resolves it.
+                let kv_len = kv1 - kv0;
+                let n_sub = ((kv_len / patch).ceil() as usize).clamp(1, MAX_PATCHES);
+                let dv_sub = kv_len / n_sub as f64;
+                let v_sub_scale = dv_sub / 2.0;
+                for isv in 0..n_sub {
+                    let v_sub_mid = dv_sub.mul_add(isv as f64, kv0) + v_sub_scale;
+                    for gpv in gauss_pts {
+                        let v = v_sub_scale.mul_add(gpv.x, v_sub_mid);
+                        let w = w_u * gpv.w * v_sub_scale;
+                        let p = surface.evaluate(u, v);
+                        let du = surface.partial_u(u, v);
+                        let dv = surface.partial_v(u, v);
+                        let n = Vec3::new(
+                            du.y() * dv.z() - du.z() * dv.y(),
+                            du.z() * dv.x() - du.x() * dv.z(),
+                            du.x() * dv.y() - du.y() * dv.x(),
+                        );
+                        let n_len = n.length();
+                        acc.area += w * n_len;
+                        let pv = Vec3::new(p.x(), p.y(), p.z());
+                        acc.volume += w * pv.dot(n) / 3.0;
+                        acc.volume_moment_x += w * 0.5 * p.x() * p.x() * n.x();
+                        acc.volume_moment_y += w * 0.5 * p.y() * p.y() * n.y();
+                        acc.volume_moment_z += w * 0.5 * p.z() * p.z() * n.z();
+                        acc.centroid_x += w * p.x() * n_len;
+                        acc.centroid_y += w * p.y() * n_len;
+                        acc.centroid_z += w * p.z() * n_len;
+                    }
+                }
+            }
+        }
+    }
+
+    let (area, vol, mx, my, mz, cx, cy, cz) = (
+        acc.area,
+        acc.volume,
+        acc.volume_moment_x,
+        acc.volume_moment_y,
+        acc.volume_moment_z,
+        acc.centroid_x,
+        acc.centroid_y,
+        acc.centroid_z,
+    );
+
+    FaceContribution {
+        area,
+        volume: vol * sign,
+        volume_moment_x: mx * sign,
+        volume_moment_y: my * sign,
+        volume_moment_z: mz * sign,
+        centroid_x: cx,
+        centroid_y: cy,
+        centroid_z: cz,
+    }
+}
+
 /// Absolute shoelace area of a UV polygon. Near-zero means the boundary has
 /// collapsed onto a line or point (a degenerate seam/pole projection).
 fn polygon_area(poly: &[(f64, f64)]) -> f64 {
@@ -573,6 +769,7 @@ fn integrate_with_trimming<S: ParametricSurface>(
     uv_boundary: &[(f64, f64)],
     u_periodic: bool,
     hole_vs: &[f64],
+    inner_loops: &[Vec<(f64, f64)>],
 ) -> FaceContribution {
     if uv_boundary.len() < 3 {
         return integrate_parametric(surface, u_range, v_range, gauss_order, sign);
@@ -610,8 +807,36 @@ fn integrate_with_trimming<S: ParametricSurface>(
             d - tau * ((d + std::f64::consts::PI) / tau).floor()
         })
         .sum();
-    let full_revolution = u_periodic && winding.abs() >= tau - 1e-3;
+    // The u-extent the boundary actually covers. A wall bounded by two full
+    // cap circles (each projecting across the whole 0..2π period) plus a seam
+    // line nets a winding of ~0 — the two circles wind oppositely — so the
+    // winding test alone misses it. The covered u-span is the robust signal:
+    // a tube wall spans the full period even when its winding cancels.
+    let u_span = {
+        let umax = uv_boundary
+            .iter()
+            .map(|p| p.0)
+            .fold(f64::NEG_INFINITY, f64::max);
+        umax - u_min
+    };
+    let full_revolution = u_periodic && (winding.abs() >= tau - 1e-3 || u_span >= tau - 1e-3);
     let v_degenerate = (v_max - v_min) <= 1e-9;
+
+    // A full-revolution wall (cylinder/cone tube) carrying interior hole loops:
+    // its outer boundary cannot trim the holes (they are interior), and the
+    // winding may cancel to ~0, so handle it here before the winding-based
+    // branches. Integrate the whole revolution over the wall's v-extent with
+    // the lens holes rejected (the Steinmetz lens of two crossing cylinders).
+    if u_periodic && !v_degenerate && !inner_loops.is_empty() && u_span >= tau - 1e-3 {
+        return integrate_band_excluding_holes(
+            surface,
+            (u_min, u_min + tau),
+            (v_min, v_max),
+            gauss_order,
+            sign,
+            inner_loops,
+        );
+    }
 
     if full_revolution && v_degenerate {
         // Polar cap (e.g. a sphere hemisphere bounded only by one latitude
@@ -633,8 +858,9 @@ fn integrate_with_trimming<S: ParametricSurface>(
         let v_dom = (v_min.min(v_far), v_min.max(v_far));
         integrate_parametric(surface, (u_min, u_min + tau), v_dom, gauss_order, sign)
     } else if full_revolution {
-        // Full-revolution band (cone/cylinder): integrate the whole revolution
-        // over the band's v-extent.
+        // Full-revolution band (cone/cylinder) with no interior holes (the
+        // holed case is handled by the early return above): integrate the whole
+        // revolution over the band's v-extent.
         integrate_parametric(
             surface,
             (u_min, u_min + tau),
@@ -792,4 +1018,36 @@ where
     }
 
     Ok(uv)
+}
+
+/// Build a UV polygon per inner wire (hole) of a face, projecting each loop's
+/// densely-sampled boundary onto the surface and unwrapping periodic u so a
+/// seam-crossing hole (e.g. the closed ellipse where one cylinder bores
+/// through another) stays a simple, non-self-crossing loop in its own
+/// u-window.
+fn build_face_uv_inner_loops<F>(
+    topo: &Topology,
+    face_id: FaceId,
+    project: F,
+    u_periodic: bool,
+) -> Result<Vec<Vec<(f64, f64)>>, CheckError>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
+    let face = topo.face(face_id)?;
+    let mut loops = Vec::new();
+    for &wid in face.inner_wires() {
+        let polygon = crate::util::wire_polygon(topo, wid)?;
+        if polygon.len() < 3 {
+            continue;
+        }
+        let mut uv: Vec<(f64, f64)> = polygon.iter().map(|&p| project(p)).collect();
+        if u_periodic {
+            for i in 1..uv.len() {
+                uv[i].0 = unwrap_angle(uv[i - 1].0, uv[i].0);
+            }
+        }
+        loops.push(uv);
+    }
+    Ok(loops)
 }
