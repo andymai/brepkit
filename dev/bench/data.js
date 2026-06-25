@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782344180452,
+  "lastUpdate": 1782346726605,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -215,6 +215,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20553038,
             "range": "± 68626",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8ecca9f23cfbe36c39ae56454bced46b31a40968",
+          "message": "chore(observability): trigger all 7 fallback paths in census example (#995)\n\n## What\n\nExtends `approx_census.rs` so it empirically triggers **all 7**\n`brepkit_approx` approximation probes, not just the 3 the primitive\nmatrix reached.\n\nThe primitive matrix already fired:\n1. boolean → mesh fallback\n2. fillet → Newton-Raphson walker\n3. offset NURBS face → sampled-NURBS refit\n\nA new `remaining_paths()` section constructs the inputs the primitive\nmatrix can't reach to fire the other four:\n\n| Probe | Trigger added |\n|-------|---------------|\n| chamfer → `UnsupportedSurface` (v1 has no walker) | `chamfer_v2` on a\n**torus** (analytic declines Torus pairs) |\n| offset trim → grid-sampling | `offset_face` on a **NURBS loft face**,\ngentle offset (no self-intersection → SSI finds nothing) |\n| offset face → raw surface | `offset_face` on a **sharply-waisted NURBS\nloft**, large inward offset (self-intersection > 50% → trim errors) |\n| rolling-ball fillet → planar corner | `fillet_rolling_ball` on a\n**square pyramid** (4-valence apex → non-triangular corner) |\n\n## Verification\n\n`cargo run --release --example approx_census -p brepkit-operations` now\nshows every probe firing. De-duped probe families:\n\n```\nboolean: GFA → mesh\nfillet: → walker\noffset: NURBS face → sampled-NURBS\nchamfer: → UnsupportedSurface\noffset_trim: → grid-sampling\noffset_face: → raw-offset-surface\nfillet(rolling-ball): → planar corner\n```\n\nThe `offset_face` inward cases also surface the genuine error detail\n(`SSI trim failed: ...covers 100%...`), confirming the raw-surface\nfallback path.\n\n- `cargo clippy -p brepkit-operations --example approx_census\n--all-features -- -D warnings` clean.\n- Example-only change; no engine/library code touched.",
+          "timestamp": "2026-06-24T17:16:45-07:00",
+          "tree_id": "a301b2724c142cc78d2b0531a8e1ca51cb5b5f29",
+          "url": "https://github.com/andymai/brepkit/commit/8ecca9f23cfbe36c39ae56454bced46b31a40968"
+        },
+        "date": 1782346726235,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1424526,
+            "range": "± 1989",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1521486,
+            "range": "± 9035",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13196,
+            "range": "± 125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 595738,
+            "range": "± 1824",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21719304,
+            "range": "± 171542",
             "unit": "ns/iter"
           }
         ]
