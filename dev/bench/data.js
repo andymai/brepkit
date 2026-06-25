@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782354605570,
+  "lastUpdate": 1782362383710,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -647,6 +647,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20946477,
             "range": "± 380588",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e034ed0013a8c01c779647b9a7f9b690e243a7ca",
+          "message": "fix(algo): bound sphere/torus faces by surface extent in boolean broad-phase (#1003)\n\n## What\n\nMakes the boolean **broad-phase face AABB sound for sphere and torus\nfaces**.\n\n`compute_face_bbox` (in `phase_ff.rs`) derived each face's AABB from its\nboundary edges alone. A curved analytic face bulges *between* its\nboundaries,\nso the box collapsed:\n\n- a **sphere hemisphere** flattened to its equatorial disk (`z ∈ [0,\n0]`), and\n- a **full torus** — whose entire boundary is two degenerate seam-point\n`Line(v0, v0)` edges — collapsed to a single **point** `(R, 0, 0)`.\n\nThe FF broad-phase then wrongly rejected genuinely intersecting face\npairs (and\nthe 16-sample section filter dropped the curve), forcing every boolean\non those\nprimitives down the mesh co-refinement fallback (100–1000× slower,\nanalytic\nsurface types lost).\n\n## How\n\n- Add closed-form `aabb()` to `SphericalSurface` (`center ± radius`) and\n`ToroidalSurface` (ring + tube extent, orientation-aware) in\n`brepkit-math`,\n  with unit tests.\n- Union it into the face bbox for `Sphere`/`Torus` faces in\n`compute_face_bbox`.\n\nThe bbox only ever **widens**, so it can add broad-phase candidates but\nnever\ndrop a needed pair — the precise in-both restriction downstream still\ntrims\nexactly. Cylinder, cone, and plane boundaries already bound their faces\nand are\nuntouched. Same class as the cylinder seam-collapse fix in #997.\n\n## Effect (raw GFA, measured)\n\nThis is a **foundational** fix in a multi-PR campaign to eliminate the\nfour\nremaining boolean→mesh fallbacks (`box∩sphere`, `sphere−cyl`, `cyl∪cyl`\nperp,\n`torus−box`). It advances all three curved cases but closes none on its\nown —\nthe analytic results land in the follow-up split/assembly PRs:\n\n| case | before | after |\n|---|---|---|\n| `torus − box` | hard error: *\"no faces selected\"* (pairs rejected at\nbroad-phase) | reaches shell assembly (*\"all shells classified as\nholes\"*) |\n| `sphere − cyl` | cyl×sphere section dropped at broad-phase | sections\nsurvive (sphere split/keep is the follow-up) |\n| `box ∩ sphere` | box-cap sections dropped | sphere face survives the\nbroad-phase |\n\n## Test\n\n- 4 new unit tests for `SphericalSurface::aabb` /\n`ToroidalSurface::aabb`\n  (origin, off-center, canonical, and x-axis-oriented torus).\n- Full workspace suite green: **2444 passed, 9 skipped**, no regressions\n(incl. all gridfinity in-mem fixtures and\n`intersect_box_sphere_succeeds`).",
+          "timestamp": "2026-06-24T21:37:46-07:00",
+          "tree_id": "021e6ef53eb0bb410b7c354cb86485194985eb78",
+          "url": "https://github.com/andymai/brepkit/commit/e034ed0013a8c01c779647b9a7f9b690e243a7ca"
+        },
+        "date": 1782362382787,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1321585,
+            "range": "± 33010",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1399592,
+            "range": "± 32674",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11977,
+            "range": "± 105",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 590833,
+            "range": "± 10784",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21087655,
+            "range": "± 424014",
             "unit": "ns/iter"
           }
         ]
