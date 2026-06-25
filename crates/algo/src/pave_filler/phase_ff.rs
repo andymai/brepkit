@@ -1205,10 +1205,15 @@ fn sphere_region_axis(
     Some(axis * (1.0 / len))
 }
 
-/// True when every edge of the face is degenerate (zero length in 3D) — the
-/// signature of a full, untrimmed torus, whose boundary is the doubly-periodic
-/// fundamental-polygon seam built from `Line(v0, v0)` edges. A trimmed torus
-/// patch has real boundary edges and returns `false`.
+/// True when every edge of the face has zero spatial extent (a degenerate seam
+/// point) — the signature of a full, untrimmed torus, whose boundary is the
+/// doubly-periodic fundamental-polygon seam built from `Line(v0, v0)` edges.
+///
+/// Extent (not just endpoint coincidence) is the test: a closed `Circle` or
+/// closed NURBS edge also has `start == end`, yet it spans a real loop and
+/// bounds a *trimmed* patch — those must return `false` so the patch is not
+/// over-widened to the whole torus. Each edge is sampled along its curve and
+/// must stay within `tol` of its start point.
 fn face_boundary_all_degenerate(
     topo: &Topology,
     face_id: FaceId,
@@ -1222,8 +1227,13 @@ fn face_boundary_all_degenerate(
         let edge = topo.edge(eid)?;
         let sp = topo.vertex(edge.start())?.point();
         let ep = topo.vertex(edge.end())?.point();
-        if (ep - sp).length() > tol.linear {
-            return Ok(false);
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        for frac in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let t = t0 + (t1 - t0) * frac;
+            let p = edge.curve().evaluate_with_endpoints(t, sp, ep);
+            if (p - sp).length() > tol.linear {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
@@ -2806,6 +2816,51 @@ mod tests {
         // The equatorial circle's plane normal is ±z; sampling recovers it.
         assert!(axis.z().abs() > 0.99, "axis not aligned with z: {axis:?}");
         assert!(axis.x().abs() < 0.05 && axis.y().abs() < 0.05);
+    }
+
+    #[test]
+    fn closed_circle_torus_boundary_is_not_full_torus() {
+        // A torus patch bounded by a closed `Circle` edge has coincident
+        // endpoints but real spatial extent — it must NOT be treated as a full
+        // (untrimmed) torus, which would over-widen its AABB to the whole torus.
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::default();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(13.0, 0.0, 0.0), 1e-7));
+        // A tube cross-section circle at u=0: centered on the tube center
+        // (10,0,0), in the x-z plane, radius = minor radius 3.
+        let circle =
+            Circle3D::new(Point3::new(10.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 3.0).unwrap();
+        let edge = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(circle)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus)));
+        assert!(!face_boundary_all_degenerate(&topo, face, Tolerance::default()).unwrap());
+    }
+
+    #[test]
+    fn point_seam_boundary_is_full_torus() {
+        // Degenerate `Line(v0, v0)` seam edges (zero extent) are the full-torus
+        // signature and must return true.
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::default();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(13.0, 0.0, 0.0), 1e-7));
+        let e0 = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(e0, true), OrientedEdge::new(e1, true)],
+                true,
+            )
+            .unwrap(),
+        );
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus)));
+        assert!(face_boundary_all_degenerate(&topo, face, Tolerance::default()).unwrap());
     }
 
     #[test]
