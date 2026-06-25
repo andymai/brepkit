@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782354026879,
+  "lastUpdate": 1782354309267,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -539,6 +539,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21044268,
             "range": "± 241846",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2a8d97dc1e2fae79c5960b135dc41657c9ec1d67",
+          "message": "fix(offset): restrict torus-wire rebuild to full untrimmed torus faces (#1001)\n\n## What\n\nFollow-up to #999 addressing a Copilot review finding: the torus-wire\nrebuild fired for **any** toroidal offset face, so a **trimmed torus\npatch** (e.g. a fillet/blend's torus face, which carries real\nboundary/intersection edges) would wrongly get the full\nfundamental-polygon seam wire instead of using its actual edges.\n\n## Fix\n\nGate the rebuild on the face having **no real (non-degenerate) edge**. A\nfull doubly-periodic torus offset face has only degenerate `v0→v0` seam\nedges (which the generic strategies can't use); a trimmed torus patch\ncarries real edges. So the rebuild now fires only for the genuine\nfull-torus case, and trimmed patches flow through the normal\ncircle/seam, chaining, and line-intersection strategies as before.\n\nAlso moved the check to after `face_edges` collection (it now needs them\nto compute `has_real_edge`).\n\n## Verification\n\n- `offset_torus_stays_analytic` still passes (the full untrimmed torus\nhas no real edges → still rebuilt → 1 analytic torus face).\n- `cargo clippy --all-targets` clean; full `cargo test --workspace`\ngreen.",
+          "timestamp": "2026-06-25T02:23:06Z",
+          "tree_id": "d97d17baec5533aa4bd48ddc97c02bc7564d9857",
+          "url": "https://github.com/andymai/brepkit/commit/2a8d97dc1e2fae79c5960b135dc41657c9ec1d67"
+        },
+        "date": 1782354308903,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1337678,
+            "range": "± 7850",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1427950,
+            "range": "± 1677",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11938,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 592196,
+            "range": "± 3235",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20574217,
+            "range": "± 42129",
             "unit": "ns/iter"
           }
         ]
