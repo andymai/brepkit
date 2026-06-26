@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782491936758,
+  "lastUpdate": 1782494076438,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1241,6 +1241,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15759151,
             "range": "± 319486",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f7d30008e660d233acbd0727eeaa9f12c3f96c99",
+          "message": "feat(render): brepkit-render M1 — offscreen wgpu renderer (#1013)\n\n## What\n\n**Milestone 1 of a GPU renderer for brepkit** — a new `crates/render`\n(`brepkit-render`) leaf crate that renders a B-Rep `Solid` **offscreen**\nvia wgpu: Lambert-shaded mesh + crisp topological edges + a per-pixel\n`FaceId` buffer for picking. Offscreen-first so it's verifiable\nheadlessly (and independently useful for thumbnails / server-side\nrenders / tessellator visual-regression tests).\n\nVerified working — box and cylinder render correctly (shaded, correctly\nframed, crisp edges), reproducible via the test (writes PNGs to the temp\ndir).\n\n## API\n```rust\nrender_solid_offscreen(topo, solid, &Camera, &RenderOpts) -> Result<RenderOutput, RenderError>\n// RenderOutput { color: image::RgbaImage, id_buffer: Vec<u32>, width, height }\n//   .face_id_at(x, y) -> Option<u32>   // 0 = background\n```\n\n## Pipeline (consumes existing brepkit output — no kernel changes)\n- `tessellate_solid_grouped_with_tolerance` → positions/normals/indices\n+ **`face_offsets`** → per-triangle `FaceId`.\n- `sample_solid_edges` → topological edges as crisp depth-biased lines.\n- **RTC precision:** tessellate in f64, upload f32 **relative to the\nmodel-center origin**, fold the f64 center into the view matrix.\n- Three targets: `Rgba8UnormSrgb` color, `Depth32Float`, **`R32Uint`\nid** (each face's triangles write its `FaceId`); two-sided Lambert mesh\npass + optional edge pass.\n- **Raw wgpu + pollster** (per the renderer research: not Bevy's\nf32-Transform game shape, not archived rend3, not WebGL-only three-d).\n\n## Roadmap (this is M1)\nM1 offscreen renderer (this PR) → M1.5 interactive winit window → **M2\nanalytic-quadric view-dependent compute meshing** (the differentiator —\nship surface parameters, mesh per-frame at LOD) → M3 direct quadric\nray-cast → later WebGPU/wasm. Rationale\n([research](.claude/agent-memory-local/researcher/cad-gpu-renderer-landscape.md)):\nbrepkit's kernel runs **in-browser via wasm**, so it can mesh\nview-dependently client-side — an architecture neither Zoo (server-side\nGPU + pixel streaming) nor Onshape (server tessellation) can use.\n\n## Verification\n- Box + cylinder render non-blank, silhouette plausible, shaded with\ncrisp edges; `id_buffer` maps every non-background pixel to a real\n`FaceId`. 2 tests, **gated on GPU-adapter availability** (skip cleanly\nif the runner has no GPU/software-Vulkan).\n- clippy `-D warnings`, fmt, `check-boundaries.sh`, doctest,\nwhole-workspace build all clean; no `unwrap`/`expect`/`panic` in lib\ncode.\n\n## Consideration for review\nThe heavy `wgpu` dep tree is isolated to this leaf crate (nothing\ndepends on it), but `cargo build --workspace` (and CI) will now compile\nit. If kernel-CI time matters, we can later move `render` out of the\ndefault workspace build (or to its own workspace). Flagging rather than\ndeciding unilaterally.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a new leaf crate `brepkit-render` that renders B‑Rep solids\noffscreen via `wgpu`, producing a Lambert‑shaded image and a per‑pixel\nface‑id buffer for picking. Hardened with strict size checks, adapter\nfallback, and MRT correctness for reliable headless runs.\n\n- New Features\n- API: `render_solid_offscreen(topo, solid, &Camera, &RenderOpts) ->\nRenderOutput { color, id_buffer, width, height }` with `face_id_at(x,\ny)`.\n- Pipeline: RTC upload (f64 tessellation → f32 positions around model\ncenter), two‑sided Lambert mesh pass, optional edge pass, and R32 `id`\ntarget (0 = background).\n- Tests: box and cylinder offscreen; gated on adapter via\n`probe_adapter`; write PNGs to the temp dir.\n\n- Bug Fixes\n- Robustness: reject zero and oversized renders (`InvalidSize`,\n`SizeTooLarge`), fall back from real GPU to software adapter for device\ncreation, stricter mesh validation (indices/face offsets/ranges), and\nguarded camera math (degenerate up, projection clamps) with unit tests.\n- Edge pass: add write‑masked `@location(1)` id output to satisfy\nmulti‑render‑target rules; picking unchanged.\n- Tooling: `deny.toml` allowlist updated for `wgpu` transitive licenses;\n`check-boundaries.sh` and `CLAUDE.md` enforce `render` as an L4 leaf.\n\n<sup>Written for commit 91a0e83ac3752e846e329367761db73138315010.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1013?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-06-26T10:12:15-07:00",
+          "tree_id": "404ac7cf8eb1568c01499bde7b0ec57d2d45e629",
+          "url": "https://github.com/andymai/brepkit/commit/f7d30008e660d233acbd0727eeaa9f12c3f96c99"
+        },
+        "date": 1782494075570,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 734803,
+            "range": "± 1830",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 821311,
+            "range": "± 2513",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11913,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 622591,
+            "range": "± 11703",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19077998,
+            "range": "± 415456",
             "unit": "ns/iter"
           }
         ]
