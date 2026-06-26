@@ -91,7 +91,7 @@ fn candidate_adapters(
 /// returned alongside the device so callers (the viewer) can query surface
 /// capabilities. When `surface` is `Some`, only surface-compatible adapters are
 /// considered.
-fn acquire_device(
+pub fn acquire_device(
     instance: &wgpu::Instance,
     surface: Option<&wgpu::Surface<'_>>,
 ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), RenderError> {
@@ -719,7 +719,7 @@ pub fn map_and_read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Vec<
 }
 
 /// Strip per-row copy padding and build an RGBA image (rows are tightly packed).
-fn unpad_to_rgba(bytes: &[u8], width: u32, height: u32, padded_bpr: u32) -> image::RgbaImage {
+pub fn unpad_to_rgba(bytes: &[u8], width: u32, height: u32, padded_bpr: u32) -> image::RgbaImage {
     let row_len = (width * 4) as usize;
     let mut packed = Vec::with_capacity(row_len * height as usize);
     for row in 0..height as usize {
@@ -735,7 +735,7 @@ fn unpad_to_rgba(bytes: &[u8], width: u32, height: u32, padded_bpr: u32) -> imag
 }
 
 /// Strip per-row copy padding and decode the R32Uint id target to `Vec<u32>`.
-fn unpad_to_u32(bytes: &[u8], width: u32, height: u32, padded_bpr: u32) -> Vec<u32> {
+pub fn unpad_to_u32(bytes: &[u8], width: u32, height: u32, padded_bpr: u32) -> Vec<u32> {
     let mut out = Vec::with_capacity((width * height) as usize);
     for row in 0..height as usize {
         let row_start = row * padded_bpr as usize;
