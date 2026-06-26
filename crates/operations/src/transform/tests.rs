@@ -384,47 +384,44 @@ fn transform_nurbs_solid() {
 
     let mut topo = Topology::new();
 
-    // Create a small rectangular face at x=[2,3], z=[0,1], y=0.
-    // This is offset from the Y axis so the revolve doesn't self-intersect.
-    let tol_val = 1e-10;
-    let v0 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), tol_val));
-    let v1 = topo.add_vertex(Vertex::new(Point3::new(3.0, 0.0, 0.0), tol_val));
-    let v2 = topo.add_vertex(Vertex::new(Point3::new(3.0, 0.0, 1.0), tol_val));
-    let v3 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 1.0), tol_val));
-
-    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
-    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
-    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
-    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
-
-    let wire = Wire::new(
-        vec![
-            OrientedEdge::new(e0, true),
-            OrientedEdge::new(e1, true),
-            OrientedEdge::new(e2, true),
-            OrientedEdge::new(e3, true),
-        ],
-        true,
-    )
-    .unwrap();
-    let wid = topo.add_wire(wire);
-
-    let normal = brepkit_math::vec::Vec3::new(0.0, -1.0, 0.0);
-    let rect = topo.add_face(Face::new(
-        wid,
-        vec![],
-        FaceSurface::Plane { normal, d: 0.0 },
-    ));
-
-    // Revolve 90° around the Y axis to produce NURBS faces.
-    let solid = crate::revolve::revolve(
-        &mut topo,
-        rect,
-        Point3::new(0.0, 0.0, 0.0),
-        brepkit_math::vec::Vec3::new(0.0, 1.0, 0.0),
-        std::f64::consts::FRAC_PI_2,
-    )
-    .unwrap();
+    // Build a NURBS-faced solid by lofting two offset squares: a smooth loft
+    // produces genuine NURBS side surfaces (revolve of a polygonal profile is now
+    // recognised as analytic cone/cylinder/plane bands, so it no longer yields
+    // NURBS walls — see the revolve analytic-surface recognition).
+    let square = |topo: &mut Topology, half: f64, z: f64| -> FaceId {
+        let tol_val = 1e-10;
+        let a = topo.add_vertex(Vertex::new(Point3::new(-half, -half, z), tol_val));
+        let b = topo.add_vertex(Vertex::new(Point3::new(half, -half, z), tol_val));
+        let c = topo.add_vertex(Vertex::new(Point3::new(half, half, z), tol_val));
+        let d = topo.add_vertex(Vertex::new(Point3::new(-half, half, z), tol_val));
+        let e0 = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(c, d, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(d, a, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    };
+    let p0 = square(&mut topo, 3.0, 0.0);
+    let p1 = square(&mut topo, 2.0, 2.0);
+    let p2 = square(&mut topo, 3.0, 4.0);
+    let solid = crate::loft::loft_smooth(&mut topo, &[p0, p1, p2]).unwrap();
 
     // Record a NURBS surface control point before the transform.
     let solid_data = topo.solid(solid).unwrap();
