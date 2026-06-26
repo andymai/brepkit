@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.120.6](https://github.com/andymai/brepkit/compare/v2.120.5...v2.120.6) (2026-06-26)
+
+
+### Bug Fixes
+
+* **algo:** assemble perpendicular cyl∪cyl Fuse analytically ([#1008](https://github.com/andymai/brepkit/issues/1008)) ([0dadfc9](https://github.com/andymai/brepkit/commit/0dadfc9d982bf59243eb2495c94d8737a76fba13))
+
 ## [2.120.5](https://github.com/andymai/brepkit/compare/v2.120.4...v2.120.5) (2026-06-25)
 
 
