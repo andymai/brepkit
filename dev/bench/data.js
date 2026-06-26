@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782452707864,
+  "lastUpdate": 1782491654928,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1133,6 +1133,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18351257,
             "range": "± 44962",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45c1375881609a08edd6cdf906066954b3c58797",
+          "message": "feat(operations): recover analytic surfaces of revolution + exact volume (#1012)\n\n## What\n\nRecovers **analytic surfaces of revolution** from `revolve`. Previously\n`revolve` produced NURBS faces (≈0.04% volume error, up to 2.3% on\npointed cones) for everything except axis-parallel-line→`Cylinder`. Now\nevery analytic profile edge becomes its exact surface of revolution with\nexact volume, and full-turn disc-cap convex revolutions match the\nprimitives' face counts.\n\nFirst PR of the **analytic-recovery campaign for non-boolean ops**\n(after the primitive-boolean campaign #1003/#1005/#1006/#1008/#1010).\nRevolve was the diagnosis's #1 target: genuinely closable (the closed\nforms already exist in `make_cone`/`make_torus`), unlike\nfillet/offset/sweep which *introduce* blend surfaces with no closed\nform.\n\n## Recognition — all 4 profile-edge types (`revolution_band_surface`)\n\n| profile edge | → surface | layer |\n|---|---|---|\n| axis-parallel line | `Cylinder` | existing |\n| **oblique line** | **`Cone`** (apex + half-angle, mirroring\n`make_cone`) | L1 |\n| **perpendicular line** | **`Plane`** annular cap | L4 |\n| **circular arc** | **`Torus`** band | L2 |\n\nA genuine NURBS/spline profile still declines to NURBS — correct, no\nclosed form. (The decline comment at the old `revolve.rs:159` claiming\n\"oblique lines have no simpler exact form\" was factually wrong — an\noblique line revolved *is* a cone.)\n\n## Volume (coupled work)\n\n- **`analytic_revolution_solid_volume`** — per-face analytic sum,\n**tightly gated** to a genuine surface of revolution (quadric walls\nsharing one axis line; every cap's arcs centered on that axis). The\ntight guard is load-bearing: a loose version (any arc-bounded planar\nface) **regressed 4 boolean tests 3×** (rounded-rect caps) — the\naxis-centered check cleanly separates revolve caps from corner caps.\n- **`planar_cap_signed_volume`** — exact disc/annulus/sector area via\n**Green's theorem** (exact circular-arc bulge `±ρ²(|α|−sin|α|)`, never\nchorded). This is the prerequisite that makes the `Plane` cap arm\nnon-regressing (boundary chording was the original reason caps stayed\nNURBS).\n- **apex-singularity fix** — a cone band touching the apex (where the\nangular parameter is undefined on the axis) read a 2× angular span →\n**+50% volume on pointed cones**. Fixed by skipping the apex vertex's\n`u` (the cone analog of the #968 cylinder-integrator midpoint fix).\n\n## Periodic-face merge\n\nFor a full revolution of a fully-analytic disc-cap profile, build **one\nperiodic face per profile edge** (shared rim circles + seam line,\nmirroring `make_cylinder`/`make_cone`) instead of 4 angular segments:\n**frustum 16 → 3 faces** (= `make_cone`), watertight (the u=0≡2π seam\nreuses the primitives' proven shared-rim topology, so #696 doesn't\nbite). Also fixes a latent topology bug — the segmented path's\ndegenerate on-axis bands faked χ=0; the merge gives the correct genus-0\nχ=2.\n\n## Verification\n\n- All 4 profile types analytic + exact volume. frustum/cylinder → 3\nfaces, watertight (bd=0 at defl 0.1/0.05/0.02), matching\n`make_cone`/`make_cylinder`. Pointed cone 2.31% → **0.0000%**.\n- **No regression:** `make_cone`/`make_cylinder`/`make_torus` (which\nrevolve-fallback through this path), sweep/loft, all booleans\n(box∩sphere, torus−box), gridfinity `*_inmem`; full suite **2481\npassed**. clippy/fmt/boundaries clean.\n- Tests: cone/torus recognition + exact volume + watertight + the merged\nface counts; `revolve` cases added to `approx_census`.\n\n## Deferred (noted, not blocking — all stay analytic + exact, just\nover-segmented)\nPointed-cone apex periodic-merge (needs a degenerate apex seam wire);\nannulus/washer-cap merge (inner-wall-toward-axis orientation — caught\nvia volume verification and scoped out rather than risk it);\npartial-turn closed-circle → partial torus.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRecovered exact analytic surfaces in `revolve` (Cylinder, Cone, Plane\ncaps, Torus) and added exact, tessellation‑free volume integration for\nanalytic surfaces of revolution. Also fixed disc‑cap and torus seam edge\ncases so multi‑section revolves compute exact, deflection‑independent\nvolume.\n\n- **New Features**\n- Profile edge → surface: parallel line → `Cylinder`, oblique line →\n`Cone`, perpendicular line → `Plane` cap, circular arc → `Torus`.\n- Exact volume for analytic revolutions via per‑face integrals; planar\ncaps use exact disc/annulus/sector area (Green’s theorem).\n- Full‑turn analytic profiles build one periodic face per edge (e.g.,\nfrustum/cylinder → 3 faces), watertight; NURBS only when needed.\n- Added a revolve survey to `approx_census`; new watertight/volume\ntests; `transform` NURBS test now uses `loft_smooth`.\n\n- **Bug Fixes**\n- Fixed apex‑singularity on cone bands touching the apex (+50% volume\nerror).\n- Closed‑circle caps now integrate (α=2π → πρ²); arc‑bulge uses the\ncurve’s domain midpoint and is orientation‑consistent, so annular caps\nsubtract the inner rim correctly.\n- Torus‑band minor‑range ambiguity at the v=0/2π seam now defers to\ntessellation to avoid mis‑integration.\n- Tight axis‑centered guard for analytic‑volume recognition; cached\nplanar‑cap volumes; `approx_census` `surf_tags` is now exhaustive\n(counts `Sphere`).\n\n<sup>Written for commit 126a0421acdc52dd0dca5b49ee993022fb590814.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1012?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-06-26T09:32:08-07:00",
+          "tree_id": "8562fe048798902787d01755bf1fdd54450ea03c",
+          "url": "https://github.com/andymai/brepkit/commit/45c1375881609a08edd6cdf906066954b3c58797"
+        },
+        "date": 1782491654110,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 734768,
+            "range": "± 3886",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 820473,
+            "range": "± 2648",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11862,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 622897,
+            "range": "± 4127",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19082699,
+            "range": "± 96447",
             "unit": "ns/iter"
           }
         ]
