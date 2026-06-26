@@ -1183,11 +1183,21 @@ fn cut_torus_by_box_notch_is_analytic_watertight() {
             _ => others += 1,
         }
     }
-    // 1 kept toroidal band + 4 plane notch walls (x=6, y=±4 split; the inner x=6
-    // wall splits into two thin lobes), no NURBS fallback faces.
+    // Exact analytic decomposition: 1 kept toroidal band + 4 plane notch walls
+    // (the y=±4 walls + the inner x=6 wall split into two thin lobes), with NO
+    // NURBS fallback faces — i.e. NOT a mesh fallback.
     assert_eq!(others, 0, "no non-analytic faces expected, got {others}");
-    assert_eq!(tori, 1, "expected 1 kept toroidal band, got {tori}");
-    assert!(planes >= 3, "expected the box notch walls, got {planes}");
+    assert_eq!(tori, 1, "expected exactly 1 kept toroidal band, got {tori}");
+    assert_eq!(
+        planes, 4,
+        "expected exactly 4 plane notch walls, got {planes}"
+    );
+    assert_eq!(
+        face_ids.len(),
+        5,
+        "expected exactly 5 faces, got {}",
+        face_ids.len()
+    );
 
     // Watertight analytic B-rep (not a mesh fallback): every edge shared by
     // exactly two faces.

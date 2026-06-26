@@ -1005,12 +1005,29 @@ fn real_roots_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> Vec<f64> {
             break;
         }
     }
-    // Keep roots with negligible imaginary part.
-    let mut out = Vec::new();
+    // Keep roots with negligible imaginary part AND a small REAL-polynomial
+    // residual — Durand–Kerner stops after a fixed iteration cap whether or not
+    // it converged, so a non-converged iterate could otherwise be returned as a
+    // spurious root. Evaluate the monic quartic at each candidate (real part) and
+    // keep only |p(x)| below a magnitude-scaled tolerance; de-dup near-equal
+    // roots (a double root converges to two near-identical iterates).
+    let p_real = |x: f64| -> f64 { (((x + a) * x + b) * x + c) * x + d };
+    let mut out: Vec<f64> = Vec::new();
     for z in r {
-        if z.im.abs() < 1e-7 {
-            out.push(z.re);
+        if z.im.abs() >= 1e-7 {
+            continue;
         }
+        let x = z.re;
+        // Residual tolerance scales with the polynomial's coefficient magnitude
+        // and |x|^4 so large-coefficient quartics are not over-rejected.
+        let scale = 1.0 + a.abs() + b.abs() + c.abs() + d.abs() + x.abs().powi(4);
+        if p_real(x).abs() > 1e-6 * scale {
+            continue;
+        }
+        if out.iter().any(|&y| (y - x).abs() < 1e-9 * (1.0 + x.abs())) {
+            continue;
+        }
+        out.push(x);
     }
     out
 }

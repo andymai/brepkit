@@ -118,10 +118,17 @@ fn torus_wire_wraps_tube(
         let Ok(e) = topo.edge(oe.edge()) else {
             return false;
         };
-        for vid in [e.start(), e.end()] {
-            if let Ok(v) = topo.vertex(vid) {
-                vs.push(torus.project_point(v.point()).1);
-            }
+        let (Ok(sv), Ok(ev)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+            return false;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        // Sample ALONG each edge (not just endpoints): a wrapping seam arc bows
+        // far in v between its endpoints, so endpoint-only sampling can miss the
+        // wrap and misclassify a notch band as a constant-v circle.
+        for k in 0..=8 {
+            let f = f64::from(k) / 8.0;
+            let p = e.curve().evaluate_with_endpoints(f, sp, ep);
+            vs.push(torus.project_point(p).1);
         }
     }
     if vs.len() < 3 {

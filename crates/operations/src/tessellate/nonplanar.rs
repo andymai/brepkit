@@ -161,8 +161,10 @@ type LatRing = Vec<(f64, u32)>;
 /// sorted by `v`, taking the SHARED global vertices (so the ring shares the
 /// notch walls' vertices) and projecting to the torus `(u, v)`. Accepts edges of
 /// any curve type (the notch seam arcs are NURBS). Returns `None` if any edge is
-/// missing from the shared pool or the ring does not WRAP the tube once (the
-/// largest `v` gap is under a full turn).
+/// missing from the shared pool, or the ring does NOT wrap the tube — detected
+/// as the largest gap between consecutive sorted `v` samples (including the
+/// wrap-around gap) EXCEEDING half a turn (`π`): a ring that encircles the tube
+/// has all its `v`-gaps below `π`, whereas a partial arc leaves one gap above it.
 fn collect_torus_phi_ring(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,

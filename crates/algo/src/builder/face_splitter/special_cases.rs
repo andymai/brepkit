@@ -1092,9 +1092,10 @@ pub(super) fn split_torus_band_by_arrangement(
     }
 
     // Stitch arcs into closed loops by chaining shared 3D endpoints. The FF
-    // exact-crossing trim makes adjacent arcs share the box-edge crossing
-    // EXACTLY, so a tight join tolerance suffices.
-    let join_tol = (tol * 1000.0).max(1e-3);
+    // exact-crossing trim snaps adjacent arcs to the SAME box-edge crossing
+    // (and the arc-split shares the exact midpoint), so a tight tolerance
+    // suffices — a loose one could stitch unrelated endpoints into false loops.
+    let join_tol = (tol * 100.0).max(tol);
     let mut used = vec![false; open.len()];
     let mut loops: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
     for s0 in 0..open.len() {
@@ -1185,9 +1186,33 @@ pub(super) fn split_torus_band_by_arrangement(
     }
 
     let outer = loops[0].clone();
+    // Interior sample on the KEPT band: the band spans the ring angle u the LONG
+    // way between the two boundary loops, which sit at roughly constant u (the
+    // box-wall cuts). Take each loop's mean u (wrap-safe via summed unit vectors)
+    // and the MIDPOINT of the long arc between them — NOT a hardcoded u = π,
+    // which is only correct when the notch is on the +x side (a mirrored or
+    // rotated cut puts the kept band's centre elsewhere). The band wraps the tube
+    // v fully at this interior u, so v = 0 is on it.
+    let loop_mean_u = |l: &[OrientedPCurveEdge]| -> f64 {
+        let (mut sx, mut sy) = (0.0, 0.0);
+        for e in l {
+            let (u, _) = torus.project_point(e.start_3d);
+            sx += u.cos();
+            sy += u.sin();
+        }
+        sy.atan2(sx).rem_euclid(TAU)
+    };
+    let u0 = loop_mean_u(&loops[0]);
+    let u1 = loop_mean_u(&loops[1]);
+    // Long-arc midpoint between u0 and u1 (the short gap is the removed notch).
+    let fwd = (u1 - u0).rem_euclid(TAU);
+    let u_mid = if fwd >= PI {
+        (u0 + fwd / 2.0).rem_euclid(TAU) // a->b the long way is increasing
+    } else {
+        (u0 - (TAU - fwd) / 2.0).rem_euclid(TAU) // long way is decreasing
+    };
+    let interior = torus.evaluate(u_mid, 0.0);
     let inner_rev = reverse_loop(&loops[1]);
-    // Interior sample on the KEPT band (θ = π is the far side of the ring).
-    let interior = torus.evaluate(PI, 0.0);
 
     Some(vec![SplitSubFace {
         surface: surface.clone(),

@@ -943,8 +943,12 @@ fn trim_torus_oval_to_box_face(
             })
             .collect()
     };
-    // Pick the in-box arc points (longest such — the φ-wrapping outer arc).
-    let mut best_pts: Option<(f64, Vec<Point3>)> = None;
+    // Collect ALL in-box arcs (the oval may cross the box face's boundary into
+    // MORE than one in-box interval — e.g. a plane cut that enters the box face
+    // twice — and each is a valid section; keeping only the longest would drop
+    // the others and leave incomplete walls). Each arc spans between two
+    // consecutive boundary crossings whose mid-arc point is inside the box face.
+    let mut arc_point_sets: Vec<Vec<Point3>> = Vec::new();
     for i in 0..marks.len() {
         let (f0, p0) = marks[i];
         let (f1, p1) = marks[(i + 1) % marks.len()];
@@ -958,14 +962,13 @@ fn trim_torus_oval_to_box_face(
         let last = pts.len() - 1;
         pts[0] = p0;
         pts[last] = p1;
-        let span = if f1 >= f0 { f1 - f0 } else { f1 + 1.0 - f0 };
-        if best_pts.as_ref().is_none_or(|(s, _)| *s < span) {
-            best_pts = Some((span, pts));
-        }
+        arc_point_sets.push(pts);
     }
-    let (span, pts) = best_pts?;
+    if arc_point_sets.is_empty() {
+        return None;
+    }
 
-    // Emit the kept in-box arc ALWAYS SPLIT at its midpoint into two sub-arcs
+    // Emit each kept in-box arc ALWAYS SPLIT at its midpoint into two sub-arcs
     // with a distinct middle vertex. Each kept arc shares BOTH its endpoints (the
     // box-edge∩torus crossings) with the partner box-wall edge that closes the
     // same notch-wall lens — a straight box Line for the inner (x=6) wall, the
@@ -976,7 +979,6 @@ fn trim_torus_oval_to_box_face(
     // arc is emitted as ONE shared FF section, so BOTH consumers — the kept
     // toroidal band and the box-wall sub-face — see the same midpoint vertex and
     // stay watertight. Geometry is unchanged (the two halves retrace the arc).
-    let _ = span;
     let fit = |seg: &[Point3]| -> Option<RawCurve> {
         let curve = brepkit_math::nurbs::fitting::interpolate(seg, 3.min(seg.len() - 1)).ok()?;
         let dom = curve.domain();
@@ -990,16 +992,18 @@ fn trim_torus_oval_to_box_face(
         })
     };
     let mut out_arcs = Vec::new();
-    if pts.len() >= 7 {
-        let mid = pts.len() / 2;
-        if let (Some(a0), Some(a1)) = (fit(&pts[..=mid]), fit(&pts[mid..])) {
-            out_arcs.push(a0);
-            out_arcs.push(a1);
-        } else if let Some(a) = fit(&pts) {
+    for pts in &arc_point_sets {
+        if pts.len() >= 7 {
+            let mid = pts.len() / 2;
+            if let (Some(a0), Some(a1)) = (fit(&pts[..=mid]), fit(&pts[mid..])) {
+                out_arcs.push(a0);
+                out_arcs.push(a1);
+            } else if let Some(a) = fit(pts) {
+                out_arcs.push(a);
+            }
+        } else if let Some(a) = fit(pts) {
             out_arcs.push(a);
         }
-    } else if let Some(a) = fit(&pts) {
-        out_arcs.push(a);
     }
     if out_arcs.is_empty() {
         return None;
