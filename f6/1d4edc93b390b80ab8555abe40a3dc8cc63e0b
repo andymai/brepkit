@@ -1,0 +1,25 @@
+crates/render/src/compute_mesh.rs
+  s_3a7801f96b397a::t_14fb97fd2458c1 121-126
+  s_3a7801f96b397a::t_013db839ffb596 1053,1062-1064,1069-1077,1087-1088,1096-1119
+  s_3a7801f96b397a::t_2548583610985e 1065-1068,1078-1086,1089-1095
+  s_3a7801f96b397a::t_2cd336c2739e10 94-96,99-100
+  s_3a7801f96b397a::t_f04a528c3490c0 135-147,150-158,165
+crates/render/tests/compute_mesh_lod.rs
+  s_3a7801f96b397a::t_13db4264258b07 106-108,110-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "f61d4edc93b390b80ab8555abe40a3dc8cc63e0b",
+  "prompts": {},
+  "sessions": {
+    "s_3a7801f96b397a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d87b0fde-b82d-435e-90fb-1a5c8028f43f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
