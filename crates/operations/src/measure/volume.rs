@@ -286,27 +286,35 @@ fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
         return false;
     };
 
-    // Account for EVERY face: the only non-cylinder faces allowed are the planar
-    // end-caps of the two lens cylinders, i.e. planes perpendicular to `a0` or
-    // `a1` (normal parallel to one cylinder's axis). A planar face pointing any
-    // other way belongs to a different attached body — reject so its volume is
-    // not silently absorbed into the two-cylinder closed form. (The census has
-    // exactly 4 such caps; we don't require a count, only that none is foreign.)
+    // Account for EVERY face: the lens fuse has EXACTLY four planar caps — two
+    // per cylinder, each perpendicular to its own axis (normal parallel to `a0`
+    // or `a1`). Require that exact tally: a plane pointing any other way, OR an
+    // extra axis-aligned plane (e.g. an attached box's face), means a foreign
+    // body whose volume the two-cylinder closed form would silently drop. Reject
+    // anything but exactly 2 caps per axis.
     let a0 = c0.axis();
     let a1 = c1.axis();
     // Parallelism via squared cosine (n·a)² ≥ (1−ε)²·|n|²·|a|², so a non-unit
     // (but parallel) plane normal or axis isn't spuriously rejected.
-    let cap_axis_aligned = |n: &Vec3| -> bool {
+    let thr = (1.0 - 1e-6) * (1.0 - 1e-6);
+    let mut caps_a0 = 0_usize;
+    let mut caps_a1 = 0_usize;
+    for n in &planar_normals {
         let nn = n.dot(*n);
         if nn < 1e-20 {
             return false;
         }
-        let thr = (1.0 - 1e-6) * (1.0 - 1e-6);
         let na0 = n.dot(a0);
         let na1 = n.dot(a1);
-        na0 * na0 >= thr * nn * a0.dot(a0) || na1 * na1 >= thr * nn * a1.dot(a1)
-    };
-    if !planar_normals.iter().all(cap_axis_aligned) {
+        if na0 * na0 >= thr * nn * a0.dot(a0) {
+            caps_a0 += 1;
+        } else if na1 * na1 >= thr * nn * a1.dot(a1) {
+            caps_a1 += 1;
+        } else {
+            return false;
+        }
+    }
+    if caps_a0 != 2 || caps_a1 != 2 {
         return false;
     }
 
@@ -1918,15 +1926,15 @@ mod regression_tests {
             "a planar cap not aligned with either lens axis must make the gate decline"
         );
 
-        // Guard against a false positive in the helper: the extra cap from the
-        // z-aligned plain cylinder is axis-aligned, so it alone is NOT foreign —
-        // confirms the rejection above is the axis check, not an accidental
-        // catch-all. (Adding it keeps 2 holed walls, so the gate still fires.)
+        // An EXTRA axis-aligned plane is also rejected: the lens fuse has EXACTLY
+        // two caps per axis, so a fifth cap aligned with `a0` (here the z-aligned
+        // plain-cylinder cap) makes `caps_a0 == 3` — a foreign attached body whose
+        // volume the closed form would silently drop.
         let mut with_aligned_cap = census_faces;
         with_aligned_cap.push(extra_cap);
         assert!(
-            solid_is_steinmetz_lens_fuse(&topo, &with_aligned_cap),
-            "a z-aligned extra cap is not foreign (still the lens signature by axis check)"
+            !solid_is_steinmetz_lens_fuse(&topo, &with_aligned_cap),
+            "an extra axis-aligned cap beyond the exactly-four lens caps must make the gate decline"
         );
     }
 }
