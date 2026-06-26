@@ -277,23 +277,74 @@ fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
     else {
         return false;
     };
-    cylinders_perpendicular_and_intersecting(c0, c1)
+    let Some(axis_isect) = cylinders_perpendicular_and_intersecting(c0, c1) else {
+        return false;
+    };
+
+    // Non-truncation: the closed form `−16r³/3` is the INFINITE-cylinder
+    // Steinmetz solid, valid only when neither finite wall is cut shorter than
+    // the lens. Each wall must extend ≥ r past the axis-intersection point on
+    // both sides (project the intersection onto each axis; both caps ≥ r away).
+    let r = c0.radius();
+    wall_extends_past(topo, holed_cyl_walls[0], c0, axis_isect, r)
+        && wall_extends_past(topo, holed_cyl_walls[1], c1, axis_isect, r)
 }
 
-/// Whether two cylinders are equal-radius with perpendicular, intersecting axes
-/// — the geometric precondition for the right-angle Steinmetz closed form.
+/// Whether a cylinder wall's cap-to-cap extent reaches at least `r` past the
+/// axis-intersection point on BOTH sides (the non-truncation precondition for
+/// the right-angle Steinmetz closed form). Reads the wall's axial (v) extent
+/// from its outer wire and compares against the intersection's axial coordinate.
+fn wall_extends_past(
+    topo: &Topology,
+    wall: FaceId,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    axis_isect: Point3,
+    r: f64,
+) -> bool {
+    let Ok(face) = topo.face(wall) else {
+        return false;
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return false;
+    };
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for oe in wire.edges() {
+        let Ok(e) = topo.edge(oe.edge()) else {
+            return false;
+        };
+        for vid in [e.start(), e.end()] {
+            let Ok(v) = topo.vertex(vid) else {
+                return false;
+            };
+            let (_, vv) = cyl.project_point(v.point());
+            v_min = v_min.min(vv);
+            v_max = v_max.max(vv);
+        }
+    }
+    if !v_min.is_finite() || !v_max.is_finite() {
+        return false;
+    }
+    let (_, v_isect) = cyl.project_point(axis_isect);
+    let tol = 1e-6 * r.max(1.0);
+    v_isect - v_min >= r - tol && v_max - v_isect >= r - tol
+}
+
+/// If two cylinders are equal-radius with perpendicular, intersecting axes —
+/// the geometric precondition for the right-angle Steinmetz closed form —
+/// returns their axis-intersection point; otherwise `None`.
 fn cylinders_perpendicular_and_intersecting(
     c0: &brepkit_math::surfaces::CylindricalSurface,
     c1: &brepkit_math::surfaces::CylindricalSurface,
-) -> bool {
+) -> Option<Point3> {
     let r0 = c0.radius();
     if (r0 - c1.radius()).abs() > 1e-6 * r0.max(1.0) {
-        return false; // Unequal radius.
+        return None; // Unequal radius.
     }
     let a0 = c0.axis();
     let a1 = c1.axis();
     if a0.dot(a1).abs() > 1e-6 {
-        return false; // Not perpendicular.
+        return None; // Not perpendicular.
     }
     // Closest approach of the two axis lines (perpendicular ⇒ the system
     // decouples): s* = −(w0·a0), t* = w0·a1, where w0 = o0 − o1.
@@ -312,7 +363,16 @@ fn cylinders_perpendicular_and_intersecting(
         o1.y() + a1.y() * t,
         o1.z() + a1.z() * t,
     );
-    (p0 - p1).length() <= 1e-6 * r0.max(1.0)
+    if (p0 - p1).length() <= 1e-6 * r0.max(1.0) {
+        // Both closest points coincide ⇒ the axes meet; return the midpoint.
+        Some(Point3::new(
+            0.5 * (p0.x() + p1.x()),
+            0.5 * (p0.y() + p1.y()),
+            0.5 * (p0.z() + p1.z()),
+        ))
+    } else {
+        None
+    }
 }
 
 /// Try to compute the volume of a solid analytically by detecting known
@@ -344,6 +404,14 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
 
     for &fid in shell.faces() {
         let face = topo.face(fid).ok()?;
+        // A holed analytic face means the solid is bored/pocketed; the closed-form
+        // primitive volumes below integrate the surface as if the hole were filled.
+        // Defer the whole solid to the hole-aware tessellation path. (The validated
+        // Steinmetz lens fuse is handled by `analytic_faces_solid_volume`, which the
+        // caller tries after this returns `None`.)
+        if !face.inner_wires().is_empty() {
+            return None;
+        }
         match face.surface() {
             FaceSurface::Nurbs(_) => return None,
             FaceSurface::Plane { normal, d } => {
@@ -1628,26 +1696,130 @@ mod regression_tests {
         let cyl = |o: Point3, a: Vec3, r: f64| CylindricalSurface::new(o, a, r).unwrap();
         let z = cyl(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0);
 
-        // The census config: z⊥x, axes meet at the origin, equal r → TRUE.
+        // The census config: z⊥x, axes meet at the origin, equal r → Some(origin).
         let x = cyl(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 3.0);
-        assert!(cylinders_perpendicular_and_intersecting(&z, &x));
+        let isect = cylinders_perpendicular_and_intersecting(&z, &x).expect("axes meet");
+        assert!((isect - Point3::new(0.0, 0.0, 0.0)).length() < 1e-9);
 
-        // Unequal radius → false.
+        // Unequal radius → None.
         let x_big = cyl(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 4.0);
-        assert!(!cylinders_perpendicular_and_intersecting(&z, &x_big));
+        assert!(cylinders_perpendicular_and_intersecting(&z, &x_big).is_none());
 
-        // Non-perpendicular (45°), intersecting, equal r → false (its
+        // Non-perpendicular (45°), intersecting, equal r → None (its
         // intersection is NOT 16r³/3, so the closed form would be wrong).
         let diag = cyl(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 1.0), 3.0);
-        assert!(!cylinders_perpendicular_and_intersecting(&z, &diag));
+        assert!(cylinders_perpendicular_and_intersecting(&z, &diag).is_none());
 
-        // Parallel-offset equal r (both along z) → false (not perpendicular).
+        // Parallel-offset equal r (both along z) → None (not perpendicular).
         let z_off = cyl(Point3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0);
-        assert!(!cylinders_perpendicular_and_intersecting(&z, &z_off));
+        assert!(cylinders_perpendicular_and_intersecting(&z, &z_off).is_none());
 
         // Perpendicular but SKEW (x-axis shifted in y so its line never meets
-        // the z-axis) → false (not intersecting).
+        // the z-axis) → None (not intersecting).
         let x_skew = cyl(Point3::new(0.0, 5.0, 8.0), Vec3::new(1.0, 0.0, 0.0), 3.0);
-        assert!(!cylinders_perpendicular_and_intersecting(&z, &x_skew));
+        assert!(cylinders_perpendicular_and_intersecting(&z, &x_skew).is_none());
+
+        // Perpendicular + intersecting but the meet point is OFF-origin
+        // (x-axis through (0,0,4)): returns Some at that point.
+        let x_high = cyl(Point3::new(0.0, 0.0, 4.0), Vec3::new(1.0, 0.0, 0.0), 3.0);
+        let isect_high = cylinders_perpendicular_and_intersecting(&z, &x_high).expect("axes meet");
+        assert!((isect_high - Point3::new(0.0, 0.0, 4.0)).length() < 1e-9);
+    }
+
+    #[test]
+    fn drilled_cylinder_volume_subtracts_the_bore() {
+        // A coaxial tube (cylinder r=5 h=20 with a coaxial r=2 bore cut through
+        // it). Its holed analytic faces (annular planar caps with inner wires +
+        // two cylinder walls) must NOT hit a hole-FILLING analytic fast-path —
+        // they route to hole-aware tessellation, giving the bore-subtracted
+        // volume V = π·(5²−2²)·20 = π·420, not the solid-cylinder π·500.
+        use std::f64::consts::PI;
+        let mut topo = Topology::new();
+        let outer = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let bore = crate::primitives::make_cylinder(&mut topo, 2.0, 20.0).unwrap();
+        let tube = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, outer, bore)
+            .unwrap();
+
+        // Neither analytic fast-path may claim this holed solid.
+        assert!(
+            try_analytic_solid_volume(&topo, tube).is_none(),
+            "the holed tube must not hit the whole-solid analytic primitive path"
+        );
+        assert!(
+            analytic_faces_solid_volume(&topo, tube).is_none(),
+            "the holed tube must not hit the per-face analytic path (it ignores holes)"
+        );
+
+        let expect = PI * (25.0 - 4.0) * 20.0; // bore subtracted
+        let vol = solid_volume(&topo, tube, 0.005).unwrap();
+        let solid_cyl = PI * 25.0 * 20.0; // hole-FILLED (the wrong answer)
+        assert!(
+            (vol - expect).abs() < expect * 0.01,
+            "drilled tube volume {vol} should be the bore-subtracted {expect}, \
+             not the hole-filled {solid_cyl}"
+        );
+        assert!(
+            (vol - solid_cyl).abs() > solid_cyl * 0.05,
+            "drilled tube volume {vol} must be clearly LESS than the solid cylinder \
+             {solid_cyl} (the bore is really removed)"
+        );
+    }
+
+    #[test]
+    fn plain_primitives_still_use_the_analytic_fast_path() {
+        // The Finding-3 hole guard must not over-gate: a plain (hole-less)
+        // cylinder, cone, sphere and torus must STILL hit the closed-form
+        // analytic fast-path (no tessellation perf regression).
+        use std::f64::consts::PI;
+        let mut t = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut t, 3.0, 10.0).unwrap();
+        let v = try_analytic_solid_volume(&t, cyl).expect("plain cylinder fast-path");
+        assert!((v - PI * 9.0 * 10.0).abs() < 1e-9);
+
+        let mut t = Topology::new();
+        let cone = crate::primitives::make_cone(&mut t, 4.0, 0.0, 9.0).unwrap();
+        let v = try_analytic_solid_volume(&t, cone).expect("plain cone fast-path");
+        assert!((v - PI / 3.0 * 16.0 * 9.0).abs() < 1e-6);
+
+        let mut t = Topology::new();
+        let sph = crate::primitives::make_sphere(&mut t, 5.0, 32).unwrap();
+        let v = try_analytic_solid_volume(&t, sph).expect("plain sphere fast-path");
+        assert!((v - 4.0 / 3.0 * PI * 125.0).abs() < 1e-6);
+
+        let mut t = Topology::new();
+        let tor = crate::primitives::make_torus(&mut t, 6.0, 2.0, 32).unwrap();
+        let v = try_analytic_solid_volume(&t, tor).expect("plain torus fast-path");
+        assert!((v - 2.0 * PI * PI * 6.0 * 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn truncated_perpendicular_fuse_gate_defers() {
+        // A SHORT perpendicular equal-radius fuse: the second cylinder is only
+        // h=2 (< r=3 past the axis intersection on each side), so the lens is
+        // truncated and the infinite-cylinder term −16r³/3 would be wrong. The
+        // gate must DECLINE so tessellation computes the true (truncated) volume.
+        use brepkit_math::mat::Mat4;
+        let mut topo = Topology::new();
+        let c1 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, c1, &Mat4::translation(0.0, 0.0, -10.0))
+            .unwrap();
+        // Short cross cylinder: h=2, centred on the z-axis (caps at x=±1, only 1
+        // past the intersection — less than r=3).
+        let c2 = crate::primitives::make_cylinder(&mut topo, 3.0, 2.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            c2,
+            &Mat4::rotation_y(std::f64::consts::FRAC_PI_2),
+        )
+        .unwrap();
+        crate::transform::transform_solid(&mut topo, c2, &Mat4::translation(-1.0, 0.0, 0.0))
+            .unwrap();
+        let res =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, c1, c2).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, res).unwrap();
+        assert!(
+            !solid_is_steinmetz_lens_fuse(&topo, &faces),
+            "a truncated (short) perpendicular fuse must not use the infinite-cylinder closed form"
+        );
     }
 }

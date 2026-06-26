@@ -1385,7 +1385,7 @@ pub(super) fn split_face_with_internal_loops(
 /// kept wall well clear of every lens. Returns `None` if the surface evaluator
 /// or boundary v-range is unusable, so the caller keeps the unset interior.
 fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> {
-    use std::f64::consts::TAU;
+    use std::f64::consts::{PI, TAU};
     // Densely sample every hole loop into 3D points AND project each to a (u, v)
     // polyline so candidate interior points can be tested for face containment
     // (outside every hole). Endpoint UVs are unusable here — a lens hole is one
@@ -1409,13 +1409,20 @@ fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> 
                     .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d);
                 hole_pts.push(p);
                 if let Some((u, v)) = remainder.surface.project_point(p) {
-                    if let Some((pu, pv)) = prev_uv
-                        && (u - pu).abs() < TAU * 0.5
-                    {
-                        let (a_u, a_v, b_u, b_v) = if pu <= u {
-                            (pu, pv, u, v)
+                    if let Some((pu, pv)) = prev_uv {
+                        // Unwrap `u` relative to the previous sample so a
+                        // seam-crossing step is a single continuous segment in an
+                        // extended u-frame (`pu → pu + wrapped_delta`, |Δ| ≤ π)
+                        // instead of being dropped. `point_in_hole_loops_uv` tests
+                        // every 2π translate, so a segment living past the seam is
+                        // still matched for a query on the other side — the lens
+                        // boundary stays closed.
+                        let wrapped_delta = ((u - pu + PI).rem_euclid(TAU)) - PI;
+                        let u_unwrapped = pu + wrapped_delta;
+                        let (a_u, a_v, b_u, b_v) = if pu <= u_unwrapped {
+                            (pu, pv, u_unwrapped, v)
                         } else {
-                            (u, v, pu, pv)
+                            (u_unwrapped, v, pu, pv)
                         };
                         hole_segs.push((a_u, a_v, b_u, b_v));
                     }
@@ -1989,6 +1996,57 @@ mod tests {
         );
         // No segments → never inside.
         assert!(!point_in_hole_loops_uv(&[], uc, vc));
+    }
+
+    #[test]
+    fn hole_containment_handles_seam_crossing_loop() {
+        // A square hole loop straddling the u-seam: its corners sit at u≈TAU−h
+        // and u≈+h (i.e. the loop wraps across u=0). The projection unwraps each
+        // step (|Δu| ≤ π) so the loop is a CLOSED boundary in an extended u-frame;
+        // a point inside it (at the seam, u=0) must read inside, and a point on
+        // the far side (u=π) must read outside. Before the seam-crossing fix the
+        // wrap segment was dropped, leaving an open boundary that mis-classified.
+        use std::f64::consts::{PI, TAU};
+        let vc = 10.0_f64;
+        let h = 0.5_f64;
+        // Corners walked in order around the seam: (TAU−h, lo) → (h, lo) →
+        // (h, hi) → (TAU−h, hi). Build segments by unwrapping like the
+        // production projection does.
+        let corners = [
+            (TAU - h, vc - h),
+            (h, vc - h),
+            (h, vc + h),
+            (TAU - h, vc + h),
+        ];
+        let mut segs: Vec<(f64, f64, f64, f64)> = Vec::new();
+        let mut prev = corners[corners.len() - 1];
+        for &(u, v) in &corners {
+            let (pu, pv) = prev;
+            let wrapped_delta = ((u - pu + PI).rem_euclid(TAU)) - PI;
+            let u_un = pu + wrapped_delta;
+            let seg = if pu <= u_un {
+                (pu, pv, u_un, v)
+            } else {
+                (u_un, v, pu, pv)
+            };
+            segs.push(seg);
+            prev = (u, v);
+        }
+        // At the seam (u=0, inside the wrapped loop) → inside.
+        assert!(
+            point_in_hole_loops_uv(&segs, 0.0, vc),
+            "seam-crossing hole contains the seam point"
+        );
+        // Just inside on the +u side and the wrap side.
+        assert!(point_in_hole_loops_uv(&segs, 0.25, vc));
+        assert!(point_in_hole_loops_uv(&segs, TAU - 0.25, vc));
+        // Far side of the cylinder (u=π) → outside.
+        assert!(
+            !point_in_hole_loops_uv(&segs, PI, vc),
+            "the opposite side of the wall is outside the seam-crossing hole"
+        );
+        // Outside in v at the seam → outside.
+        assert!(!point_in_hole_loops_uv(&segs, 0.0, vc + 2.0));
     }
 
     #[test]
