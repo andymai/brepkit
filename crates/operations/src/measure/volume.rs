@@ -294,10 +294,17 @@ fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
     // exactly 4 such caps; we don't require a count, only that none is foreign.)
     let a0 = c0.axis();
     let a1 = c1.axis();
+    // Parallelism via squared cosine (n·a)² ≥ (1−ε)²·|n|²·|a|², so a non-unit
+    // (but parallel) plane normal or axis isn't spuriously rejected.
     let cap_axis_aligned = |n: &Vec3| -> bool {
-        let na0 = n.dot(a0).abs();
-        let na1 = n.dot(a1).abs();
-        na0 > 1.0 - 1e-6 || na1 > 1.0 - 1e-6
+        let nn = n.dot(*n);
+        if nn < 1e-20 {
+            return false;
+        }
+        let thr = (1.0 - 1e-6) * (1.0 - 1e-6);
+        let na0 = n.dot(a0);
+        let na1 = n.dot(a1);
+        na0 * na0 >= thr * nn * a0.dot(a0) || na1 * na1 >= thr * nn * a1.dot(a1)
     };
     if !planar_normals.iter().all(cap_axis_aligned) {
         return false;
