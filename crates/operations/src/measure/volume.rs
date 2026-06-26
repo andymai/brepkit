@@ -311,7 +311,10 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
 
     // Second pass (axis known): every planar face must be a circular
     // disc/annulus/sector centred on the shared axis, and every NURBS face must
-    // be the degenerate on-axis band (zero radial extent).
+    // be the degenerate on-axis band (zero radial extent). Cache each planar
+    // cap's analytic volume here so the summation below reuses it rather than
+    // re-traversing the wire and re-running arc recognition a second time.
+    let mut cap_volumes: std::collections::HashMap<FaceId, f64> = std::collections::HashMap::new();
     for &fid in &faces {
         let face = topo.face(fid).ok()?;
         match face.surface() {
@@ -322,8 +325,9 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
                 if !planar_face_arcs_centered_on_axis(topo, fid, axis_o, axis_d) {
                     return None;
                 }
-                // Confirm the cap is analytically integrable (has a circular arc).
-                planar_cap_signed_volume(topo, fid).ok()??;
+                // Must be analytically integrable (a circular-arc-bounded cap).
+                let v = planar_cap_signed_volume(topo, fid).ok()??;
+                cap_volumes.insert(fid, v);
             }
             FaceSurface::Nurbs(_) if !nurbs_band_is_on_axis(topo, fid, axis_o, axis_d) => {
                 return None;
@@ -342,7 +346,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
             FaceSurface::Cylinder(_) => analytic_cylinder_signed_volume(topo, fid).ok()?,
             FaceSurface::Cone(_) => analytic_cone_signed_volume(topo, fid).ok()?,
             FaceSurface::Torus(_) => analytic_torus_signed_volume(topo, fid).ok()?,
-            FaceSurface::Plane { .. } => planar_cap_signed_volume(topo, fid).ok()??,
+            FaceSurface::Plane { .. } => *cap_volumes.get(&fid)?,
             FaceSurface::Nurbs(_) => 0.0, // degenerate on-axis band
             FaceSurface::Sphere(_) => return None,
         };

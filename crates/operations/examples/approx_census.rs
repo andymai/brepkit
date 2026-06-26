@@ -349,18 +349,21 @@ fn rz_profile(topo: &mut Topology, pts: &[(f64, f64)]) -> Result<FaceId, Box<dyn
 
 /// Count faces by analytic surface type for the revolve survey.
 fn surf_tags(topo: &Topology, s: SolidId) -> String {
-    let (mut pl, mut cy, mut co, mut to, mut nu) = (0, 0, 0, 0, 0);
+    let (mut pl, mut cy, mut co, mut sp, mut to, mut nu) = (0, 0, 0, 0, 0, 0);
     for f in solid_faces(topo, s).unwrap_or_default() {
+        // Exhaustive over `FaceSurface` so a new variant is compiler-flagged here
+        // (the project forbids a `_ =>` wildcard on `FaceSurface`).
         match topo.face(f).map(|fc| fc.surface().clone()) {
             Ok(FaceSurface::Plane { .. }) => pl += 1,
             Ok(FaceSurface::Cylinder(_)) => cy += 1,
             Ok(FaceSurface::Cone(_)) => co += 1,
+            Ok(FaceSurface::Sphere(_)) => sp += 1,
             Ok(FaceSurface::Torus(_)) => to += 1,
             Ok(FaceSurface::Nurbs(_)) => nu += 1,
-            _ => {}
+            Err(_) => {}
         }
     }
-    format!("plane={pl} cyl={cy} cone={co} torus={to} NURBS={nu}")
+    format!("plane={pl} cyl={cy} cone={co} sphere={sp} torus={to} NURBS={nu}")
 }
 
 /// Revolve survey: each profile-edge type revolves into its exact analytic
