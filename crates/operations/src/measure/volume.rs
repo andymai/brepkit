@@ -1332,13 +1332,18 @@ fn planar_cap_signed_volume(
 
             if let Some((center, radius)) = arc {
                 arc_edges += 1;
-                // The bulge term is `sign·ρ²·(|α| − sin|α|)`, α the signed sweep.
-                // `planar_cap_signed_volume` takes the absolute area, so only |α|
-                // matters here.
-                let alpha = if is_closed_circle {
-                    // A full circle sweeps 2π → the bulge gives the disc area πρ².
-                    // (The seam endpoint's antipode is NOT the domain midpoint, so
-                    // the open-arc disambiguation below does not apply.)
+                // The bulge correction (circular segment between the arc and its
+                // chord) is `sign·ρ²·(|α| − sin|α|)`. Compute the sweep in the
+                // curve's NATURAL direction (start→mid→end), then flip its sign for
+                // a reversed `OrientedEdge`, so the bulge is consistent with the
+                // chord term above (which uses the oriented endpoints). Without the
+                // flip, a reversed inner rim of an annulus ADDS its segment instead
+                // of subtracting it (inflated area).
+                let nat_alpha = if is_closed_circle {
+                    // A full circle sweeps 2π in its natural (CCW) direction → the
+                    // bulge gives the disc area πρ². (The seam endpoint's antipode is
+                    // NOT the domain midpoint, so the open-arc disambiguation below
+                    // does not apply.)
                     std::f64::consts::TAU
                 } else {
                     // Sample the arc at its DOMAIN midpoint (the domain need not be
@@ -1352,15 +1357,22 @@ fn planar_cap_signed_volume(
                         nat_end,
                     );
                     let (cx, cy) = to_2d(center);
+                    let (sx, sy) = to_2d(nat_start);
+                    let (ex, ey) = to_2d(nat_end);
                     let (mx, my) = to_2d(mid_pt);
-                    let va = (ax - cx, ay - cy);
+                    let va = (sx - cx, sy - cy);
                     let vm = (mx - cx, my - cy);
-                    let vb = (bx - cx, by - cy);
-                    // Signed sweep a→mid→b (each leg in (−π, π]).
+                    let vb = (ex - cx, ey - cy);
+                    // Signed sweep start→mid→end (each leg in (−π, π]).
                     let ang = |u: (f64, f64), w: (f64, f64)| -> f64 {
                         (u.0 * w.1 - u.1 * w.0).atan2(u.0 * w.0 + u.1 * w.1)
                     };
                     ang(va, vm) + ang(vm, vb)
+                };
+                let alpha = if oe.is_forward() {
+                    nat_alpha
+                } else {
+                    -nat_alpha
                 };
                 area2 += alpha.signum() * radius * radius * (alpha.abs() - alpha.abs().sin());
             }
@@ -2510,6 +2522,55 @@ mod regression_tests {
         assert!(
             (cap_v.abs() - 12.0 * PI * 4.0 / 3.0).abs() < 1e-9,
             "closed-circle disc cap contribution should be (1/3)·12·π·4, got {cap_v}"
+        );
+    }
+
+    /// An ANNULAR planar cap (outer rim + a reversed inner-rim hole) must
+    /// SUBTRACT the inner circular segment, giving area `π(R²−r²)`. The arc-bulge
+    /// sweep must respect the oriented (reversed) inner rim — otherwise the inner
+    /// segment is added (inflated area `π(R²+r²)`).
+    #[test]
+    fn annular_cap_volume_is_exact() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::PI;
+
+        let (r_out, r_in, h) = (7.0_f64, 5.0_f64, 4.0_f64);
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+
+        // Outer rim: a closed CCW circle at z = h, radius r_out.
+        let v_out = topo.add_vertex(Vertex::new(Point3::new(r_out, 0.0, h), 1e-7));
+        let outer_c = Circle3D::new(Point3::new(0.0, 0.0, h), axis, r_out).unwrap();
+        let e_out = topo.add_edge(Edge::new(v_out, v_out, EdgeCurve::Circle(outer_c)));
+        let outer_wire =
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e_out, true)], true).unwrap());
+
+        // Inner rim (the hole): a closed circle at the same z, radius r_in, wound
+        // OPPOSITE the outer wire — here via a reversed `OrientedEdge`.
+        let v_in = topo.add_vertex(Vertex::new(Point3::new(r_in, 0.0, h), 1e-7));
+        let inner_c = Circle3D::new(Point3::new(0.0, 0.0, h), axis, r_in).unwrap();
+        let e_in = topo.add_edge(Edge::new(v_in, v_in, EdgeCurve::Circle(inner_c)));
+        let inner_wire =
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e_in, false)], true).unwrap());
+
+        let cap = topo.add_face(Face::new(
+            outer_wire,
+            vec![inner_wire],
+            FaceSurface::Plane { normal: axis, d: h },
+        ));
+
+        let cap_v = planar_cap_signed_volume(&topo, cap).unwrap().unwrap();
+        // Exact annulus contribution: (1/3)·h·π·(R²−r²) (outward normal +axis).
+        let expected = h * PI * (r_out * r_out - r_in * r_in) / 3.0;
+        assert!(
+            (cap_v.abs() - expected).abs() < 1e-9,
+            "annular cap contribution should subtract the inner segment: \
+             expected {expected}, got {cap_v} (inflated would be {})",
+            h * PI * (r_out * r_out + r_in * r_in) / 3.0
         );
     }
 }

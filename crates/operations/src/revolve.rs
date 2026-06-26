@@ -1520,11 +1520,19 @@ mod tests {
             "top+bottom annulus caps × 4 segments are planar"
         );
 
-        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        // Cylinder walls + analytic annular-sector disc caps ⇒ EXACT volume,
+        // independent of deflection (the annular sectors must SUBTRACT their inner
+        // arc segment — a reversed-inner-rim orientation bug would inflate it).
         let expected = PI * (49.0 - 25.0) * 5.0;
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let vol_fine = crate::measure::solid_volume(&topo, solid, 0.0001).unwrap();
         assert!(
             (vol - expected).abs() / expected < 1e-6,
             "washer volume {expected}, got {vol}"
+        );
+        assert!(
+            (vol - vol_fine).abs() < 1e-9,
+            "washer volume must be analytic (deflection-independent): {vol} vs {vol_fine}"
         );
         assert!(
             crate::validate::validate_solid(&topo, solid)
