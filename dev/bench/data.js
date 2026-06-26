@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782496732488,
+  "lastUpdate": 1782498065820,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1457,6 +1457,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18814188,
             "range": "± 1004551",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cf1dc6e0c6c845f8e43f1f5a28e44bb936f3f5a1",
+          "message": "feat(render): compute-shader quadric mesher for cylinders (M2) (#1017)\n\n## What\n\n**GPU compute-shader quadric mesher** (M2) — the renderer's\ndifferentiator. Instead of CPU-tessellating an analytic face and\nuploading thousands of triangles, brepkit can ship the surface's\n**parameters** and let a compute shader evaluate the parametric surface\ninto a vertex buffer at a caller-chosen LOD. This PR implements it for\nthe **cylinder**; cone/sphere/torus + screen-space-adaptive LOD follow\nthe same pattern.\n\nBuilt on the merged M1 offscreen renderer (#1013).\n\n## How it works\n- `extract_cylinder_descriptor(topo, FaceId)`: `FaceSurface::Cylinder` →\n`CylinderDescriptor` (center/axis/x_ref/y_ref/radius + axial trim\n`v0..v1` from the outer wire, full-revolution `u0..u1`); RTC center\nfolded into the camera like M1.\n- `quadric_mesh.wgsl`: `cs_vertices` writes `pos(u,v)=origin+r(cos\nu·x+sin u·y)+v·axis` + the radial normal into a flat `array<u32>` (**7\nwords/vertex = M1's `Vertex` stride**), `cs_indices` writes 2 tris/quad.\nThe *same buffer* is bound STORAGE (compute writes it) then VERTEX/INDEX\n(the draw reads it), so **M1's mesh shader draws the compute output\nunchanged** — no CPU round-trip, no format conversion.\n- Seam: the wrap quad references column 0 → watertight by construction.\n- `render_cylinder_compute_offscreen(..)` renders it through M1's mesh\npass.\n\n`★ why this matters` — brepkit's kernel runs in-browser via wasm, so it\ncan mesh view-dependently *client-side*. Shipping surface parameters (a\nfew floats) instead of a fixed mesh is the foundation for smooth\ninfinite-zoom LOD — an approach server-side CAD renderers can't use.\nWebGPU has no tessellation/mesh shaders, so the mesher *must* be a\ncompute shader; that's exactly what this is.\n\n## Verification (live RTX 4080 — the tests actually mesh + render)\n- **Geometric correctness**: `compute_mesh_matches_cpu_silhouette` — the\ncompute-meshed cylinder's silhouette bbox is **identical** to M1's CPU\ntessellation at the same camera;\n`compute_mesh_matches_cpu_for_off_origin_cylinder` exercises the\n`axis_origin` term.\n- **LOD**: triangle count scales `2·n_u·n_v`; the coarse 6-gon is\nvisibly faceted (5px shortfall vs a 256-gon reference), the fine 48-gon\nis smooth (0px).\n- **Watertight seam**: a dedicated test centers the u=0 seam on the\ncamera and asserts zero interior holes.\n- `cargo nextest run -p brepkit-render`: **11/11** (5 compute + M1's 6).\nclippy `-D warnings`, fmt, `cargo deny check`, `check-boundaries.sh`:\nclean. No `unwrap`/`expect`/`panic` in lib.\n\n## Notes\n- `pipeline.rs`: reuses main's review-fixed `acquire_device()`\n(real→software fallback) for the compute path; M1's readback/format\nhelpers widened to `pub(crate)`; M1's `SizeTooLarge` over-size guard\nmirrored onto the compute path.\n- Overlaps PR #1016 (M1.5) only in `pipeline.rs` visibility (#1016\ntouches window/surface code, this touches readback/device helpers) —\nthey merge sequentially; whichever lands first, the other rebases.\n\nNext: cone/sphere/torus descriptors (pole/seam handling) +\nscreen-space-adaptive LOD (the marked `TODO` in `TessFactor`).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd a GPU compute-shader mesher for cylinders that evaluates the surface\non the GPU and draws it with the existing mesh pass. This removes CPU\ntessellation/uploads and sets up client-side, view-dependent LOD.\n\n- **New Features**\n- `quadric_mesh.wgsl`: `cs_vertices`/`cs_indices` write positions,\nnormals, face-id, and indices; seam wraps to column 0 for a watertight\nmesh; uses a CPU-provided `full` flag and guards divides; column-major\nindexing.\n- `TessFactor::new(..)` clamps to `[3,16384]` (u) / `[1,16384]` (v) to\nkeep counts in `u32`; `CylinderDescriptor` +\n`extract_cylinder_descriptor(..)` (axis frame, radius, axial trim,\nfull-rev u, RTC center); `render_cylinder_compute_offscreen(..)` meshes\nwith `TessFactor` and draws via the existing mesh pipeline with the same\nbuffers bound as STORAGE then VERTEX/INDEX.\n- Export `CylinderDescriptor`, `TessFactor`,\n`extract_cylinder_descriptor`, `render_cylinder_compute_offscreen` from\n`lib.rs`. Headless tests cover silhouette vs CPU, LOD scaling, seam\nwatertightness, off-origin handling, plus `TessFactor` clamp unit tests.\n\n- **Refactors**\n- Make `pipeline::acquire_device`, `unpad_to_rgba`, and `unpad_to_u32`\npublic; reuse device/readback/padding helpers; mirror the `SizeTooLarge`\nguard.\n- Use a `WORDS_PER_VERT` constant and checked `u32::try_from` for index\ncounts to avoid truncation.\n\n<sup>Written for commit e4871bbe608a8cd2c039906318c0af21e6044276.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1017?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-06-26T11:18:59-07:00",
+          "tree_id": "7641d19ab082e9230f81f952217d51406a0a6814",
+          "url": "https://github.com/andymai/brepkit/commit/cf1dc6e0c6c845f8e43f1f5a28e44bb936f3f5a1"
+        },
+        "date": 1782498064926,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 735773,
+            "range": "± 9017",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 821024,
+            "range": "± 1195",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12140,
+            "range": "± 167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 623397,
+            "range": "± 1301",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19529279,
+            "range": "± 208619",
             "unit": "ns/iter"
           }
         ]
