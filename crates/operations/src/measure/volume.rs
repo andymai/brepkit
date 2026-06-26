@@ -338,7 +338,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     let mut total = 0.0;
     for &fid in &faces {
         let face = topo.face(fid).ok()?;
-        total += match face.surface() {
+        let c = match face.surface() {
             FaceSurface::Cylinder(_) => analytic_cylinder_signed_volume(topo, fid).ok()?,
             FaceSurface::Cone(_) => analytic_cone_signed_volume(topo, fid).ok()?,
             FaceSurface::Torus(_) => analytic_torus_signed_volume(topo, fid).ok()?,
@@ -346,6 +346,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
             FaceSurface::Nurbs(_) => 0.0, // degenerate on-axis band
             FaceSurface::Sphere(_) => return None,
         };
+        total += c;
     }
     Some(total.abs())
 }
@@ -1233,12 +1234,6 @@ fn analytic_cylinder_signed_volume(
     Ok(if face.is_reversed() { -vol } else { vol })
 }
 
-/// Exact signed volume contribution of a conical face via the divergence
-/// theorem: `V = (1/3) integral P.n dA`.
-///
-/// For a cone parameterised as
-///   `P(u,v) = apex + v*(cos_a*(cos u * ex + sin u * ey) + sin_a * axis)`
-/// the outward normal is `n = sin_a*(cos u * ex + sin u * ey) - cos_a * axis`,
 /// Exact signed volume contribution of a PLANAR face whose boundary is made of
 /// straight and circular-arc edges (a revolve cap: a disc, an annulus, or an
 /// angular sector of either), via the divergence theorem.
@@ -1247,7 +1242,8 @@ fn analytic_cylinder_signed_volume(
 /// volume integral `(1/3)∮∮ P·n dA` reduces to `(1/3)·d·A`, where `A` is the
 /// signed area in the plane oriented by the face normal. `A` is computed
 /// EXACTLY by Green's theorem — `A = (1/2)∮(x dy − y dx)` — summing each edge's
-/// chord term plus the exact circular-segment bulge for arc edges, so a circular
+/// chord term plus the exact circular-segment bulge for arc edges (including a
+/// full closed circle, whose 2π sweep gives the disc area πρ²), so a circular
 /// boundary is not chorded (the reason the tessellation path under-counts it).
 ///
 /// Returns `Ok(None)` when an edge is neither a line nor a circular arc (e.g. a
@@ -1296,11 +1292,16 @@ fn planar_cap_signed_volume(
             // Chord term: triangle (origin, a, b) doubled.
             area2 += ax * by - bx * ay;
 
-            // A degenerate edge collapsed to a point (e.g. the inner "arc" at the
-            // axis where a disc cap reaches r = 0) contributes no chord and no
-            // bulge — skip it (and do NOT let curve recognition on a zero-length
-            // arc decline the whole cap).
-            if (pa - pb).length() < tol_lin {
+            // A degenerate edge collapsed to a point that is NOT a closed circle
+            // (e.g. the inner "arc" at the axis where a disc cap reaches r = 0, or
+            // a zero-length line) contributes no chord and no bulge — skip it (and
+            // do NOT let curve recognition on a zero-length arc decline the whole
+            // cap). A CLOSED `Circle` rim also has coincident endpoints but bounds
+            // a full disc, so it falls through to the arc handler below.
+            let is_closed_circle =
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
+                    && edge.start() == edge.end();
+            if (pa - pb).length() < tol_lin && !is_closed_circle {
                 continue;
             }
 
@@ -1327,23 +1328,36 @@ fn planar_cap_signed_volume(
 
             if let Some((center, radius)) = arc {
                 arc_edges += 1;
-                // Midpoint on the arc disambiguates the signed sweep > π. Evaluate
-                // at the curve's natural parameter midpoint (its own start→end).
-                let nat_start = topo.vertex(edge.start())?.point();
-                let nat_end = topo.vertex(edge.end())?.point();
-                let mid_pt = edge
-                    .curve()
-                    .evaluate_with_endpoints(0.5, nat_start, nat_end);
-                let (cx, cy) = to_2d(center);
-                let (mx, my) = to_2d(mid_pt);
-                let va = (ax - cx, ay - cy);
-                let vm = (mx - cx, my - cy);
-                let vb = (bx - cx, by - cy);
-                // Signed sweep a→mid→b (each leg in (−π, π], summed for the full arc).
-                let ang = |u: (f64, f64), w: (f64, f64)| -> f64 {
-                    (u.0 * w.1 - u.1 * w.0).atan2(u.0 * w.0 + u.1 * w.1)
+                // The bulge term is `sign·ρ²·(|α| − sin|α|)`, α the signed sweep.
+                // `planar_cap_signed_volume` takes the absolute area, so only |α|
+                // matters here.
+                let alpha = if is_closed_circle {
+                    // A full circle sweeps 2π → the bulge gives the disc area πρ².
+                    // (The seam endpoint's antipode is NOT the domain midpoint, so
+                    // the open-arc disambiguation below does not apply.)
+                    std::f64::consts::TAU
+                } else {
+                    // Sample the arc at its DOMAIN midpoint (the domain need not be
+                    // [0,1]) to disambiguate the signed sweep > π for a major arc.
+                    let nat_start = topo.vertex(edge.start())?.point();
+                    let nat_end = topo.vertex(edge.end())?.point();
+                    let (t0, t1) = edge.curve().domain_with_endpoints(nat_start, nat_end);
+                    let mid_pt = edge.curve().evaluate_with_endpoints(
+                        f64::midpoint(t0, t1),
+                        nat_start,
+                        nat_end,
+                    );
+                    let (cx, cy) = to_2d(center);
+                    let (mx, my) = to_2d(mid_pt);
+                    let va = (ax - cx, ay - cy);
+                    let vm = (mx - cx, my - cy);
+                    let vb = (bx - cx, by - cy);
+                    // Signed sweep a→mid→b (each leg in (−π, π]).
+                    let ang = |u: (f64, f64), w: (f64, f64)| -> f64 {
+                        (u.0 * w.1 - u.1 * w.0).atan2(u.0 * w.0 + u.1 * w.1)
+                    };
+                    ang(va, vm) + ang(vm, vb)
                 };
-                let alpha = ang(va, vm) + ang(vm, vb);
                 area2 += alpha.signum() * radius * radius * (alpha.abs() - alpha.abs().sin());
             }
         }
@@ -1368,6 +1382,12 @@ fn planar_cap_signed_volume(
     Ok(Some(d_out * area / 3.0))
 }
 
+/// Exact signed volume contribution of a conical face via the divergence
+/// theorem: `V = (1/3) integral P.n dA`.
+///
+/// For a cone parameterised as
+///   `P(u,v) = apex + v*(cos_a*(cos u * ex + sin u * ey) + sin_a * axis)`
+/// the outward normal is `n = sin_a*(cos u * ex + sin u * ey) - cos_a * axis`,
 /// and `dA = v * cos_a * du dv`.
 ///
 /// The integrand `P.n * dA` simplifies to closed form over `[u1,u2] x [v1,v2]`.
@@ -1687,6 +1707,25 @@ fn analytic_torus_signed_volume(
     let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if (v_max - v_min).abs() < 1e-15 {
         return Ok(0.0);
+    }
+
+    // The minor (v) range is taken as the raw [min, max] span, which is only
+    // correct when the band does NOT straddle the v = 0/2π seam. A band given by
+    // just two distinct minor angles spanning MORE than π is ambiguous: the true
+    // arc could be the short complementary side (e.g. a fillet's concave quarter
+    // rim, whose endpoints are 270° apart but whose band is the 90° short side).
+    // Without an interior minor sample to disambiguate, decline so the caller
+    // falls back to tessellation rather than integrate the wrong portion.
+    {
+        let mut sorted = v_vals.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        if sorted.len() < 3 && (v_max - v_min) > std::f64::consts::PI + 1e-9 {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "torus band minor range is ambiguous (seam-straddling, no interior sample)"
+                    .into(),
+            });
+        }
     }
 
     let u_range = compute_angular_range(&mut u_vals);
@@ -2385,6 +2424,88 @@ mod regression_tests {
         assert!(
             !solid_is_steinmetz_lens_fuse(&topo, &with_aligned_cap),
             "an extra axis-aligned cap beyond the exactly-four lens caps must make the gate decline"
+        );
+    }
+
+    /// A full-disc cap bounded by a SINGLE closed circle (`v→v`) must integrate to
+    /// the exact disc area `πρ²` — its 2π sweep, not a dropped zero. Exercised via
+    /// a TWO-section revolution (two stacked cone frustums → two cone walls + two
+    /// closed-circle disc caps), which the single-primitive volume path declines
+    /// (two cones), forcing `analytic_revolution_solid_volume`. The volume must be
+    /// exact AND deflection-independent (analytic, not the inscribed mesh).
+    #[test]
+    fn closed_circle_disc_cap_volume_is_exact() {
+        use brepkit_topology::explorer::solid_faces;
+        use std::f64::consts::{PI, TAU};
+        let mut topo = Topology::new();
+        // (6,0)→(4,6) cone, (4,6)→(2,12) cone, (2,12)→(0,12) top disc cap,
+        // (0,12)→(0,0) on-axis (no face); bottom (0,0)→(6,0) disc cap.
+        let wire = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(6.0, 0.0, 0.0),
+                Point3::new(4.0, 0.0, 6.0),
+                Point3::new(2.0, 0.0, 12.0),
+                Point3::new(0.0, 0.0, 12.0),
+                Point3::new(0.0, 0.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let face = topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 0.0,
+            },
+        ));
+        let solid = crate::revolve::revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            TAU,
+        )
+        .unwrap();
+
+        // The merged solid has 2 cone walls + 2 closed-circle disc caps; the top
+        // cap's closed circle must contribute (1/3)·12·π·2² to the volume.
+        let fr = |rb: f64, rt: f64, h: f64| PI * h / 3.0 * rb.mul_add(rb, rb.mul_add(rt, rt * rt));
+        let expected = fr(6.0, 4.0, 6.0) + fr(4.0, 2.0, 6.0);
+
+        let v_fine = solid_volume(&topo, solid, 0.0001).unwrap();
+        let v_coarse = solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            (v_fine - expected).abs() / expected < 1e-9,
+            "two-section revolve volume {expected}, got {v_fine}"
+        );
+        assert!(
+            (v_fine - v_coarse).abs() < 1e-9,
+            "volume must be analytic (deflection-independent): {v_fine} vs {v_coarse}"
+        );
+
+        // Direct check: the top disc cap (a single closed circle, radius 2 at
+        // z=12) contributes exactly (1/3)·12·π·4 via `planar_cap_signed_volume`.
+        let top_cap = solid_faces(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&fid| {
+                let f = topo.face(fid).unwrap();
+                matches!(f.surface(), FaceSurface::Plane { .. })
+                    && topo.wire(f.outer_wire()).unwrap().edges().iter().all(|oe| {
+                        topo.vertex(topo.edge(oe.edge()).unwrap().start())
+                            .unwrap()
+                            .point()
+                            .z()
+                            > 11.0
+                    })
+            })
+            .expect("top disc cap");
+        let cap_v = planar_cap_signed_volume(&topo, top_cap).unwrap().unwrap();
+        assert!(
+            (cap_v.abs() - 12.0 * PI * 4.0 / 3.0).abs() < 1e-9,
+            "closed-circle disc cap contribution should be (1/3)·12·π·4, got {cap_v}"
         );
     }
 }
