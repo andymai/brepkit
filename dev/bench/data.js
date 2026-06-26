@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782494405026,
+  "lastUpdate": 1782496436997,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1349,6 +1349,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19816518,
             "range": "± 139564",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "362d8a71c2edffb8d39d10404b4fdbcf01e169c6",
+          "message": "feat(render): interactive viewer — orbit, pan, zoom, click-to-pick (M1.5) (#1016)\n\n## What\n\n**Interactive viewer for brepkit-render** (M1.5) — an orbit/pan/zoom\nwindow with **click-to-pick face highlighting**, built on the merged M1\noffscreen renderer (#1013). Behind a `window` feature (winit 0.30,\nmatched to wgpu 29's `rwh_06`).\n\n**Live-verified:** launched on a real display and captured a frame from\nthe running window — it renders the box∪cylinder fuse correctly\n(Lambert-shaded, crisp topological edges), and click-to-pick resolves\nthe kernel `FaceId` under the cursor.\n\n## API + controls\n```rust\nview_solid(topo, solid, &ViewOpts) -> Result<(), RenderError>   // opens the window, runs the event loop\n```\n| action | control |\n|---|---|\n| Orbit | left-drag |\n| Zoom | scroll |\n| Pan | right-drag / Shift+left-drag |\n| **Pick a face** | left-click → highlights orange + reports its\n`FaceId` (click again to clear) |\n\nRun the demo: `cargo run -p brepkit-render --example viewer --features\nwindow`\n\n## How it reuses M1 (no duplication)\nThe viewer shares M1's render passes verbatim. M1's monolithic\n`render()` was factored into building blocks both paths use:\n- `GpuContext` (optional `compatible_surface` for presentation) +\n`acquire_device` (real→software adapter fallback, kept from M1's review\nfixes).\n- format-parametrized `Pipelines` (offscreen `Rgba8UnormSrgb` vs the\nsurface's preferred sRGB format), `GlobalsBinding`,\n`encode_scene(PassTargets)`.\n- Picking re-renders the `R32Uint` id pass for the current view and\nreads back the pixel under the cursor — the same id buffer M1 already\nproduces.\n\nThe offscreen `render()` and its tests are unchanged. M1's review fixes\n(edge MRT, degenerate-`up`, render-size validation, mesh error handling)\nare all present (this branch was rebased onto the fixed M1), so the\nviewer is valid on strict GPUs, not just NVIDIA.\n\n## Verification\n- `cargo build -p brepkit-render` (default / `--features window` /\n`--example viewer`): clean.\n- `cargo nextest run -p brepkit-render`: 6/6 (M1 offscreen + camera/size\nunit tests).\n- clippy `-D warnings` (default + window), fmt, `cargo deny check`,\n`check-boundaries.sh`: all clean. No `unwrap`/`expect`/`panic` in lib.\n- The interactive window is inherently not CI-verifiable (needs a\ndisplay); it was verified live by capturing a frame from the running\nwindow.\n\nMilestone 1.5 of the renderer roadmap (next: M2 compute-mesher —\nseparate PR).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an interactive viewer window with orbit/pan/zoom and click-to-pick\nface highlighting, behind a `window` feature so headless/offscreen users\nstay unaffected. Includes review fixes for stable zoom framing,\nstrict-backend surface setup, and more robust picking.\n\n- New Features\n- `view_solid(topo, solid, &ViewOpts)` opens a `winit` window; orbit\n(left-drag), pan (right-drag or Shift+left), zoom (scroll); left-click\npicks a face and toggles its highlight. Example: `cargo run -p\nbrepkit-render --example viewer --features window`.\n- Picking reuses the `R32Uint` id pass; mesh shader adds a `selected_id`\nuniform to tint the selected face.\n- Optional `window` feature pulls in `winit 0.30` (aligned with `wgpu\n29`/`rwh_06`); new windowing errors added to `RenderError`.\n\n- Refactors\n- Pipeline split into reusable parts for offscreen and viewer:\n`GpuContext`, `GlobalsBinding`, `Pipelines`, `GeometryBuffers`, and\n`encode_scene` (offscreen `render()` unchanged; pipelines are\ncolor-format agnostic; edge pass masks id writes).\n- Stability/robustness: orbit camera derives near/far per-frame and\nfloors min distance to avoid dolly clipping; viewer creates the surface\nand device from the same `wgpu::Instance`, prefers FIFO present mode,\nclamps surface/targets to device limits, floors+clamps pick coordinates\nand logs readback errors; `deny.toml` allows BSD-2/3 for the `winit`\nsubtree.\n\n<sup>Written for commit a5c7a37d4987432ce485ab5ec19dedc4fe6cb374.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1016?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-06-26T10:51:51-07:00",
+          "tree_id": "cb05a4ebcba9b4346ccf238ca6220523dd6735a7",
+          "url": "https://github.com/andymai/brepkit/commit/362d8a71c2edffb8d39d10404b4fdbcf01e169c6"
+        },
+        "date": 1782496436676,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 726221,
+            "range": "± 1228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 815480,
+            "range": "± 689",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12019,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 618654,
+            "range": "± 624",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18840245,
+            "range": "± 28392",
             "unit": "ns/iter"
           }
         ]
