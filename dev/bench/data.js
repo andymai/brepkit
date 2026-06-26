@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782491654928,
+  "lastUpdate": 1782491936758,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1187,6 +1187,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19082699,
             "range": "± 96447",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d84b95c0d9d74dd39835bc62d73b750426cc985",
+          "message": "chore(main): release 2.121.0 (#1014)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.121.0](https://github.com/andymai/brepkit/compare/v2.120.7...v2.121.0)\n(2026-06-26)\n\n\n### Features\n\n* **operations:** recover analytic surfaces of revolution + exact volume\n([#1012](https://github.com/andymai/brepkit/issues/1012))\n([45c1375](https://github.com/andymai/brepkit/commit/45c1375881609a08edd6cdf906066954b3c58797))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.121.0 of `brepkit-wasm` adds an operations feature to recover\nanalytic surfaces of revolution and compute exact volume. This improves\nprecision and enables exact volume results for revolved geometry.\n\n<sup>Written for commit 57fe2eb807b07f67842a3ce619eb1690df244788.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1014?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-26T16:37:01Z",
+          "tree_id": "25a020be37ccc0d64c6c62b96aca0cf272375835",
+          "url": "https://github.com/andymai/brepkit/commit/3d84b95c0d9d74dd39835bc62d73b750426cc985"
+        },
+        "date": 1782491935891,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 591694,
+            "range": "± 1819",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 667729,
+            "range": "± 1216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10207,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 488122,
+            "range": "± 4871",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15759151,
+            "range": "± 319486",
             "unit": "ns/iter"
           }
         ]
