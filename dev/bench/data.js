@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782498802880,
+  "lastUpdate": 1782501414135,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1619,6 +1619,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18996661,
             "range": "± 48747",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "252efcefcdf06abf32d39a77e184096e8d7f92a9",
+          "message": "feat(render): screen-space adaptive LOD for the compute-mesher (M2.1) (#1021)\n\n## What\n\n**Screen-space adaptive LOD** (M2.1) — the compute-mesher now derives\nits tessellation factor **per-frame from the cylinder's projected pixel\nsize**, so detail tracks zoom under a target chord-error budget. This\nreplaces the caller-supplied `TessFactor` (the `// TODO: view-dependent\nLOD` marker from M2) and is the payoff of the compute-mesher: ship the\nsurface's *parameters* and mesh at exactly the detail the current view\nneeds.\n\n## The math\n- Projected radius (perspective): `r_px = r · (H/2) / (d ·\ntan(fov_y/2))`, where `d = |cam.eye − desc.center|`, `H` = viewport\nheight.\n- An inscribed `n_u`-gon has chord error `ε = r·(1 − cos(π/n_u))`.\nBounding the *screen-space* error by `target_px` and solving: `n_u =\nceil(π / acos(1 − clamp(target_px/r_px, 0, 2)))`. A sub-pixel cylinder\nfloors to the `TessFactor` minimum (3).\n- `n_v = 1` — a cylinder's lateral face is **ruled** (straight +\nconstant normal along the axis), so one axial segment is exact.\n(Sphere/torus will need `n_v` adaptivity too — noted for the extension.)\n- Always finishes through `TessFactor::new`, so the `[3, MAX_TESS]`\nclamp + overflow guard still apply; every divisor is guarded, so\ndegenerate inputs (camera on center, zero/NaN fov/budget) clamp cleanly.\n\n## API\n- `screen_space_tess_factor(desc, cam, viewport, target_px) ->\nTessFactor`\n- `render_cylinder_compute_screen_lod(desc, face_id, cam, opts,\ntarget_px) -> RenderOutput` (computes the LOD internally)\n- `pub const DEFAULT_TARGET_PX: f64 = 0.5`\n\n## Verification (live RTX 4080)\n- **Adaptive:** same cylinder → near `n_u=39` (78 tris) **>** far\n`n_u=16` (32 tris), monotonic with distance.\n- **Bound holds:** rendered silhouette chord error near **0.00px** / far\n**0.39px**, both ≤ the 0.5px target.\n- **Near-minimal:** at a fixed view the chosen `n_u` gives 0.00px;\nquartering it → 0.93px (exceeds budget) — so the LOD is tuned, not\nwasteful.\n- `render_cylinder_compute_screen_lod` is byte-identical to rendering\nwith the explicitly-chosen factor.\n- **23/23 render tests** (8 new incl. 5 `screen_space_tess_factor` unit\ntests + degenerate-input handling), stable across 3 runs. clippy `-D\nwarnings`, fmt, `cargo deny check`, `check-boundaries.sh`, doctest:\nclean. No unwrap/expect/panic in lib.\n\n## Note\nGPU render tests run under `cargo nextest` (each test in its own\nprocess). `cargo test`'s multi-threaded harness can SIGSEGV the\nlavapipe/Vulkan driver on concurrent cross-thread device creation —\npre-existing (M2's tests too); nextest (already the project's bar) is\nthe correct answer, so no `--test-threads=1` hack was added.\n\nNext: cone (silhouette radius varies along the axis — use the larger\nend) then sphere/torus (need `n_v` adaptivity for the second curved\ndirection).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds screen-space adaptive LOD for the compute mesher on cylinders. Mesh\ndetail now tracks zoom under a pixel chord‑error budget and handles\nextreme views robustly.\n\n- **New Features**\n- Per-frame LOD from projected radius (uses view-space depth); `n_u`\nmeets the pixel error target, `n_v=1` for the ruled side.\n- API: `screen_space_tess_factor(..)`,\n`render_cylinder_compute_screen_lod(..)`, and `DEFAULT_TARGET_PX = 0.5`\n(re-exported in `render`).\n- Adoption: keep `render_cylinder_compute_offscreen(.., TessFactor, ..)`\nas-is, or switch to `render_cylinder_compute_screen_lod(.., target_px)`.\n\n- **Bug Fixes**\n- `r_px=+∞` (camera engulfed) now requests `MAX_TESS`;\nbehind-camera/degenerate inputs floor to the minimum.\n- Use view-space depth `d = view_dir · (center − eye)` to avoid\nunder-tessellating off-axis surfaces.\n  - Clamp `fov_y` to `(1e-4, π−1e-4)` for bounded, stable LOD.\n\n<sup>Written for commit f61d4edc93b390b80ab8555abe40a3dc8cc63e0b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1021?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-06-26T12:14:49-07:00",
+          "tree_id": "25cc06fe94be7a953f91ca4c1bc1f6c66b9fa5ec",
+          "url": "https://github.com/andymai/brepkit/commit/252efcefcdf06abf32d39a77e184096e8d7f92a9"
+        },
+        "date": 1782501413641,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 738878,
+            "range": "± 27917",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 829315,
+            "range": "± 5398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11988,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 626244,
+            "range": "± 1582",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18975264,
+            "range": "± 67622",
             "unit": "ns/iter"
           }
         ]
