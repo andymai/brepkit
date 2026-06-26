@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.122.0](https://github.com/andymai/brepkit/compare/v2.121.0...v2.122.0) (2026-06-26)
+
+
+### Features
+
+* **render:** brepkit-render M1 — offscreen wgpu renderer ([#1013](https://github.com/andymai/brepkit/issues/1013)) ([f7d3000](https://github.com/andymai/brepkit/commit/f7d30008e660d233acbd0727eeaa9f12c3f96c99))
+
 ## [2.121.0](https://github.com/andymai/brepkit/compare/v2.120.7...v2.121.0) (2026-06-26)
 
 
