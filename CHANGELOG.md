@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.121.0](https://github.com/andymai/brepkit/compare/v2.120.7...v2.121.0) (2026-06-26)
+
+
+### Features
+
+* **operations:** recover analytic surfaces of revolution + exact volume ([#1012](https://github.com/andymai/brepkit/issues/1012)) ([45c1375](https://github.com/andymai/brepkit/commit/45c1375881609a08edd6cdf906066954b3c58797))
+
 ## [2.120.7](https://github.com/andymai/brepkit/compare/v2.120.6...v2.120.7) (2026-06-26)
 
 
