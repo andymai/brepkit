@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782498065820,
+  "lastUpdate": 1782498363497,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1511,6 +1511,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19529279,
             "range": "± 208619",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d417c887185cee9abb241559facf3651c438b09f",
+          "message": "chore(main): release 2.124.0 (#1019)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.0](https://github.com/andymai/brepkit/compare/v2.123.0...v2.124.0)\n(2026-06-26)\n\n\n### Features\n\n* **render:** compute-shader quadric mesher for cylinders (M2)\n([#1017](https://github.com/andymai/brepkit/issues/1017))\n([cf1dc6e](https://github.com/andymai/brepkit/commit/cf1dc6e0c6c845f8e43f1f5a28e44bb936f3f5a1))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a GPU compute-shader quadric mesher for cylinders in the renderer\nto improve performance and mesh quality. Releases `brepkit-wasm`\n2.124.0.\n\n<sup>Written for commit 31057dd9fcd60934c895d221d8a4e65869fbe30d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1019?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-26T18:24:00Z",
+          "tree_id": "d350404f85df577e6f3cc4eced8687004afb32cd",
+          "url": "https://github.com/andymai/brepkit/commit/d417c887185cee9abb241559facf3651c438b09f"
+        },
+        "date": 1782498363139,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 732460,
+            "range": "± 2430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 820724,
+            "range": "± 1270",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12046,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 619225,
+            "range": "± 15522",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18842198,
+            "range": "± 50412",
             "unit": "ns/iter"
           }
         ]
