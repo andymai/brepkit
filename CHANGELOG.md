@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.123.0](https://github.com/andymai/brepkit/compare/v2.122.0...v2.123.0) (2026-06-26)
+
+
+### Features
+
+* **render:** interactive viewer — orbit, pan, zoom, click-to-pick (M1.5) ([#1016](https://github.com/andymai/brepkit/issues/1016)) ([362d8a7](https://github.com/andymai/brepkit/commit/362d8a71c2edffb8d39d10404b4fdbcf01e169c6))
+
 ## [2.122.0](https://github.com/andymai/brepkit/compare/v2.121.0...v2.122.0) (2026-06-26)
 
 
