@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.0](https://github.com/andymai/brepkit/compare/v2.123.0...v2.124.0) (2026-06-26)
+
+
+### Features
+
+* **render:** compute-shader quadric mesher for cylinders (M2) ([#1017](https://github.com/andymai/brepkit/issues/1017)) ([cf1dc6e](https://github.com/andymai/brepkit/commit/cf1dc6e0c6c845f8e43f1f5a28e44bb936f3f5a1))
+
 ## [2.123.0](https://github.com/andymai/brepkit/compare/v2.122.0...v2.123.0) (2026-06-26)
 
 
