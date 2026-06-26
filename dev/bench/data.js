@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782498363497,
+  "lastUpdate": 1782498802880,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1565,6 +1565,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18842198,
             "range": "± 50412",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d06afc42687c050cfa081a4da3a0cfc64393ece",
+          "message": "ci: force HTTP/1.1 + retries for crates.io fetches (fix HTTP/2 download flake) (#1020)\n\n## What\nAdd `[http] multiplexing = false` + `[net] retry = 10` to\n`.cargo/config.toml` so dependency fetches stop reddening CI.\n\n## Why\ncrates.io downloads on the runners intermittently fail with `[16] Error\nin the HTTP2 framing layer` while fetching `criterion`'s transitive deps\n(`cast`, `alloca`, `oorandom`, `itertools`) and others. **Today alone\nthis flaked Coverage, Test, MSRV (1.88), Boolean perf, and WASM Size\nReport across the render + revolve PRs** — each a spurious red that only\ncleared on a manual re-run.\n\n## The fix\n- `[http] multiplexing = false` — cargo uses HTTP/1.1 instead of HTTP/2,\nsidestepping the HTTP/2 framing fault that causes the resets.\n- `[net] retry = 10` — retries transient network failures.\n\n## Tradeoff\nHTTP/1.1 has no connection multiplexing, so cold-cache fetches open more\nconnections (marginally slower). Downloads only happen on a cold cargo\ncache — almost always CI — so local-dev impact is negligible, and the\nreliability win removes a recurring class of spurious CI failures +\nmanual re-runs.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nForce HTTP/1.1 and add retries for Cargo dependency downloads to stop\ncrates.io HTTP/2 flakiness in CI. This removes intermittent red jobs\nwithout affecting local dev.\n\n- **Bug Fixes**\n  - Set `[http] multiplexing = false` to use HTTP/1.1 for fetches.\n  - Set `[net] retry = 10` to retry transient network errors.\n- Stabilizes Coverage, Test, MSRV, Boolean perf, and WASM Size jobs;\nonly minor cold-cache slowdown in CI.\n\n<sup>Written for commit 3243e4d426f337795a7da8a696803ad34e1eaaf5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1020?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-06-26T11:31:07-07:00",
+          "tree_id": "aa056ea47c13190f7b63e26726acba4c6d9314b5",
+          "url": "https://github.com/andymai/brepkit/commit/1d06afc42687c050cfa081a4da3a0cfc64393ece"
+        },
+        "date": 1782498802550,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 733831,
+            "range": "± 3079",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 824067,
+            "range": "± 2512",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12261,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 623276,
+            "range": "± 17129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18996661,
+            "range": "± 48747",
             "unit": "ns/iter"
           }
         ]
