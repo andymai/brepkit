@@ -45,6 +45,7 @@
 //! ```
 
 mod camera;
+mod compute_mesh;
 mod error;
 mod mesh;
 mod pipeline;
@@ -52,6 +53,9 @@ mod pipeline;
 mod viewer;
 
 pub use camera::Camera;
+pub use compute_mesh::{
+    CylinderDescriptor, TessFactor, extract_cylinder_descriptor, render_cylinder_compute_offscreen,
+};
 pub use error::RenderError;
 pub use pipeline::probe_adapter;
 #[cfg(feature = "window")]
