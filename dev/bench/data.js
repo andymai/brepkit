@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782496436997,
+  "lastUpdate": 1782496732488,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1403,6 +1403,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18840245,
             "range": "± 28392",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2de24b31ec30f32dcc2ae46d773e387d3ef060c6",
+          "message": "chore(main): release 2.123.0 (#1018)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.123.0](https://github.com/andymai/brepkit/compare/v2.122.0...v2.123.0)\n(2026-06-26)\n\n\n### Features\n\n* **render:** interactive viewer — orbit, pan, zoom, click-to-pick\n(M1.5) ([#1016](https://github.com/andymai/brepkit/issues/1016))\n([362d8a7](https://github.com/andymai/brepkit/commit/362d8a71c2edffb8d39d10404b4fdbcf01e169c6))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.123.0 adds an interactive viewer to the renderer in\n`brepkit-wasm` to make model inspection easier.\n\n- **New Features**\n- Interactive viewer controls: orbit, pan, zoom, and click-to-pick to\nidentify entities under the cursor.\n\n<sup>Written for commit ac89e2aa09692425067dab6a20b7500f4b6f5241.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1018?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-26T17:56:47Z",
+          "tree_id": "da8d48985ed3e0144b42d7b65f6f59148650d8f1",
+          "url": "https://github.com/andymai/brepkit/commit/2de24b31ec30f32dcc2ae46d773e387d3ef060c6"
+        },
+        "date": 1782496732153,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 727501,
+            "range": "± 1998",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 821390,
+            "range": "± 714",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11906,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 617741,
+            "range": "± 900",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18814188,
+            "range": "± 1004551",
             "unit": "ns/iter"
           }
         ]
