@@ -35,6 +35,7 @@ use brepkit_operations::loft::loft_smooth;
 use brepkit_operations::offset_face::offset_face;
 use brepkit_operations::offset_v2::{offset_solid_v2, shell_v2};
 use brepkit_operations::primitives;
+use brepkit_operations::revolve::revolve;
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -317,6 +318,152 @@ fn nurbs_section() -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+/// Build a closed planar profile in the XZ plane (Y-up normal) from
+/// `(radial, axial)` points, for revolving about the Z axis.
+fn rz_profile(topo: &mut Topology, pts: &[(f64, f64)]) -> Result<FaceId, Box<dyn Error>> {
+    let tol = 1e-7;
+    let v: Vec<_> = pts
+        .iter()
+        .map(|(r, z)| topo.add_vertex(Vertex::new(Point3::new(*r, 0.0, *z), tol)))
+        .collect();
+    let n = v.len();
+    let e: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(v[i], v[(i + 1) % n], EdgeCurve::Line)))
+        .collect();
+    let wire = Wire::new(
+        (0..n).map(|i| OrientedEdge::new(e[i], true)).collect(),
+        true,
+    )?;
+    let wid = topo.add_wire(wire);
+    Ok(topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: 0.0,
+        },
+    )))
+}
+
+/// Count faces by analytic surface type for the revolve survey.
+fn surf_tags(topo: &Topology, s: SolidId) -> String {
+    let (mut pl, mut cy, mut co, mut to, mut nu) = (0, 0, 0, 0, 0);
+    for f in solid_faces(topo, s).unwrap_or_default() {
+        match topo.face(f).map(|fc| fc.surface().clone()) {
+            Ok(FaceSurface::Plane { .. }) => pl += 1,
+            Ok(FaceSurface::Cylinder(_)) => cy += 1,
+            Ok(FaceSurface::Cone(_)) => co += 1,
+            Ok(FaceSurface::Torus(_)) => to += 1,
+            Ok(FaceSurface::Nurbs(_)) => nu += 1,
+            _ => {}
+        }
+    }
+    format!("plane={pl} cyl={cy} cone={co} torus={to} NURBS={nu}")
+}
+
+/// Revolve survey: each profile-edge type revolves into its exact analytic
+/// surface of revolution — axis-parallel line → `Cylinder`, oblique line →
+/// `Cone`, perpendicular line → `Plane`, circular arc → `Torus`. A fully-analytic
+/// full revolution with disc caps builds ONE periodic face per profile edge
+/// (frustum/cylinder → 3 faces, matching the primitives); profiles with a
+/// pointed-cone apex or an annulus cap keep the segmented (analytic but
+/// over-segmented) bands — still NURBS-free for the walls.
+fn revolve_matrix() {
+    use std::f64::consts::TAU;
+    println!("\nREVOLVE (profile edges → analytic surfaces of revolution):");
+    let z = Point3::new(0.0, 0.0, 0.0);
+    let zdir = Vec3::new(0.0, 0.0, 1.0);
+
+    let cases: [(&str, &[(f64, f64)]); 3] = [
+        // Oblique outer wall → Cone, perpendicular caps → Plane (solid frustum,
+        // caps reach the axis).
+        (
+            "frustum (oblique→Cone, caps→Plane)",
+            &[(6.0, 0.0), (2.0, 12.0), (0.0, 12.0), (0.0, 0.0)],
+        ),
+        // Axis-parallel outer wall → Cylinder, perpendicular caps → Plane.
+        (
+            "cylinder (parallel→Cyl, caps→Plane)",
+            &[(5.0, 0.0), (5.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+        ),
+        // Pointed cone apex on the axis (exercises the apex-band volume guard).
+        (
+            "pointed cone (apex on axis)",
+            &[(5.0, 0.0), (0.0, 12.0), (0.0, 0.0)],
+        ),
+    ];
+    for (name, pts) in cases {
+        let mut topo = Topology::new();
+        let face = match rz_profile(&mut topo, pts) {
+            Ok(f) => f,
+            Err(e) => {
+                println!("  {name:<38} build ERR: {e}");
+                continue;
+            }
+        };
+        let t = Instant::now();
+        let res = revolve(&mut topo, face, z, zdir, TAU);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        match res {
+            Ok(s) => {
+                let nf = face_count(&topo, s);
+                let tags = surf_tags(&topo, s);
+                println!("  {name:<38} {ms:>7.3}ms  faces={nf:<3}  {tags}");
+            }
+            Err(e) => println!("  {name:<38} ERR: {e}"),
+        }
+    }
+
+    // Circular-arc profile edge → Torus band. A half-disc (semicircle arc + its
+    // diameter on an axis-parallel line) makes the arc bands `Torus`.
+    {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+        let mut topo = Topology::new();
+        let Ok(circ) = Circle3D::new(Point3::new(10.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 3.0)
+        else {
+            return;
+        };
+        let pa = circ.evaluate(-std::f64::consts::FRAC_PI_2);
+        let pb = circ.evaluate(std::f64::consts::FRAC_PI_2);
+        let va = topo.add_vertex(Vertex::new(pa, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(pb, 1e-7));
+        let e_arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::Circle(circ)));
+        let e_dia = topo.add_edge(Edge::new(vb, va, EdgeCurve::Line));
+        let Ok(wire) = Wire::new(
+            vec![
+                OrientedEdge::new(e_arc, true),
+                OrientedEdge::new(e_dia, true),
+            ],
+            true,
+        ) else {
+            return;
+        };
+        let wid = topo.add_wire(wire);
+        let face = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 0.0,
+            },
+        ));
+        let t = Instant::now();
+        let res = revolve(&mut topo, face, z, zdir, TAU);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        match res {
+            Ok(s) => println!(
+                "  {:<38} {ms:>7.3}ms  faces={:<3}  {}",
+                "half-disc (arc→Torus)",
+                face_count(&topo, s),
+                surf_tags(&topo, s)
+            ),
+            Err(e) => println!("  half-disc (arc→Torus) ERR: {e}"),
+        }
+    }
 }
 
 fn blend_matrix() -> Result<(), Box<dyn Error>> {
@@ -618,6 +765,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     boolean_matrix();
     offset_matrix()?;
     nurbs_section()?;
+    revolve_matrix();
     blend_matrix()?;
     remaining_paths()?;
 
