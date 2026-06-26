@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782437951850,
+  "lastUpdate": 1782438257163,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -971,6 +971,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20695582,
             "range": "± 3350549",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "548424ed321749409b5538b2ea35939a3ee4e21f",
+          "message": "chore(main): release 2.120.6 (#1009)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.120.6](https://github.com/andymai/brepkit/compare/v2.120.5...v2.120.6)\n(2026-06-26)\n\n\n### Bug Fixes\n\n* **algo:** assemble perpendicular cyl∪cyl Fuse analytically\n([#1008](https://github.com/andymai/brepkit/issues/1008))\n([0dadfc9](https://github.com/andymai/brepkit/commit/0dadfc9d982bf59243eb2495c94d8737a76fba13))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.120.6 for `brepkit-wasm`, fixing the Fuse operation for\nperpendicular cylinder∪cylinder by assembling it analytically for more\nstable and accurate results.\n\n- **Bug Fixes**\n- Use analytical assembly for perpendicular cyl∪cyl Fuse to avoid\nartifacts and tolerance errors in boolean unions.\n\n<sup>Written for commit 1b09ab31f70f80f5afc3b10cccf12b6354b9bb8e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1009?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-26T01:42:13Z",
+          "tree_id": "40a1199963f7b84a9a4a4015a1d27e2b2d787383",
+          "url": "https://github.com/andymai/brepkit/commit/548424ed321749409b5538b2ea35939a3ee4e21f"
+        },
+        "date": 1782438256801,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1348985,
+            "range": "± 3130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1436722,
+            "range": "± 1178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11908,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 604104,
+            "range": "± 1407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20187378,
+            "range": "± 69819",
             "unit": "ns/iter"
           }
         ]
