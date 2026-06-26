@@ -131,9 +131,11 @@ struct OrbitCamera {
     elevation: f64,
     /// Eye distance from the target.
     distance: f64,
+    /// Model bounding-sphere radius; sets the scale for the clip planes so they
+    /// track `distance` as the user zooms (see [`OrbitCamera::clip_planes`]).
+    radius: f64,
+    /// Vertical field of view (radians).
     fov_y: f64,
-    near: f64,
-    far: f64,
 }
 
 /// Keep elevation a hair below the poles so the up vector never degenerates.
@@ -151,9 +153,8 @@ impl OrbitCamera {
             azimuth: 45.0_f64.to_radians(),
             elevation: 30.0_f64.to_radians(),
             distance,
+            radius,
             fov_y,
-            near: (distance - radius).max(radius * 0.01),
-            far: distance + radius * 4.0,
         }
     }
 
@@ -167,17 +168,32 @@ impl OrbitCamera {
         )
     }
 
+    /// Near/far clip planes for the current eye distance.
+    ///
+    /// Derived from `distance` (not cached) so the model stays inside the
+    /// frustum across the whole zoom range: the model spans roughly
+    /// `[distance - radius, distance + radius]` from the eye, so near sits just
+    /// inside the near surface and far just beyond the far surface. Both are
+    /// kept strictly positive with `near < far`.
+    fn clip_planes(&self) -> (f64, f64) {
+        let near = (self.distance - self.radius).max(self.distance * 0.01);
+        let near = near.max(1e-4);
+        let far = (self.distance + self.radius * 4.0).max(near * 10.0);
+        (near, far)
+    }
+
     /// Build the f64 [`Camera`] for the current orbit state at `aspect`.
     fn camera(&self, aspect: f64) -> Camera {
         let eye = self.target + self.eye_dir() * self.distance;
+        let (near, far) = self.clip_planes();
         Camera {
             eye,
             target: self.target,
             up: Vec3::new(0.0, 0.0, 1.0),
             fov_y: self.fov_y,
             aspect,
-            near: self.near,
-            far: self.far,
+            near,
+            far,
         }
     }
 
@@ -190,10 +206,15 @@ impl OrbitCamera {
     }
 
     /// Dolly toward/away from the target by a scroll amount (multiplicative so
-    /// zoom feels uniform regardless of current distance). Keeps near/far sane.
+    /// zoom feels uniform regardless of current distance).
+    ///
+    /// The clip planes are recomputed from `distance` in [`OrbitCamera::camera`],
+    /// so zooming never leaves the model behind a stale near/far plane. Distance
+    /// is floored to a small fraction of the model radius so it can't collapse
+    /// to zero.
     fn dolly(&mut self, amount: f64) {
         let factor = (1.0 - amount * 0.1).clamp(0.2, 5.0);
-        self.distance = (self.distance * factor).max(self.near * 0.5 + 1e-6);
+        self.distance = (self.distance * factor).max(self.radius * 0.05 + 1e-6);
     }
 
     /// Pan the target in the camera's view plane by mouse deltas (pixels),
@@ -431,10 +452,14 @@ impl ViewerApp {
             format,
             width,
             height,
+            // Fifo (vsync) is guaranteed supported by the WebGPU spec; prefer it
+            // explicitly rather than trusting the first advertised mode.
             present_mode: caps
                 .present_modes
-                .first()
+                .iter()
                 .copied()
+                .find(|m| *m == wgpu::PresentMode::Fifo)
+                .or_else(|| caps.present_modes.first().copied())
                 .unwrap_or(wgpu::PresentMode::Fifo),
             desired_maximum_frame_latency: 2,
             alpha_mode: caps
@@ -539,17 +564,22 @@ impl ViewerApp {
         let Some(gpu) = self.gpu.as_ref() else {
             return false;
         };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let px = self.cursor.x.round() as i64;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let py = self.cursor.y.round() as i64;
-        if px < 0 || py < 0 {
+        if gpu.config.width == 0 || gpu.config.height == 0 {
             return false;
         }
-        let (px, py) = (px as u32, py as u32);
-        if px >= gpu.config.width || py >= gpu.config.height {
+        // Reject positions outside the viewport, then floor to a pixel index and
+        // clamp to the last in-bounds pixel so an in-bounds cursor (which can sit
+        // at exactly `width`/`height` at the far edge) never reads out of range.
+        let (w, h) = (gpu.config.width, gpu.config.height);
+        let cx = self.cursor.x;
+        let cy = self.cursor.y;
+        if cx < 0.0 || cy < 0.0 || cx >= f64::from(w) || cy >= f64::from(h) {
             return false;
         }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let px = (cx.floor() as u32).min(w - 1);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let py = (cy.floor() as u32).min(h - 1);
 
         // Re-render the id target for the current camera (selection irrelevant
         // to face ids), then read the one pixel.
@@ -559,7 +589,12 @@ impl ViewerApp {
 
         let picked = match render_and_read_id(gpu, &self.opts.background, px, py) {
             Ok(id) => id,
-            Err(_) => return false,
+            Err(e) => {
+                // Non-fatal: a failed id readback (e.g. device lost) must not
+                // crash the viewer, but surface it so it isn't a silent no-op.
+                log::warn!("brepkit-render: face pick readback failed: {e}");
+                return false;
+            }
         };
         // Clicking the same face again clears the highlight.
         let next = if picked == self.selected_id {
@@ -631,16 +666,14 @@ impl ApplicationHandler for ViewerApp {
                     };
                 }
                 (MouseButton::Left, ElementState::Released) => {
-                    // A press with negligible movement is a pick; otherwise it
-                    // was a drag and the camera already moved.
-                    let was_click = self
-                        .press_pos
-                        .map(|p| {
-                            (p.x - self.cursor.x).abs() <= CLICK_SLOP
-                                && (p.y - self.cursor.y).abs() <= CLICK_SLOP
-                        })
-                        .unwrap_or(false)
-                        && !self.moved_while_pressed;
+                    // A press that never left the click slop (neither at release
+                    // nor at any point during the press) is a pick; anything that
+                    // dragged past the slop already moved the camera.
+                    let near_press = self.press_pos.is_some_and(|p| {
+                        (p.x - self.cursor.x).abs() <= CLICK_SLOP
+                            && (p.y - self.cursor.y).abs() <= CLICK_SLOP
+                    });
+                    let was_click = near_press && !self.moved_while_pressed;
                     self.drag = DragMode::None;
                     self.press_pos = None;
                     if was_click && self.pick() {
@@ -675,7 +708,13 @@ impl ApplicationHandler for ViewerApp {
                     }
                 };
                 if changed {
-                    self.moved_while_pressed = true;
+                    // Only count as a drag (suppressing a pick) once the cursor
+                    // has moved beyond the click slop from where it was pressed;
+                    // sub-slop jitter must still register as a click.
+                    self.moved_while_pressed |= self.press_pos.is_some_and(|p| {
+                        (p.x - self.cursor.x).abs() > CLICK_SLOP
+                            || (p.y - self.cursor.y).abs() > CLICK_SLOP
+                    });
                     self.request_redraw();
                 }
             }
@@ -806,4 +845,80 @@ fn mesh_world_aabb(mesh: &RenderMesh) -> (Point3, Point3) {
         Point3::new(min[0], min[1], min[2]),
         Point3::new(max[0], max[1], max[2]),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The model spans `[distance - radius, distance + radius]` along the view
+    /// ray. Some of it must be visible (not entirely clipped) and the back must
+    /// not be clipped away, with a valid frustum throughout. (The near plane may
+    /// legitimately sit ahead of the model front when the eye is *inside* the
+    /// bounding sphere — that geometry is correctly behind the camera.)
+    fn model_visible(cam: &OrbitCamera) -> bool {
+        let (near, far) = cam.clip_planes();
+        let model_far = cam.distance + cam.radius;
+        near > 0.0 && near < far && near < model_far && far >= model_far
+    }
+
+    /// When the eye is outside the bounding sphere (the normal framing regime),
+    /// the near plane must also not clip the *front* of the model.
+    fn whole_model_visible(cam: &OrbitCamera) -> bool {
+        let (near, _far) = cam.clip_planes();
+        let model_near = cam.distance - cam.radius;
+        model_visible(cam) && near <= model_near + 1e-9
+    }
+
+    #[test]
+    fn clip_planes_valid_across_full_zoom_range() {
+        let mut cam = OrbitCamera::framing(Point3::new(10.0, 20.0, 30.0), 50.0);
+        // Initial framing sits well outside the model, so the whole model fits.
+        assert!(
+            whole_model_visible(&cam),
+            "initial framing must show the whole model"
+        );
+
+        // Zoom all the way in: repeated dolly-in must never produce an invalid
+        // frustum or clip the model entirely out of view.
+        for _ in 0..200 {
+            cam.dolly(1.0);
+            let (near, far) = cam.clip_planes();
+            assert!(near > 0.0, "near must stay positive (near={near})");
+            assert!(near < far, "near < far must hold (near={near} far={far})");
+            assert!(model_visible(&cam), "model must stay visible zooming in");
+        }
+
+        // Zoom all the way out: the model must remain fully framed (eye stays
+        // outside the bounding sphere), so this is the regime the P1 bug hit.
+        let mut cam = OrbitCamera::framing(Point3::new(0.0, 0.0, 0.0), 2.0);
+        for _ in 0..200 {
+            cam.dolly(-1.0);
+            assert!(
+                whole_model_visible(&cam),
+                "whole model must stay framed zooming out (distance={} near/far stale?)",
+                cam.distance
+            );
+        }
+    }
+
+    #[test]
+    fn dolly_floors_distance_above_zero() {
+        let mut cam = OrbitCamera::framing(Point3::new(0.0, 0.0, 0.0), 10.0);
+        for _ in 0..1000 {
+            cam.dolly(1.0);
+        }
+        assert!(
+            cam.distance > 0.0,
+            "distance must not collapse to zero (distance={})",
+            cam.distance
+        );
+    }
+
+    #[test]
+    fn tiny_radius_still_yields_valid_planes() {
+        let cam = OrbitCamera::framing(Point3::new(0.0, 0.0, 0.0), 1e-9);
+        let (near, far) = cam.clip_planes();
+        assert!(near > 0.0 && near < far, "near={near} far={far}");
+    }
 }

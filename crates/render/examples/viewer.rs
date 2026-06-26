@@ -15,8 +15,6 @@
 //! Each highlighted face corresponds to a kernel `FaceId`, read back from the
 //! GPU id buffer under the cursor.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::primitives::{make_box, make_cylinder};

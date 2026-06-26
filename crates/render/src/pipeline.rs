@@ -129,21 +129,28 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// Create a context, optionally constraining the adapter to be compatible
-    /// with `surface` (required for window presentation).
+    /// Create a surfaceless context for the offscreen path.
+    ///
+    /// Window callers must use [`GpuContext::with_instance`] instead, passing a
+    /// surface created from the *same* instance — a surface created from a
+    /// different instance than the adapter/device is invalid on strict backends,
+    /// so this constructor deliberately does not accept one.
     ///
     /// # Errors
     ///
     /// [`RenderError::NoAdapter`] if no adapter exists, or
     /// [`RenderError::DeviceRequest`] if the device cannot be created.
-    pub fn new(surface: Option<&wgpu::Surface<'_>>) -> Result<Self, RenderError> {
+    pub fn new() -> Result<Self, RenderError> {
         let instance = wgpu::Instance::default();
-        Self::with_instance(instance, surface)
+        Self::with_instance(instance, None)
     }
 
-    /// Like [`GpuContext::new`] but reuses an existing instance (the same
-    /// instance that created `surface` must be reused, so the viewer builds the
-    /// instance first, creates the surface, then hands both here).
+    /// Build a context from an existing instance, optionally constraining the
+    /// adapter to be compatible with `surface`.
+    ///
+    /// The surface (when `Some`) must have been created from `instance`, so the
+    /// viewer builds the instance first, creates the surface from it, then hands
+    /// both here — guaranteeing the adapter/device and surface share an instance.
     ///
     /// # Errors
     ///
@@ -528,7 +535,7 @@ pub fn render(
         });
     }
 
-    let ctx = GpuContext::new(None)?;
+    let ctx = GpuContext::new()?;
     let device = &ctx.device;
     let queue = &ctx.queue;
 
