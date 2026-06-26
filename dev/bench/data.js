@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782438257163,
+  "lastUpdate": 1782452414248,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1025,6 +1025,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20187378,
             "range": "± 69819",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ead6f717904265047b3af89b9871d8b5d9828444",
+          "message": "fix(algo): close torus−box boolean analytically (plane×torus seam + toroidal band) (#1010)\n\n## What\n\nMakes `Cut(torus, box)` fully analytic — B-Rep + watertight render +\ncorrect volume — instead of a 1733-face mesh fallback. Census: **233ms /\n1733 faces → 14ms / 5 faces**.\n\n**The campaign's fourth and final case** (after #1003 keystone, #1005\nsphere−cyl, #1006 box∩sphere, #1008 cyl∪cyl). With this, **all\nprimitive-boolean cases in the census are analytic — zero mesh\nfallbacks.**\n\nThe case: torus (major 10, minor 3) minus a side-8 box that severs one\nside of the ring, leaving a capped C-tube (genus-0).\n\n## The fix (staged)\n\n**B-Rep**\n- **plane×torus marcher closure** — the marcher emitted\nnear-closed-but-*open* ovals (~0.15mm gap, one grid step) that fell into\na no-man's-land: too open to be recognized as a loop, never clipped.\nClose the fit when the chain wraps (a grazing inner-tangent figure-eight\nstays open). Adds exact `intersect_line_torus` (quartic, Durand-Kerner)\nfor box-edge crossings.\n- **`FaceExtent` for a whole torus** — a whole untrimmed torus is now\nfull extent, so `restrict_curves_to_faces` clips the ovals against the\nbox (it was bailing on the `None` v-range).\n- **exact-crossing trim + arc-split + band tracer** — trim each oval at\nits **exact** box-edge∩torus crossings (z=±1.105, shared vertices →\nwatertight), always split the kept arc at its midpoint, and trace the\nkept toroidal band (a φ-wrapping u-band, the long 294° kept side).\n\n**Render + volume**\n- `tessellate_torus_notch_band` — sweeps the band along u, sharing seam\nvertices with the notch walls (crack-free). The u-sweep starts at each\nboundary loop's **kept-side edge** (a mean start folds the stitch back\nover the boundary strip → undercount).\n- volume via `signed_volume_from_mesh` off the now-watertight mesh (the\nband isn't closed in isolation), gated to the notch-band signature.\n\n**General engine improvements** (motivated here, gated narrow)\n- SD `source_face` guard: complementary sub-faces split from the same\ninput face are never same-domain duplicates of each other.\n- `perform_areas`: a single result shell is always growth (no enclosing\nshell to be a cavity of); multi-shell results keep the volume-sign\nsplit.\n\n## Why not the \"arc-identity merge-key primitive\"\n\nThe long-discussed shared *arc-identity-edge-merge primitive* is **not\nbuildable**: `merge_duplicate_edges`'s endpoint-pair key is load-bearing\nfor the gridfinity lip ring (Line-chord + Circle-arc co-endpoint pairs,\ndeviating up to 2.4mm, that **must** collapse for manifoldness), while\ntorus−box's notch-wall lens needs the **opposite** (Line + co-endpoint\narc must stay distinct). Same local configuration, opposite required\noutcome → no merge *key* can separate them. The **splitter-side\narc-split** (give the lens arc a midpoint vertex so the face is 3 edges)\ncontrols the geometry *we* emit and sidesteps it — so\n**`merge_duplicate_edges` is byte-identical to main**.\n\n## Verification\n\n- census `torus − box`: 14ms / 5 faces (1 toroidal band + 4 plane notch\nwalls) / exact analytic; free=0, manifold.\n- render watertight: whole-solid mesh bd-edges == 0, stable across\ndeflection 0.1/0.05/0.02 (no seam cracks).\n- volume: `solid_volume` = 1537.5 vs 1543.07 (Monte-Carlo, 20M) =\n**0.36%**, convergent upward (inscribed-mesh).\n- **No regression:** gridfinity d1/d3/d4/d5 + coplanar caps (#909/#859)\n+ #696 seams green; box∩sphere (8) / sphere−cyl (3) / cyl∪cyl (6) /\ncyl∩cyl (3) unchanged; **plain torus unchanged** (the new branches gate\non the notch-band signature); `merge_duplicate_edges` byte-identical to\nmain; full suite **2476 passed**.\n- 2 fixtures: `cut_torus_by_box_notch_is_analytic_watertight`,\n`torus_box_notch_band_tessellates_watertight`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMakes the torus − box cut fully analytic, watertight, and fast. Replaces\na 1733‑face mesh fallback with a 5‑face B‑Rep (233ms → 14ms).\n\n- **New Features**\n- Analytic trim of plane×torus ovals at exact box‑edge×torus crossings\nusing `intersect_line_torus` (quartic), then split the kept arc at its\nmidpoint; keeps all in‑box arcs.\n- Torus notch band tracing with `split_torus_band_by_arrangement`\n(φ‑wrapping u‑band), and structured `tessellate_torus_notch_band` that\nsweeps along u from each loop’s kept‑side edge and shares seam vertices;\ninterior point from the boundary loops’ long‑arc midpoint.\n- Volume for this case is taken from the watertight whole‑solid mesh via\n`signed_volume_from_mesh` when a torus notch band is detected.\n\n- **Bug Fixes**\n- Plane×torus marcher: wrapped ovals now close; grazing inner‑tangent\nfigure‑eight stays open.\n- A whole, untrimmed torus is treated as full `FaceExtent` so ovals are\nclipped against the box face.\n- Same‑domain detection skips only complementary splits from the same\n`source_face` (distinct interiors); coincident same‑source duplicates\nstill de‑duplicated.\n- Single‑shell classification: a lone negative‑volume shell is growth\nonly if outward per a curvature‑robust divergence‑flux check; rejects\ngenuine inward cavity results. Added cube orientation tests.\n- Hardened torus pieces: tighter arc‑join tolerance; notch‑band v‑wrap\ndetection samples along edges; quartic root finder filters by residual\nand de‑dups. Added stronger torus−box fixtures (exact 5‑face\ndecomposition; watertight across deflections).\n\n<sup>Written for commit bcd2832a3932c27827637514ef834a7bd45e9c77.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1010?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-06-25T22:38:07-07:00",
+          "tree_id": "cdfdac18892a25392c9570f1052dd9976fb19445",
+          "url": "https://github.com/andymai/brepkit/commit/ead6f717904265047b3af89b9871d8b5d9828444"
+        },
+        "date": 1782452413219,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 755279,
+            "range": "± 2345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 851700,
+            "range": "± 1052",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13116,
+            "range": "± 191",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 621787,
+            "range": "± 1757",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19832762,
+            "range": "± 335991",
             "unit": "ns/iter"
           }
         ]
