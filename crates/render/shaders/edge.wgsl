@@ -29,7 +29,19 @@ fn vs_main(@location(0) position: vec3<f32>) -> VsOut {
     return out;
 }
 
+struct FsOut {
+    @location(0) color: vec4<f32>,
+    // The render pass keeps the id target bound, so the fragment must declare an
+    // output for it to satisfy the multi-render-target contract (WebGPU/strict
+    // drivers reject a missing location). The pipeline write-masks this target
+    // off, so edges leave the underlying face ids untouched.
+    @location(1) face_id: u32,
+};
+
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.05, 0.05, 0.06, 1.0);
+fn fs_main(in: VsOut) -> FsOut {
+    var out: FsOut;
+    out.color = vec4<f32>(0.05, 0.05, 0.06, 1.0);
+    out.face_id = 0u;
+    return out;
 }

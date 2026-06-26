@@ -5,7 +5,12 @@
 //! log a skip message and return rather than failing, so the suite stays green
 //! on machines without any GPU stack.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::panic
+)]
 
 use std::collections::HashSet;
 
@@ -216,7 +221,7 @@ fn render_box_and_cylinder_offscreen() {
 
 #[test]
 fn invalid_size_is_rejected() {
-    // Size validation does not need a GPU, so it always runs.
+    // Zero-size validation short-circuits before any GPU work, so it always runs.
     let mut topo = Topology::new();
     let cube = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
     let cam = iso_camera(Point3::new(5.0, 5.0, 5.0), 9.0);
@@ -229,4 +234,24 @@ fn invalid_size_is_rejected() {
         err,
         Err(brepkit_render::RenderError::InvalidSize { .. })
     ));
+}
+
+#[test]
+fn oversized_render_is_rejected() {
+    // The texture-limit check runs after device creation, so it needs an adapter.
+    let Some(_adapter) = probe_adapter() else {
+        println!("SKIP oversized_render_is_rejected: no wgpu adapter available");
+        return;
+    };
+    let mut topo = Topology::new();
+    let cube = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let cam = iso_camera(Point3::new(5.0, 5.0, 5.0), 9.0);
+    // 1_000_000 px far exceeds any real `max_texture_dimension_2d` (typically
+    // 8192-16384), so this must be a clean error rather than a wgpu panic.
+    let opts = RenderOpts::new(1_000_000, 1_000_000);
+    match render_solid_offscreen(&topo, cube, &cam, &opts) {
+        Err(brepkit_render::RenderError::SizeTooLarge { .. }) => {}
+        Err(other) => panic!("expected SizeTooLarge, got {other:?}"),
+        Ok(_) => panic!("expected SizeTooLarge, got Ok"),
+    }
 }

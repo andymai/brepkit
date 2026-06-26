@@ -41,7 +41,7 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `sketch` | *(none — no workspace deps)* |
 | `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry`, `offset`, `sketch` |
 | `io` | `math`, `topology`, `operations` |
-| `render` | `math`, `topology`, `operations` (leaf L4 — nothing depends on it) |
+| `render` | `math`, `topology`, `operations` (L4 leaf — the script also rejects any crate that depends on `render`) |
 | `wasm` | all crates (`blend` only transitively, via `operations`) |
 
 The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the pre-push hook.

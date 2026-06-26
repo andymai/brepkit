@@ -36,7 +36,7 @@ check_deps() {
   local deps_section
   deps_section=$(sed -n '/^\[dependencies\]/,/^\[/p' "$cargo_toml" 2>/dev/null || true)
 
-  for dep in brepkit-math brepkit-topology brepkit-algo brepkit-blend brepkit-heal brepkit-check brepkit-geometry brepkit-offset brepkit-sketch brepkit-operations brepkit-io; do
+  for dep in brepkit-math brepkit-topology brepkit-algo brepkit-blend brepkit-heal brepkit-check brepkit-geometry brepkit-offset brepkit-sketch brepkit-operations brepkit-io brepkit-render; do
     if echo "$deps_section" | grep -q "${dep}"; then
       local is_allowed=false
       for a in "${allowed[@]}"; do

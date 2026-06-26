@@ -57,8 +57,10 @@ impl RenderMesh {
     ///
     /// # Errors
     ///
-    /// Returns [`RenderError::Operations`] if tessellation or topology
-    /// traversal fails.
+    /// Returns [`RenderError::Operations`] / [`RenderError::Topology`] if
+    /// tessellation or topology traversal fails, or [`RenderError::MeshData`]
+    /// if the tessellation violates a mesh invariant (index buffer not a whole
+    /// number of triangles, an out-of-range index, or incomplete face offsets).
     pub fn build(topo: &Topology, solid: SolidId, deflection: f64) -> Result<Self, RenderError> {
         let angular_tol = brepkit_math::chord::DEFAULT_ANGULAR_TOL;
         let (mesh, face_offsets) =
@@ -87,27 +89,46 @@ impl RenderMesh {
             })
             .collect();
 
+        // A triangle mesh's index buffer must be a whole number of triangles.
+        if mesh.indices.len() % 3 != 0 {
+            return Err(RenderError::MeshData(format!(
+                "index buffer length {} is not divisible by 3",
+                mesh.indices.len()
+            )));
+        }
+        let tri_count = mesh.indices.len() / 3;
+
+        // The grouped tessellator returns one offset per face plus a final
+        // sentinel, so `face_offsets[i]..face_offsets[i + 1]` is face i's range.
+        // A short array would silently mis-attribute triangles, so require it.
+        if face_offsets.len() != faces.len() + 1 {
+            return Err(RenderError::MeshData(format!(
+                "face_offsets has {} entries, expected {} (one per face + sentinel)",
+                face_offsets.len(),
+                faces.len() + 1
+            )));
+        }
+
         // A vertex shared between two faces would need two different face ids,
         // so we cannot reuse the welded index buffer directly. Expand to
         // non-indexed-per-face: one fresh vertex per triangle corner, tagged
         // with that triangle's owning face. (Edges still come from topology.)
-        let tri_count = mesh.indices.len() / 3;
         let mut vertices: Vec<Vertex> = Vec::with_capacity(tri_count * 3);
         let mut indices: Vec<u32> = Vec::with_capacity(tri_count * 3);
 
-        // The grouped tessellator lays out each face's triangles contiguously,
-        // so walk faces in lockstep with the index buffer rather than searching
-        // per triangle: `face_offsets[i]..face_offsets[i + 1]` is face i's range.
+        // Walk faces in lockstep with the index buffer rather than searching
+        // per triangle.
         let mut tri_face_ids = vec![0_u32; tri_count];
         for (i, face) in faces.iter().enumerate() {
-            let start = face_offsets.get(i).copied().unwrap_or(0) as usize / 3;
-            let end = face_offsets
-                .get(i + 1)
-                .copied()
-                .map_or(tri_count, |o| o as usize / 3);
+            let start = face_offsets[i] as usize / 3;
+            let end = face_offsets[i + 1] as usize / 3;
             #[allow(clippy::cast_possible_truncation)]
             let id = face.index() as u32 + 1;
-            for slot in tri_face_ids.iter_mut().take(end.min(tri_count)).skip(start) {
+            for slot in tri_face_ids
+                .iter_mut()
+                .take(end.min(tri_count))
+                .skip(start.min(tri_count))
+            {
                 *slot = id;
             }
         }
@@ -116,8 +137,15 @@ impl RenderMesh {
             let face_id = tri_face_ids[t];
             for k in 0..3 {
                 let vi = mesh.indices[t * 3 + k] as usize;
-                let position = positions_rtc.get(vi).copied().unwrap_or([0.0; 3]);
-                let normal = normals.get(vi).copied().unwrap_or([0.0, 0.0, 1.0]);
+                // Out-of-range indices mean a corrupt tessellation; fail rather
+                // than substituting placeholder geometry / picking ids.
+                let (Some(&position), Some(&normal)) = (positions_rtc.get(vi), normals.get(vi))
+                else {
+                    return Err(RenderError::MeshData(format!(
+                        "triangle index {vi} is out of range ({} vertices)",
+                        positions_rtc.len()
+                    )));
+                };
                 #[allow(clippy::cast_possible_truncation)]
                 let idx = vertices.len() as u32;
                 vertices.push(Vertex {

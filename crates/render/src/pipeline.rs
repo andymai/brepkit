@@ -30,7 +30,7 @@ const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 #[must_use]
 pub fn probe_adapter() -> Option<String> {
     let instance = wgpu::Instance::default();
-    request_any_adapter(&instance).map(|adapter| {
+    candidate_adapters(&instance).first().map(|adapter| {
         let info = adapter.get_info();
         format!(
             "{:?} / {} ({:?})",
@@ -39,22 +39,58 @@ pub fn probe_adapter() -> Option<String> {
     })
 }
 
-/// Request a real adapter, falling back to a software adapter.
-fn request_any_adapter(instance: &wgpu::Instance) -> Option<wgpu::Adapter> {
-    let real = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-    }));
-    if let Ok(adapter) = real {
-        return Some(adapter);
+/// Request the preferred (real GPU) adapter, then the software fallback.
+///
+/// Returns adapters in priority order (real first, fallback second); either may
+/// be absent. Both are returned so device creation can fall back if the first
+/// adapter fails to produce a device.
+fn candidate_adapters(instance: &wgpu::Instance) -> Vec<wgpu::Adapter> {
+    let mut out = Vec::new();
+    if let Ok(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+    {
+        out.push(adapter);
     }
-    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        force_fallback_adapter: true,
-        compatible_surface: None,
-    }))
-    .ok()
+    if let Ok(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: true,
+            compatible_surface: None,
+        }))
+    {
+        out.push(adapter);
+    }
+    out
+}
+
+/// Acquire a device + queue, trying each candidate adapter in priority order.
+///
+/// A real adapter that exists but cannot create a device falls back to the
+/// software adapter rather than failing outright.
+fn acquire_device(instance: &wgpu::Instance) -> Result<(wgpu::Device, wgpu::Queue), RenderError> {
+    let adapters = candidate_adapters(instance);
+    if adapters.is_empty() {
+        return Err(RenderError::NoAdapter(
+            "request_adapter returned no adapter".into(),
+        ));
+    }
+    let mut last_err = String::new();
+    for adapter in &adapters {
+        match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("brepkit-render device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+            ..Default::default()
+        })) {
+            Ok(dq) => return Ok(dq),
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    Err(RenderError::DeviceRequest(last_err))
 }
 
 /// Render a solid's prepared geometry offscreen and read back color + ids.
@@ -76,18 +112,15 @@ pub fn render(
     }
 
     let instance = wgpu::Instance::default();
-    let adapter = request_any_adapter(&instance)
-        .ok_or_else(|| RenderError::NoAdapter("request_adapter returned no adapter".into()))?;
-
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("brepkit-render device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
-        ..Default::default()
-    }))
-    .map_err(|e| RenderError::DeviceRequest(e.to_string()))?;
+    let (device, queue) = acquire_device(&instance)?;
 
     let (width, height) = (opts.width, opts.height);
+    // Reject oversized targets with a clean error rather than tripping wgpu's
+    // internal validation (which surfaces as a device-error/panic path).
+    let max = device.limits().max_texture_dimension_2d;
+    if width > max || height > max {
+        return Err(RenderError::SizeTooLarge { width, height, max });
+    }
     let extent = wgpu::Extent3d {
         width,
         height,

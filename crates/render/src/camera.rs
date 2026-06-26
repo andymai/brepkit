@@ -96,6 +96,24 @@ impl Mat4d {
     }
 }
 
+/// Pick a world axis to use as an "up" vector that is not parallel to `f`.
+///
+/// Returns the axis (`X`, `Y`, or `Z`) whose alignment with `f` is smallest,
+/// so the subsequent `f x up` cross product is well-conditioned regardless of
+/// the view direction.
+fn fallback_up(f: Vec3) -> Vec3 {
+    let ax = f.x().abs();
+    let ay = f.y().abs();
+    let az = f.z().abs();
+    if ax <= ay && ax <= az {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else if ay <= az {
+        Vec3::new(0.0, 1.0, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    }
+}
+
 /// Right-handed look-at view matrix operating on center-relative positions.
 ///
 /// `eye`, `target`, and `center` are absolute world points; subtracting
@@ -108,7 +126,14 @@ fn look_at_rh_rtc(eye: Point3, target: Point3, up: Vec3, center: Point3) -> Mat4
     let f = (target - eye)
         .normalize()
         .unwrap_or(Vec3::new(0.0, 0.0, -1.0));
-    let s = f.cross(up).normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+    // If `up` is parallel (or anti-parallel) to the view direction, f x up
+    // collapses to ~zero and the basis is degenerate. Fall back to whichever
+    // world axis is least aligned with f, which is guaranteed non-parallel.
+    let s = f.cross(up).normalize().unwrap_or_else(|_| {
+        f.cross(fallback_up(f))
+            .normalize()
+            .unwrap_or(Vec3::new(1.0, 0.0, 0.0))
+    });
     let u = s.cross(f);
 
     // Eye expressed relative to the model center.
@@ -132,7 +157,28 @@ fn look_at_rh_rtc(eye: Point3, target: Point3, up: Vec3, center: Point3) -> Mat4
 
 /// Right-handed perspective projection mapping NDC z to `[0, 1]` (wgpu/WebGPU
 /// depth convention, "zero-to-one").
+///
+/// Inputs are clamped to finite, well-conditioned ranges so a malformed
+/// [`Camera`] (zero FOV, zero/negative near or aspect, `far <= near`) yields a
+/// usable matrix instead of one full of NaNs/infinities.
 fn perspective_rh_zo(fov_y: f64, aspect: f64, near: f64, far: f64) -> Mat4d {
+    let fov_y = fov_y.clamp(1.0e-4, std::f64::consts::PI - 1.0e-4);
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        1.0
+    };
+    let near = if near.is_finite() && near > 0.0 {
+        near
+    } else {
+        1.0e-3
+    };
+    let far = if far.is_finite() && far > near {
+        far
+    } else {
+        near * 1000.0
+    };
+
     let f = 1.0 / (fov_y * 0.5).tan();
     let nf = 1.0 / (near - far);
 
@@ -143,5 +189,68 @@ fn perspective_rh_zo(fov_y: f64, aspect: f64, near: f64, far: f64) -> Mat4d {
             [0.0, 0.0, far * nf, -1.0],
             [0.0, 0.0, far * near * nf, 0.0],
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn all_finite(m: &[f32; 16]) -> bool {
+        m.iter().all(|v| v.is_finite())
+    }
+
+    #[test]
+    fn degenerate_up_parallel_to_view_stays_finite() {
+        // up parallel to the view direction would collapse f x up to zero; the
+        // fallback-up path must still yield a finite, usable view matrix.
+        let cam = Camera {
+            eye: Point3::new(0.0, 0.0, 10.0),
+            target: Point3::new(0.0, 0.0, 0.0),
+            up: Vec3::new(0.0, 0.0, 1.0), // parallel to view dir (-Z)
+            fov_y: 45.0_f64.to_radians(),
+            aspect: 1.0,
+            near: 0.1,
+            far: 100.0,
+        };
+        let m = view_proj_rtc(&cam, Point3::new(0.0, 0.0, 0.0));
+        assert!(all_finite(&m), "view-proj must be finite for parallel up");
+    }
+
+    #[test]
+    fn fallback_up_is_not_parallel_to_view() {
+        // For each principal view direction, the chosen fallback up must not be
+        // (anti-)parallel to it, so the basis cross product is well-conditioned.
+        for f in [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ] {
+            let up = fallback_up(f);
+            assert!(
+                f.cross(up).length() > 0.5,
+                "fallback up {up:?} too aligned with view dir {f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn projection_guards_degenerate_inputs() {
+        // Zero FOV, zero aspect, zero near, and far <= near must all be clamped
+        // to produce a finite matrix rather than NaNs/infinities.
+        let cam = Camera {
+            eye: Point3::new(5.0, 5.0, 5.0),
+            target: Point3::new(0.0, 0.0, 0.0),
+            up: Vec3::new(0.0, 0.0, 1.0),
+            fov_y: 0.0,
+            aspect: 0.0,
+            near: 0.0,
+            far: 0.0,
+        };
+        let m = view_proj_rtc(&cam, Point3::new(0.0, 0.0, 0.0));
+        assert!(
+            all_finite(&m),
+            "projection must be finite for degenerate inputs"
+        );
     }
 }
