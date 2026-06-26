@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782401474654,
+  "lastUpdate": 1782437951850,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -917,6 +917,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21522289,
             "range": "± 30572",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0dadfc9d982bf59243eb2495c94d8737a76fba13",
+          "message": "fix(algo): assemble perpendicular cyl∪cyl Fuse analytically (#1008)\n\n## What\n\nMakes `Fuse(cyl, cyl)` for two perpendicular equal-radius cylinders (a\n**Steinmetz solid**) produce an analytic, manifold, correct-volume B-Rep\ninstead of a 138-face mesh fallback. Census: **19ms / 138 mesh → 1.78ms\n/ 6 analytic faces** (2 mutually-trimmed cylinder walls + 4 caps).\n\nFourth PR in the campaign to eliminate the boolean→mesh fallbacks (after\n#1003 keystone, #1005 sphere−cyl, #1006 box∩sphere).\n\n## The fix (analytic B-Rep + volume)\n\n- **`phase_ff`** — keep the closed Steinmetz seam loop whole when its\nin-both run is near-complete (≥ N−3), and clamp the seam-wrap-trim\nparameter to the curve domain. The closed-NURBS seam's wrap returned an\nout-of-domain `t` that `NurbsCurve::evaluate` extrapolated to a garbage\npoint, collapsing the carved loop → walls dropped.\n- **`face_splitter`** — emit the complementary outer-wall remainder\n(boundary-with-hole) for the Steinmetz internal-loop split, with a\ncurved-remainder interior point placed clear of the lens, so Fuse keeps\nboth mutually-trimmed walls (not just the inside lobe).\n- **`check`/`measure`** — integrate the holed cylinder/cone band\nexcluding its inner loops (even-odd over the *combined* lens arrangement\n— each lens ellipse is a full-u sinusoid bounding no area alone), so the\nanalytic volume subtracts the Steinmetz intersection.\n\n## Verification\n\n- Raw GFA: 6 analytic faces, **manifold** (euler 4), free edges 0.\n- Census: `cyl ∪ cyl 1.78ms faces=6 exact analytic`; other 8 boolean\ncases unchanged.\n- Volume: 985.3 (analytic 987.0, **0.17%**), via the holed-band analytic\nintegrator.\n- Full suite **2457 passed**; clippy clean; fmt clean; layer boundaries\nvalid.\n- Regression fixture:\n`fuse_perpendicular_cylinders_is_analytic_watertight`.\n\n## Known limitation — watertight render mesh deferred (precisely\nroot-caused)\n\nThe preview tessellation renders **two full interpenetrating tubes**\n(correct silhouette, hidden internal walls). `solid_volume` is analytic\nand correct, **independent of the mesh**, so volume/STEP/B-Rep are\nright; only the preview mesh lags.\n\nA watertight render needs the *exact* ellipse seam, which **self-touches\nat (0,±3,0)** — a genuine boundary singularity of the Steinmetz union.\nEight measured tessellator/GFA approaches traced this to one missing\ncore-GFA primitive: **arc-identity-aware edge merging**. The exact\nseam's four co-endpoint arcs (a \"double-theta\" graph between the two\ncrossing vertices) are collapsed by the current endpoint-keyed\n`merge_duplicate_edges` → non-manifold (euler odd). This is the **same\nprimitive that gates box∩sphere's exact closure and torus−box**, is\nregression-prone (a naive midpoint key breaks the coplanar-cap-cylinder\ntests), and is a **standalone dedicated core-GFA effort** — not part of\nthis PR. The current marched-NURBS seam is manifold precisely because\nits loops are ~0.11 apart and dodge the singularity.\n\n## Does not touch\n\nThe render-blocking arc-identity primitive is the campaign's terminal\nfinding and the highest-leverage next step (unblocks cyl∪cyl render +\nbox∩sphere exact + torus−box). `torus − box` remains a future PR.",
+          "timestamp": "2026-06-25T18:36:59-07:00",
+          "tree_id": "31f3e58a992a20243eb28a6c7735130e0bcac9e7",
+          "url": "https://github.com/andymai/brepkit/commit/0dadfc9d982bf59243eb2495c94d8737a76fba13"
+        },
+        "date": 1782437951535,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1357175,
+            "range": "± 17173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1444155,
+            "range": "± 36988",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12035,
+            "range": "± 85",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 648955,
+            "range": "± 1822",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20695582,
+            "range": "± 3350549",
             "unit": "ns/iter"
           }
         ]
