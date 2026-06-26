@@ -2821,13 +2821,17 @@ pub fn face_has_curved_lens_holes(topo: &Topology, face_id: FaceId) -> bool {
     }
     face.inner_wires().iter().any(|&wid| {
         topo.wire(wid).is_ok_and(|wire| {
-            wire.edges().iter().any(|oe| {
-                topo.edge(oe.edge()).is_ok_and(|e| {
-                    matches!(
-                        e.curve(),
-                        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
-                    )
-                })
+            // The degenerate lens hole is a SINGLE closed curved edge (the seam
+            // ellipse). A regular curved hole (e.g. a drilled bore) has multiple
+            // edges and a working generic interior — don't force it to mesh.
+            let [oe] = wire.edges() else {
+                return false;
+            };
+            topo.edge(oe.edge()).is_ok_and(|e| {
+                matches!(
+                    e.curve(),
+                    EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
+                )
             })
         })
     })
