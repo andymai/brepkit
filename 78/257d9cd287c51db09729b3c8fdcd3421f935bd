@@ -1,0 +1,36 @@
+crates/render/src/compute_mesh.rs
+  s_3a7801f96b397a::t_74f4f437a673c9 826,830,836
+  s_3a7801f96b397a::t_84b49d55441588 297-302,326-327
+  s_3a7801f96b397a::t_ceec68627020c3 834
+  s_3a7801f96b397a::t_f9dc92dfc5b6e8 330-332
+  s_3a7801f96b397a::t_85cf7917bb76ab 44-48
+  s_3a7801f96b397a::t_e526ac3618dc16 318-322
+  s_3a7801f96b397a::t_3ac662d2344a01 790-825,827-829,831-833,835,837-840
+  s_3a7801f96b397a::t_b416b4390cfdb5 245,262-265
+  s_3a7801f96b397a::t_a0c716cab9faa2 36-43,57,59,64-66,70-71
+  s_3a7801f96b397a::t_1f93d5454eb3b1 506
+  s_3a7801f96b397a::t_50b6c5b7ea2937 353
+  s_3a7801f96b397a::t_7595b8d73af8df 334
+  s_3a7801f96b397a::t_ae4b0b673fbc3f 333
+crates/render/shaders/quadric_mesh.wgsl
+  s_3a7801f96b397a::t_79a8c4ad546523 128,130,134-137
+  s_3a7801f96b397a::t_cfcce062a9cc7a 38-41
+  s_3a7801f96b397a::t_dff7b2783cd641 56-59,64-65
+  s_3a7801f96b397a::t_166091a09b4358 90,95-98,100,110-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "78257d9cd287c51db09729b3c8fdcd3421f935bd",
+  "prompts": {},
+  "sessions": {
+    "s_3a7801f96b397a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d87b0fde-b82d-435e-90fb-1a5c8028f43f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
