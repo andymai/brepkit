@@ -7,3 +7,15 @@ xtask = "run --manifest-path xtask/Cargo.toml --"
 # via xtask (disable with --no-simd). Not set here because rustflags in
 # config.toml overrides (doesn't append to) env RUSTFLAGS, and CI sets
 # RUSTFLAGS=-Dwarnings globally.
+
+# crates.io dependency downloads intermittently fail on CI runners with
+# "[16] Error in the HTTP2 framing layer" (criterion's transitive deps —
+# cast/alloca/oorandom/itertools — and others), reddening otherwise-passing
+# jobs. Force HTTP/1.1 (sidesteps the HTTP/2 multiplexing fault) and retry
+# transient network failures so dependency fetches are reliable. Downloads
+# only matter on a cold cache (mostly CI), so the local-dev cost is negligible.
+[http]
+multiplexing = false
+
+[net]
+retry = 10
