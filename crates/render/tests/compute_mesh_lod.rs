@@ -103,10 +103,12 @@ fn side_max_half_width(out: &RenderOutput) -> f64 {
 }
 
 /// The cylinder radius projected to pixels at `cam`, matching the formula
-/// `screen_space_tess_factor` uses: `r_px = r · (H/2) / (d · tan(fov_y/2))`.
+/// `screen_space_tess_factor` uses: `r_px = r · (H/2) / (d · tan(fov_y/2))`,
+/// where `d` is the center's view-space depth (these side-on test cameras look
+/// straight at the center, so depth equals the eye distance).
 fn analytic_projected_radius(desc: &CylinderDescriptor, cam: &Camera, viewport_h: u32) -> f64 {
-    let d = (cam.eye - desc.center).length();
-    desc.radius * (f64::from(viewport_h) * 0.5) / (d * (cam.fov_y * 0.5).tan())
+    let depth = cam.view_direction().dot(desc.center - cam.eye);
+    desc.radius * (f64::from(viewport_h) * 0.5) / (depth * (cam.fov_y * 0.5).tan())
 }
 
 /// Rendered chord error in pixels: how far the silhouette edge falls inside the
