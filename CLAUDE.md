@@ -10,6 +10,7 @@ Strict layered Cargo workspace. Each layer depends only on layers below it.
 
 ```
 L4: brepkit-wasm        → JS bindings (wasm-bindgen)
+L4: brepkit-render      → Offscreen GPU rendering (wgpu) to image + face-id buffer
 L3: brepkit-io          → STEP, 3MF, STL, IGES, OBJ, PLY, glTF import/export
 L3: brepkit-operations  → Booleans, fillets, extrusions, tessellation
 L2: brepkit-algo        → GFA boolean engine, classification, intersection
@@ -40,6 +41,7 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `sketch` | *(none — no workspace deps)* |
 | `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry`, `offset`, `sketch` |
 | `io` | `math`, `topology`, `operations` |
+| `render` | `math`, `topology`, `operations` (leaf L4 — nothing depends on it) |
 | `wasm` | all crates (`blend` only transitively, via `operations`) |
 
 The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the pre-push hook.
@@ -56,6 +58,7 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 - `sketch/src/**` → only `std`, external crates
 - `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`, `brepkit_offset::*`, `brepkit_sketch::*`
 - `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`
+- `render/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`
 - `wasm/src/**` → all `brepkit_*`
 
 ## Module Map

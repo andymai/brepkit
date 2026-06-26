@@ -15,6 +15,7 @@ set -euo pipefail
 #   L2   (sketch)     — no workspace deps
 #   L3   (operations) — depends on math, topology, algo, blend, heal, check, geometry, offset, sketch
 #   L3   (io)         — depends on math, topology, operations
+#   L4   (render)     — depends on math, topology, operations
 #   L4   (wasm)       — depends on all
 
 FAIL=0
@@ -65,6 +66,7 @@ check_deps "offset"     "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "sketch"
 check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-offset" "brepkit-sketch"
 check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations"
+check_deps "render"     "brepkit-math" "brepkit-topology" "brepkit-operations"
 check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-offset" "brepkit-sketch" "brepkit-operations" "brepkit-io"
 
 if [ $FAIL -ne 0 ]; then
