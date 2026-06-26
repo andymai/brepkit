@@ -409,16 +409,35 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &mut pb_vertex_registry,
                 arena,
             );
-            let pt = split.precomputed_interior.unwrap_or_else(|| {
-                super::face_splitter::interior_point_3d(split, parent_frame.as_ref())
-            });
+            let resolved_face_id = new_face_id.unwrap_or(face_id);
+            // For a curved-lens-hole wall (cylinder/cone with closed
+            // Circle/Ellipse/NURBS holes) the generic `interior_point_3d` is
+            // unsafe — it can sample inside the removed lens. The dedicated
+            // search ran in the splitter; if it found a contained point it is in
+            // `precomputed_interior`. When it is unset for such a face, leave the
+            // interior unset so the classifier aborts the analytic split (→ mesh
+            // fallback) instead of classifying the wall from inside the lens.
+            let interior_point = match split.precomputed_interior {
+                Some(pt) => Some(pt),
+                None if super::face_splitter::face_has_curved_lens_holes(
+                    topo,
+                    resolved_face_id,
+                ) =>
+                {
+                    None
+                }
+                None => Some(super::face_splitter::interior_point_3d(
+                    split,
+                    parent_frame.as_ref(),
+                )),
+            };
 
             sub_faces.push(SubFace {
-                face_id: new_face_id.unwrap_or(face_id),
+                face_id: resolved_face_id,
                 source_face: face_id,
                 classification: FaceClass::Unknown,
                 rank,
-                interior_point: Some(pt),
+                interior_point,
             });
         }
     }

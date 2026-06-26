@@ -1474,33 +1474,39 @@ fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> 
     // construction — AND outside every lens hole). A point outside the sub-face
     // fed to classification would drop valid curved wall faces, so an
     // uncontained best is rejected.
-    let mut best: Option<(f64, Point3)> = None;
-    let n_u = 48;
-    let n_v = 5;
-    for iu in 0..n_u {
-        #[allow(clippy::cast_precision_loss)]
-        let u = u_lo + u_span * (iu as f64) / f64::from(n_u);
-        for iv in 1..n_v {
+    let search = |n_u: u32, n_v: u32| -> Option<Point3> {
+        let mut best: Option<(f64, Point3)> = None;
+        for iu in 0..n_u {
             #[allow(clippy::cast_precision_loss)]
-            let v = v_min + (v_max - v_min) * (iv as f64) / f64::from(n_v);
-            if point_in_hole_loops_uv(&hole_segs, u, v) {
-                continue; // Inside a lens hole — not the kept region.
-            }
-            let Some(p) = remainder.surface.evaluate(u, v) else {
-                continue;
-            };
-            let min_d = hole_pts
-                .iter()
-                .map(|h| (*h - p).length())
-                .fold(f64::INFINITY, f64::min);
-            if best.is_none_or(|(bd, _)| min_d > bd) {
-                best = Some((min_d, p));
+            let u = u_lo + u_span * f64::from(iu) / f64::from(n_u);
+            for iv in 1..n_v {
+                #[allow(clippy::cast_precision_loss)]
+                let v = v_min + (v_max - v_min) * f64::from(iv) / f64::from(n_v);
+                if point_in_hole_loops_uv(&hole_segs, u, v) {
+                    continue; // Inside a lens hole — not the kept region.
+                }
+                let Some(p) = remainder.surface.evaluate(u, v) else {
+                    continue;
+                };
+                let min_d = hole_pts
+                    .iter()
+                    .map(|h| (*h - p).length())
+                    .fold(f64::INFINITY, f64::min);
+                if best.is_none_or(|(bd, _)| min_d > bd) {
+                    best = Some((min_d, p));
+                }
             }
         }
-    }
-    // No contained candidate found → report (keep the interior unset) rather
-    // than return a point outside the sub-face.
-    best.map(|(_, p)| p)
+        best.map(|(_, p)| p)
+    };
+
+    // First pass at the standard density (the census finds a contained interior
+    // here). If a thin kept strip or a close pair of lens loops yields nothing
+    // contained at this resolution, take ONE refined denser pass before giving
+    // up — a present-but-narrow remainder strip then resolves. Returning `None`
+    // (no contained point even dense) signals the caller to abort the analytic
+    // split rather than fall back to an uncontained generic interior point.
+    search(48, 5).or_else(|| search(256, 17))
 }
 
 /// Whether `(u, v)` lies inside the region bounded by the combined inner-loop
@@ -2106,6 +2112,62 @@ mod tests {
         assert!(
             (p - hole_center).length() > 1.5,
             "interior point must be clear of the hole, got dist {}",
+            (p - hole_center).length()
+        );
+    }
+
+    #[test]
+    fn remainder_interior_found_for_thin_kept_strip() {
+        // A narrow wall band v∈[8,12] mostly filled by a large lens hole centred
+        // at v=10, leaving only thin kept strips near the rims. The two-pass grid
+        // (coarse then dense) must still return an ON-WALL point CLEAR of the
+        // hole — never `None`, which would abort the analytic split. Exercises
+        // robustness of the contained-interior search on a thin remainder.
+        use super::super::super::split_types::SplitSubFace;
+        use crate::ds::Rank;
+        use brepkit_topology::topology::Topology;
+
+        let mut dummy_topo = Topology::new();
+        let parent = brepkit_topology::test_utils::make_unit_square_face(&mut dummy_topo);
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+
+        // Narrow band v∈[8,12].
+        let bot = Circle3D::new(Point3::new(0.0, 0.0, 8.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let top =
+            Circle3D::new(Point3::new(0.0, 0.0, 12.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let outer = vec![
+            arc_edge(&bot, 0.0, TAU, true),
+            line_chord(Point3::new(3.0, 0.0, 8.0), Point3::new(3.0, 0.0, 12.0)),
+            arc_edge(&top, 0.0, TAU, true),
+            line_chord(Point3::new(3.0, 0.0, 12.0), Point3::new(3.0, 0.0, 8.0)),
+        ];
+
+        // Big hole centred at (3,0,10) nearly filling the 4-unit band.
+        let hole_center = Point3::new(3.0, 0.0, 10.0);
+        let hole = Circle3D::new(hole_center, Vec3::new(1.0, 0.0, 0.0), 1.9).unwrap();
+        let inner = vec![vec![arc_edge(&hole, 0.0, TAU, true)]];
+
+        let sub = SplitSubFace {
+            surface,
+            outer_wire: outer,
+            inner_wires: inner,
+            reversed: false,
+            parent,
+            rank: Rank::A,
+            precomputed_interior: None,
+        };
+
+        // The two-pass search must find a contained point in the thin kept strip.
+        let p = super::cylinder_cone_remainder_interior(&sub).unwrap();
+        let radial = (p.x() * p.x() + p.y() * p.y()).sqrt();
+        assert!((radial - 3.0).abs() < 1e-6, "interior point on the wall");
+        assert!(
+            (p - hole_center).length() > 1.9,
+            "interior point must be outside the hole, got dist {}",
             (p - hole_center).length()
         );
     }

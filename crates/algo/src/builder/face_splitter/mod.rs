@@ -2799,6 +2799,40 @@ pub fn split_face_2d(
     sub_faces
 }
 
+/// Whether a face is a cylinder/cone lateral wall carrying CURVED inner-wire
+/// loops — the lens-hole signature (a closed Circle/Ellipse/NURBS edge where
+/// another quadric crosses the wall). For these the generic `interior_point_3d`
+/// /`sample_face_interior` fallbacks are unsafe: each lens loop is a single
+/// closed edge with a degenerate start/end UV, so the assembled hole polygon is
+/// unusable and a generic sample can land inside the removed lens. The dedicated
+/// `cylinder_cone_remainder_interior` handles them; when even its dense grid
+/// finds no contained point, the analytic split must abort to mesh rather than
+/// classify the wall from inside the removed region.
+pub fn face_has_curved_lens_holes(topo: &Topology, face_id: FaceId) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    if !matches!(
+        face.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+    ) {
+        return false;
+    }
+    face.inner_wires().iter().any(|&wid| {
+        topo.wire(wid).is_ok_and(|wire| {
+            wire.edges().iter().any(|oe| {
+                topo.edge(oe.edge()).is_ok_and(|e| {
+                    matches!(
+                        e.curve(),
+                        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
+                    )
+                })
+            })
+        })
+    })
+}
+
 /// Get a point guaranteed inside a sub-face's outer wire (in UV space),
 /// not inside any inner wire (hole), then evaluate it to 3D via the surface.
 #[allow(clippy::too_many_lines)]
