@@ -1,0 +1,54 @@
+crates/render/src/mesh.rs
+  s_3a7801f96b397a::t_4c2e0401ed9236 60-63,92-111,119-120,123-124,127-131,140-148
+crates/render/src/camera.rs
+  s_3a7801f96b397a::t_4c2e0401ed9236 132-136,251-254
+  s_3a7801f96b397a::t_0e0719d4202a85 114-115,194-250,255-256
+  s_3a7801f96b397a::t_8a4e06bc0c2510 111-113
+  s_3a7801f96b397a::t_9d025a21059754 116
+  s_3a7801f96b397a::t_d49d1538efdc4b 129-131
+  s_a0fea5552330ad::t_e6b643b49b599a 99-110,160-163,165-181
+crates/render/src/pipeline.rs
+  s_3a7801f96b397a::t_4c2e0401ed9236 54-57,64-68,70-77,79-81,83-85,88-89,99-104,106-111,113-116,536-541
+  s_3a7801f96b397a::t_f2011ecd2ddab2 58-63,69,78,86-87,90-98,105,112
+  s_3a7801f96b397a::t_841e011d941d96 155
+  s_3a7801f96b397a::t_50149922daa4eb 45
+CLAUDE.md
+  s_a0fea5552330ad::t_496826412a703e 44
+crates/render/shaders/edge.wgsl
+  s_a0fea5552330ad::t_fa179a554b7398 32-40,42-46
+crates/render/src/error.rs
+  s_a0fea5552330ad::t_328a881f73e290 32-51
+crates/render/tests/offscreen_render.rs
+  s_a0fea5552330ad::t_971e448e404afa 8-13,224,238-257
+deny.toml
+  s_a0fea5552330ad::t_673a003444ca88 6-8
+scripts/check-boundaries.sh
+  s_a0fea5552330ad::t_c0d2b88186277c 39
+crates/render/src/viewer.rs
+  s_3a7801f96b397a::t_178870d8689133 414-420
+  s_3a7801f96b397a::t_61dfb07da29fa3 296-307,529
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "0f4c96a36a4a2c914c929999f88c8d9dd8ab3680",
+  "prompts": {},
+  "sessions": {
+    "s_3a7801f96b397a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d87b0fde-b82d-435e-90fb-1a5c8028f43f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_a0fea5552330ad": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-ac52edee465e5e691",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
