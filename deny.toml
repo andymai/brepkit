@@ -3,7 +3,9 @@ unmaintained = "workspace"
 yanked = "warn"
 
 [licenses]
-allow = ["Apache-2.0", "MIT", "Zlib", "Unicode-3.0"]
+# CC0-1.0 (hexf-parse) and ISC (libloading) enter via the wgpu/naga dependency
+# tree; both are permissive (public-domain-equivalent / MIT-like).
+allow = ["Apache-2.0", "MIT", "Zlib", "Unicode-3.0", "CC0-1.0", "ISC"]
 
 [bans]
 multiple-versions = "warn"

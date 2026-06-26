@@ -1,0 +1,22 @@
+[package]
+description = "Offscreen GPU renderer for brepkit B-Rep solids"
+edition.workspace = true
+license.workspace = true
+name = "brepkit-render"
+repository.workspace = true
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+brepkit-math.workspace = true
+brepkit-operations.workspace = true
+brepkit-topology.workspace = true
+
+bytemuck = {version = "1", features = ["derive"]}
+image = {version = "0.25", default-features = false, features = ["png"]}
+pollster = "0.4"
+thiserror.workspace = true
+wgpu = "29"
+
+[lints]
+workspace = true
