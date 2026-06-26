@@ -1,0 +1,35 @@
+crates/render/Cargo.toml
+  s_3a7801f96b397a::t_3e91d83009c01c 15,30-33
+crates/render/src/pipeline.rs
+  s_3a7801f96b397a::t_bf00de5e33c53e 538
+  s_3a7801f96b397a::t_ec8680cf572b07 132-137,143,145,148-153
+deny.toml
+  s_3a7801f96b397a::t_7d42042e3f5e9e 7-18
+crates/render/src/viewer.rs
+  s_3a7801f96b397a::t_49351c2f999999 711-717
+  s_3a7801f96b397a::t_6c19efdfb31cb9 567,570-576,579-582
+  s_3a7801f96b397a::t_a1620c87fdb659 855-859,862,865-872,876-877,880,886,889-890,895-897
+  s_3a7801f96b397a::t_9be0d0da859eb8 592-597
+  s_3a7801f96b397a::t_0045631e36b28a 134-137
+  s_3a7801f96b397a::t_5a935e6c7e077c 156,171-184,188,195-196,209-214,217
+  s_3a7801f96b397a::t_f2b6efee970a70 669-676
+  s_3a7801f96b397a::t_58a78d8ce9b809 455-456,459,461-462
+  s_3a7801f96b397a::t_fae4d17afa127d 849-854,860-861,863-864,873-875,878-879,881-885,887-888,891-894,898-921
+  s_3a7801f96b397a::t_a969ea612f1c47 922-924
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "a5c7a37d4987432ce485ab5ec19dedc4fe6cb374",
+  "prompts": {},
+  "sessions": {
+    "s_3a7801f96b397a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d87b0fde-b82d-435e-90fb-1a5c8028f43f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
