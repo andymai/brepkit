@@ -498,7 +498,16 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
 
         let signed_vol = signed_volume_of_shell(topo, shell);
 
-        if signed_vol >= 0.0 {
+        // A SINGLE shell is the result's outer boundary — there is no enclosing
+        // shell for it to be a cavity OF, so it is always growth. Its
+        // `signed_volume_of_shell` can read negative when a curved band face
+        // (e.g. the torus−box kept toroidal band, which wraps the tube) is
+        // sampled by the fan-tet integral over only its outer-wire CORNER
+        // vertices — a degenerate under-sampling that flips the sign. Treating a
+        // lone shell as growth avoids discarding the whole result as a hole;
+        // multi-shell results keep the volume-sign split (a Cut can leave the
+        // tool's interior as a separate negative-volume shell).
+        if shells.len() == 1 || signed_vol >= 0.0 {
             growth.push(shell.clone());
         } else {
             holes.push(shell.clone());

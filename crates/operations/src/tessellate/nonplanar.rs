@@ -157,6 +157,210 @@ pub(super) fn tessellate_revolution_band_shared(
 /// longitude during stitching.
 type LatRing = Vec<(f64, u32)>;
 
+/// Collect a torus face wire's boundary as a ring of `(tube-angle v, shared gid)`
+/// sorted by `v`, taking the SHARED global vertices (so the ring shares the
+/// notch walls' vertices) and projecting to the torus `(u, v)`. Accepts edges of
+/// any curve type (the notch seam arcs are NURBS). Returns `None` if any edge is
+/// missing from the shared pool or the ring does not WRAP the tube once (the
+/// largest `v` gap is under a full turn).
+fn collect_torus_phi_ring(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &TriangleMesh,
+) -> Result<Option<Vec<(f64, u32)>>, crate::OperationsError> {
+    let wire = topo.wire(wire_id)?;
+    let mut gids: Vec<u32> = Vec::new();
+    for oe in wire.edges() {
+        let Some(edge_gids) = edge_global_indices.get(&oe.edge().index()) else {
+            return Ok(None);
+        };
+        gids.extend_from_slice(edge_gids);
+    }
+    let mut seen: DetHashSet<u32> = DetHashSet::default();
+    let mut ring: Vec<(f64, u32)> = Vec::with_capacity(gids.len());
+    for g in gids {
+        if !seen.insert(g) {
+            continue;
+        }
+        let (_, v) = torus.project_point(merged.positions[g as usize]);
+        ring.push((v, g));
+    }
+    if ring.len() < 3 {
+        return Ok(None);
+    }
+    ring.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Must wrap the tube once: largest v-gap (incl. wrap) under a full turn.
+    let max_gap = ring
+        .windows(2)
+        .map(|w| w[1].0 - w[0].0)
+        .chain(std::iter::once(
+            ring[0].0 + std::f64::consts::TAU - ring[ring.len() - 1].0,
+        ))
+        .fold(0.0_f64, f64::max);
+    if max_gap > std::f64::consts::PI {
+        return Ok(None);
+    }
+    Ok(Some(ring))
+}
+
+/// Tessellate the `torus − box`-style notch band: a kept toroidal patch that
+/// WRAPS the tube angle `v` fully and is bounded by TWO `v`-wrapping seam-arc
+/// loops at the two ends of a ring-angle (`u`) span (the box notch's `±y` walls).
+/// The band is swept structurally along `u` from one boundary loop to the other
+/// the LONG way (through `u = π`, the 294° kept side), with full-`v` interior
+/// rings; both boundary loops use their SHARED wall vertices, so the band and the
+/// plane notch walls meet crack-free (watertight). Returns `false` (defer to the
+/// CDT path) for any torus face that is not this two-`v`-loop notch band.
+///
+/// Distinct from [`tessellate_latitude_band_shared`]: there the two boundaries
+/// are constant-`v` latitude circles swept along `v`; here they wrap `v` and the
+/// sweep is along `u`.
+pub(super) fn tessellate_torus_notch_band(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<bool, crate::OperationsError> {
+    use std::f64::consts::{PI, TAU};
+    let FaceSurface::Torus(torus) = face_data.surface() else {
+        return Ok(false);
+    };
+    if face_data.inner_wires().len() != 1 {
+        return Ok(false);
+    }
+    let t1 = torus.clone();
+    let t2 = torus.clone();
+    let project = move |p: Point3| t1.project_point(p);
+    let surf_normal = move |u: f64, v: f64| t2.normal(u, v);
+
+    // Both boundary loops wrap the tube (v) once, with their shared wall gids.
+    let Some(ring_a) = collect_torus_phi_ring(
+        topo,
+        face_data.outer_wire(),
+        torus,
+        edge_global_indices,
+        merged,
+    )?
+    else {
+        return Ok(false);
+    };
+    let Some(ring_b) = collect_torus_phi_ring(
+        topo,
+        face_data.inner_wires()[0],
+        torus,
+        edge_global_indices,
+        merged,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    // Ring-angle (u) of each loop: each loop sits at a u-BAND (the box wall's cut
+    // varies in u with the tube angle), one near u_a, the other near u_b, the
+    // kept band the LONG way between them. Take each loop's mean u (wrap-safe)
+    // plus its half-u-spread, so the interior rows start at each loop's KEPT-SIDE
+    // edge (mean ± spread toward the band midpoint), NOT its mean — otherwise the
+    // first/last interior row sits INSIDE the loop's u-band and the stitch folds
+    // back over the boundary strip, under-covering the band.
+    let mean_u = |ring: &[(f64, u32)]| -> f64 {
+        let (mut sx, mut sy) = (0.0, 0.0);
+        for &(_, g) in ring {
+            let (u, _) = project(merged.positions[g as usize]);
+            sx += u.cos();
+            sy += u.sin();
+        }
+        sy.atan2(sx).rem_euclid(TAU)
+    };
+    // Max signed u-offset of a ring's vertices from its mean (wrap into (-π,π]).
+    let half_spread = |ring: &[(f64, u32)], mean: f64| -> f64 {
+        ring.iter()
+            .map(|&(_, g)| {
+                let (u, _) = project(merged.positions[g as usize]);
+                let d = (u - mean + PI).rem_euclid(TAU) - PI;
+                d.abs()
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    let u_a = mean_u(&ring_a);
+    let u_b = mean_u(&ring_b);
+    let spread_a = half_spread(&ring_a, u_a);
+    let spread_b = half_spread(&ring_b, u_b);
+
+    // Sweep the LONG way from ring_a toward ring_b (through the kept far side).
+    let fwd_span = (u_b - u_a).rem_euclid(TAU); // a -> b increasing u
+    // The interior must lie on the long arc; start just past each loop's
+    // kept-side edge so no interior row overlaps a boundary loop's u-band.
+    let (u_start, u_end) = if fwd_span >= PI {
+        // a -> b the long way is INCREASING u: kept edge of a is u_a+spread_a,
+        // of b is u_b-spread_b (i.e. u_a+fwd_span-spread_b).
+        (u_a + spread_a, u_a + fwd_span - spread_b)
+    } else {
+        // a -> b the long way is DECREASING u.
+        (u_a - spread_a, u_a - (TAU - fwd_span) + spread_b)
+    };
+    let span = (u_end - u_start).abs();
+    if span < 1e-6 {
+        return Ok(false);
+    }
+
+    // Interior rows: full-v circles at constant u, stepped along the sweep. Count
+    // from chord deviation over the band's u-arc-length (radius ≈ R, the ring).
+    let n_u =
+        segments_for_chord_deviation_a(torus.major_radius(), span, deflection, angular_tol, true)
+            .max(2);
+    // v-resolution: a full tube circle.
+    let n_v =
+        segments_for_chord_deviation_a(torus.minor_radius(), TAU, deflection, angular_tol, true)
+            .max(8);
+
+    // Build interior rings as `LatRing` (sorted by v) of fresh vertices.
+    let build_u_ring = |u: f64,
+                        merged: &mut TriangleMesh,
+                        point_to_global: &mut DetHashMap<(i64, i64, i64), u32>|
+     -> LatRing {
+        let mut row: LatRing = Vec::with_capacity(n_v);
+        for j in 0..n_v {
+            #[allow(clippy::cast_precision_loss)]
+            let v = TAU * (j as f64) / (n_v as f64);
+            let p = torus.evaluate(u, v);
+            let key = point_merge_key(p, MERGE_GRID);
+            let gid = *point_to_global.entry(key).or_insert_with(|| {
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(p);
+                merged.normals.push(surf_normal(u, v));
+                idx
+            });
+            row.push((v, gid));
+        }
+        row.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        row
+    };
+
+    let emit = make_band_emit(&project, &surf_normal);
+    let idx_start = merged.indices.len();
+
+    // Stitch ring_a -> interior rows -> ring_b. All rings sorted by v; `v` is the
+    // ring parameter passed to `stitch_rings` (it walks the shared tube angle).
+    let mut prev: LatRing = ring_a;
+    for iu in 1..n_u {
+        #[allow(clippy::cast_precision_loss)]
+        let u = u_start + (u_end - u_start) * (iu as f64) / (n_u as f64);
+        let row = build_u_ring(u.rem_euclid(TAU), merged, point_to_global);
+        stitch_rings(merged, &prev, &row, &emit);
+        prev = row;
+    }
+    stitch_rings(merged, &prev, &ring_b, &emit);
+
+    // Orient the whole band once against the torus outward normal.
+    orient_triangle_run(merged, idx_start, &project, &surf_normal);
+    Ok(true)
+}
+
 /// Tessellate a sphere/torus latitude band (the annular region between two
 /// constant-`v` full-revolution boundaries) as a structured UV grid.
 ///

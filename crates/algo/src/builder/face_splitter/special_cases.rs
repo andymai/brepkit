@@ -1027,6 +1027,179 @@ pub(super) fn split_periodic_face_into_bands(
     Some(bands)
 }
 
+/// Build an `OrientedPCurveEdge` (forward) from a section on this (torus) face.
+fn torus_section_to_edge(
+    section: &SectionEdge,
+    surface: &FaceSurface,
+    rank: Rank,
+) -> OrientedPCurveEdge {
+    let pcurve = match rank {
+        Rank::A => &section.pcurve_a,
+        Rank::B => &section.pcurve_b,
+    };
+    let (start_uv, end_uv) = match rank {
+        Rank::A => section.start_uv_a.zip(section.end_uv_a),
+        Rank::B => section.start_uv_b.zip(section.end_uv_b),
+    }
+    .unwrap_or_else(|| uv_endpoints_from_pcurve(pcurve, section.start, section.end, surface, &[]));
+    OrientedPCurveEdge {
+        curve_3d: section.curve_3d.clone(),
+        pcurve: pcurve.clone(),
+        start_uv,
+        end_uv,
+        start_3d: section.start,
+        end_3d: section.end,
+        forward: true,
+        source_edge_idx: None,
+        pave_block_id: section.pave_block_id,
+    }
+}
+
+/// Contained tracer for the `torus − box`-style cut: a box notch removes a
+/// connected sector of the ring whose surface boundary, in the torus `(θ, φ)`
+/// parameter space, is TWO closed loops each WRAPPING the tube angle `φ` fully
+/// (one at each θ-band where the box walls cut the tube partially; the box
+/// swallows the whole tube cross-section in between). The kept toroidal surface
+/// is the annular `u`-band between those two loops — emitted as ONE band face
+/// (outer wire = one φ-loop, the other as an inner wire, like a cylinder band
+/// between two rims).
+///
+/// Returns `None` (defer to the generic path) unless the in-box arcs stitch into
+/// exactly two φ-wrapping closed loops. Relies on the FF exact-crossing trim
+/// (`trim_torus_oval_to_box_face`) having given the arcs faithful endpoints that
+/// share the box-edge crossing vertices.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn split_torus_band_by_arrangement(
+    surface: &FaceSurface,
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use std::f64::consts::{PI, TAU};
+    let FaceSurface::Torus(torus) = surface else {
+        return None;
+    };
+    // Open arcs only (closed sections would be the lobe-hole case, not a band).
+    let open: Vec<OrientedPCurveEdge> = sections
+        .iter()
+        .filter(|s| (s.start - s.end).length() > tol)
+        .map(|s| torus_section_to_edge(s, surface, rank))
+        .collect();
+    if open.len() < 2 {
+        return None;
+    }
+
+    // Stitch arcs into closed loops by chaining shared 3D endpoints. The FF
+    // exact-crossing trim makes adjacent arcs share the box-edge crossing
+    // EXACTLY, so a tight join tolerance suffices.
+    let join_tol = (tol * 1000.0).max(1e-3);
+    let mut used = vec![false; open.len()];
+    let mut loops: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
+    for s0 in 0..open.len() {
+        if used[s0] {
+            continue;
+        }
+        used[s0] = true;
+        let mut chain = vec![open[s0].clone()];
+        loop {
+            let tail = chain.last().map_or(chain[0].start_3d, |e| e.end_3d);
+            if (tail - chain[0].start_3d).length() < join_tol && chain.len() >= 2 {
+                break; // closed
+            }
+            let nxt = open.iter().enumerate().find_map(|(i, e)| {
+                if used[i] {
+                    None
+                } else if (e.start_3d - tail).length() < join_tol {
+                    Some((i, false))
+                } else if (e.end_3d - tail).length() < join_tol {
+                    Some((i, true))
+                } else {
+                    None
+                }
+            });
+            match nxt {
+                Some((i, rev)) => {
+                    used[i] = true;
+                    let mut e = open[i].clone();
+                    if rev {
+                        std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+                        std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+                        e.forward = !e.forward;
+                    }
+                    chain.push(e);
+                }
+                None => break,
+            }
+        }
+        let closed = chain.len() >= 2
+            && chain
+                .last()
+                .is_some_and(|e| (e.end_3d - chain[0].start_3d).length() < join_tol);
+        if closed {
+            loops.push(chain);
+        }
+    }
+
+    // The kept band needs exactly two φ-wrapping boundary loops.
+    if loops.len() != 2 {
+        return None;
+    }
+    // Each loop must wrap φ fully: net φ-traversal ≈ ±2π.
+    let net_phi = |l: &[OrientedPCurveEdge]| -> f64 {
+        let mut phis: Vec<f64> = Vec::new();
+        for e in l {
+            let (_, v) = torus.project_point(e.start_3d);
+            phis.push(v);
+            let (_, vm) = torus.project_point(
+                e.curve_3d
+                    .evaluate_with_endpoints(0.5, e.start_3d, e.end_3d),
+            );
+            phis.push(vm);
+        }
+        let mut acc = 0.0;
+        for i in 0..phis.len() {
+            let d = phis[(i + 1) % phis.len()] - phis[i];
+            acc += d - TAU * ((d + PI) / TAU).floor();
+        }
+        acc
+    };
+    if loops.iter().any(|l| net_phi(l).abs() < PI) {
+        return None;
+    }
+
+    // Snap each loop's internal junctions to the midpoint of the two meeting
+    // endpoints so the loop is internally watertight at the box-edge vertices.
+    let snap_loop = |l: &mut Vec<OrientedPCurveEdge>| {
+        let n = l.len();
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let mid = l[i].end_3d + (l[j].start_3d - l[i].end_3d) * 0.5;
+            l[i].end_3d = mid;
+            l[j].start_3d = mid;
+        }
+    };
+    for l in &mut loops {
+        snap_loop(l);
+    }
+
+    let outer = loops[0].clone();
+    let inner_rev = reverse_loop(&loops[1]);
+    // Interior sample on the KEPT band (θ = π is the far side of the ring).
+    let interior = torus.evaluate(PI, 0.0);
+
+    Some(vec![SplitSubFace {
+        surface: surface.clone(),
+        outer_wire: outer,
+        inner_wires: vec![inner_rev],
+        reversed,
+        parent: face_id,
+        rank,
+        precomputed_interior: Some(interior),
+    }])
+}
+
 /// Split a face when ALL section edges are interior (don't touch the boundary).
 ///
 /// Groups section edges into closed loops by chaining shared 3D endpoints.

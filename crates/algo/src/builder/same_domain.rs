@@ -200,6 +200,15 @@ pub fn detect_same_domain<S: BuildHasher>(
                 };
 
                 if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
+                    // Two sub-faces split from the SAME input face are
+                    // complementary regions of one face's partition (e.g. the
+                    // in-tube and out-tube parts of a box wall cut by a torus) —
+                    // never same-domain duplicates of each other. Genuine SD
+                    // pairs come from DIFFERENT input faces (coincident walls
+                    // across operands, or sequential-boolean residue). Skip.
+                    if sub_faces[i].source_face == sub_faces[j].source_face {
+                        continue;
+                    }
                     // Two curved faces of the same underlying surface can share an
                     // outer-wire edge set yet cover DIFFERENT regions — e.g. the
                     // two hemisphere bands of a bored sphere share the equator
@@ -251,6 +260,11 @@ pub fn detect_same_domain<S: BuildHasher>(
                 _ => None,
             };
             let Some(same_dir) = same_dir else { continue };
+            // Sub-faces split from the SAME input face are complementary
+            // partition regions, not overlapping duplicates (see Step 1).
+            if sub_faces[i].source_face == sub_faces[j].source_face {
+                continue;
+            }
             if uf.find(i) == uf.find(j) {
                 continue; // already grouped
             }
@@ -298,6 +312,11 @@ pub fn detect_same_domain<S: BuildHasher>(
                 _ => None,
             };
             let Some(same_dir) = same_dir else { continue };
+            // Sub-faces split from the SAME input face are complementary
+            // partition regions, not overlapping duplicates (see Step 1).
+            if sub_faces[i].source_face == sub_faces[j].source_face {
+                continue;
+            }
             if uf.find(i) == uf.find(j) {
                 continue; // already grouped (e.g. identical edge sets)
             }

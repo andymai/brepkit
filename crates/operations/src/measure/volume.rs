@@ -82,6 +82,64 @@ fn solid_has_scalloped_sphere_collar(topo: &Topology, solid: SolidId) -> bool {
     })
 }
 
+/// Whether the solid has a torus notch band (torus − box: a kept toroidal patch
+/// bounded by two tube-angle(`v`)-WRAPPING seam-arc loops, NOT constant-`v`
+/// latitude circles). Its per-face analytic tessellation can't be sampled
+/// watertight in isolation (the band wraps `v` and shares vertices with the
+/// notch walls), and there is no closed-form volume — so the volume is taken off
+/// the (watertight) whole-solid mesh instead, like the box ∩ sphere collar.
+fn solid_has_torus_notch_band(topo: &Topology, solid: SolidId) -> bool {
+    let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, solid) else {
+        return false;
+    };
+    faces.iter().any(|&fid| {
+        topo.face(fid).is_ok_and(|f| match f.surface() {
+            FaceSurface::Torus(t) => {
+                f.inner_wires().len() == 1 && torus_wire_wraps_tube(topo, f.outer_wire(), t)
+            }
+            _ => false,
+        })
+    })
+}
+
+/// True when a torus face wire's vertices span the full tube angle `v` (a
+/// `v`-wrapping seam loop), as opposed to a constant-`v` latitude circle. Sampled
+/// from the wire's edge endpoints projected to the torus `v` parameter.
+fn torus_wire_wraps_tube(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> bool {
+    let Ok(wire) = topo.wire(wire_id) else {
+        return false;
+    };
+    let mut vs: Vec<f64> = Vec::new();
+    for oe in wire.edges() {
+        let Ok(e) = topo.edge(oe.edge()) else {
+            return false;
+        };
+        for vid in [e.start(), e.end()] {
+            if let Ok(v) = topo.vertex(vid) {
+                vs.push(torus.project_point(v.point()).1);
+            }
+        }
+    }
+    if vs.len() < 3 {
+        return false;
+    }
+    vs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Largest v-gap (incl. wrap); a wrapping loop's gap is well under a full turn,
+    // a constant-v circle collapses to ~one v value (gap ≈ 2π).
+    let max_gap = vs
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .chain(std::iter::once(
+            vs[0] + std::f64::consts::TAU - vs[vs.len() - 1],
+        ))
+        .fold(0.0_f64, f64::max);
+    max_gap < std::f64::consts::PI
+}
+
 /// Count mesh edges incident to a number of triangles other than 2 (boundary or
 /// non-manifold edges). Zero means a closed 2-manifold.
 fn mesh_boundary_edge_count(mesh: &tessellate::TriangleMesh) -> usize {
@@ -730,6 +788,20 @@ pub fn solid_volume(
         }
         // Non-watertight mesh: fall through to the generic paths below rather
         // than return a leaky volume.
+    }
+
+    // A torus notch band (torus − box) likewise has no closed-form volume and
+    // can't be per-face tessellated watertight (the band wraps the tube and
+    // shares vertices with the notch walls). The whole-solid mesh IS watertight
+    // (the structured notch-band tessellator), so take the divergence-theorem
+    // volume off it. Per-face summation would under-count (the band's own per-
+    // face mesh isn't closed).
+    if solid_has_torus_notch_band(topo, solid) {
+        let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
+        if !mesh.indices.is_empty() && mesh_boundary_edge_count(&mesh) == 0 {
+            return Ok(signed_volume_from_mesh(&mesh));
+        }
+        // Non-watertight mesh: fall through rather than return a leaky volume.
     }
 
     // Fast path: for solids made entirely of planar triangular faces
