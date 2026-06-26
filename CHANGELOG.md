@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.120.7](https://github.com/andymai/brepkit/compare/v2.120.6...v2.120.7) (2026-06-26)
+
+
+### Bug Fixes
+
+* **algo:** close torus−box boolean analytically (plane×torus seam + toroidal band) ([#1010](https://github.com/andymai/brepkit/issues/1010)) ([ead6f71](https://github.com/andymai/brepkit/commit/ead6f717904265047b3af89b9871d8b5d9828444))
+
 ## [2.120.6](https://github.com/andymai/brepkit/compare/v2.120.5...v2.120.6) (2026-06-26)
 
 
