@@ -234,13 +234,18 @@ fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
     use std::collections::HashSet;
 
     let mut holed_cyl_walls: Vec<FaceId> = Vec::new();
+    let mut planar_normals: Vec<Vec3> = Vec::new();
     for &fid in faces {
         let Ok(face) = topo.face(fid) else {
             return false;
         };
         match face.surface() {
             FaceSurface::Cylinder(_) if !face.inner_wires().is_empty() => holed_cyl_walls.push(fid),
-            FaceSurface::Cylinder(_) | FaceSurface::Plane { .. } => {}
+            // An UNHOLED cylinder face means a third cylinder is attached (its
+            // wall carries no lens hole); the lens fuse has EXACTLY two
+            // cylindrical faces, both holed. Reject so its volume isn't dropped.
+            FaceSurface::Cylinder(_) => return false,
+            FaceSurface::Plane { normal, .. } => planar_normals.push(*normal),
             // Any sphere/cone/torus/NURBS face, or a holed non-cylinder, is not
             // the cyl∪cyl lens signature.
             _ => return false,
@@ -280,6 +285,23 @@ fn solid_is_steinmetz_lens_fuse(topo: &Topology, faces: &[FaceId]) -> bool {
     let Some(axis_isect) = cylinders_perpendicular_and_intersecting(c0, c1) else {
         return false;
     };
+
+    // Account for EVERY face: the only non-cylinder faces allowed are the planar
+    // end-caps of the two lens cylinders, i.e. planes perpendicular to `a0` or
+    // `a1` (normal parallel to one cylinder's axis). A planar face pointing any
+    // other way belongs to a different attached body — reject so its volume is
+    // not silently absorbed into the two-cylinder closed form. (The census has
+    // exactly 4 such caps; we don't require a count, only that none is foreign.)
+    let a0 = c0.axis();
+    let a1 = c1.axis();
+    let cap_axis_aligned = |n: &Vec3| -> bool {
+        let na0 = n.dot(a0).abs();
+        let na1 = n.dot(a1).abs();
+        na0 > 1.0 - 1e-6 || na1 > 1.0 - 1e-6
+    };
+    if !planar_normals.iter().all(cap_axis_aligned) {
+        return false;
+    }
 
     // Non-truncation: the closed form `−16r³/3` is the INFINITE-cylinder
     // Steinmetz solid, valid only when neither finite wall is cut shorter than
@@ -1820,6 +1842,84 @@ mod regression_tests {
         assert!(
             !solid_is_steinmetz_lens_fuse(&topo, &faces),
             "a truncated (short) perpendicular fuse must not use the infinite-cylinder closed form"
+        );
+    }
+
+    #[test]
+    fn gate_rejects_extra_face_beyond_the_lens_fuse() {
+        // The two-cylinder closed form must fire ONLY when the solid is EXACTLY
+        // the lens fuse. A solid carrying the lens pair PLUS an extra attached
+        // cylinder still has two holed walls + their caps, but the extra
+        // cylinder's volume would be dropped — so the gate must account for
+        // every face and reject any foreign one.
+        let (mut topo, res) = steinmetz_fuse_census();
+        let census_faces = brepkit_topology::explorer::solid_faces(&topo, res).unwrap();
+        // Sanity: the clean census (2 holed walls + 4 caps) passes.
+        assert!(solid_is_steinmetz_lens_fuse(&topo, &census_faces));
+
+        // Build a separate plain cylinder in the SAME arena and grab its
+        // (UNHOLED) cylindrical wall face + one of its caps.
+        let extra = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        let extra_faces = brepkit_topology::explorer::solid_faces(&topo, extra).unwrap();
+        let extra_cyl = extra_faces
+            .iter()
+            .copied()
+            .find(|&f| {
+                topo.face(f)
+                    .is_ok_and(|fc| matches!(fc.surface(), FaceSurface::Cylinder(_)))
+            })
+            .expect("plain cylinder wall face");
+        let extra_cap = extra_faces
+            .iter()
+            .copied()
+            .find(|&f| {
+                topo.face(f)
+                    .is_ok_and(|fc| matches!(fc.surface(), FaceSurface::Plane { .. }))
+            })
+            .expect("plain cylinder cap face");
+
+        // Lens pair + an extra UNHOLED cylinder wall → reject (would drop its
+        // volume).
+        let mut with_extra_cyl = census_faces.clone();
+        with_extra_cyl.push(extra_cyl);
+        assert!(
+            !solid_is_steinmetz_lens_fuse(&topo, &with_extra_cyl),
+            "an extra unholed cylinder face must make the gate decline"
+        );
+
+        // Lens pair + an extra planar cap whose normal is NOT aligned with
+        // either lens axis (a tilted cylinder's cap) → reject.
+        let tilted = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            tilted,
+            &brepkit_math::mat::Mat4::rotation_x(0.7),
+        )
+        .unwrap();
+        let tilted_cap = brepkit_topology::explorer::solid_faces(&topo, tilted)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                topo.face(f)
+                    .is_ok_and(|fc| matches!(fc.surface(), FaceSurface::Plane { .. }))
+            })
+            .expect("tilted cylinder cap");
+        let mut with_foreign_cap = census_faces.clone();
+        with_foreign_cap.push(tilted_cap);
+        assert!(
+            !solid_is_steinmetz_lens_fuse(&topo, &with_foreign_cap),
+            "a planar cap not aligned with either lens axis must make the gate decline"
+        );
+
+        // Guard against a false positive in the helper: the extra cap from the
+        // z-aligned plain cylinder is axis-aligned, so it alone is NOT foreign —
+        // confirms the rejection above is the axis check, not an accidental
+        // catch-all. (Adding it keeps 2 holed walls, so the gate still fires.)
+        let mut with_aligned_cap = census_faces;
+        with_aligned_cap.push(extra_cap);
+        assert!(
+            solid_is_steinmetz_lens_fuse(&topo, &with_aligned_cap),
+            "a z-aligned extra cap is not foreign (still the lens signature by axis check)"
         );
     }
 }
