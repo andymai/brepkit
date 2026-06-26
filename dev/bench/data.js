@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782494076438,
+  "lastUpdate": 1782494405026,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1295,6 +1295,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19077998,
             "range": "± 415456",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea21ba69a8d25088714639e7bbeebd86eb3dba3c",
+          "message": "chore(main): release 2.122.0 (#1015)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.122.0](https://github.com/andymai/brepkit/compare/v2.121.0...v2.122.0)\n(2026-06-26)\n\n\n### Features\n\n* **render:** brepkit-render M1 — offscreen wgpu renderer\n([#1013](https://github.com/andymai/brepkit/issues/1013))\n([f7d3000](https://github.com/andymai/brepkit/commit/f7d30008e660d233acbd0727eeaa9f12c3f96c99))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.122.0 of `brepkit-wasm`, adding the offscreen `wgpu` renderer\n(M1) from `brepkit-render` for headless rendering.\n\n<sup>Written for commit 0a567078c2658c50d78a26acc13c41add44b9e8a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1015?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-06-26T17:17:55Z",
+          "tree_id": "5cda83fb33a4db47ed49d7146df208f9c7b49542",
+          "url": "https://github.com/andymai/brepkit/commit/ea21ba69a8d25088714639e7bbeebd86eb3dba3c"
+        },
+        "date": 1782494404021,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 755644,
+            "range": "± 4938",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 852134,
+            "range": "± 5268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13156,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 620744,
+            "range": "± 1386",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19816518,
+            "range": "± 139564",
             "unit": "ns/iter"
           }
         ]
