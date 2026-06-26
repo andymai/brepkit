@@ -12,7 +12,7 @@ use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_d
 use super::mesh_ops::{dedupe_coincident_triangles, weld_boundary_vertices};
 use super::nonplanar::{
     tessellate_latitude_band_shared, tessellate_nonplanar_cdt, tessellate_nonplanar_snap,
-    tessellate_revolution_band_shared,
+    tessellate_revolution_band_shared, tessellate_torus_notch_band,
 };
 use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
@@ -891,18 +891,34 @@ pub(super) fn tessellate_face_with_shared_edges(
         // fills the removed polar cap. Tessellate such bands structurally from
         // the shared boundary vertices instead. Returns false for any other
         // sphere/torus face, which then takes the CDT/snap path unchanged.
-        let handled_band = matches!(
-            face_data.surface(),
-            FaceSurface::Sphere(_) | FaceSurface::Torus(_)
-        ) && tessellate_latitude_band_shared(
-            topo,
-            face_data,
-            deflection,
-            angular_tol,
-            edge_global_indices,
-            merged,
-            point_to_global,
-        )?;
+        // A torus notch band (torus − box: a kept patch wrapping the tube fully,
+        // bounded by two v-wrapping seam-arc loops at the ends of a ring-angle
+        // span) is swept along u, not v, so it is not a latitude band. Try it
+        // first; it returns false for any other torus face.
+        let handled_notch = matches!(face_data.surface(), FaceSurface::Torus(_))
+            && tessellate_torus_notch_band(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                edge_global_indices,
+                merged,
+                point_to_global,
+            )?;
+
+        let handled_band = handled_notch
+            || (matches!(
+                face_data.surface(),
+                FaceSurface::Sphere(_) | FaceSurface::Torus(_)
+            ) && tessellate_latitude_band_shared(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                edge_global_indices,
+                merged,
+                point_to_global,
+            )?);
 
         if !handled_band {
             let pos_save = merged.positions.len();

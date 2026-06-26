@@ -1157,6 +1157,68 @@ fn intersect_box_centered_sphere_is_analytic_collar() {
 }
 
 #[test]
+/// Cut a box notch out of a torus (major 10, minor 3): the box [6,14]×[−4,4]×[−4,4]
+/// scoops a sector of the +x ring lobe, severing the ring into a capped C-tube.
+/// The result is an analytic B-rep — one kept toroidal band (wrapping the tube,
+/// spanning the long 294° ring arc) + the box notch walls — watertight, NOT a
+/// mesh fallback. Volume ≈ torus minus the box∩torus chunk (Monte-carlo 1543).
+fn cut_torus_by_box_notch_is_analytic_watertight() {
+    let mut topo = Topology::new();
+    let tor = crate::primitives::make_torus(&mut topo, 10.0, 3.0, 32).unwrap();
+    let bx = crate::primitives::make_box(&mut topo, 8.0, 8.0, 8.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        bx,
+        &brepkit_math::mat::Mat4::translation(6.0, -4.0, -4.0),
+    )
+    .unwrap();
+    let result = boolean(&mut topo, BooleanOp::Cut, tor, bx).unwrap();
+
+    let face_ids = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let (mut planes, mut tori, mut others) = (0usize, 0usize, 0usize);
+    for fid in &face_ids {
+        match topo.face(*fid).unwrap().surface() {
+            brepkit_topology::face::FaceSurface::Plane { .. } => planes += 1,
+            brepkit_topology::face::FaceSurface::Torus(_) => tori += 1,
+            _ => others += 1,
+        }
+    }
+    // Exact analytic decomposition: 1 kept toroidal band + 4 plane notch walls
+    // (the y=±4 walls + the inner x=6 wall split into two thin lobes), with NO
+    // NURBS fallback faces — i.e. NOT a mesh fallback.
+    assert_eq!(others, 0, "no non-analytic faces expected, got {others}");
+    assert_eq!(tori, 1, "expected exactly 1 kept toroidal band, got {tori}");
+    assert_eq!(
+        planes, 4,
+        "expected exactly 4 plane notch walls, got {planes}"
+    );
+    assert_eq!(
+        face_ids.len(),
+        5,
+        "expected exactly 5 faces, got {}",
+        face_ids.len()
+    );
+
+    // Watertight analytic B-rep (not a mesh fallback): every edge shared by
+    // exactly two faces.
+    let adj = brepkit_topology::adjacency::AdjacencyIndex::build(&topo, result).unwrap();
+    assert_eq!(
+        adj.boundary_edges().len(),
+        0,
+        "result must be watertight (0 free edges)"
+    );
+    assert!(adj.is_manifold(), "result must be manifold");
+
+    // Volume ≈ torus (2π²·10·9 = 1776.5) minus the box∩torus chunk (≈233).
+    let expected = 1543.0;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 0.02,
+        "volume {vol:.2} should be within 2% of {expected:.0}"
+    );
+}
+
+#[test]
 /// Fuse a 10³ box with a sphere of r=7.
 ///
 /// By inclusion-exclusion: V(A∪B) = V(A) + V(B) - V(A∩B).

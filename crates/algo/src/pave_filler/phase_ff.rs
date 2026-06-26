@@ -544,7 +544,25 @@ impl FaceExtent {
                 margin: (smaller * 0.01).max(tol.linear),
             })
         } else {
-            let (v0, v1) = v_range?;
+            // A whole, untrimmed torus has no `v_range` (its boundary is the
+            // degenerate fundamental-polygon seam), yet it IS a real extent: the
+            // full tube v ∈ [0, 2π], full revolution u (no gap). Treating it as
+            // full extent lets `restrict_curves_to_faces` run the in-both clip,
+            // so a plane×torus oval is trimmed to the partner box face's region
+            // instead of bailing unclipped. Mirrors the whole-torus AABB gate
+            // (`face_boundary_all_degenerate` → `t.aabb()`).
+            let (v0, v1) = match v_range {
+                Some(r) => r,
+                None => {
+                    if matches!(surface, FaceSurface::Torus(_))
+                        && face_boundary_all_degenerate(topo, face_id, tol).unwrap_or(false)
+                    {
+                        (0.0, std::f64::consts::TAU)
+                    } else {
+                        return None;
+                    }
+                }
+            };
             let margin = (v1 - v0).abs() * 0.01 + tol.linear;
             // For a partial-arc lateral face (rounded-rect corner = a 90°
             // quarter-cylinder), record the angular gap the face does NOT
@@ -704,6 +722,18 @@ fn restrict_curves_to_faces(
             out.push(raw);
             continue;
         }
+        // Torus × box-plane: a plane×torus oval is clipped to its EXACT in-box
+        // arc at the box-edge∩torus crossings (shared with the adjacent box
+        // wall, so the notch is watertight). Gated to a closed NURBS oval whose
+        // partner is a planar face with straight (Line) boundary edges; defers
+        // (None) otherwise, so all other sections keep the sample-clip below.
+        if let Some(arcs) =
+            trim_torus_oval_to_box_face(topo, fa, fb, surf_a, surf_b, &raw, &ext_a, &ext_b, tol)
+        {
+            out.extend(arcs);
+            continue;
+        }
+
         let pt = |i: usize| -> Point3 {
             #[allow(clippy::cast_precision_loss)]
             let f = i as f64 / N as f64;
@@ -749,6 +779,236 @@ fn restrict_curves_to_faces(
         out.push(raw);
     }
     out
+}
+
+/// Trim a plane×torus oval to its EXACT in-box arc at the box-edge∩torus
+/// crossings (the analogue of box∩sphere's `emit_split_circle_arcs`, for a
+/// marched torus oval instead of a `Circle`).
+///
+/// Gated: fires only when one face is a `Torus`, the partner is a `Plane` whose
+/// outer wire is all straight `Line` edges (a box wall), and `raw` is a CLOSED
+/// non-`Line` oval. Returns:
+/// - `Some(arc)` — the single in-box arc, with its endpoints SNAPPED to the
+///   exact box-edge∩torus crossings so the adjacent box wall (trimmed against
+///   the same edge) shares those vertices and the notch is watertight.
+/// - `Some(vec![raw])` — the oval lies wholly inside the box face (no boundary
+///   crossing): keep it whole.
+/// - `None` — not this case; the caller's sample-clip handles it.
+///
+/// The kept arc is the one whose midpoint is inside the box-face polygon (the
+/// outer arc that wraps most of the tube), not the inner fragment a contiguous
+/// sample run would wrongly keep on a mirror-asymmetric marcher parameterisation.
+#[allow(clippy::too_many_arguments)]
+fn trim_torus_oval_to_box_face(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    surf_a: &FaceSurface,
+    surf_b: &FaceSurface,
+    raw: &RawCurve,
+    ext_a: &FaceExtent,
+    ext_b: &FaceExtent,
+    tol: Tolerance,
+) -> Option<Vec<RawCurve>> {
+    // Identify the torus face/surface and the box (plane) face; the oval must be
+    // a closed non-Line curve.
+    if matches!(raw.curve, EdgeCurve::Line) {
+        return None;
+    }
+    if (raw.p_start - raw.p_end).length() > 1e-6 {
+        return None; // open curve — not a closed oval
+    }
+    let (torus, plane_face, plane_ext) = match (surf_a, surf_b) {
+        (FaceSurface::Torus(t), FaceSurface::Plane { .. }) => (t, fb, ext_b),
+        (FaceSurface::Plane { .. }, FaceSurface::Torus(t)) => (t, fa, ext_a),
+        _ => return None,
+    };
+    let _ = ext_a;
+    let _ = ext_b;
+
+    // The box face's straight boundary edges (its rectangle sides).
+    let face = topo.face(plane_face).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut box_edges: Vec<(Point3, Point3)> = Vec::new();
+    for oe in wire.edges() {
+        let e = topo.edge(oe.edge()).ok()?;
+        if !matches!(e.curve(), EdgeCurve::Line) {
+            return None; // not a straight-edged wall — defer
+        }
+        let s = topo.vertex(e.start()).ok()?.point();
+        let en = topo.vertex(e.end()).ok()?.point();
+        box_edges.push((s, en));
+    }
+    if box_edges.len() < 3 {
+        return None;
+    }
+
+    // Exact box-edge ∩ torus crossings that lie ON the edge segment AND ON the
+    // oval. The crossing point is EXACT; `on_oval_tol` only has to confirm the
+    // crossing belongs to THIS oval (vs a different oval branch on the same
+    // plane, which is ≳1 mm away) — so it must exceed the MARCHED oval's
+    // approximation error (~0.1 mm), well below the inter-branch separation.
+    let on_oval_tol = 0.3_f64;
+    let dedup_tol = tol.linear * 100.0;
+    let mut crossings: Vec<Point3> = Vec::new();
+    for &(s, en) in &box_edges {
+        let dir = en - s;
+        let len = dir.length();
+        if len < tol.linear {
+            continue;
+        }
+        for t in analytic_intersection::intersect_line_torus(torus, s, dir) {
+            if !(-1e-6..=1.0 + 1e-6).contains(&t) {
+                continue; // off the edge segment
+            }
+            let p = s + dir * t;
+            // Must lie on the oval (the marched NURBS), else it's a crossing of
+            // a DIFFERENT oval branch on this plane.
+            let mut min_d = f64::MAX;
+            for i in 0..=128 {
+                let tt = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f64::from(i) / 128.0;
+                min_d = min_d.min(
+                    (raw.curve
+                        .evaluate_with_endpoints(tt, raw.p_start, raw.p_end)
+                        - p)
+                        .length(),
+                );
+            }
+            let on_oval = min_d < on_oval_tol;
+            if on_oval && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
+                crossings.push(p);
+            }
+        }
+    }
+
+    // No boundary crossing: the oval is wholly inside (or outside) the box face.
+    if crossings.is_empty() {
+        // Inside → keep whole; outside → the caller's sample-clip drops it.
+        let mid = raw
+            .curve
+            .evaluate_with_endpoints(0.5, raw.p_start, raw.p_end);
+        return if plane_ext.contains(mid) {
+            Some(vec![raw.clone()])
+        } else {
+            None
+        };
+    }
+    // A single tangential crossing never splits the oval into a kept arc.
+    if crossings.len() < 2 {
+        return None;
+    }
+
+    // Find each crossing's parameter on the closed oval (densest sample).
+    let n_dense = 1024usize;
+    let oval_at = |frac: f64| -> Point3 {
+        let tt = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * frac;
+        raw.curve
+            .evaluate_with_endpoints(tt, raw.p_start, raw.p_end)
+    };
+    let frac_of = |p: Point3| -> f64 {
+        let mut best_f = 0.0;
+        let mut best_d = f64::MAX;
+        for i in 0..=n_dense {
+            #[allow(clippy::cast_precision_loss)]
+            let f = i as f64 / n_dense as f64;
+            let d = (oval_at(f) - p).length();
+            if d < best_d {
+                best_d = d;
+                best_f = f;
+            }
+        }
+        best_f
+    };
+    let mut marks: Vec<(f64, Point3)> = crossings.iter().map(|&p| (frac_of(p), p)).collect();
+    marks.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    if marks.len() < 2 {
+        return None;
+    }
+
+    // For each arc between consecutive crossings (wrapping the closed oval), the
+    // kept arc has its interior midpoint inside the box face. Re-sample that arc
+    // (walking the closed oval the correct way) and fit a FRESH NURBS whose
+    // endpoints are the EXACT box-edge crossings — so the adjacent box wall
+    // shares those vertices. Re-sampling avoids out-of-domain clamped-NURBS
+    // evaluation on a wrapping arc.
+    let sample_arc = |f0: f64, f1: f64| -> Vec<Point3> {
+        // Walk f0 -> f1 forward on the closed oval (wrapping past 1.0).
+        let span = if f1 >= f0 { f1 - f0 } else { f1 + 1.0 - f0 };
+        let steps = 48usize;
+        (0..=steps)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let f = (f0 + span * (i as f64 / steps as f64)).rem_euclid(1.0);
+                oval_at(f)
+            })
+            .collect()
+    };
+    // Collect ALL in-box arcs (the oval may cross the box face's boundary into
+    // MORE than one in-box interval — e.g. a plane cut that enters the box face
+    // twice — and each is a valid section; keeping only the longest would drop
+    // the others and leave incomplete walls). Each arc spans between two
+    // consecutive boundary crossings whose mid-arc point is inside the box face.
+    let mut arc_point_sets: Vec<Vec<Point3>> = Vec::new();
+    for i in 0..marks.len() {
+        let (f0, p0) = marks[i];
+        let (f1, p1) = marks[(i + 1) % marks.len()];
+        let mut pts = sample_arc(f0, f1);
+        if pts.len() < 4 {
+            continue;
+        }
+        if !plane_ext.contains(pts[pts.len() / 2]) {
+            continue;
+        }
+        let last = pts.len() - 1;
+        pts[0] = p0;
+        pts[last] = p1;
+        arc_point_sets.push(pts);
+    }
+    if arc_point_sets.is_empty() {
+        return None;
+    }
+
+    // Emit each kept in-box arc ALWAYS SPLIT at its midpoint into two sub-arcs
+    // with a distinct middle vertex. Each kept arc shares BOTH its endpoints (the
+    // box-edge∩torus crossings) with the partner box-wall edge that closes the
+    // same notch-wall lens — a straight box Line for the inner (x=6) wall, the
+    // partner arc for the y-walls. The endpoint-pair-keyed `merge_duplicate_edges`
+    // (unchanged, gridfinity-load-bearing) would collapse any two co-endpoint
+    // edges, degenerating the wall into a one-edge face. The midpoint vertex
+    // breaks that: no two edges of the lens then share BOTH endpoints. The split
+    // arc is emitted as ONE shared FF section, so BOTH consumers — the kept
+    // toroidal band and the box-wall sub-face — see the same midpoint vertex and
+    // stay watertight. Geometry is unchanged (the two halves retrace the arc).
+    let fit = |seg: &[Point3]| -> Option<RawCurve> {
+        let curve = brepkit_math::nurbs::fitting::interpolate(seg, 3.min(seg.len() - 1)).ok()?;
+        let dom = curve.domain();
+        let bbox = Aabb3::try_from_points(seg.iter().copied())?;
+        Some(RawCurve {
+            curve: EdgeCurve::NurbsCurve(curve),
+            bbox,
+            t_range: dom,
+            p_start: seg[0],
+            p_end: seg[seg.len() - 1],
+        })
+    };
+    let mut out_arcs = Vec::new();
+    for pts in &arc_point_sets {
+        if pts.len() >= 7 {
+            let mid = pts.len() / 2;
+            if let (Some(a0), Some(a1)) = (fit(&pts[..=mid]), fit(&pts[mid..])) {
+                out_arcs.push(a0);
+                out_arcs.push(a1);
+            } else if let Some(a) = fit(pts) {
+                out_arcs.push(a);
+            }
+        } else if let Some(a) = fit(pts) {
+            out_arcs.push(a);
+        }
+    }
+    if out_arcs.is_empty() {
+        return None;
+    }
+    Some(out_arcs)
 }
 
 /// Trim a CLOSED section curve (Ellipse or NURBS) to its in-both arc
@@ -1327,6 +1587,7 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
 }
 
 /// Intermediate intersection result before face IDs are assigned.
+#[derive(Clone)]
 struct RawCurve {
     /// The 3D curve geometry.
     curve: EdgeCurve,

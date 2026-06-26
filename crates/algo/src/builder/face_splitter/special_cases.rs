@@ -1027,6 +1027,204 @@ pub(super) fn split_periodic_face_into_bands(
     Some(bands)
 }
 
+/// Build an `OrientedPCurveEdge` (forward) from a section on this (torus) face.
+fn torus_section_to_edge(
+    section: &SectionEdge,
+    surface: &FaceSurface,
+    rank: Rank,
+) -> OrientedPCurveEdge {
+    let pcurve = match rank {
+        Rank::A => &section.pcurve_a,
+        Rank::B => &section.pcurve_b,
+    };
+    let (start_uv, end_uv) = match rank {
+        Rank::A => section.start_uv_a.zip(section.end_uv_a),
+        Rank::B => section.start_uv_b.zip(section.end_uv_b),
+    }
+    .unwrap_or_else(|| uv_endpoints_from_pcurve(pcurve, section.start, section.end, surface, &[]));
+    OrientedPCurveEdge {
+        curve_3d: section.curve_3d.clone(),
+        pcurve: pcurve.clone(),
+        start_uv,
+        end_uv,
+        start_3d: section.start,
+        end_3d: section.end,
+        forward: true,
+        source_edge_idx: None,
+        pave_block_id: section.pave_block_id,
+    }
+}
+
+/// Contained tracer for the `torus − box`-style cut: a box notch removes a
+/// connected sector of the ring whose surface boundary, in the torus `(θ, φ)`
+/// parameter space, is TWO closed loops each WRAPPING the tube angle `φ` fully
+/// (one at each θ-band where the box walls cut the tube partially; the box
+/// swallows the whole tube cross-section in between). The kept toroidal surface
+/// is the annular `u`-band between those two loops — emitted as ONE band face
+/// (outer wire = one φ-loop, the other as an inner wire, like a cylinder band
+/// between two rims).
+///
+/// Returns `None` (defer to the generic path) unless the in-box arcs stitch into
+/// exactly two φ-wrapping closed loops. Relies on the FF exact-crossing trim
+/// (`trim_torus_oval_to_box_face`) having given the arcs faithful endpoints that
+/// share the box-edge crossing vertices.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn split_torus_band_by_arrangement(
+    surface: &FaceSurface,
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use std::f64::consts::{PI, TAU};
+    let FaceSurface::Torus(torus) = surface else {
+        return None;
+    };
+    // Open arcs only (closed sections would be the lobe-hole case, not a band).
+    let open: Vec<OrientedPCurveEdge> = sections
+        .iter()
+        .filter(|s| (s.start - s.end).length() > tol)
+        .map(|s| torus_section_to_edge(s, surface, rank))
+        .collect();
+    if open.len() < 2 {
+        return None;
+    }
+
+    // Stitch arcs into closed loops by chaining shared 3D endpoints. The FF
+    // exact-crossing trim snaps adjacent arcs to the SAME box-edge crossing
+    // (and the arc-split shares the exact midpoint), so a tight tolerance
+    // suffices — a loose one could stitch unrelated endpoints into false loops.
+    let join_tol = (tol * 100.0).max(tol);
+    let mut used = vec![false; open.len()];
+    let mut loops: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
+    for s0 in 0..open.len() {
+        if used[s0] {
+            continue;
+        }
+        used[s0] = true;
+        let mut chain = vec![open[s0].clone()];
+        loop {
+            let tail = chain.last().map_or(chain[0].start_3d, |e| e.end_3d);
+            if (tail - chain[0].start_3d).length() < join_tol && chain.len() >= 2 {
+                break; // closed
+            }
+            let nxt = open.iter().enumerate().find_map(|(i, e)| {
+                if used[i] {
+                    None
+                } else if (e.start_3d - tail).length() < join_tol {
+                    Some((i, false))
+                } else if (e.end_3d - tail).length() < join_tol {
+                    Some((i, true))
+                } else {
+                    None
+                }
+            });
+            match nxt {
+                Some((i, rev)) => {
+                    used[i] = true;
+                    let mut e = open[i].clone();
+                    if rev {
+                        std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+                        std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+                        e.forward = !e.forward;
+                    }
+                    chain.push(e);
+                }
+                None => break,
+            }
+        }
+        let closed = chain.len() >= 2
+            && chain
+                .last()
+                .is_some_and(|e| (e.end_3d - chain[0].start_3d).length() < join_tol);
+        if closed {
+            loops.push(chain);
+        }
+    }
+
+    // The kept band needs exactly two φ-wrapping boundary loops.
+    if loops.len() != 2 {
+        return None;
+    }
+    // Each loop must wrap φ fully: net φ-traversal ≈ ±2π.
+    let net_phi = |l: &[OrientedPCurveEdge]| -> f64 {
+        let mut phis: Vec<f64> = Vec::new();
+        for e in l {
+            let (_, v) = torus.project_point(e.start_3d);
+            phis.push(v);
+            let (_, vm) = torus.project_point(
+                e.curve_3d
+                    .evaluate_with_endpoints(0.5, e.start_3d, e.end_3d),
+            );
+            phis.push(vm);
+        }
+        let mut acc = 0.0;
+        for i in 0..phis.len() {
+            let d = phis[(i + 1) % phis.len()] - phis[i];
+            acc += d - TAU * ((d + PI) / TAU).floor();
+        }
+        acc
+    };
+    if loops.iter().any(|l| net_phi(l).abs() < PI) {
+        return None;
+    }
+
+    // Snap each loop's internal junctions to the midpoint of the two meeting
+    // endpoints so the loop is internally watertight at the box-edge vertices.
+    let snap_loop = |l: &mut Vec<OrientedPCurveEdge>| {
+        let n = l.len();
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let mid = l[i].end_3d + (l[j].start_3d - l[i].end_3d) * 0.5;
+            l[i].end_3d = mid;
+            l[j].start_3d = mid;
+        }
+    };
+    for l in &mut loops {
+        snap_loop(l);
+    }
+
+    let outer = loops[0].clone();
+    // Interior sample on the KEPT band: the band spans the ring angle u the LONG
+    // way between the two boundary loops, which sit at roughly constant u (the
+    // box-wall cuts). Take each loop's mean u (wrap-safe via summed unit vectors)
+    // and the MIDPOINT of the long arc between them — NOT a hardcoded u = π,
+    // which is only correct when the notch is on the +x side (a mirrored or
+    // rotated cut puts the kept band's centre elsewhere). The band wraps the tube
+    // v fully at this interior u, so v = 0 is on it.
+    let loop_mean_u = |l: &[OrientedPCurveEdge]| -> f64 {
+        let (mut sx, mut sy) = (0.0, 0.0);
+        for e in l {
+            let (u, _) = torus.project_point(e.start_3d);
+            sx += u.cos();
+            sy += u.sin();
+        }
+        sy.atan2(sx).rem_euclid(TAU)
+    };
+    let u0 = loop_mean_u(&loops[0]);
+    let u1 = loop_mean_u(&loops[1]);
+    // Long-arc midpoint between u0 and u1 (the short gap is the removed notch).
+    let fwd = (u1 - u0).rem_euclid(TAU);
+    let u_mid = if fwd >= PI {
+        (u0 + fwd / 2.0).rem_euclid(TAU) // a->b the long way is increasing
+    } else {
+        (u0 - (TAU - fwd) / 2.0).rem_euclid(TAU) // long way is decreasing
+    };
+    let interior = torus.evaluate(u_mid, 0.0);
+    let inner_rev = reverse_loop(&loops[1]);
+
+    Some(vec![SplitSubFace {
+        surface: surface.clone(),
+        outer_wire: outer,
+        inner_wires: vec![inner_rev],
+        reversed,
+        parent: face_id,
+        rank,
+        precomputed_interior: Some(interior),
+    }])
+}
+
 /// Split a face when ALL section edges are interior (don't touch the boundary).
 ///
 /// Groups section edges into closed loops by chaining shared 3D endpoints.

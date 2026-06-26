@@ -483,6 +483,138 @@ fn face_normal_at(topo: &Topology, face_id: FaceId, point: Point3) -> Option<Vec
 
 // ── Phase 3 ──────────────────────────────────────────────────────────
 
+/// Robust outward-orientation test for a closed shell, independent of face
+/// curvature and wire winding.
+///
+/// `signed_volume_of_shell` signs each face by its surface normal but integrates
+/// the magnitude over the outer-wire CORNER vertices only — a fan that
+/// under-samples (and can sign-flip) a doubly-curved band whose corners barely
+/// bound the wrapped surface (the torus−box notch band reads negative despite
+/// being outward). This computes the divergence-theorem flux `∮ P · n dA` per
+/// face with a curvature-aware quadrature — a planar face from its corner fan
+/// (exact), a curved face from a `(u, v)` GRID over its boundary's parameter box
+/// with the local area element `|∂P/∂u × ∂P/∂v|` — so a wrapped band integrates
+/// correctly. A closed outward shell yields a positive total (≈ 3·Volume); a
+/// genuinely inward-oriented lone shell (a Cut leaving only a cavity component)
+/// yields negative and is still rejected. Returns `None` when no face yields a
+/// usable contribution so the caller falls back to the volume sign.
+fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> {
+    let mut flux = 0.0_f64;
+    let mut any = false;
+    for &fid in faces {
+        let Ok(face) = topo.face(fid) else { continue };
+        let surface = face.surface();
+        if let FaceSurface::Plane { .. } = surface {
+            // Planar: corner fan from sampled boundary points is exact.
+            let Ok(wire) = topo.wire(face.outer_wire()) else {
+                continue;
+            };
+            let mut pts: Vec<Point3> = Vec::new();
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                    continue;
+                };
+                let (sp, ep) = (sv.point(), ev.point());
+                for k in 0..4 {
+                    let f = f64::from(k) / 4.0;
+                    let f = if oe.is_forward() { f } else { 1.0 - f };
+                    pts.push(edge.curve().evaluate_with_endpoints(f, sp, ep));
+                }
+            }
+            if pts.len() < 3 {
+                continue;
+            }
+            let centroid = {
+                let n = pts.len() as f64;
+                let mut c = Vec3::new(0.0, 0.0, 0.0);
+                for p in &pts {
+                    c += Vec3::new(p.x(), p.y(), p.z());
+                }
+                Point3::new(c.x() / n, c.y() / n, c.z() / n)
+            };
+            let Some(normal) = face_normal_at(topo, fid, centroid) else {
+                continue;
+            };
+            let area = newell_normal(&pts).length() * 0.5;
+            flux += area * Vec3::new(centroid.x(), centroid.y(), centroid.z()).dot(normal);
+            any = true;
+        } else {
+            // Curved: integrate over the boundary's (u, v) parameter box.
+            let Ok(wire) = topo.wire(face.outer_wire()) else {
+                continue;
+            };
+            let mut uvs: Vec<(f64, f64)> = Vec::new();
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                    continue;
+                };
+                let (sp, ep) = (sv.point(), ev.point());
+                for k in 0..=8 {
+                    let f = f64::from(k) / 8.0;
+                    let p = edge.curve().evaluate_with_endpoints(f, sp, ep);
+                    if let Some((u, v)) = surface.project_point(p) {
+                        uvs.push((u, v));
+                    }
+                }
+            }
+            if uvs.len() < 3 {
+                continue;
+            }
+            let (u_lo, u_hi, v_lo, v_hi) = uvs.iter().fold(
+                (f64::MAX, f64::MIN, f64::MAX, f64::MIN),
+                |(ul, uh, vl, vh), &(u, v)| (ul.min(u), uh.max(u), vl.min(v), vh.max(v)),
+            );
+            let reversed = face.is_reversed();
+            let (n_u, n_v) = (24usize, 24usize);
+            let du = (u_hi - u_lo) / n_u as f64;
+            let dv = (v_hi - v_lo) / n_v as f64;
+            if du.abs() < 1e-12 || dv.abs() < 1e-12 {
+                continue;
+            }
+            let eps_u = du * 1e-3;
+            let eps_v = dv * 1e-3;
+            for iu in 0..n_u {
+                for iv in 0..n_v {
+                    let u = u_lo + (iu as f64 + 0.5) * du;
+                    let v = v_lo + (iv as f64 + 0.5) * dv;
+                    let (Some(p), Some(pu1), Some(pu0), Some(pv1), Some(pv0)) = (
+                        surface.evaluate(u, v),
+                        surface.evaluate(u + eps_u, v),
+                        surface.evaluate(u - eps_u, v),
+                        surface.evaluate(u, v + eps_v),
+                        surface.evaluate(u, v - eps_v),
+                    ) else {
+                        continue;
+                    };
+                    let dp_du = (pu1 - pu0) * (1.0 / (2.0 * eps_u));
+                    let dp_dv = (pv1 - pv0) * (1.0 / (2.0 * eps_v));
+                    let cross = dp_du.cross(dp_dv);
+                    let da = cross.length() * du.abs() * dv.abs();
+                    if da < 1e-20 {
+                        continue;
+                    }
+                    let mut n = surface.normal(u, v);
+                    if reversed {
+                        n = -n;
+                    }
+                    flux += da * Vec3::new(p.x(), p.y(), p.z()).dot(n);
+                    any = true;
+                }
+            }
+        }
+    }
+    if !any || flux.abs() < 1e-9 {
+        return None;
+    }
+    Some(flux > 0.0)
+}
+
 /// Classify shells as Growth (outer) or Hole (inner).
 ///
 /// Uses signed volume: positive → outward normals (growth),
@@ -498,7 +630,36 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
 
         let signed_vol = signed_volume_of_shell(topo, shell);
 
-        if signed_vol >= 0.0 {
+        // `signed_volume_of_shell` integrates over the outer-wire CORNER vertices
+        // only, so it can sign-flip a doubly-curved band whose corners barely
+        // bound the wrapped surface (the torus−box notch band reads negative
+        // despite being outward). For a LONE shell — the result's outer boundary,
+        // with no enclosing shell to be a cavity of — disambiguate with the
+        // curvature-robust `shell_is_outward_oriented` (surface-normal divergence
+        // flux): keep it as growth only when genuinely outward, so a Cut that
+        // leaves only an INWARD cavity component is still rejected. Multi-shell
+        // results keep the volume-sign split (a Cut can leave the tool's interior
+        // as a separate negative-volume cavity shell).
+        let is_growth = if signed_vol >= 0.0 {
+            // Positive corner-fan volume already reads outward — keep the
+            // historical behaviour for every solid that integrates cleanly
+            // (planar, and curved shells whose constant-v boundaries the fan
+            // captures, e.g. the sphere − through-cylinder band). The robust
+            // test is consulted ONLY below, never overriding a positive volume.
+            true
+        } else if shells.len() == 1 {
+            // A LONE shell read NEGATIVE: either it is genuinely inward (a Cut
+            // leaving only a cavity component — must be rejected) or its
+            // corner-fan volume sign-flipped on a doubly-curved band whose
+            // corners barely bound the wrapped surface (the torus−box notch
+            // band). Disambiguate with the curvature-robust surface-normal flux;
+            // fall back to the (negative) volume sign if it is inconclusive.
+            shell_is_outward_oriented(topo, shell).unwrap_or(false)
+        } else {
+            // Multi-shell: a negative shell is the tool's interior cavity (hole).
+            false
+        };
+        if is_growth {
             growth.push(shell.clone());
         } else {
             holes.push(shell.clone());
@@ -2405,6 +2566,39 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    #[test]
+    fn shell_outward_orientation_outward_cube_is_growth() {
+        let mut topo = Topology::new();
+        let solid = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        assert_eq!(
+            shell_is_outward_oriented(&topo, &faces),
+            Some(true),
+            "a standard outward cube shell must read outward (growth)"
+        );
+    }
+
+    #[test]
+    fn shell_outward_orientation_inward_cube_is_rejected() {
+        // A single INWARD shell (every face reversed, normals point in — the
+        // "Cut leaving only a cavity" case Greptile flagged) must NOT read as
+        // growth, or `perform_areas` would invert it into a solid.
+        let mut topo = Topology::new();
+        let solid = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        for &fid in &faces {
+            let reversed = topo.face(fid).unwrap().is_reversed();
+            if let Ok(f) = topo.face_mut(fid) {
+                f.set_reversed(!reversed);
+            }
+        }
+        assert_eq!(
+            shell_is_outward_oriented(&topo, &faces),
+            Some(false),
+            "an all-faces-reversed (inward) cube shell must read inward (rejected)"
+        );
+    }
 
     #[test]
     fn angle_with_ref_perpendicular() {

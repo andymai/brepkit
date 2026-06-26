@@ -813,8 +813,8 @@ pub fn intersect_plane_torus(
         }
 
         if chain.len() >= 4 {
-            let pts: Vec<Point3> = chain.iter().map(|&i| crossing_pts[i].2).collect();
-            let ipts: Vec<IntersectionPoint> = chain
+            let mut pts: Vec<Point3> = chain.iter().map(|&i| crossing_pts[i].2).collect();
+            let mut ipts: Vec<IntersectionPoint> = chain
                 .iter()
                 .map(|&i| IntersectionPoint {
                     point: crossing_pts[i].2,
@@ -822,6 +822,32 @@ pub fn intersect_plane_torus(
                     param2: (0.0, 0.0),
                 })
                 .collect();
+
+            // Plane × full torus is always a set of CLOSED loops, but the greedy
+            // nearest-neighbour chaining stops one step short of closing: the
+            // first point is already `used`, so the walk never re-adds it and the
+            // last point sits ~one grid step from the start. Detect that wrap (the
+            // end-to-start gap is comparable to the chain's own point spacing) and
+            // append the exact start point, so the fitted NURBS closes
+            // (`evaluate(0) == evaluate(1)`) and downstream consumers see a closed
+            // section curve instead of a near-closed open one. A fragmented chain
+            // (greedy walk broke a loop at a near-tangency) ends FAR from its
+            // start (gap ≫ spacing) and is left open — it must not be force-closed
+            // into a wrong loop.
+            let closing_gap = (pts[pts.len() - 1] - pts[0]).length();
+            let median_spacing = {
+                let mut spac: Vec<f64> = pts.windows(2).map(|w| (w[1] - w[0]).length()).collect();
+                spac.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                spac.get(spac.len() / 2).copied().unwrap_or(0.0)
+            };
+            // Wrap when the closing gap is within ~2 point-spacings (measured
+            // ratio ≈ 1.0 for the census ovals) and not already coincident.
+            let wrapped =
+                closing_gap > 1e-9 && median_spacing > 1e-12 && closing_gap <= 2.0 * median_spacing;
+            if wrapped {
+                pts.push(pts[0]);
+                ipts.push(ipts[0]);
+            }
 
             if let Ok(curve) = interpolate(&pts, 3.min(pts.len() - 1)) {
                 curves.push(IntersectionCurve {
@@ -866,6 +892,247 @@ fn newton_refine_torus(
         v -= step * fv;
     }
     (u, v)
+}
+
+/// Real intersection parameters `t` of the line `origin + t·dir` with a torus.
+///
+/// A line meets a torus in up to four points (degree-4). Substituting the line
+/// into the torus implicit `(a² + b² + c² + R² − r²)² = 4R²(a² + b²)` — where
+/// `(a, b, c)` are the line point's coordinates in the torus frame — gives a
+/// quartic in `t`, solved here for its real roots (each refined by one Newton
+/// step against the implicit). `dir` need not be unit length; `t` is in units of
+/// `dir`. Returns the roots sorted ascending (0–4 of them).
+///
+/// Used by the boolean section trimmer to find where a plane×torus oval exits a
+/// box face's straight boundary edge — the exact crossing shared by the two
+/// adjacent faces, which is what makes the notch watertight.
+#[must_use]
+pub fn intersect_line_torus(torus: &ToroidalSurface, origin: Point3, dir: Vec3) -> Vec<f64> {
+    let c = torus.center();
+    let (xa, ya, za) = (torus.x_axis(), torus.y_axis(), torus.z_axis());
+    let big_r = torus.major_radius();
+    let small_r = torus.minor_radius();
+
+    // Line point in torus frame: a(t)=a0+a1 t, b(t)=b0+b1 t, c(t)=c0+c1 t.
+    let o = Vec3::new(origin.x() - c.x(), origin.y() - c.y(), origin.z() - c.z());
+    let (a0, a1) = (xa.dot(o), xa.dot(dir));
+    let (b0, b1) = (ya.dot(o), ya.dot(dir));
+    let (c0, c1) = (za.dot(o), za.dot(dir));
+
+    // G(t) = a² + b² + c² + R² − r²  (quadratic: g2 t² + g1 t + g0)
+    let g2 = a1.mul_add(a1, b1.mul_add(b1, c1 * c1));
+    let g1 = 2.0 * a1.mul_add(a0, b1.mul_add(b0, c1 * c0));
+    let g0 = a0.mul_add(
+        a0,
+        b0.mul_add(b0, c0.mul_add(c0, big_r.mul_add(big_r, -small_r * small_r))),
+    );
+
+    // H(t) = 4R² (a² + b²)  (quadratic: h2 t² + h1 t + h0)
+    let four_rr = 4.0 * big_r * big_r;
+    let h2 = four_rr * a1.mul_add(a1, b1 * b1);
+    let h1 = four_rr * (2.0 * a1.mul_add(a0, b1 * b0));
+    let h0 = four_rr * a0.mul_add(a0, b0 * b0);
+
+    // Quartic G² − H = 0:  e4 t⁴ + e3 t³ + e2 t² + e1 t + e0.
+    let e4 = g2 * g2;
+    let e3 = 2.0 * g2 * g1;
+    let e2 = g1.mul_add(g1, 2.0 * g2 * g0) - h2;
+    let e1 = 2.0f64.mul_add(g1 * g0, -h1);
+    let e0 = g0.mul_add(g0, -h0);
+
+    let mut roots = real_roots_quartic(e4, e3, e2, e1, e0);
+    // One Newton polish against the torus implicit for full precision.
+    let impl_f = |t: f64| -> f64 {
+        let p = origin + dir * t;
+        let q = Vec3::new(p.x() - c.x(), p.y() - c.y(), p.z() - c.z());
+        let (a, b, cc) = (xa.dot(q), ya.dot(q), za.dot(q));
+        (a.hypot(b) - big_r).hypot(cc) - small_r
+    };
+    for t in &mut roots {
+        let eps = 1e-7;
+        let f = impl_f(*t);
+        let df = (impl_f(*t + eps) - impl_f(*t - eps)) / (2.0 * eps);
+        if df.abs() > 1e-12 {
+            *t -= f / df;
+        }
+    }
+    roots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    roots
+}
+
+/// Real roots of `c4 x⁴ + c3 x³ + c2 x² + c1 x + c0` via Durand–Kerner, falling
+/// back to the lower-degree solvers when the leading coefficients vanish.
+fn real_roots_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> Vec<f64> {
+    // Degenerate leading coefficient → lower degree.
+    if c4.abs() < 1e-14 {
+        return real_roots_cubic(c3, c2, c1, c0);
+    }
+    // Monic: x⁴ + a x³ + b x² + c x + d.
+    let (a, b, c, d) = (c3 / c4, c2 / c4, c1 / c4, c0 / c4);
+    let eval = |z: Complex| -> Complex {
+        // Horner.
+        let mut acc = Complex::new(1.0, 0.0);
+        acc = acc * z + Complex::new(a, 0.0);
+        acc = acc * z + Complex::new(b, 0.0);
+        acc = acc * z + Complex::new(c, 0.0);
+        acc * z + Complex::new(d, 0.0)
+    };
+    // Durand–Kerner: four roots seeded on a circle, iterated to convergence.
+    let seed = Complex::new(0.4, 0.9);
+    let mut r = [
+        Complex::new(1.0, 0.0),
+        seed,
+        seed * seed,
+        seed * seed * seed,
+    ];
+    for _ in 0..100 {
+        let mut max_step = 0.0_f64;
+        for i in 0..4 {
+            let mut denom = Complex::new(1.0, 0.0);
+            for j in 0..4 {
+                if i != j {
+                    denom = denom * (r[i] - r[j]);
+                }
+            }
+            if denom.norm() < 1e-300 {
+                continue;
+            }
+            let step = eval(r[i]) / denom;
+            r[i] = r[i] - step;
+            max_step = max_step.max(step.norm());
+        }
+        if max_step < 1e-14 {
+            break;
+        }
+    }
+    // Keep roots with negligible imaginary part AND a small REAL-polynomial
+    // residual — Durand–Kerner stops after a fixed iteration cap whether or not
+    // it converged, so a non-converged iterate could otherwise be returned as a
+    // spurious root. Evaluate the monic quartic at each candidate (real part) and
+    // keep only |p(x)| below a magnitude-scaled tolerance; de-dup near-equal
+    // roots (a double root converges to two near-identical iterates).
+    let p_real = |x: f64| -> f64 { (((x + a) * x + b) * x + c) * x + d };
+    let mut out: Vec<f64> = Vec::new();
+    for z in r {
+        if z.im.abs() >= 1e-7 {
+            continue;
+        }
+        let x = z.re;
+        // Residual tolerance scales with the polynomial's coefficient magnitude
+        // and |x|^4 so large-coefficient quartics are not over-rejected.
+        let scale = 1.0 + a.abs() + b.abs() + c.abs() + d.abs() + x.abs().powi(4);
+        if p_real(x).abs() > 1e-6 * scale {
+            continue;
+        }
+        if out.iter().any(|&y| (y - x).abs() < 1e-9 * (1.0 + x.abs())) {
+            continue;
+        }
+        out.push(x);
+    }
+    out
+}
+
+/// Real roots of `a x³ + b x² + c x + d` (Cardano), with quadratic fallback.
+fn real_roots_cubic(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
+    if a.abs() < 1e-14 {
+        return real_roots_quadratic(b, c, d);
+    }
+    // Depressed cubic t³ + p t + q via x = t − b/(3a).
+    let (b, c, d) = (b / a, c / a, d / a);
+    let p = c - b * b / 3.0;
+    let q = 2.0 * b * b * b / 27.0 - b * c / 3.0 + d;
+    let shift = -b / 3.0;
+    let disc = q * q / 4.0 + p * p * p / 27.0;
+    if disc > 1e-14 {
+        let sq = disc.sqrt();
+        let u = (-q / 2.0 + sq).cbrt();
+        let v = (-q / 2.0 - sq).cbrt();
+        vec![u + v + shift]
+    } else if disc < -1e-14 {
+        // Three real roots (trigonometric).
+        let m = 2.0 * (-p / 3.0).sqrt();
+        let theta = (3.0 * q / (p * m)).clamp(-1.0, 1.0).acos() / 3.0;
+        (0..3)
+            .map(|k| {
+                m.mul_add(
+                    (theta - 2.0 * std::f64::consts::PI * f64::from(k) / 3.0).cos(),
+                    shift,
+                )
+            })
+            .collect()
+    } else {
+        // Repeated roots.
+        let u = (-q / 2.0).cbrt();
+        vec![2.0 * u + shift, -u + shift]
+    }
+}
+
+/// Real roots of `a x² + b x + c`, with linear fallback.
+fn real_roots_quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
+    if a.abs() < 1e-14 {
+        if b.abs() < 1e-14 {
+            return Vec::new();
+        }
+        return vec![-c / b];
+    }
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 {
+        Vec::new()
+    } else {
+        let sq = disc.sqrt();
+        vec![(-b - sq) / (2.0 * a), (-b + sq) / (2.0 * a)]
+    }
+}
+
+/// Minimal complex number for the quartic root finder.
+#[derive(Clone, Copy)]
+struct Complex {
+    re: f64,
+    im: f64,
+}
+
+impl Complex {
+    const fn new(re: f64, im: f64) -> Self {
+        Self { re, im }
+    }
+    fn norm(self) -> f64 {
+        self.re.hypot(self.im)
+    }
+}
+
+impl std::ops::Add for Complex {
+    type Output = Self;
+    fn add(self, o: Self) -> Self {
+        Self::new(self.re + o.re, self.im + o.im)
+    }
+}
+
+impl std::ops::Sub for Complex {
+    type Output = Self;
+    fn sub(self, o: Self) -> Self {
+        Self::new(self.re - o.re, self.im - o.im)
+    }
+}
+
+impl std::ops::Mul for Complex {
+    type Output = Self;
+    fn mul(self, o: Self) -> Self {
+        Self::new(
+            self.re.mul_add(o.re, -(self.im * o.im)),
+            self.re.mul_add(o.im, self.im * o.re),
+        )
+    }
+}
+
+impl std::ops::Div for Complex {
+    type Output = Self;
+    fn div(self, o: Self) -> Self {
+        let den = o.re.mul_add(o.re, o.im * o.im);
+        Self::new(
+            self.re.mul_add(o.re, self.im * o.im) / den,
+            self.im.mul_add(o.re, -(self.re * o.im)) / den,
+        )
+    }
 }
 
 /// Build intersection curves from a collection of ordered 3D points.
@@ -2089,6 +2356,126 @@ mod tests {
             !curves.is_empty(),
             "should find intersection curves with torus"
         );
+    }
+
+    /// Signed distance of a point to a z-axis torus centred at the origin:
+    /// `sqrt((sqrt(x^2+y^2) - R)^2 + z^2) - r`.
+    fn torus_implicit(p: Point3, major: f64, minor: f64) -> f64 {
+        let rho = p.x().hypot(p.y());
+        ((rho - major).hypot(p.z())) - minor
+    }
+
+    #[test]
+    fn plane_torus_lobe_closes_and_stays_on_surface() {
+        use crate::traits::ParametricCurve;
+        let (major, minor) = (10.0, 3.0);
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
+
+        // The census cutting planes (y=-4, x=6) each cut the +x and -x tube lobes
+        // in a CLOSED oval. The greedy marcher stops one grid step short of
+        // closing; the wrap-close must make every fitted lobe close exactly.
+        for (n, d) in [
+            (Vec3::new(0.0, -1.0, 0.0), 4.0),  // y = -4
+            (Vec3::new(-1.0, 0.0, 0.0), -6.0), // x = 6
+            (Vec3::new(0.0, 0.0, 1.0), 0.0),   // z = 0 -> two concentric circles
+        ] {
+            let curves = intersect_plane_torus(&torus, n, d).unwrap();
+            assert!(!curves.is_empty(), "plane n={n:?} d={d} found no curves");
+            for c in &curves {
+                let p0 = ParametricCurve::evaluate(&c.curve, 0.0);
+                let p1 = ParametricCurve::evaluate(&c.curve, 1.0);
+                assert!(
+                    (p0 - p1).length() < 1e-7,
+                    "lobe not closed: gap={} (n={n:?} d={d})",
+                    (p0 - p1).length()
+                );
+                // Every fitted sample stays on the torus (shape-preserving).
+                for k in 0..=64 {
+                    let t = f64::from(k) / 64.0;
+                    let p = ParametricCurve::evaluate(&c.curve, t);
+                    assert!(
+                        torus_implicit(p, major, minor).abs() < 1e-2,
+                        "off-surface point {p:?} implicit={}",
+                        torus_implicit(p, major, minor)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plane_torus_inner_tangent_figure_eight_stays_open() {
+        use crate::traits::ParametricCurve;
+        let (major, minor) = (10.0, 3.0);
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
+
+        // A plane tangent to the inner equator (x = major - minor = 7) cuts a
+        // self-touching figure-eight. The marcher traces it as a single chain
+        // whose end lands on the opposite lobe — FAR from its start (gap is many
+        // point-spacings). The wrap-close must NOT force-close this into a wrong
+        // loop; it must stay OPEN so a self-touching curve is never sealed.
+        let curves =
+            intersect_plane_torus(&torus, Vec3::new(-1.0, 0.0, 0.0), -(major - minor)).unwrap();
+        assert!(!curves.is_empty(), "inner-tangent plane found no curves");
+        let max_gap = curves
+            .iter()
+            .map(|c| {
+                let p0 = ParametricCurve::evaluate(&c.curve, 0.0);
+                let p1 = ParametricCurve::evaluate(&c.curve, 1.0);
+                (p0 - p1).length()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_gap > 1e-2,
+            "figure-eight chain was wrongly force-closed (max end-gap={max_gap})"
+        );
+    }
+
+    #[test]
+    fn line_torus_box_edge_crossing_is_exact() {
+        // The census box edge x=6, y=-4 (z varying) crosses the torus (R=10,r=3)
+        // at z = ±sqrt(r² − (rho−R)²), rho = hypot(6,4) ≈ 7.2111 → z ≈ ±1.1055.
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+        let ts = intersect_line_torus(
+            &torus,
+            Point3::new(6.0, -4.0, -5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        // Vertical line through (6,-4) meets the tube twice.
+        assert_eq!(ts.len(), 2, "expected 2 crossings, got {ts:?}");
+        let zs: Vec<f64> = ts.iter().map(|t| -5.0 + t).collect();
+        let rho = 6.0_f64.hypot(4.0);
+        let z_exp = (9.0 - (rho - 10.0).powi(2)).sqrt();
+        assert!(
+            (zs[0] - (-z_exp)).abs() < 1e-9,
+            "z0={} exp={}",
+            zs[0],
+            -z_exp
+        );
+        assert!((zs[1] - z_exp).abs() < 1e-9, "z1={} exp={}", zs[1], z_exp);
+        // Each crossing lies on the torus.
+        for &t in &ts {
+            let p = Point3::new(6.0, -4.0, -5.0 + t);
+            let rho = p.x().hypot(p.y());
+            let impl_v = (rho - 10.0).hypot(p.z()) - 3.0;
+            assert!(impl_v.abs() < 1e-9, "off-torus impl={impl_v}");
+        }
+    }
+
+    #[test]
+    fn line_torus_miss_and_tangent() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+        // A vertical line at rho beyond the outer rim (x=20) misses entirely.
+        let miss = intersect_line_torus(
+            &torus,
+            Point3::new(20.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        assert!(miss.is_empty(), "expected no crossings, got {miss:?}");
+        // The z-axis (rho=0) passes through the hole — no intersection.
+        let axis =
+            intersect_line_torus(&torus, Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        assert!(axis.is_empty(), "z-axis should miss the tube, got {axis:?}");
     }
 
     #[test]

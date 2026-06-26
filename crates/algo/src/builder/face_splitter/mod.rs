@@ -38,7 +38,7 @@ use edge_splitting::{
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic};
 use special_cases::{
     split_face_with_internal_loops, split_noseam_face_direct, split_periodic_face_into_bands,
-    try_split_crossing_plane_face,
+    split_torus_band_by_arrangement, try_split_crossing_plane_face,
 };
 
 /// Number of probe points (plus one for the closing sample) walked along a
@@ -1889,6 +1889,27 @@ pub fn split_face_2d(
             &wire_pts,
             tol.linear,
         );
+    }
+
+    // Torus notch band: a box (or analogous) cut removes a sector of the ring
+    // whose surface boundary is two φ-wrapping loops; the kept torus is the
+    // u-band between them. Contained tracer — defers (None) when the in-box arcs
+    // don't stitch into exactly two φ-wrapping loops. Restricted to ALL-OPEN
+    // sections: a CLOSED-loop section (a section circle/loop entirely interior to
+    // the torus, e.g. a small tool poking a closed hole) bounds its own region
+    // that the band tracer would silently drop, so defer those to the
+    // internal-loops path.
+    let all_sections_open = !sections.is_empty()
+        && sections
+            .iter()
+            .all(|s| (s.start - s.end).length() > tol.linear);
+    if matches!(surface, FaceSurface::Torus(_))
+        && original_inner_wires.is_empty()
+        && all_sections_open
+        && let Some(band) =
+            split_torus_band_by_arrangement(&surface, sections, rank, reversed, face_id, tol.linear)
+    {
+        return band;
     }
 
     // Band shortcut: closed section circles on a u-periodic face split it

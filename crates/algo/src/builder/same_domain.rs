@@ -200,6 +200,14 @@ pub fn detect_same_domain<S: BuildHasher>(
                 };
 
                 if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
+                    // Complementary partition regions of ONE input face's split
+                    // (same source, distinct interiors — e.g. the in-tube and
+                    // out-tube parts of a box wall cut by a torus) are never
+                    // same-domain duplicates of each other. A genuine coincident
+                    // same-source duplicate (same interior) is NOT excluded here.
+                    if same_source_complementary_split(sub_faces, i, j, tol) {
+                        continue;
+                    }
                     // Two curved faces of the same underlying surface can share an
                     // outer-wire edge set yet cover DIFFERENT regions — e.g. the
                     // two hemisphere bands of a bored sphere share the equator
@@ -251,6 +259,12 @@ pub fn detect_same_domain<S: BuildHasher>(
                 _ => None,
             };
             let Some(same_dir) = same_dir else { continue };
+            // Complementary partition regions of one split (same source, distinct
+            // interiors) are not overlapping duplicates; a coincident same-source
+            // duplicate (same interior) still reaches `planar_faces_overlap`.
+            if same_source_complementary_split(sub_faces, i, j, tol) {
+                continue;
+            }
             if uf.find(i) == uf.find(j) {
                 continue; // already grouped
             }
@@ -298,6 +312,12 @@ pub fn detect_same_domain<S: BuildHasher>(
                 _ => None,
             };
             let Some(same_dir) = same_dir else { continue };
+            // Complementary partition regions of one split (same source, distinct
+            // interiors) are not overlapping duplicates; a coincident same-source
+            // duplicate (same interior) still reaches `analytic_faces_overlap`.
+            if same_source_complementary_split(sub_faces, i, j, tol) {
+                continue;
+            }
             if uf.find(i) == uf.find(j) {
                 continue; // already grouped (e.g. identical edge sets)
             }
@@ -1305,6 +1325,32 @@ fn planar(surf: &FaceSurface) -> bool {
 /// (defer to the edge-set union) when either interior is unavailable, keeping
 /// the conservative pre-existing behaviour.
 fn distinct_curved_regions(sub_faces: &[SubFace], i: usize, j: usize, tol: Tolerance) -> bool {
+    match (sub_faces[i].interior_point, sub_faces[j].interior_point) {
+        (Some(pi), Some(pj)) => (pi - pj).length() > tol.linear * 100.0,
+        _ => false,
+    }
+}
+
+/// Whether two sub-faces are COMPLEMENTARY partition regions of a single split
+/// of one input face — same `source_face` AND distinct interior points (they
+/// tile the parent, e.g. the in-tube and out-tube parts of a box wall cut by a
+/// torus). Such a pair is never a same-domain DUPLICATE of itself, so it is
+/// excluded from SD grouping. Crucially this does NOT exclude two same-source
+/// sub-faces that are genuine COINCIDENT duplicates (sequential-boolean /
+/// split-cascade residue at the SAME region): those share an interior point
+/// (distance ≤ 100·tol) and stay subject to the normal SD overlap checks, so
+/// real duplicates are still caught (Greptile #1010-2). Requires both interior
+/// points to be set — if either is absent the pair is NOT excluded (the SD
+/// checks run as usual).
+fn same_source_complementary_split(
+    sub_faces: &[SubFace],
+    i: usize,
+    j: usize,
+    tol: Tolerance,
+) -> bool {
+    if sub_faces[i].source_face != sub_faces[j].source_face {
+        return false;
+    }
     match (sub_faces[i].interior_point, sub_faces[j].interior_point) {
         (Some(pi), Some(pj)) => (pi - pj).length() > tol.linear * 100.0,
         _ => false,

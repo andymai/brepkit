@@ -769,6 +769,30 @@ fn box_centered_sphere_collar_tessellates_watertight() {
 }
 
 #[test]
+fn torus_box_notch_band_tessellates_watertight() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let tor = crate::primitives::make_torus(&mut topo, 10.0, 3.0, 32).unwrap();
+    let bx = crate::primitives::make_box(&mut topo, 8.0, 8.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, bx, &Mat4::translation(6.0, -4.0, -4.0)).unwrap();
+    let result =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, tor, bx).unwrap();
+
+    // The kept toroidal notch band must tessellate watertight (shared seam
+    // vertices with the notch walls — no cracks), STABLE across deflections.
+    for &defl in &[0.1_f64, 0.05, 0.02] {
+        let mesh = tessellate_solid(&topo, result, defl).unwrap();
+        assert!(
+            is_watertight(&mesh),
+            "torus−box notch band must tessellate watertight at deflection {defl}: bd={} nm={}",
+            boundary_edge_count(&mesh),
+            non_manifold_edge_count(&mesh)
+        );
+    }
+}
+
+#[test]
 fn tessellate_solid_box_correct_area() {
     let mut topo = Topology::new();
     let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
