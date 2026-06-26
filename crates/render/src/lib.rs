@@ -54,7 +54,9 @@ mod viewer;
 
 pub use camera::Camera;
 pub use compute_mesh::{
-    CylinderDescriptor, TessFactor, extract_cylinder_descriptor, render_cylinder_compute_offscreen,
+    CylinderDescriptor, DEFAULT_TARGET_PX, TessFactor, extract_cylinder_descriptor,
+    render_cylinder_compute_offscreen, render_cylinder_compute_screen_lod,
+    screen_space_tess_factor,
 };
 pub use error::RenderError;
 pub use pipeline::probe_adapter;

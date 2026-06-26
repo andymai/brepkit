@@ -71,10 +71,111 @@ impl TessFactor {
             n_v: n_v.clamp(1, MAX_TESS),
         }
     }
+}
 
-    // TODO: view-dependent (screen-space) LOD — pick (n_u, n_v) per frame from a
-    // screen-space chord-error metric (projected radius / pixel budget) instead
-    // of a caller-supplied factor. Next milestone.
+/// Default screen-space chord-error budget, in pixels.
+///
+/// Sub-pixel: the faceting of a cylinder tessellated to this bound is invisible
+/// at the rendered resolution.
+pub const DEFAULT_TARGET_PX: f64 = 0.5;
+
+/// Derive a [`TessFactor`] from the cylinder's *projected screen size* so the
+/// silhouette's chord error stays within `target_px` pixels at the given view.
+///
+/// A zoomed-in cylinder (large projected radius) gets a fine mesh; a distant one
+/// (small projected radius) gets a coarse mesh — view-dependent LOD, the payoff
+/// of meshing analytic surfaces on the GPU from their parameters.
+///
+/// # Math
+///
+/// The chord error of an `n_u`-gon inscribed in a circle of radius `r` is
+/// `ε = r·(1 − cos(π/n_u))`. Projecting `r` to pixels under perspective,
+/// `r_px = r · (H/2) / (d · tan(fov_y/2))` where `H` is the viewport height and
+/// `d` is the center's *view-space depth* (its projection onto the view
+/// direction, `view_dir · (center − eye)`) — not the Euclidean eye distance, so
+/// an off-axis cylinder at the same depth is not under-tessellated. Bounding the
+/// *screen-space* error `r_px·(1 − cos(π/n_u)) ≤ target_px` and solving:
+/// `n_u = ceil(π / acos(1 − clamp(target_px / r_px, 0, 2)))`. A sub-pixel
+/// cylinder (`r_px ≤ target_px`) floors to the [`TessFactor`] minimum; a cylinder
+/// engulfing the camera (`r_px → ∞`) requests the maximum.
+///
+/// `n_v` is fixed at 1: a cylinder's lateral face is *ruled* (straight and of
+/// constant normal along the axis), so one axial division is geometrically and
+/// shading-exact. Sphere/torus surfaces will later need `n_v` adaptivity too,
+/// since they curve in both parametric directions.
+///
+/// The result always passes through [`TessFactor::new`], so the
+/// `[3, MAX_TESS]` clamp and the buffer-overflow guard still apply.
+#[must_use]
+pub fn screen_space_tess_factor(
+    desc: &CylinderDescriptor,
+    cam: &Camera,
+    viewport: (u32, u32),
+    target_px: f64,
+) -> TessFactor {
+    let n_u = angular_subdivisions_for_screen_error(desc, cam, viewport, target_px);
+    TessFactor::new(n_u, 1)
+}
+
+/// Angular subdivisions needed to keep the projected chord error within
+/// `target_px`. Returns a raw count (the caller clamps via [`TessFactor::new`]).
+///
+/// Edge cases collapse so the clamp lands on a valid factor: an unbounded
+/// projection (`r_px → ∞`, the camera engulfed by the surface) → the maximum;
+/// a sub-pixel projection, a center behind the camera, or a non-finite/≤0 budget
+/// → the minimum.
+fn angular_subdivisions_for_screen_error(
+    desc: &CylinderDescriptor,
+    cam: &Camera,
+    viewport: (u32, u32),
+    target_px: f64,
+) -> u32 {
+    let (_, height) = viewport;
+
+    // Clamp the FOV into the valid open interval `(0, π)` so `tan(fov/2)` is
+    // always finite-positive (matching a sane render); an out-of-range fov must
+    // not poison the projection.
+    let fov_y = cam.fov_y.clamp(1.0e-4, std::f64::consts::PI - 1.0e-4);
+    let half_fov_tan = (fov_y * 0.5).tan();
+
+    // Perspective scale is set by the *view-space depth* of the center (its
+    // projection onto the view axis), not the Euclidean eye distance: an
+    // off-axis cylinder at the same depth must not be under-tessellated.
+    let depth = cam.view_direction().dot(desc.center - cam.eye);
+
+    // A non-finite or non-positive budget can't bound anything → max detail.
+    if !(target_px.is_finite() && target_px > 0.0) {
+        return MAX_TESS;
+    }
+    let r_px = desc.radius * (f64::from(height) * 0.5) / (depth * half_fov_tan);
+    // Classify the projected radius:
+    //   +∞  → the surface engulfs/fills the screen (depth → 0): finest mesh.
+    //   ≤ 0 or NaN → behind the camera or degenerate: won't render → coarsest.
+    //   finite > 0 → the normal screen-size formula below.
+    if r_px.is_infinite() && r_px > 0.0 {
+        return MAX_TESS;
+    }
+    if !(r_px.is_finite() && r_px > 0.0) {
+        return 3;
+    }
+
+    // ratio ∈ [0, 2] keeps the acos argument (1 − ratio) in [−1, 1].
+    let ratio = (target_px / r_px).clamp(0.0, 2.0);
+    let theta = (1.0 - ratio).acos(); // half the per-facet angle bound
+    if !(theta.is_finite() && theta > 0.0) {
+        // r_px ≤ target_px (sub-pixel facets already): minimum tessellation.
+        return 3;
+    }
+    let n = (std::f64::consts::PI / theta).ceil();
+    // n is finite and ≥ 1 here; clamp into u32 range before TessFactor re-clamps.
+    if n >= f64::from(MAX_TESS) {
+        MAX_TESS
+    } else {
+        // Safe: 1 ≤ n < MAX_TESS ≤ u32::MAX, and n is finite.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let v = n as u32;
+        v
+    }
 }
 
 /// A cylinder surface packed for GPU evaluation.
@@ -575,6 +676,29 @@ pub fn render_cylinder_compute_offscreen(
     })
 }
 
+/// Render a compute-meshed cylinder with the tessellation chosen automatically
+/// from its projected screen size (view-dependent LOD).
+///
+/// Computes a [`screen_space_tess_factor`] from `cam` and the render dimensions
+/// in `opts` (bounding the silhouette chord error to `target_px` pixels — pass
+/// [`DEFAULT_TARGET_PX`] for the sub-pixel default), then meshes and renders
+/// exactly as [`render_cylinder_compute_offscreen`]. A near view yields a fine
+/// mesh, a far view a coarse one, both staying within the pixel budget.
+///
+/// # Errors
+///
+/// Same as [`render_cylinder_compute_offscreen`].
+pub fn render_cylinder_compute_screen_lod(
+    desc: &CylinderDescriptor,
+    face_id: u32,
+    cam: &Camera,
+    opts: &RenderOpts,
+    target_px: f64,
+) -> Result<RenderOutput, RenderError> {
+    let tess = screen_space_tess_factor(desc, cam, (opts.width, opts.height), target_px);
+    render_cylinder_compute_offscreen(desc, tess, face_id, cam, opts)
+}
+
 /// A read-write storage-buffer bind-group-layout entry visible to compute.
 fn storage_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
@@ -836,6 +960,161 @@ mod tests {
         assert!(
             u32::try_from(vertex_count * WORDS_PER_VERT).is_ok(),
             "vertex word count exceeds u32"
+        );
+    }
+
+    /// A unit cylinder of `radius` centered at the origin, axis +Z.
+    fn unit_cylinder(radius: f64) -> CylinderDescriptor {
+        CylinderDescriptor {
+            center: Point3::new(0.0, 0.0, 0.0),
+            axis_origin: Point3::new(0.0, 0.0, -1.0),
+            axis: Vec3::new(0.0, 0.0, 1.0),
+            x_ref: Vec3::new(1.0, 0.0, 0.0),
+            y_ref: Vec3::new(0.0, 1.0, 0.0),
+            radius,
+            v0: 0.0,
+            v1: 2.0,
+            u0: 0.0,
+            u1: TAU,
+        }
+    }
+
+    /// A camera at distance `dist` along +X looking back at the origin.
+    fn camera_at(dist: f64) -> Camera {
+        Camera {
+            eye: Point3::new(dist, 0.0, 0.0),
+            target: Point3::new(0.0, 0.0, 0.0),
+            up: Vec3::new(0.0, 0.0, 1.0),
+            fov_y: 45.0_f64.to_radians(),
+            aspect: 1.0,
+            near: 0.1,
+            far: dist * 10.0,
+        }
+    }
+
+    #[test]
+    fn screen_lod_increases_when_closer() {
+        let desc = unit_cylinder(5.0);
+        let viewport = (512, 512);
+        let near = screen_space_tess_factor(&desc, &camera_at(20.0), viewport, 0.5);
+        let far = screen_space_tess_factor(&desc, &camera_at(200.0), viewport, 0.5);
+        assert!(
+            near.n_u > far.n_u,
+            "closer camera should subdivide more: near {} far {}",
+            near.n_u,
+            far.n_u
+        );
+        assert_eq!(near.n_v, 1, "ruled axial direction stays at 1");
+        assert_eq!(far.n_v, 1);
+    }
+
+    #[test]
+    fn screen_lod_increases_with_radius() {
+        let viewport = (512, 512);
+        let cam = camera_at(50.0);
+        let small = screen_space_tess_factor(&unit_cylinder(2.0), &cam, viewport, 0.5);
+        let large = screen_space_tess_factor(&unit_cylinder(40.0), &cam, viewport, 0.5);
+        assert!(
+            large.n_u > small.n_u,
+            "larger projected radius should subdivide more: small {} large {}",
+            small.n_u,
+            large.n_u
+        );
+    }
+
+    #[test]
+    fn screen_lod_floors_at_minimum_when_subpixel() {
+        // A tiny cylinder very far away projects to under a pixel: the coarsest
+        // mesh (the TessFactor minimum) already satisfies any sane budget.
+        let desc = unit_cylinder(0.01);
+        let t = screen_space_tess_factor(&desc, &camera_at(5_000.0), (256, 256), 0.5);
+        assert_eq!(t.n_u, 3, "sub-pixel cylinder floors at the minimum");
+    }
+
+    #[test]
+    fn screen_lod_tighter_budget_subdivides_more() {
+        let desc = unit_cylinder(5.0);
+        let cam = camera_at(40.0);
+        let coarse = screen_space_tess_factor(&desc, &cam, (512, 512), 2.0);
+        let fine = screen_space_tess_factor(&desc, &cam, (512, 512), 0.25);
+        assert!(
+            fine.n_u > coarse.n_u,
+            "a tighter pixel budget should subdivide more: coarse {} fine {}",
+            coarse.n_u,
+            fine.n_u
+        );
+    }
+
+    #[test]
+    fn screen_lod_handles_degenerate_inputs() {
+        let desc = unit_cylinder(5.0);
+        let viewport = (512, 512);
+
+        // Zero / non-finite target budget can't bound anything → max detail.
+        let t0 = screen_space_tess_factor(&desc, &camera_at(40.0), viewport, 0.0);
+        assert_eq!(
+            t0.n_u, MAX_TESS,
+            "zero pixel budget requests the maximum LOD"
+        );
+        let t_nan = screen_space_tess_factor(&desc, &camera_at(40.0), viewport, f64::NAN);
+        assert_eq!(t_nan.n_u, MAX_TESS, "NaN budget falls back to maximum");
+    }
+
+    #[test]
+    fn screen_lod_engulfing_camera_requests_maximum() {
+        // A camera engulfed by / sitting on the cylinder has zero view-space
+        // depth, so the projected radius is unbounded (r_px → +∞): it must
+        // tessellate FINELY (max), not coarsely (the bug this guards against —
+        // the prior code treated +∞ as sub-pixel and returned the minimum).
+        let desc = unit_cylinder(5.0);
+        let viewport = (512, 512);
+        let mut on_center = camera_at(40.0);
+        on_center.eye = desc.center;
+        assert_eq!(
+            screen_space_tess_factor(&desc, &on_center, viewport, 0.5).n_u,
+            MAX_TESS,
+            "a camera engulfed by the cylinder (depth 0) must request the maximum LOD"
+        );
+    }
+
+    #[test]
+    fn screen_lod_clamps_extreme_fov_to_bounded_high_lod() {
+        // A near-zero FOV (extreme telephoto zoom) is clamped to a valid minimum
+        // rather than poisoning the projection: it yields a high but *bounded*
+        // tessellation, not a degenerate one.
+        let desc = unit_cylinder(5.0);
+        let viewport = (512, 512);
+        let mut tiny_fov = camera_at(40.0);
+        tiny_fov.fov_y = 1.0e-12;
+        let normal = screen_space_tess_factor(&desc, &camera_at(40.0), viewport, 0.5);
+        let zoomed = screen_space_tess_factor(&desc, &tiny_fov, viewport, 0.5);
+        assert!(
+            zoomed.n_u > normal.n_u,
+            "extreme zoom should subdivide far more than the normal fov: zoomed {} normal {}",
+            zoomed.n_u,
+            normal.n_u
+        );
+    }
+
+    #[test]
+    fn screen_lod_behind_camera_floors_at_minimum() {
+        // The cylinder behind the camera (negative view-space depth) does not
+        // render meaningfully → the coarsest mesh. `camera_at` looks down −X at
+        // the origin, so a center placed further down +X is behind the eye.
+        let viewport = (512, 512);
+        let mut desc = unit_cylinder(5.0);
+        let cam = camera_at(40.0); // eye at (40,0,0) looking toward −X
+        desc.center = Point3::new(80.0, 0.0, 0.0); // behind the camera
+        desc.axis_origin = Point3::new(80.0, 0.0, -1.0);
+        let depth_is_negative = cam.view_direction().dot(desc.center - cam.eye) < 0.0;
+        assert!(
+            depth_is_negative,
+            "test setup: center should be behind the camera"
+        );
+        assert_eq!(
+            screen_space_tess_factor(&desc, &cam, viewport, 0.5).n_u,
+            3,
+            "a cylinder behind the camera floors at the minimum LOD"
         );
     }
 }
