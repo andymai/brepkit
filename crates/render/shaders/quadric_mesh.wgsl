@@ -35,7 +35,10 @@ struct Descriptor {
     n_v: u32,
     // FaceId.index() + 1, written into every emitted vertex (0 = background).
     face_id: u32,
-    _pad: u32,
+    // 1 = full revolution (share the seam columns), 0 = partial arc. Decided
+    // once on the CPU (in f64) and uploaded, so this shader never re-derives the
+    // (span ≈ 2π) test in f32 — both entry points must agree on it.
+    full: u32,
 };
 
 @group(0) @binding(0)
@@ -50,12 +53,16 @@ var<storage, read_write> out_indices: array<u32>;
 
 const WORDS_PER_VERT: u32 = 7u;
 
+fn is_full() -> bool {
+    return desc.full != 0u;
+}
+
 // Number of unique angular columns. A full revolution shares the u = 0 and
 // u = 2π columns (identical positions), so only n_u columns are emitted and the
 // wrap-around quad reuses column 0 — the seam is watertight by construction.
 // A partial arc (u1 - u0 < 2π) emits n_u + 1 distinct columns.
-fn col_count(full: bool) -> u32 {
-    if full {
+fn col_count() -> u32 {
+    if is_full() {
         return desc.n_u;
     }
     return desc.n_u + 1u;
@@ -80,16 +87,17 @@ fn write_vertex(slot: u32, pos: vec3<f32>, normal: vec3<f32>) {
 fn cs_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x; // angular index
     let j = gid.y; // axial index
-    let span = desc.u1 - desc.u0;
-    let full = abs(span - 6.28318530717958647692) < 1.0e-6;
-    let cols = col_count(full);
+    let cols = col_count();
     if i >= cols || j > desc.n_v {
         return;
     }
 
-    let fu = f32(i) / f32(desc.n_u);
+    // max(.., 1u) guards the normalization divide; the Rust TessFactor clamps
+    // n_u >= 3 and n_v >= 1, so this is defensive against a hand-built uniform.
+    let span = desc.u1 - desc.u0;
+    let fu = f32(i) / f32(max(desc.n_u, 1u));
     let u = desc.u0 + span * fu;
-    let fv = f32(j) / f32(desc.n_v);
+    let fv = f32(j) / f32(max(desc.n_v, 1u));
     let v = desc.v0 + (desc.v1 - desc.v0) * fv;
 
     let radial = cos(u) * desc.x_ref + sin(u) * desc.y_ref;
@@ -99,8 +107,10 @@ fn cs_vertices(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Outward radial normal (direction only, unaffected by the center shift).
     let normal = normalize(radial);
 
-    let row_stride = desc.n_v + 1u;
-    let slot = i * row_stride + j;
+    // Column-major: vertices of one angular column are contiguous, so the stride
+    // between columns is the column length (n_v + 1).
+    let col_stride = desc.n_v + 1u;
+    let slot = i * col_stride + j;
     write_vertex(slot, pos, normal);
 }
 
@@ -114,19 +124,17 @@ fn cs_indices(@builtin(global_invocation_id) gid: vec3<u32>) {
     if i >= desc.n_u || j >= desc.n_v {
         return;
     }
-    let span = desc.u1 - desc.u0;
-    let full = abs(span - 6.28318530717958647692) < 1.0e-6;
 
-    let row_stride = desc.n_v + 1u;
+    let col_stride = desc.n_v + 1u;
     var i_next = i + 1u;
-    if full && i_next == desc.n_u {
+    if is_full() && i_next == desc.n_u {
         i_next = 0u; // wrap the seam back onto column 0
     }
 
-    let v00 = i * row_stride + j;
-    let v01 = i * row_stride + (j + 1u);
-    let v10 = i_next * row_stride + j;
-    let v11 = i_next * row_stride + (j + 1u);
+    let v00 = i * col_stride + j;
+    let v01 = i * col_stride + (j + 1u);
+    let v10 = i_next * col_stride + j;
+    let v11 = i_next * col_stride + (j + 1u);
 
     let quad = i * desc.n_v + j;
     let base = quad * 6u;

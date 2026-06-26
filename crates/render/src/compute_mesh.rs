@@ -33,6 +33,19 @@ use crate::error::RenderError;
 use crate::pipeline;
 use crate::{RenderOpts, RenderOutput};
 
+/// Upper bound on each tessellation dimension.
+///
+/// Caps `n_u`/`n_v` so the derived vertex and index counts stay far below
+/// `u32::MAX` (the worst case `MAX_TESS² · 6 ≈ 1.6e9` indices) and so a single
+/// quadric can never request an absurd buffer. Already well past any sane LOD
+/// for one surface (a 16384-gon cross section is sub-pixel at any zoom).
+const MAX_TESS: u32 = 16_384;
+
+/// Words per emitted vertex in the flat `out_verts` storage buffer. Must match
+/// `WORDS_PER_VERT` in `quadric_mesh.wgsl` and the 28-byte draw `Vertex` stride:
+/// pos(3) + normal(3) + face_id(1).
+const WORDS_PER_VERT: u64 = 7;
+
 /// Tessellation factor (level of detail) for the compute mesher.
 ///
 /// `n_u` angular steps around the surface and `n_v` steps along it. Higher
@@ -41,20 +54,21 @@ use crate::{RenderOpts, RenderOutput};
 /// section falls off as `1 - cos(π / n_u)`.
 #[derive(Debug, Clone, Copy)]
 pub struct TessFactor {
-    /// Angular subdivisions around the surface (must be >= 3).
+    /// Angular subdivisions around the surface (clamped to `[3, MAX_TESS]`).
     pub n_u: u32,
-    /// Axial subdivisions along the surface (must be >= 1).
+    /// Axial subdivisions along the surface (clamped to `[1, MAX_TESS]`).
     pub n_v: u32,
 }
 
 impl TessFactor {
-    /// Create a tessellation factor, clamping to the minimum that yields a
-    /// non-degenerate closed mesh (`n_u >= 3`, `n_v >= 1`).
+    /// Create a tessellation factor, clamping each dimension into the range
+    /// that yields a non-degenerate closed mesh without overflowing the GPU
+    /// buffer index math: `n_u ∈ [3, MAX_TESS]`, `n_v ∈ [1, MAX_TESS]`.
     #[must_use]
     pub fn new(n_u: u32, n_v: u32) -> Self {
         Self {
-            n_u: n_u.max(3),
-            n_v: n_v.max(1),
+            n_u: n_u.clamp(3, MAX_TESS),
+            n_v: n_v.clamp(1, MAX_TESS),
         }
     }
 
@@ -228,7 +242,7 @@ fn axial_range(
 /// GPU descriptor uniform. Field order and padding match the WGSL `Descriptor`
 /// struct in `quadric_mesh.wgsl` (vec3 fields are 16-byte aligned, with the
 /// trailing scalar packed into the 4th word of each 16-byte slot; the final
-/// group pads to 16 bytes).
+/// group fills its 16 bytes exactly).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct GpuDescriptor {
@@ -245,7 +259,10 @@ struct GpuDescriptor {
     n_u: u32,
     n_v: u32,
     face_id: u32,
-    _pad: u32,
+    /// `1` for a full revolution (seam columns shared), `0` for a partial arc.
+    /// Computed once on the CPU so the two compute entry points never re-derive
+    /// the `(span ≈ 2π)` test in f32 (which could disagree with this f64 one).
+    full: u32,
 }
 
 /// Render a compute-meshed cylinder offscreen to a shaded color image + face-id
@@ -277,6 +294,12 @@ pub fn render_cylinder_compute_offscreen(
         });
     }
 
+    // Normalize the factor at the boundary: the public `TessFactor::new` clamps
+    // to `[3, MAX_TESS]` / `[1, MAX_TESS]`, but the fields are `pub`, so a
+    // struct-literal could bypass it. Re-clamping here makes every downstream
+    // count (and the u32 index cast) provably within range.
+    let tess = TessFactor::new(tess.n_u, tess.n_v);
+
     let instance = wgpu::Instance::default();
     let (_adapter, device, queue) = pipeline::acquire_device(&instance, None)?;
 
@@ -292,12 +315,23 @@ pub fn render_cylinder_compute_offscreen(
     }
 
     // --- Grid sizing -------------------------------------------------------
+    // `full` is the single source of truth for the seam decision: it is uploaded
+    // to the shader (see GpuDescriptor::full) so the two compute entry points
+    // never recompute the `(span ≈ 2π)` test in f32. A full revolution shares
+    // the u = 0 / u = 2π columns, so it emits only `n_u` columns (the wrap quad
+    // reuses column 0); a partial arc emits `n_u + 1`.
     let full = (desc.u1 - desc.u0 - TAU).abs() < 1.0e-6;
     let cols = if full { tess.n_u } else { tess.n_u + 1 };
     let rows = tess.n_v + 1;
+    // With both dims clamped to MAX_TESS, the worst case is MAX_TESS²·6 ≈ 1.6e9,
+    // comfortably inside u32, so the index cast for `draw_indexed` cannot wrap.
     let vertex_count = u64::from(cols) * u64::from(rows);
     let index_count = u64::from(tess.n_u) * u64::from(tess.n_v) * 6;
-    let vert_bytes = vertex_count * 7 * 4; // 7 u32 words per vertex
+    // The MAX_TESS clamp guarantees this fits in u32 (worst case ≈ 1.6e9); the
+    // checked `try_from` keeps the draw count from ever silently wrapping even if
+    // that invariant is later weakened.
+    let index_count_u32 = u32::try_from(index_count).unwrap_or(u32::MAX);
+    let vert_bytes = vertex_count * WORDS_PER_VERT * 4; // 4 bytes per u32 word
     let index_bytes = index_count * 4;
 
     // --- Descriptor uniform -----------------------------------------------
@@ -316,7 +350,7 @@ pub fn render_cylinder_compute_offscreen(
         n_u: tess.n_u,
         n_v: tess.n_v,
         face_id,
-        _pad: 0,
+        full: u32::from(full),
     };
     let desc_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("cylinder descriptor"),
@@ -469,8 +503,7 @@ pub fn render_cylinder_compute_offscreen(
         pass.set_pipeline(&draw.pipeline);
         pass.set_vertex_buffer(0, vertex_buf.slice(..));
         pass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint32);
-        #[allow(clippy::cast_possible_truncation)]
-        pass.draw_indexed(0..index_count as u32, 0, 0..1);
+        pass.draw_indexed(0..index_count_u32, 0, 0..1);
     }
 
     let color_bpr = pipeline::padded_bytes_per_row(width, 4);
@@ -754,4 +787,55 @@ fn vec_f32(v: Vec3) -> [f32; 3] {
 #[allow(clippy::cast_possible_truncation)]
 fn pt_f32(p: Point3) -> [f32; 3] {
     [p.x() as f32, p.y() as f32, p.z() as f32]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tess_factor_clamps_below_minimum() {
+        let t = TessFactor::new(0, 0);
+        assert_eq!(t.n_u, 3, "n_u floors at 3 (degenerate below)");
+        assert_eq!(t.n_v, 1, "n_v floors at 1");
+    }
+
+    #[test]
+    fn tess_factor_clamps_above_maximum() {
+        let t = TessFactor::new(u32::MAX, u32::MAX);
+        assert_eq!(t.n_u, MAX_TESS, "n_u caps at MAX_TESS");
+        assert_eq!(t.n_v, MAX_TESS, "n_v caps at MAX_TESS");
+    }
+
+    #[test]
+    fn tess_factor_passes_through_valid_range() {
+        let t = TessFactor::new(48, 4);
+        assert_eq!((t.n_u, t.n_v), (48, 4));
+    }
+
+    #[test]
+    fn max_tess_keeps_index_and_vertex_counts_within_u32() {
+        // The buffer index math (vertex `slot`, index `quad`) runs in u32 on the
+        // GPU and the draw count is u32; the clamp must keep every derived count
+        // strictly inside u32 so nothing wraps. Worst case: full grid at MAX_TESS.
+        let n = u64::from(MAX_TESS);
+        let cols = n + 1; // partial-arc column count (the larger of the two)
+        let rows = n + 1;
+        let vertex_count = cols * rows;
+        let index_count = n * n * 6;
+        assert!(
+            u32::try_from(vertex_count).is_ok(),
+            "vertex_count {vertex_count} exceeds u32"
+        );
+        assert!(
+            u32::try_from(index_count).is_ok(),
+            "index_count {index_count} exceeds u32"
+        );
+        // The vertex word stream (7 words/vertex) also must not overflow u32
+        // element indexing in the shader (`slot * WORDS_PER_VERT`).
+        assert!(
+            u32::try_from(vertex_count * WORDS_PER_VERT).is_ok(),
+            "vertex word count exceeds u32"
+        );
+    }
 }
