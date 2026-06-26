@@ -9,7 +9,9 @@ struct Globals {
     // opposite this). xyz used; w is padding for 16-byte alignment.
     view_dir: vec4<f32>,
     ambient: f32,
-    _pad0: f32,
+    // Encoded FaceId (index + 1) to highlight, or 0 for "no selection". Matches
+    // the encoding written to the id target so a picked id round-trips directly.
+    selected_id: u32,
     _pad1: f32,
     _pad2: f32,
 };
@@ -52,7 +54,11 @@ fn fs_main(in: VsOut) -> FsOut {
     let diffuse = abs(dot(n, light_dir));
     let intensity = clamp(globals.ambient + (1.0 - globals.ambient) * diffuse, 0.0, 1.0);
 
-    let base = vec3<f32>(0.72, 0.74, 0.78);
+    // Tint the selected face warm orange; everything else uses the neutral base.
+    var base = vec3<f32>(0.72, 0.74, 0.78);
+    if (globals.selected_id != 0u && in.face_id == globals.selected_id) {
+        base = vec3<f32>(0.95, 0.55, 0.18);
+    }
     var out: FsOut;
     out.color = vec4<f32>(base * intensity, 1.0);
     out.face_id = in.face_id;

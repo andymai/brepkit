@@ -6,7 +6,7 @@ struct Globals {
     view_proj: mat4x4<f32>,
     view_dir: vec4<f32>,
     ambient: f32,
-    _pad0: f32,
+    selected_id: u32,
     _pad1: f32,
     _pad2: f32,
 };

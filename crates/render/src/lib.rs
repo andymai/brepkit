@@ -48,10 +48,14 @@ mod camera;
 mod error;
 mod mesh;
 mod pipeline;
+#[cfg(feature = "window")]
+mod viewer;
 
 pub use camera::Camera;
 pub use error::RenderError;
 pub use pipeline::probe_adapter;
+#[cfg(feature = "window")]
+pub use viewer::{ViewOpts, view_solid};
 
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;

@@ -7,6 +7,13 @@ repository.workspace = true
 rust-version.workspace = true
 version = "0.1.0"
 
+[features]
+default = []
+# Interactive viewer window (winit surface + orbit camera + click-to-pick).
+# Off by default so headless consumers (CI, the offscreen path) need not pull
+# in winit. Enable with `--features window`.
+window = ["dep:winit"]
+
 [dependencies]
 brepkit-math.workspace = true
 brepkit-operations.workspace = true
@@ -17,6 +24,15 @@ image = {version = "0.25", default-features = false, features = ["png"]}
 pollster = "0.4"
 thiserror.workspace = true
 wgpu = "29"
+
+# Window/interaction (feature = "window"). winit 0.30 and wgpu 29 both use
+# raw-window-handle 0.6, so an `Arc<Window>` satisfies wgpu's surface handle
+# traits directly (no separate raw-window-handle dep needed).
+winit = {version = "0.30", optional = true}
+
+[[example]]
+name = "viewer"
+required-features = ["window"]
 
 [lints]
 workspace = true

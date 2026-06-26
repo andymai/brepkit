@@ -49,6 +49,14 @@ pub enum RenderError {
     #[error("malformed tessellation mesh: {0}")]
     MeshData(String),
 
+    /// The windowing event loop could not be created or run (viewer only).
+    #[error("windowing event loop error: {0}")]
+    EventLoop(String),
+
+    /// A window surface could not be created or configured (viewer only).
+    #[error("failed to create or configure window surface: {0}")]
+    SurfaceConfig(String),
+
     /// Tessellation of the input solid failed.
     #[error(transparent)]
     Operations(#[from] brepkit_operations::OperationsError),
