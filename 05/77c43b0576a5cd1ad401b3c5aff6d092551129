@@ -1,0 +1,19 @@
+.cargo/audit.toml
+  s_d6753900c31c8e::t_810aff9eff8310 1-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.8",
+  "base_commit_sha": "0577c43b0576a5cd1ad401b3c5aff6d092551129",
+  "prompts": {},
+  "sessions": {
+    "s_d6753900c31c8e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a9dde3a-d604-40df-81ec-898bc2574873",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
