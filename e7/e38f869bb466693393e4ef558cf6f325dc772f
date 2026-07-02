@@ -1,0 +1,214 @@
+.claude/skills/render-verify/reference.md
+  s_d6753900c31c8e::t_384d55947a4ed6 1-32,34-65,67-112
+  s_d6753900c31c8e::t_1bfdb4dd04ff1b 33
+  s_d6753900c31c8e::t_179f9742830b1d 66
+.claude/skills/roadmap/SKILL.md
+  s_d6753900c31c8e::t_d72e5301bd5831 1-11,13-68,70-104,106-135,144-178
+  s_d6753900c31c8e::t_502291853dd4af 69
+  s_d6753900c31c8e::t_41184ca211d52b 136-140,142-143
+  s_d6753900c31c8e::t_d0eca64ca0d465 12
+  s_d6753900c31c8e::t_9d80d4b9d8ab62 105
+  s_d6753900c31c8e::t_89a23e7511b55f 141
+.claude/skills/testing/reference.md
+  s_d6753900c31c8e::t_b90cedbc267482 41
+  s_d6753900c31c8e::t_f277abb6b4bbe1 1-40,42-62,67-157,159-167,169-183
+  s_d6753900c31c8e::t_82750949a95d30 63-66
+  s_d6753900c31c8e::t_5764ddf2af141c 158
+  s_d6753900c31c8e::t_c3d125853be847 168
+.claude/skills/solid-verification/SKILL.md
+  s_d6753900c31c8e::t_6181307d765bfe 27
+  s_d6753900c31c8e::t_711598eb9742d6 1-4,7-26,28-76
+  s_d6753900c31c8e::t_62fcad6a8c991b 5-6
+.claude/skills/add-operation/reference.md
+  s_d6753900c31c8e::t_dce938b5d5b461 28
+  s_d6753900c31c8e::t_78897dbfd32b6d 7
+  s_d6753900c31c8e::t_4aa0e4780ea086 1-6,8-27,29-59,61-135
+  s_d6753900c31c8e::t_92114dea8ec9c1 60
+.claude/skills/debugging-doctrine/reference.md
+  s_d6753900c31c8e::t_dad285286a6745 7,9-10
+  s_d6753900c31c8e::t_cdefae30b07e14 74-79
+  s_d6753900c31c8e::t_ea91f763909d8c 1-6,8,11-73,80-101,103-132,134-137
+  s_d6753900c31c8e::t_6b23cf409cc3bc 102
+  s_d6753900c31c8e::t_ee1802be523352 133
+.claude/skills/testing/SKILL.md
+  s_d6753900c31c8e::t_43b368e19ff1e0 1-103
+.claude/skills/tessellation/SKILL.md
+  s_d6753900c31c8e::t_7939cebfd7e11b 51
+  s_d6753900c31c8e::t_ba73d5a9c09389 1-50,52-90
+.claude/skills/layer-boundaries/SKILL.md
+  s_d6753900c31c8e::t_db10fdfa7b4b0c 1-39,41-98
+  s_d6753900c31c8e::t_e19860bace7685 40
+.claude/skills/layer-boundaries/reference.md
+  s_d6753900c31c8e::t_faea1bd5093c46 65
+  s_d6753900c31c8e::t_882770b113a63b 1-64,66-75,77-85
+  s_d6753900c31c8e::t_1215aa726959ab 76
+.claude/skills/fillet-blend/reference.md
+  s_d6753900c31c8e::t_a5b3694479c68f 1,11-14,18-19,93-95
+  s_d6753900c31c8e::t_2b46a423bcfebf 96
+  s_d6753900c31c8e::t_a089657e2f3fef 2-10,15-17,20-46,49-74,76,78,80,84-88,90-92
+  s_d6753900c31c8e::t_b679e14db0ae7c 47-48
+  s_d6753900c31c8e::t_4758fc1ba5594c 75,77,79,81-83
+  s_d6753900c31c8e::t_d046924121782a 89
+.claude/skills/add-operation/SKILL.md
+  s_d6753900c31c8e::t_8f56a062d662b7 1-18,20-69
+  s_d6753900c31c8e::t_dae71241f0efc1 19
+.claude/skills/render-verify/SKILL.md
+  s_d6753900c31c8e::t_9444bcb82dc8ea 1-42,44-57,59,61-82
+  s_d6753900c31c8e::t_d5e543e2a72abb 58,60
+  s_d6753900c31c8e::t_9e3daf72d8b35b 43
+.claude/skills/wasm-bindings/SKILL.md
+  s_d6753900c31c8e::t_29260f1b697b36 1-2,4-66,71-73
+  s_d6753900c31c8e::t_3a4e32fbedb45d 67-70
+  s_d6753900c31c8e::t_75da5ea4ae1ee3 3
+.claude/skills/pr-workflow/reference.md
+  s_d6753900c31c8e::t_9928a8716a7f5f 132-134
+  s_d6753900c31c8e::t_c20cfb163e5c77 145
+  s_d6753900c31c8e::t_a9c9fb1cf3f228 7
+  s_d6753900c31c8e::t_21bfce94307d77 1-6,8-15,18-24,26-80,117-122,124,126-128,130-131,135-144
+  s_d6753900c31c8e::t_3d48cad86fd236 16-17
+  s_d6753900c31c8e::t_20fc4621d45446 25
+  s_d6753900c31c8e::t_5c5ca6fa9b857c 89
+  s_d6753900c31c8e::t_f7c04faed69188 123
+  s_d6753900c31c8e::t_e0fd4e7281d92d 125
+  s_d6753900c31c8e::t_515d8e589f44cf 81-88,90-116
+  s_d6753900c31c8e::t_7f30839cd4c78b 129
+.claude/skills/release-flow/SKILL.md
+  s_d6753900c31c8e::t_2a12d3fa74ea9f 1-14,17-83,88-132
+  s_d6753900c31c8e::t_dfc3b2405c6aa5 15-16
+  s_d6753900c31c8e::t_2ac2ad58ed6543 84-87
+.claude/skills/profiling/SKILL.md
+  s_d6753900c31c8e::t_e20aafd3cd9a1f 1-30,32-34,36-49,51-68
+  s_d6753900c31c8e::t_82c92c00a1a2af 35
+  s_d6753900c31c8e::t_26f484ff960c58 50
+  s_d6753900c31c8e::t_f0ca6647b316db 31
+.claude/skills/pr-workflow/SKILL.md
+  s_d6753900c31c8e::t_1b63a26cc0acb0 29
+  s_d6753900c31c8e::t_62ed75847ddccf 1-2,4-28,31-40,42-94,99-101
+  s_d6753900c31c8e::t_a8ca5c46f58545 30
+  s_d6753900c31c8e::t_eb4119486760cb 41
+  s_d6753900c31c8e::t_70df943126922e 95-98
+  s_d6753900c31c8e::t_227e406f7e0478 3
+.claude/skills/release-flow/reference.md
+  s_d6753900c31c8e::t_c585cf807b4e1f 197-200,202-203
+  s_d6753900c31c8e::t_6de48ad08ae3fd 1-112,116-119,125-196,201,204-206,208-213,217-219,224-225,227-229,231-236
+  s_d6753900c31c8e::t_0ced14ef008107 113-115,120-124
+  s_d6753900c31c8e::t_90a265da9f381e 207
+  s_d6753900c31c8e::t_19446ea50c017b 214-216
+  s_d6753900c31c8e::t_40b02f07580d82 220-223,226,230
+.claude/skills/debugging-doctrine/SKILL.md
+  s_d6753900c31c8e::t_20118ea0880c46 54
+  s_d6753900c31c8e::t_8c205463209647 3
+  s_d6753900c31c8e::t_0d4536b2cd6ed0 1-2,4-21,24-53,55-82
+  s_d6753900c31c8e::t_46ea4d92a64f18 22-23
+.claude/skills/parity-benchmarking/reference.md
+  s_d6753900c31c8e::t_b158bc81f17d00 119,121-122
+  s_d6753900c31c8e::t_d2830facea0963 1-2,4-23,25-26,28-79,81-106,108-118,120,123-163
+  s_d6753900c31c8e::t_7fd84df206190c 107
+  s_d6753900c31c8e::t_b848e2239dd4c2 80
+  s_d6753900c31c8e::t_5733e88ee7dab9 3
+  s_d6753900c31c8e::t_37a7eba197ea59 24
+  s_d6753900c31c8e::t_36ec57f859126c 27
+.claude/skills/tessellation/reference.md
+  s_d6753900c31c8e::t_a22be25c6e1756 25
+  s_d6753900c31c8e::t_9c5680131790d6 61
+  s_d6753900c31c8e::t_d9af25bea96963 1-24,26-60,62-144
+.claude/skills/analytic-preservation/reference.md
+  s_d6753900c31c8e::t_d460c41c9cf134 46,49
+  s_d6753900c31c8e::t_230f9001cd09eb 1-45,47-48,50-234
+.claude/skills/numerical-robustness/SKILL.md
+  s_d6753900c31c8e::t_6a2ec4e8474a47 36
+  s_d6753900c31c8e::t_35af7150b52302 1-35,37-86
+.claude/skills/numerical-robustness/reference.md
+  s_d6753900c31c8e::t_dde75e39963c8b 180
+  s_d6753900c31c8e::t_d08b20ae4e1434 181
+  s_d6753900c31c8e::t_d1c0b22192823b 53
+  s_d6753900c31c8e::t_c8bc4f64c54dc7 195
+  s_d6753900c31c8e::t_cabb418a02f33c 38
+  s_d6753900c31c8e::t_31f3efd6c4a4a0 103-111
+  s_d6753900c31c8e::t_7c471408932817 1-37,39-52,54-102,112-179,182-194,196
+.claude/skills/wasm-bindings/reference.md
+  s_d6753900c31c8e::t_00e39552d09b00 68
+  s_d6753900c31c8e::t_c1f1d339c7acfc 126
+  s_d6753900c31c8e::t_54a093ce55b12e 1-44,46-67,69-73,75-92,143-153
+  s_d6753900c31c8e::t_c2b87ebd3d5cbf 74
+  s_d6753900c31c8e::t_78eee16febdf19 45
+  s_d6753900c31c8e::t_f1e32e30429915 93-125,127-142
+.claude/skills/boolean-debugging/SKILL.md
+  s_d6753900c31c8e::t_28cdc68888391b 1-50,52-64,66-67,69-89
+  s_d6753900c31c8e::t_2fec347a5ed7cb 65
+  s_d6753900c31c8e::t_fa3dc5900370de 68
+  s_d6753900c31c8e::t_4b82ffdd52ff8e 51
+.claude/skills/boolean-debugging/reference.md
+  s_d6753900c31c8e::t_7946f18b047acb 83-91,94-98,100
+  s_d6753900c31c8e::t_537e36ced3d02f 32
+  s_d6753900c31c8e::t_5f95656247cfa7 117-125
+  s_d6753900c31c8e::t_0a41d2488484d7 1-31,33-82,92-93,99,101-116,126-130
+.claude/skills/fillet-blend/SKILL.md
+  s_d6753900c31c8e::t_b906543bfcbf57 1-22,24-86,88-98
+  s_d6753900c31c8e::t_b08a4e8282a921 23
+  s_d6753900c31c8e::t_7fd85be6916fd9 99
+  s_d6753900c31c8e::t_fe4643da239595 87
+.claude/skills/profiling/reference.md
+  s_d6753900c31c8e::t_a81c1ff4ee7352 42
+  s_d6753900c31c8e::t_592f743843d6fa 38
+  s_d6753900c31c8e::t_3a5241c2e6e16b 1-37,39-41,43-148
+.claude/skills/io-formats/SKILL.md
+  s_d6753900c31c8e::t_28f70b4d2ec4a0 121,123-125,128-132
+  s_d6753900c31c8e::t_0bbe08ee54b713 48-51
+  s_d6753900c31c8e::t_e4a929c4428e72 45
+  s_d6753900c31c8e::t_2c4a19d2801b5e 1-14,20-44,46-47,52-58,63-64,66,74-120,122,126-127,133-147,150-151,160-169,171-186
+  s_d6753900c31c8e::t_ebb0fe604c1c82 148-149,152-159
+  s_d6753900c31c8e::t_4b29927777986e 170
+  s_d6753900c31c8e::t_8a87b98d297a15 59-62,65,67-73
+  s_d6753900c31c8e::t_0271e65c0a7530 15-19
+.claude/skills/io-formats/reference.md
+  s_d6753900c31c8e::t_5c558d93eb7ad6 160
+  s_d6753900c31c8e::t_55d45a2538d80c 1-73,77-159,161-164
+  s_d6753900c31c8e::t_433fd11b60f822 74-76
+.claude/skills/solid-verification/reference.md
+  s_d6753900c31c8e::t_0740162e7ad06f 41
+  s_d6753900c31c8e::t_22b27a2cd5913f 21-22
+  s_d6753900c31c8e::t_769c1fbdb783b7 11
+  s_d6753900c31c8e::t_55579e6c4fc0d0 1-10,12,14-20,23-33,35-40,42-122
+  s_d6753900c31c8e::t_15f49a311bc444 34
+  s_d6753900c31c8e::t_ea5cf38fa36bd7 13
+.claude/skills/parity-benchmarking/SKILL.md
+  s_d6753900c31c8e::t_a2f1e84b5f37ef 73
+  s_d6753900c31c8e::t_bf020607ff005a 35
+  s_d6753900c31c8e::t_ba5c1beb6f779a 1-11,13-34,36-53,55-72,74-108
+  s_d6753900c31c8e::t_57acd05e7a007f 12
+  s_d6753900c31c8e::t_4d93aadbdddb4e 54
+.claude/skills/README.md
+  s_d6753900c31c8e::t_767856ad13c701 33
+  s_d6753900c31c8e::t_a126e46ebd8cab 12
+  s_d6753900c31c8e::t_9f7add78e950e5 16
+  s_d6753900c31c8e::t_b7eea4699643ca 34
+  s_d6753900c31c8e::t_d79c9fc61d4c2e 23
+  s_d6753900c31c8e::t_ffd3d2a3145d8d 35
+  s_d6753900c31c8e::t_45450c83622e34 1-11,13-15,17-22,24-32,36-55
+.claude/skills/analytic-preservation/SKILL.md
+  s_d6753900c31c8e::t_f8c11f4bf6d481 132-134
+  s_d6753900c31c8e::t_ca704296a6c250 1-11,15-20,28-63,69-112,116-128,131
+  s_d6753900c31c8e::t_edbe30d50ff0c0 22-27
+  s_d6753900c31c8e::t_9eaabfdbe1fe99 129-130
+  s_d6753900c31c8e::t_4d0b259fcd3268 21
+  s_d6753900c31c8e::t_ae400c731f079a 64-68
+  s_d6753900c31c8e::t_d8bc16d87616ae 12-14
+  s_d6753900c31c8e::t_c1f5784aa76b85 113-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.8",
+  "base_commit_sha": "e7e38f869bb466693393e4ef558cf6f325dc772f",
+  "prompts": {},
+  "sessions": {
+    "s_d6753900c31c8e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a9dde3a-d604-40df-81ec-898bc2574873",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
