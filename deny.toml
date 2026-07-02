@@ -11,8 +11,8 @@ yanked = "warn"
 # this copy cannot advance until that upstream chain updates. Re-check and drop
 # these entries when winit/wayland-scanner move off quick-xml 0.39.
 ignore = [
-  { id = "RUSTSEC-2026-0194", reason = "only reachable via wayland-scanner build-time codegen on trusted protocol XML; the untrusted-input 3MF path is patched to quick-xml >= 0.41" },
-  { id = "RUSTSEC-2026-0195", reason = "only reachable via wayland-scanner build-time codegen on trusted protocol XML; the untrusted-input 3MF path is patched to quick-xml >= 0.41" },
+  {id = "RUSTSEC-2026-0194", reason = "only reachable via wayland-scanner build-time codegen on trusted protocol XML; the untrusted-input 3MF path is patched to quick-xml >= 0.41"},
+  {id = "RUSTSEC-2026-0195", reason = "only reachable via wayland-scanner build-time codegen on trusted protocol XML; the untrusted-input 3MF path is patched to quick-xml >= 0.41"},
 ]
 
 [licenses]
