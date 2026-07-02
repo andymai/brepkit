@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782753516847,
+  "lastUpdate": 1783024558289,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1727,6 +1727,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19075998,
             "range": "± 83144",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "262676d5e280a8dbf0947bac8fb6d9f0fd6f0aba",
+          "message": "fix(deps): upgrade quick-xml to 0.41 for RUSTSEC-2026-0194/0195 (#1024)\n\n## Why\n\nTwo DoS advisories landed against `quick-xml` on untrusted XML input,\nfailing Cargo Deny and Security Audit on `main` and on every open PR:\n\n- [RUSTSEC-2026-0194](https://rustsec.org/advisories/RUSTSEC-2026-0194):\nquadratic time checking a start tag for duplicate attribute names.\n- [RUSTSEC-2026-0195](https://rustsec.org/advisories/RUSTSEC-2026-0195):\nunbounded namespace-declaration allocation in `NsReader`.\n\nBoth are fixed in `quick-xml >= 0.41.0`.\n\n## What\n\n- Bump the direct dependency `quick-xml` from `0.40` to `0.41` (root\n`Cargo.toml`). The only path that parses untrusted input is the 3MF\nreader in `brepkit-io`; it and the 3MF writer build and pass unchanged\nagainst 0.41.\n- Scope a documented advisory ignore in `deny.toml` for the residual\n`quick-xml 0.39.4`, which enters only through `wayland-scanner` (a\nbuild-time proc-macro under `winit`, behind `brepkit-render`'s `window`\nfeature). It generates code from vendored, trusted Wayland protocol XML\nat compile time and never touches runtime input, and it is pinned to\n`^0.39` upstream so it cannot advance yet. The ignore carries a re-check\ntrigger for when the `winit` chain moves off `quick-xml 0.39`.\n\n## Verification\n\n- `cargo build -p brepkit-io` and `cargo test -p brepkit-io` pass\nagainst 0.41.\n- `cargo deny --all-features check` reports `advisories ok, bans ok,\nlicenses ok, sources ok` locally (all-features reproduces the CI\naction's graph breadth, which includes the window/wayland path).\n\n## Note\n\nUnblocks the repo's security checks, which are currently red on `main`\nindependent of any single PR (including the docs-only #1023).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpgrade `quick-xml` to 0.41 to patch `RUSTSEC-2026-0194`/`0195` DoS\nissues and restore passing security checks. 3MF parsing/writing in\n`brepkit-io` builds and tests unchanged.\n\n- **Dependencies**\n- Add scoped `deny.toml` ignores for `RUSTSEC-2026-0194` and\n`RUSTSEC-2026-0195` on the residual `quick-xml 0.39.4` via\n`wayland-scanner` under `winit` (`brepkit-render` `window` feature);\nbuild-time codegen only. Taplo-formatted and includes a re-check note\nfor when the chain updates.\n- Mirror the same ignores in `.cargo/audit.toml` so the Security Audit\njob (`cargo-audit`) also passes.\n\n<sup>Written for commit 89f7898476290ef41e39ba6e224917f903418381.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1024?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-02T13:33:49-07:00",
+          "tree_id": "e16e7b50d51e0e32c50a290c084a08757b8c47ae",
+          "url": "https://github.com/andymai/brepkit/commit/262676d5e280a8dbf0947bac8fb6d9f0fd6f0aba"
+        },
+        "date": 1783024557981,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 741461,
+            "range": "± 983",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 830130,
+            "range": "± 1013",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12076,
+            "range": "± 785",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 629009,
+            "range": "± 13190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19043634,
+            "range": "± 20814",
             "unit": "ns/iter"
           }
         ]
