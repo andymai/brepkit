@@ -1,0 +1,19 @@
+deny.toml
+  s_d6753900c31c8e::t_fc24d8b20c51d9 14-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.8",
+  "base_commit_sha": "89f7898476290ef41e39ba6e224917f903418381",
+  "prompts": {},
+  "sessions": {
+    "s_d6753900c31c8e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a9dde3a-d604-40df-81ec-898bc2574873",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
