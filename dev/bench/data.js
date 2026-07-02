@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783024893871,
+  "lastUpdate": 1783025496866,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1835,6 +1835,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18978613,
             "range": "± 19994",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f57997351b7540f0115f5ef0e3de58b133c31171",
+          "message": "docs(skills): add engineering skill library under .claude/skills (#1023)\n\n## What\n\nEighteen skills under `.claude/skills/`, each capturing the method and\ntraps for one recurring class of work, so engineers and smaller models\ncan debug, extend, validate, benchmark, and ship this kernel without\nprior project context. `README.md` indexes them with a suggested reading\norder and a glossary.\n\n**Doctrine and verification:** `debugging-doctrine`,\n`solid-verification`, `numerical-robustness`, `testing`.\n**Engine internals:** `boolean-debugging`, `analytic-preservation`,\n`tessellation`, `fillet-blend`.\n**Building:** `layer-boundaries`, `add-operation`, `wasm-bindings`,\n`render-verify`, `io-formats`.\n**Shipping:** `pr-workflow`, `profiling`, `parity-benchmarking`,\n`release-flow`.\n**Work selection:** `roadmap`, a living index of open, deferred, and\nterminal cases with the chase filters and the acceptance bar.\n\n## How it was built\n\nEach skill went through research, authoring, adversarial verification,\nand fix stages, then cross-skill consistency and coverage passes. Every\nfile path, symbol, and command was checked against the current tree.\nSeveral beliefs carried in from earlier work were found stale and\ncorrected in place (tooling that now exists, a heal function that is\nimplemented rather than a stub, a deprecation already removed).\n\n## Scope\n\nDocumentation only. No source, test, or build changes. The `roadmap`\nskill declares a maintenance contract: sessions that close, defer, or\ndiscover a work item update it in the same PR.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds the brepkit engineering skill library under `.claude/skills` with\n18 task-focused guides and references so contributors can debug, extend,\nverify, benchmark, and ship the kernel. Docs-only; includes an indexed\n`README.md` and a maintenance rule for the `roadmap` skill.\n\n- **New Features**\n- Eighteen skill guides across doctrine/verification, engine internals,\nbuilding, shipping, and work selection, each with `SKILL.md` +\n`reference.md` verified against current symbols, paths, and commands.\n  - `README.md` index with suggested reading order and glossary.\n- `roadmap` adds a maintenance contract: sessions that\nclose/defer/discover work must update it in the same PR.\n\n<sup>Written for commit 3f6b64818afdb31a27b07edef926fc63b9ba623b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1023?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-02T13:49:26-07:00",
+          "tree_id": "a20266c4af14b49d2380cbf76a670477746538b4",
+          "url": "https://github.com/andymai/brepkit/commit/f57997351b7540f0115f5ef0e3de58b133c31171"
+        },
+        "date": 1783025496367,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 736584,
+            "range": "± 984",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 824550,
+            "range": "± 2728",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12019,
+            "range": "± 589",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 623327,
+            "range": "± 15568",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19114121,
+            "range": "± 54773",
             "unit": "ns/iter"
           }
         ]
