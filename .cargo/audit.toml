@@ -1,0 +1,14 @@
+# cargo-audit configuration. Mirrors the advisory ignores in deny.toml, because
+# cargo-audit does not read deny.toml.
+#
+# RUSTSEC-2026-0194 / -0195 are denial-of-service advisories against quick-xml
+# on untrusted XML input. The only path that parses untrusted input, the 3MF
+# reader in brepkit-io, is on the patched quick-xml >= 0.41.0. The residual
+# quick-xml 0.39.4 in the lock enters solely through wayland-scanner (a
+# build-time proc-macro under winit, behind brepkit-render's `window` feature),
+# which generates code from vendored, trusted Wayland protocol XML at compile
+# time and never touches runtime input. wayland-scanner pins quick-xml ^0.39, so
+# this copy cannot advance until that upstream chain updates. Re-check and drop
+# these entries when winit/wayland-scanner move off quick-xml 0.39.
+[advisories]
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
