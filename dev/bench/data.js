@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783024558289,
+  "lastUpdate": 1783024893871,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1781,6 +1781,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19043634,
             "range": "± 20814",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1813c64a575876a247c4c1d9130496d52149528d",
+          "message": "chore(main): release 2.124.1 (#1025)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.1](https://github.com/andymai/brepkit/compare/v2.124.0...v2.124.1)\n(2026-07-02)\n\n\n### Bug Fixes\n\n* **deps:** upgrade quick-xml to 0.41 for RUSTSEC-2026-0194/0195\n([#1024](https://github.com/andymai/brepkit/issues/1024))\n([262676d](https://github.com/andymai/brepkit/commit/262676d5e280a8dbf0947bac8fb6d9f0fd6f0aba))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release for `brepkit-wasm` upgrading `quick-xml` to 0.41 to\naddress RUSTSEC-2026-0194 and RUSTSEC-2026-0195. This resolves the\nadvisories and bumps the crate to version 2.124.1.\n\n<sup>Written for commit 40026c044589b93743b1d41a883767a067ff2f2e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1025?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-02T20:39:26Z",
+          "tree_id": "e38a3896bb78c62371ba84b1e674b41007268e9d",
+          "url": "https://github.com/andymai/brepkit/commit/1813c64a575876a247c4c1d9130496d52149528d"
+        },
+        "date": 1783024893502,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 740563,
+            "range": "± 1672",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 827180,
+            "range": "± 1612",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11885,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 627705,
+            "range": "± 1092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18978613,
+            "range": "± 19994",
             "unit": "ns/iter"
           }
         ]
