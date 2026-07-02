@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.1](https://github.com/andymai/brepkit/compare/v2.124.0...v2.124.1) (2026-07-02)
+
+
+### Bug Fixes
+
+* **deps:** upgrade quick-xml to 0.41 for RUSTSEC-2026-0194/0195 ([#1024](https://github.com/andymai/brepkit/issues/1024)) ([262676d](https://github.com/andymai/brepkit/commit/262676d5e280a8dbf0947bac8fb6d9f0fd6f0aba))
+
 ## [2.124.0](https://github.com/andymai/brepkit/compare/v2.123.0...v2.124.0) (2026-06-26)
 
 
