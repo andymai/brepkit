@@ -325,7 +325,36 @@ fn check_edge_face_pairs(
                 _ => find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
             };
 
-            for (t, pt) in crossings {
+            // Endpoint-drop windows, one per crossing, computed while the
+            // face's surface borrow is still live (the loop below mutates
+            // `topo`). The window scales with the crossing angle: a
+            // TANGENTIAL (grazing) contact's position along the curve is only
+            // accurate to sqrt-of-residual — an arc grazing a coplanar wall
+            // at its endpoint solves to a point microns along the arc from
+            // the true endpoint despite a ~1e-12 residual. A fixed
+            // `tol.linear` window misses that point and mints a
+            // near-duplicate vertex next to the edge's own endpoint (the
+            // gridfinity lip-corner non-manifold STL family). For transversal
+            // crossings sin(angle) ~ 1 and the window stays at `tol.linear`;
+            // the cap bounds the grazing window so a genuine crossing farther
+            // along a long edge is never eaten.
+            let endpoint_windows: Vec<f64> = crossings
+                .iter()
+                .map(|&(t, pt)| {
+                    let tangent = curve.tangent_with_endpoints(t, start_pos, end_pos);
+                    let normal = match surface {
+                        FaceSurface::Plane { normal, .. } => Some(*normal),
+                        _ => surface.project_point(pt).map(|(u, v)| surface.normal(u, v)),
+                    };
+                    let sin_angle = match (tangent.normalize(), normal) {
+                        (Ok(tangent_unit), Some(n)) => tangent_unit.dot(n).abs(),
+                        _ => 1.0,
+                    };
+                    (tol.linear / sin_angle.max(1e-9)).min(1e-3)
+                })
+                .collect();
+
+            for ((t, pt), endpoint_window) in crossings.into_iter().zip(endpoint_windows) {
                 if !containments[face_idx].accepts(pt) {
                     log::debug!(
                         "EF: dropping crossing of edge {eid:?} at t={t:.6} — outside face {fid:?} boundary",
@@ -338,10 +367,11 @@ fn check_edge_face_pairs(
                 // it as EF marks the adjacent pave block as lying inside the
                 // face even though the edge merely touches the face there
                 // (e.g. a cap-rim arc tangent to a coplanar wall corner).
-                if (pt - start_pos).length() <= tol.linear || (pt - end_pos).length() <= tol.linear
+                if (pt - start_pos).length() <= endpoint_window
+                    || (pt - end_pos).length() <= endpoint_window
                 {
                     log::debug!(
-                        "EF: dropping endpoint contact of edge {eid:?} at t={t:.6} on face {fid:?}",
+                        "EF: dropping endpoint contact of edge {eid:?} at t={t:.6} on face {fid:?} (window {endpoint_window:.2e})",
                     );
                     continue;
                 }
