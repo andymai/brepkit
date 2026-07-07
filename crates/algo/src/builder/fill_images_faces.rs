@@ -1327,20 +1327,6 @@ fn build_section_edges(
                     continue;
                 }
 
-                // An OPEN arc section that re-traces one of this face's EXISTING
-                // inner-wire (hole) edges adds no interior split — the hole is
-                // already present. Threading it makes the planar arrangement weave
-                // a zero-area annulus (a sub-face whose outer wire equals its inner
-                // wire), over-sharing every ring edge and inverting the assembled
-                // shell — the 2×1/1×2 stacking-lip fuse failure, where the lip's
-                // bottom annulus sits flush on the body's top and the FF
-                // intersection re-traces the annulus's own opening ring. Sample the
-                // section by its own parametric range (precise arc direction) and
-                // drop it when every interior sample lies on an inner-wire edge.
-                if section_on_existing_hole(topo, face_id, &sample_curve_interior(curve_ds), tol) {
-                    continue;
-                }
-
                 // Find start/end 3D points by evaluating the curve at its
                 // parametric endpoints. For closed curves (circles), start ≈ end.
                 let (start, end) = curve_endpoints(topo, arena, curve_ds);
@@ -1348,6 +1334,31 @@ fn build_section_edges(
                     (Some(s), Some(e)) => (s, e),
                     _ => continue,
                 };
+
+                // An OPEN section that re-traces PART of one of this face's
+                // EXISTING boundary edges (outer or inner wire) adds no interior
+                // split — that partition is already in the arrangement.
+                // Threading it makes the planar arrangement weave a degenerate
+                // region: a zero-area annulus over a hole ring (the 2×1/1×2
+                // stacking-lip fuse failure, where the lip's bottom annulus sits
+                // flush on the body's top and the FF intersection re-traces the
+                // annulus's own opening ring), or a multiply-traversed snake
+                // wire over the outer corner arcs (the tilted-divider lip fuse,
+                // where the body's corner cylinders meet the lip's bottom plane
+                // exactly at its flush outer rim). Sample the section by its own
+                // parametric range (precise arc direction) and drop it when
+                // every interior sample lies on a boundary edge — EXCEPT when it
+                // duplicates a single existing edge exactly (see the exemption
+                // in `section_on_existing_boundary`).
+                if section_on_existing_boundary(
+                    topo,
+                    face_id,
+                    &sample_curve_interior(curve_ds),
+                    Some((start, end)),
+                    tol,
+                ) {
+                    continue;
+                }
 
                 // Skip a degenerate curved intersection curve: a non-Line curve
                 // whose 3D chord has collapsed to a point AND whose parametric
@@ -1566,6 +1577,39 @@ fn build_section_edges(
                     }
                 }
 
+                // Same boundary-re-trace rejection as the Curve arm above: a
+                // PaveBlock section whose interior lies entirely on one of this
+                // face's existing boundary edges contributes no interior split.
+                // Keeping such sections made the arrangement of the lip bottom
+                // ring weave a degenerate region wherever the body's inner-wall
+                // planes intersect the lip plane exactly along its flush inner
+                // rim, and the whole fuse fell back to the mesh boolean (the
+                // top-row-merged compartment bin).
+                let interior_samples: Vec<Point3> = {
+                    const SAMPLES: usize = 9;
+                    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                    (1..SAMPLES)
+                        .map(|k| {
+                            #[allow(clippy::cast_precision_loss)]
+                            let frac = k as f64 / SAMPLES as f64;
+                            edge.curve().evaluate_with_endpoints(
+                                (t1 - t0).mul_add(frac, t0),
+                                start,
+                                end,
+                            )
+                        })
+                        .collect()
+                };
+                if section_on_existing_boundary(
+                    topo,
+                    face_id,
+                    &interior_samples,
+                    Some((start, end)),
+                    tol,
+                ) {
+                    continue;
+                }
+
                 // Project start/end to UV using surface projection (original approach).
                 let start_uv = face.surface().project_point(start);
                 let end_uv = face.surface().project_point(end);
@@ -1761,17 +1805,22 @@ fn closed_curve_coincides_with_boundary(
 /// failure, where the lip's bottom annulus sits flush on the body's top and the
 /// FF intersection re-traces the annulus's own opening ring.
 ///
-/// Only INNER wires are tested, never the outer wire. A section that lies on an
-/// outer boundary edge may still be a NECESSARY shared edge with the neighbour
-/// face across that boundary (e.g. a lip's bottom plane crossing a shelled cup's
-/// cavity-wall corner cylinder, where the contact arc rides the cylinder's own
-/// bottom rim but must remain to seam the two solids). The Line path's
-/// `clip_line_to_face_boundary` already drops a section lying on a single
-/// outer-boundary segment; this only adds the inner-wire (hole) case for arcs.
-fn section_on_existing_hole(
+/// Both wire kinds are tested. An inner-wire (hole) re-trace weaves a zero-area
+/// annulus (the case above). An OUTER-wire re-trace is just as destructive: the
+/// body's corner cylinders meet the lip's bottom plane exactly at its flush
+/// outer rim, so the FF intersection arcs re-trace the lip ring's own outer
+/// corner arcs; threading them makes the wire builder weave a snake wire that
+/// multiply-traverses the rim, which saturates the shell flood-fill's edge
+/// counts and orphans every face across the junction (the tilted-divider lip
+/// fuse collapsed to the 14-face body exterior). Sections that only PARTLY ride
+/// a boundary edge keep their pave — the all-interior-samples rule keeps any
+/// section that enters face material, so a genuinely needed seam section (one
+/// that crosses INTO the face) is never dropped.
+fn section_on_existing_boundary(
     topo: &Topology,
     face_id: FaceId,
     section_pts: &[Point3],
+    sec_endpoints: Option<(Point3, Point3)>,
     tol: f64,
 ) -> bool {
     if section_pts.is_empty() {
@@ -1780,12 +1829,8 @@ fn section_on_existing_hole(
     let Ok(face) = topo.face(face_id) else {
         return false;
     };
-    let inner = face.inner_wires();
-    if inner.is_empty() {
-        return false;
-    }
     'sample: for p in section_pts {
-        for &wid in inner {
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             let Ok(wire) = topo.wire(wid) else { continue };
             for oe in wire.edges() {
                 let Ok(edge) = topo.edge(oe.edge()) else {
@@ -1800,10 +1845,59 @@ fn section_on_existing_hole(
                 }
             }
         }
-        // This sample is off every inner-wire edge → the section is not a pure
-        // hole re-trace → keep it (it may split the interior or seam a neighbour).
+        // This sample is off every boundary edge → the section is not a pure
+        // boundary re-trace → keep it (it may split the interior or seam a
+        // neighbour).
         return false;
     }
+
+    // Exemption: an OPEN section that duplicates a single existing OUTER-wire
+    // edge EXACTLY (endpoint pair matches within the weld band) is safe to
+    // thread — the wire builder welds identical duplicates — and load-bearing:
+    // threading it is what routes the face through the split/rebuild path,
+    // aligning its boundary partition with the other solid's coincident faces
+    // (the shelled cup's rim/lip-base corner arcs; dropping them left the
+    // lip-bottom ring unsplit and its inner rim unpaired against the cup
+    // walls). Only SUB-SPAN re-traces (a 45°-split half of a whole corner-arc
+    // edge, a straight run split at a divider crossing) corrupt the
+    // arrangement, because the coincident pieces partition the same curve
+    // differently.
+    //
+    // The exemption deliberately excludes INNER (hole) wires and
+    // closed/degenerate sections (start ≈ end): a hole ring is a complete
+    // closed boundary already, so re-threading ANY of its edges — whole or
+    // partial — recreates the zero-area annulus this guard exists for (the
+    // 2×1/1×2 stacking-lip fuse).
+    if let Some((ss, se)) = sec_endpoints {
+        let weld = tol * 100.0;
+        // Endpoint matching uses a wider band than the closed-section test: a
+        // grazing/tangential intersection can mislocate a section endpoint by
+        // microns ALONG the boundary curve (positional error ~ sqrt of the
+        // solver residual — measured 3.1 µm on the lip-corner arc) while the
+        // section still rides the edge within `tol`. Genuine sub-span split
+        // points (a 45° arc midpoint, a divider crossing) sit millimetres from
+        // the edge endpoints, so 10 µm keeps a 100× separation margin.
+        let endpoint_band = (tol * 1e5).max(weld);
+        if (ss - se).length() >= weld
+            && let Ok(wire) = topo.wire(face.outer_wire())
+        {
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                    continue;
+                };
+                let (bs, be) = (sv.point(), ev.point());
+                let fwd = (ss - bs).length() < endpoint_band && (se - be).length() < endpoint_band;
+                let rev = (ss - be).length() < endpoint_band && (se - bs).length() < endpoint_band;
+                if fwd || rev {
+                    return false;
+                }
+            }
+        }
+    }
+
     true
 }
 
@@ -1878,7 +1972,7 @@ fn arc_param_contains(a: f64, a0: f64, a1: f64, start: Point3, end: Point3) -> b
 /// parametric range (`curve_ds.t_range`). The endpoints are excluded — they
 /// always coincide with the face boundary where the section meets it; only the
 /// interior reveals whether the section enters the face material or rides a
-/// boundary edge. Used by [`section_on_existing_hole`].
+/// boundary edge. Used by [`section_on_existing_boundary`].
 fn sample_curve_interior(curve_ds: &crate::ds::IntersectionCurveDS) -> Vec<Point3> {
     use brepkit_math::vec::Point3;
     const SAMPLES: usize = 9;

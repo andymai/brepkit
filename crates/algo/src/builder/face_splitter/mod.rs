@@ -416,6 +416,38 @@ fn split_plane_boundary_arcs_at_points(
     result
 }
 
+/// Whether an edge curve is geometrically a straight segment, independent of
+/// its nominal type. A planar-NURBS extrusion wall's rim is a `NurbsCurve`
+/// that is exactly straight (the tilted-divider cavity). Straightness is
+/// decided from the control polygon — a NURBS whose control points are
+/// collinear is straight everywhere, for any trim of the edge — so a trimmed
+/// span of a genuinely curved carrier is never misjudged by sampling only part
+/// of it. The collinearity band is the kernel's default linear tolerance
+/// (1e-7); a control polygon that tight is straight for any splitting purpose.
+fn edge_curve_is_straight(curve: &EdgeCurve) -> bool {
+    match curve {
+        EdgeCurve::Line => true,
+        EdgeCurve::NurbsCurve(n) => {
+            let pts = n.control_points();
+            let (Some(first), Some(last)) = (pts.first(), pts.last()) else {
+                return false;
+            };
+            let chord = *last - *first;
+            let len = chord.length();
+            if len < 1e-12 {
+                return false;
+            }
+            pts.iter().all(|p| {
+                let v = *p - *first;
+                let along = v.dot(chord) / len;
+                let dev_sq = along.mul_add(-along, v.dot(v));
+                dev_sq < 1e-14
+            })
+        }
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => false,
+    }
+}
+
 /// Weave hole boundaries into the section arrangement of a planar face.
 ///
 /// When a holed planar face is cut by sections (e.g. a shelled box top with a
@@ -511,11 +543,15 @@ fn integrate_holes_plane(
         .collect();
     // Straight hole edges only feed the section-split crossing set (a section
     // entering the cavity crosses a straight wall). Arc edges are carried
-    // through separately below.
+    // through separately below. "Straight" is geometric, not nominal: a
+    // planar-NURBS extrusion wall's rim is a NurbsCurve edge that is exactly
+    // straight (the tilted-divider cavity), and leaving it to the arc branch
+    // makes the whole pass bail on the section that crosses it — the divider
+    // cap is then never extracted and its top ring stays open.
     let hole_segs: Vec<(Point2, Point2, Point3, Point3)> = inner_wires
         .iter()
         .flatten()
-        .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+        .filter(|e| edge_curve_is_straight(&e.curve_3d))
         .map(|e| {
             (
                 frame.project(e.start_3d),
@@ -655,7 +691,7 @@ fn integrate_holes_plane(
     for arc in inner_wires
         .iter()
         .flatten()
-        .filter(|e| !matches!(e.curve_3d, EdgeCurve::Line))
+        .filter(|e| !edge_curve_is_straight(&e.curve_3d))
     {
         let a0 = frame.project(arc.start_3d);
         let a1 = frame.project(arc.end_3d);
@@ -1795,16 +1831,72 @@ pub fn split_face_2d(
         // endpoints and chord midpoint all sit inside it. Walking the curve
         // via `evaluate_edge_at_t` also covers closed-circle sections
         // (start == end), where chord sampling collapses to a single point.
+        //
+        // Uniform samples alone are NOT sufficient: a Line section bridging
+        // between two cavities can cross a sliver of material (the 1.2 mm
+        // divider cap between the openings, on a 200+ mm span) that every
+        // uniform probe misses, so the section reads as pure air and the
+        // divider cap is never split out (tilted-divider lip fuse). Probe the
+        // midpoints between consecutive hole-boundary crossings as well —
+        // the same sub-segment structure the hole weave itself uses — so any
+        // material sub-segment, however thin, keeps the section alive.
+        let crossing_midpoint_probes = |s: &SectionEdge| -> Vec<Point2> {
+            if !matches!(s.curve_3d, EdgeCurve::Line) {
+                return Vec::new();
+            }
+            let (Some(s0), Some(s1)) = (to_uv(s.start), to_uv(s.end)) else {
+                return Vec::new();
+            };
+            let mut ts: Vec<f64> = vec![0.0, 1.0];
+            for hole in &original_inner_wires {
+                // Only straight hole edges: for those the endpoint chord IS the
+                // edge, so the crossing parameters are exact. A curved rim's
+                // chord would place crossings (and thus the probe midpoints)
+                // off the true geometry; those edges contribute no crossings
+                // here, which errs on the side of keeping the uniform-probe
+                // verdict rather than fabricating a rescue.
+                for e in hole.iter().filter(|e| edge_curve_is_straight(&e.curve_3d)) {
+                    let h0 = frame.project(e.start_3d);
+                    let h1 = frame.project(e.end_3d);
+                    if let Some(t) = seg_cross_param(s0, s1, h0, h1) {
+                        ts.push(t);
+                    }
+                }
+            }
+            ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            ts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+            ts.windows(2)
+                .map(|w| {
+                    let tm = f64::midpoint(w[0], w[1]);
+                    Point2::new(
+                        s0.x() + (s1.x() - s0.x()) * tm,
+                        s0.y() + (s1.y() - s0.y()) * tm,
+                    )
+                })
+                .collect()
+        };
         filtered_sections = sections
             .iter()
             .filter(|s| {
-                let all_in_hole = (0..=HOLE_PROBE_SAMPLES).all(|i| {
+                let uniform_in_hole = (0..=HOLE_PROBE_SAMPLES).all(|i| {
                     #[allow(clippy::cast_precision_loss)]
                     let t = i as f64 / HOLE_PROBE_SAMPLES as f64;
                     let p = evaluate_edge_at_t(&s.curve_3d, s.start, s.end, t);
                     to_uv(p).is_some_and(|uv| is_inside_any_hole(&uv, &original_inner_wires))
                 });
-                !all_in_hole
+                if !uniform_in_hole {
+                    return true;
+                }
+                if is_plane {
+                    let probes = crossing_midpoint_probes(s);
+                    if !probes
+                        .iter()
+                        .all(|uv| is_inside_any_hole(uv, &original_inner_wires))
+                    {
+                        return true;
+                    }
+                }
+                false
             })
             .cloned()
             .collect();
