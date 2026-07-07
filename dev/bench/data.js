@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783439930024,
+  "lastUpdate": 1783445534706,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2213,6 +2213,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18528889,
             "range": "± 82517",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b6e21e5d37d7a2769cea35011d85ca0db7256e02",
+          "message": "fix(algo): scale the EF endpoint-contact window by crossing angle (#1033)\n\n## Summary\n\nRoot-caused from the gridfinity tool's literal export operands (captured\nwith the arena serializer, backtrace-trapped to\n`phase_ef::check_edge_face_pairs`):\n\nThe stacking lip's peak corner **arc** ends exactly on the tangent line\nwhere the body's coincident outer-wall **plane** grazes the lip's corner\ncylinder. A tangential edge-face contact's position along the curve is\nonly accurate to √residual — the EF crossing solver converged **3.1µm\nalong the arc** from the true endpoint (residual ~1e-12). The fixed\n`tol.linear` (1e-7) endpoint-contact window missed it, so the phase\nminted a near-duplicate vertex 3.1µm from the arc's own endpoint at\n**every lip corner**.\n\nThe result stays index-watertight (a micron-wide sliver triangle bridges\nthe pair) and volume-exact — but under the 1e-4 STL quantization the\ngridfinity tool and slicers use, the sliver's two long edges collapse\nonto one another: **8 \"non-manifold\" STL edges, two per corner** — the\ncompartment-export failure family.\n\n## Fix\n\nScale the existing endpoint-contact drop window by the crossing angle:\n`tol.linear / |curve_tangent · surface_normal|`, capped at 1mm.\nTransversal crossings (sin ≈ 1) keep the exact current behavior; grazing\ncontacts at an endpoint are recognized as the vertex-face incidence they\nare (the guard's original intent — its comment even names \"a cap-rim arc\ntangent to a coplanar wall corner\").\n\n## Verification\n\n- New fixture test `crates/io/tests/lipcorner_tangent_inmem.rs`: replays\nthe captured body+lip fuse through the provenance path\n(`boolean_with_evolution` — the tool's export route), asserting zero\nnear-duplicate vertex pairs below the STL quantization step,\nindex-watertight tessellation at the export tier, and zero defects under\nthe tool's exact 1e-4 quantized-STL oracle. Fails pre-fix, passes\npost-fix.\n- Full workspace suite green.\n- Tool-level: `compartmentBuilder.scenario.manifold` goes **5/13 →\n7/13** (both basic divider cases flip to passing; defect counts halve on\nseveral others — the residuals are smaller instances of the same class\nat other features, re-scoped in the roadmap row updated in this PR).\n- honeycombJunction and the fixture suites unchanged.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nScales the EF endpoint-contact window by crossing angle and gates it to\nendpoints that lie on the crossed surface to correctly detect grazing\nendpoint contacts. This removes the lip-corner duplicates and fixes\nnon-manifold STL edges in gridfinity exports without changing\ntransversal behavior.\n\n- **Bug Fixes**\n- Window is now `tol.linear / |curve_tangent · surface_normal|` (capped\nat 1 mm) and applies only toward an endpoint that lies on the crossed\nsurface; transversals and off-surface endpoints keep `tol.linear`.\nComment notes full-cap drops require `sin(angle) < 1e-4`.\n- Eliminates near-duplicate endpoint vertices from tangential edge–face\ncontacts at lip corners; removes 8 non-manifold STL edges in exports.\n- Tests: added `crates/io/tests/lipcorner_tangent_inmem.rs` with\ncaptured operands; quantized-STL oracle now counts sub-quantum slivers\n(three vertices in one bin) as defects; fails pre-fix, passes now.\n- Tool impact: `compartmentBuilder.scenario.manifold` improves 5/13 →\n7/13; honeycomb raw residuals re-pinned — pcut3 15→0, pcut2 holds (34),\npcut1 raw 53→65 due to previous noise splits; production result\nunchanged.\n\n<sup>Written for commit d0d736901d133081d8c9e21496899e00baf6beeb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1033?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-07T17:29:50Z",
+          "tree_id": "40db98fdb5affd62b56049631d84c31d4f1efc49",
+          "url": "https://github.com/andymai/brepkit/commit/b6e21e5d37d7a2769cea35011d85ca0db7256e02"
+        },
+        "date": 1783445534004,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 748747,
+            "range": "± 2852",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 834765,
+            "range": "± 33615",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12027,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 634680,
+            "range": "± 28848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19110500,
+            "range": "± 56279",
             "unit": "ns/iter"
           }
         ]
