@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783445534706,
+  "lastUpdate": 1783445849428,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2267,6 +2267,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19110500,
             "range": "± 56279",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8aa383111d4d43a254aeeaf6966348bc79b178af",
+          "message": "chore(main): release 2.124.3 (#1034)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.3](https://github.com/andymai/brepkit/compare/v2.124.2...v2.124.3)\n(2026-07-07)\n\n\n### Bug Fixes\n\n* **algo:** scale the EF endpoint-contact window by crossing angle\n([#1033](https://github.com/andymai/brepkit/issues/1033))\n([b6e21e5](https://github.com/andymai/brepkit/commit/b6e21e5d37d7a2769cea35011d85ca0db7256e02))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.124.3 for `brepkit-wasm`. Adjusts the edge–face (EF)\nendpoint-contact window based on crossing angle to improve contact\ndetection and reduce false misses.\n\n<sup>Written for commit 53ab534d7bbefe17e9b735155bc6c12b357ac191.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1034?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-07T17:35:18Z",
+          "tree_id": "4f21d85d6539c34696175715805fb4e294867805",
+          "url": "https://github.com/andymai/brepkit/commit/8aa383111d4d43a254aeeaf6966348bc79b178af"
+        },
+        "date": 1783445849074,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 780527,
+            "range": "± 1023",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 882856,
+            "range": "± 18885",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13451,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650490,
+            "range": "± 21554",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20218348,
+            "range": "± 22499",
             "unit": "ns/iter"
           }
         ]
