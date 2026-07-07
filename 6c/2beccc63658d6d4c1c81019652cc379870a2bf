@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_f2ad30106907f6::t_3a4a33d03e64a8 126
+crates/algo/src/builder/face_splitter/containment.rs
+  s_f2ad30106907f6::t_af8e2546849b76 59-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6c2beccc63658d6d4c1c81019652cc379870a2bf",
+  "prompts": {},
+  "sessions": {
+    "s_f2ad30106907f6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9dccc79-bff7-4fc1-97a4-a35352f0c3dc",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
