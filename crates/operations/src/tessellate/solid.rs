@@ -869,6 +869,10 @@ pub(super) fn tessellate_face_with_shared_edges(
                         merged.positions.truncate(pos_save);
                         merged.normals.truncate(nrm_save);
                         merged.indices.truncate(idx_save);
+                        // The CDT attempt may have registered merge-map entries
+                        // for the now-truncated vertices; a later lookup would
+                        // return a global id past `positions.len()`.
+                        point_to_global.retain(|_, gid| (*gid as usize) < pos_save);
                     } else {
                         cdt_handled = true;
                     }
@@ -905,6 +909,9 @@ pub(super) fn tessellate_face_with_shared_edges(
                 merged.positions.truncate(pos_save);
                 merged.normals.truncate(nrm_save);
                 merged.indices.truncate(idx_save);
+                // Same stale-merge-map hazard as the partial-band rollback
+                // above: drop entries referencing the truncated vertices.
+                point_to_global.retain(|_, gid| (*gid as usize) < pos_save);
                 tessellate_nonplanar_snap(
                     topo,
                     face_id,
