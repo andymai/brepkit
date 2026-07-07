@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.3](https://github.com/andymai/brepkit/compare/v2.124.2...v2.124.3) (2026-07-07)
+
+
+### Bug Fixes
+
+* **algo:** scale the EF endpoint-contact window by crossing angle ([#1033](https://github.com/andymai/brepkit/issues/1033)) ([b6e21e5](https://github.com/andymai/brepkit/commit/b6e21e5d37d7a2769cea35011d85ca0db7256e02))
+
 ## [2.124.2](https://github.com/andymai/brepkit/compare/v2.124.1...v2.124.2) (2026-07-07)
 
 
