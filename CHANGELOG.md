@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.6](https://github.com/andymai/brepkit/compare/v2.124.5...v2.124.6) (2026-07-07)
+
+
+### Bug Fixes
+
+* **algo:** decide planar hole nesting from the whole loop boundary ([#1039](https://github.com/andymai/brepkit/issues/1039)) ([c709987](https://github.com/andymai/brepkit/commit/c709987ab100e8c50d62ba5cf81b99e16f84f841))
+
 ## [2.124.5](https://github.com/andymai/brepkit/compare/v2.124.4...v2.124.5) (2026-07-07)
 
 
