@@ -1,0 +1,20 @@
+crates/operations/src/tessellate/solid.rs
+  s_571822668c8cb9::t_3dd30772e8220f 912-914
+  s_571822668c8cb9::t_49012d57f3f294 872-875
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7fb104278b0612050b643a91978523bf2267bbc0",
+  "prompts": {},
+  "sessions": {
+    "s_571822668c8cb9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7bec0fa-0d68-4082-8679-8525c7fe0368",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
