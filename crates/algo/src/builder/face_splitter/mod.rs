@@ -776,6 +776,44 @@ fn integrate_holes_plane(
     any_crossing.then_some((out, passthrough))
 }
 
+/// How a loop sits relative to an outer loop's sampled polygon. Exact for
+/// loops from a planar subdivision (loops never cross an outer, so boundary
+/// containment of every sampled point decides region containment):
+/// - `Nested`: every point inside or on the outer, at least one strictly
+///   interior — a genuine hole candidate.
+/// - `BoundaryCoincident`: every point ON the outer within its scale-aware
+///   boundary tolerance — a re-trace of that outline (the shelled-cup lip
+///   fuse weaves these from kept whole-edge duplicate sections).
+/// - `Outside`: at least one point strictly outside — not contained.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum LoopContainment {
+    Nested,
+    BoundaryCoincident,
+    Outside,
+}
+
+fn loop_containment(loop_pts: &[Point2], outer: &[Point2]) -> LoopContainment {
+    if outer.len() < 3 {
+        return LoopContainment::Outside;
+    }
+    let eps = super::classify_2d::boundary_eps(outer);
+    let mut any_strict = false;
+    for &p in loop_pts {
+        let on_boundary = super::classify_2d::distance_to_polygon_boundary(p, outer) <= eps;
+        if !on_boundary {
+            if !super::classify_2d::point_in_polygon_2d(p, outer) {
+                return LoopContainment::Outside;
+            }
+            any_strict = true;
+        }
+    }
+    if any_strict {
+        LoopContainment::Nested
+    } else {
+        LoopContainment::BoundaryCoincident
+    }
+}
+
 /// Attach each whole hole to the sub-face that geometrically contains it.
 ///
 /// A hole is assigned to the INNERMOST containing sub-face (the one whose own
@@ -2718,10 +2756,18 @@ pub fn split_face_2d(
     // into two side-by-side regions, the wire builder can hand back the second
     // region wound CW (negative area) even though it is ADJACENT, not nested
     // (e.g. the above-vs-below halves of a notch-straddle tool face split at the
-    // wall-top line). Detect that by probing a point strictly inside the
-    // candidate hole: if it lies in no outer's interior, the loop is a separate
-    // region — reverse it to CCW and promote it to an outer. A genuinely nested
-    // hole's probe lies inside its containing outer, so it is left alone.
+    // wall-top line). Loops come from a planar subdivision, so containment is
+    // decidable from the whole sampled boundary ([`loop_containment`]); a loop
+    // is promoted to a region only when it has points STRICTLY outside every
+    // outer. A single interior probe was tried and fails on thin regions — the
+    // crescent between a bin bottom's corner arc and a base socket outline's
+    // chamfer is ~0.1 mm wide, and the probe slips across the shared boundary
+    // into the adjacent socket region, wrongly keeping the crescent as a hole
+    // there (the socket-assembly fuse's free edges at every bin corner).
+    // `BoundaryCoincident` loops (re-traces of a sibling outline, woven from
+    // kept whole-edge duplicate sections) must NOT be promoted: they stay
+    // holes so the matching below threads their edges through the split — the
+    // shelled-cup lip fuse regresses if they become regions or are dropped.
     if !use_structural_classification && !outers.is_empty() && !holes.is_empty() {
         let outer_uv: Vec<Vec<Point2>> =
             outers.iter().map(|(w, _)| sample_wire_loop_uv(w)).collect();
@@ -2731,10 +2777,9 @@ pub fn split_face_2d(
             if hole_pts.len() < 3 {
                 return true;
             }
-            let probe = super::classify_2d::sample_interior_point(&hole_pts);
             let nested = outer_uv
                 .iter()
-                .any(|o| super::classify_2d::point_in_polygon_2d(probe, o));
+                .any(|o| loop_containment(&hole_pts, o) != LoopContainment::Outside);
             if nested {
                 true
             } else {
@@ -2768,9 +2813,14 @@ pub fn split_face_2d(
         });
     }
 
-    // Simple hole matching: each hole goes to the outer that contains its
-    // first vertex (via 2D point-in-polygon). Uses sampled UV points for
-    // accurate containment with curved outer wires.
+    // Simple hole matching: each hole goes to the first outer that nests it
+    // (all sampled hole points inside or on the outer — the same criterion the
+    // promotion pass above used to keep it a hole, so a container normally
+    // exists). Matching on the hole's FIRST VERTEX alone was tried and fails:
+    // that vertex often lies exactly on a neighboring sub-face's boundary,
+    // where the strict ray-cast answers false for every outer, and the
+    // dump-on-first-sub-face fallback then attached the hole to an arbitrary
+    // face — even one whose outer wire is nowhere near the hole.
     for hole in holes {
         if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
             let mut assigned = false;
