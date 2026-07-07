@@ -841,16 +841,50 @@ pub(super) fn tessellate_face_with_shared_edges(
             let handled =
                 tessellate_revolution_band_shared(topo, face_data, edge_global_indices, merged)?;
             if !handled {
-                tessellate_nonplanar_snap(
-                    topo,
-                    face_id,
-                    face_data,
-                    deflection,
-                    angular_tol,
-                    edge_global_indices,
-                    merged,
-                    point_to_global,
-                )?;
+                // Partial (non-full-revolution) hole-free bands have a genuine
+                // simple polygon UV boundary, so CDT over the shared pool ids
+                // is watertight by construction. The snap path re-samples the
+                // rim independently and cracks at fine deflections when its
+                // segment count diverges from the pool's (the #696 class, seen
+                // on gridfinity socket cone/cylinder corner rings). Faces WITH
+                // inner wires must keep the snap path: this CDT does not
+                // constrain inner wires and would skin the holes over.
+                let mut cdt_handled = false;
+                if face_data.inner_wires().is_empty() {
+                    let pos_save = merged.positions.len();
+                    let nrm_save = merged.normals.len();
+                    let idx_save = merged.indices.len();
+                    let cdt_ok = tessellate_nonplanar_cdt(
+                        topo,
+                        face_id,
+                        face_data,
+                        deflection,
+                        angular_tol,
+                        circle_floor,
+                        edge_global_indices,
+                        merged,
+                        point_to_global,
+                    );
+                    if cdt_ok.is_err() || merged.indices.len() == idx_save {
+                        merged.positions.truncate(pos_save);
+                        merged.normals.truncate(nrm_save);
+                        merged.indices.truncate(idx_save);
+                    } else {
+                        cdt_handled = true;
+                    }
+                }
+                if !cdt_handled {
+                    tessellate_nonplanar_snap(
+                        topo,
+                        face_id,
+                        face_data,
+                        deflection,
+                        angular_tol,
+                        edge_global_indices,
+                        merged,
+                        point_to_global,
+                    )?;
+                }
             }
         } else {
             let pos_save = merged.positions.len();

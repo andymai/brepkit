@@ -1462,10 +1462,17 @@ fn interior_grid_resolution(
             .max(2);
             (n_u, n_v)
         }
-        FaceSurface::Plane { .. }
-        | FaceSurface::Nurbs(_)
-        | FaceSurface::Cylinder(_)
-        | FaceSurface::Cone(_) => {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {
+            // u is the periodic direction (radians): curvature-driven. v runs
+            // along the straight rulings (a length, not an angle): zero chord
+            // sag, so feeding it to the chord formula would treat millimeters
+            // as radians and emit hundreds of interior rows on a tall wall.
+            // Two rows suffice for CDT quality on a developable band.
+            let r = estimate_surface_radius(surface);
+            let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol, true).max(2);
+            (n_u, 2)
+        }
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => {
             let r = estimate_surface_radius(surface);
             let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol, true).max(2);
             let n_v = segments_for_chord_deviation_a(r, dv, deflection, angular_tol, true).max(2);
