@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.5](https://github.com/andymai/brepkit/compare/v2.124.4...v2.124.5) (2026-07-07)
+
+
+### Bug Fixes
+
+* **algo:** arc-true hole polygons for the region classifier seed search ([#1037](https://github.com/andymai/brepkit/issues/1037)) ([43bda38](https://github.com/andymai/brepkit/commit/43bda38c8876379ee2596cbba7457fa29f35f876))
+
 ## [2.124.4](https://github.com/andymai/brepkit/compare/v2.124.3...v2.124.4) (2026-07-07)
 
 
