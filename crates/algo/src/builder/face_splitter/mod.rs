@@ -1675,7 +1675,7 @@ fn arrangement_regions_from_inputs(
             let seed_uv = if inner.is_empty() {
                 probes[i]
             } else {
-                find_point_outside_holes(&polys[i], &inner)
+                find_point_outside_holes(&polys[i], &inner, Some(frame))
             };
             // Drop a solid region that fills an original hole (air, not material).
             // Probe at the MATERIAL seed (outside this region's own inner-wire
@@ -3067,9 +3067,9 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // the OTHER hole and silently drops the whole frame face. The accurate
     // `is_inside_any_hole` UV point-in-polygon test avoids that.
     if matches!(&sub_face.surface, FaceSurface::Plane { .. }) && !sub_face.inner_wires.is_empty() {
-        interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
+        interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires, frame);
     } else if is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
-        interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
+        interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires, frame);
     }
 
     // Evaluate back to 3D.
