@@ -1,0 +1,28 @@
+crates/io/tests/data/compart_nurbswall_cavity_tool.bin
+  s_571822668c8cb9::t_0442c1004247c8 1
+crates/io/tests/data/compart_nurbswall_cavity_body.bin
+  s_571822668c8cb9::t_0442c1004247c8 1
+crates/io/tests/cut_reversed_tool_faces_inmem.rs
+  s_571822668c8cb9::t_dff394cb0860fb 60-63,66-68
+  s_571822668c8cb9::t_96125735e06f52 1-45,47-59,64-65,69-95
+  s_571822668c8cb9::t_a0aea425826c17 46
+crates/algo/src/builder/builder_solid.rs
+  s_571822668c8cb9::t_0442c1004247c8 78-89
+  s_571822668c8cb9::t_a0aea425826c17 1080-1084,1087-1093
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d67e844ddde3fdec6fc5b9c6103cb60e84f73e93",
+  "prompts": {},
+  "sessions": {
+    "s_571822668c8cb9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7bec0fa-0d68-4082-8679-8525c7fe0368",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
