@@ -44,7 +44,21 @@ exact analytic that now beat the reference kernel 2.9-9.5x head to head (box-sph
 intersect #1006, sphere-cyl cut #1005, perpendicular cyl-union #1008, torus-box #1010,
 all on the keystone surface-aware-AABB fix #1003); revolve made exact-analytic (#1012);
 GPU render milestones shipped (offscreen #1013, interactive viewer #1016, compute-mesher
-#1017, screen-space adaptive LOD #1021).
+#1017, screen-space adaptive LOD #1021); tessellation-parity wave (2026-07-07, #1029
+ruled-direction grid + partial-band CDT, #1030 cut orientation toggle + open-hole-shell
+guard) — honeycomb bins 63k→~3k triangles, compartment cavity cuts watertight at export
+tolerance, cut results with reversed tool faces no longer inverted.
+
+**A 2026-07-07 lesson that reshapes triage: not every scenario failure is a boolean
+fallback.** The honeycomb 15x triangle blow-up and the compartment non-manifold STL
+family both replayed with ZERO mesh fallbacks — the roots were in tessellation density,
+shared-rim meshing, and face orientation. Before assuming GFA, capture the actual
+boolean traffic with the probe kernel (branch `probe/boolean-capture`, local-only:
+`telemetry` hook in `operations::boolean`, wasm `probeEnableCapture`/`probeSummary`
+bindings, replay driver `crates/io/examples/replay_captures.rs`) and replay the
+operands natively. Also: the tool's `*.scenario.*` snapshot tests pin EXACT
+reference-kernel triangle counts — a different kernel can never match them; treat
+received-below-expected as benign density difference, received-10x-above as a defect.
 
 ## The priority filters (rules with reasons)
 
@@ -109,10 +123,22 @@ Current genuine `#[ignore]` items worth work:
 
 | Item (repro) | Layer | Symptom / first probe |
 |---|---|---|
-| `dovetail_corner_clip_intersect_is_watertight` (`crates/io/tests/dovetail_cornerclip_intersect_inmem.rs`) | algo/GFA | Coincident-wall + analytic-corner Intersect drops the boundary; tool mesh-falls-back to a slab. The sibling non-ignored test reaches free<=1 raw, so the residual is the last corner-cap sub-face. Probe: `cargo test -p brepkit-io --test dovetail_cornerclip_intersect_inmem -- --ignored --nocapture`. |
+| **Stacking-lip corner doubled faces** (fresh 2026-07-07, NEXT TARGET; tool probe recipe below) | unknown (lip build or fuse) | Every remaining basic `compartmentBuilder.scenario.manifold` failure is EXACTLY 8 non-manifold STL edges (x4 triangles each) at the 4 lip corners: one vertical edge per corner at the wall/corner-cylinder tangent seam (x,y = ±41.75, ±38.0, z 21→25.3) + one 45° chamfer diagonal per corner ((±39.85, 23.4)→(±41.75, 25.3)). Two coincident face patches each. NOT in the cavity-cut booleans (those replay watertight); the lip band comes from another pipeline stage (tool direct-mesh or a cached kernel op). Probe: tool-side STL edge-count dump on `exportBin` of a 2x2 cols=2 rows=1 bin (recipe was `zzNmProbe.test.ts`, deleted — rebuild from `compartmentBuilder.scenario.manifold.test.ts`'s `analyzeManifold`). |
+| **Tilted-divider compartment residuals** (4 of 13 manifold cases still fail post-#1029/#1030) | unknown | 12–64 NM/boundary STL edges on `1.5×6/2×6 halfSockets + tilted divider` variants. Capture with the probe kernel first — the basic-divider fix wave never saw these operands. |
+| **Honeycomb+handles kernel-poisoning panic** (`binGenerator.scenario.combinedFeatures` "2×2 honeycomb walls + handle holes") | wasm/operations | 205s runtime, then a panic mid-call leaves the wasm borrow flag locked — every later kernel call dies with "recursive use of an object". Two downstream tests die at 0ms. The probe kernel's free-function bindings still read post-poison. |
+| `dovetail_corner_clip_intersect_is_watertight` (`crates/io/tests/dovetail_cornerclip_intersect_inmem.rs`) | algo/GFA | Coincident-wall + analytic-corner Intersect drops the boundary; tool mesh-falls-back to a slab; the full dovetail scenario suite still exceeds a 25-min timeout (re-measured 2026-07-07). The sibling non-ignored test reaches free<=1 raw, so the residual is the last corner-cap sub-face. Probe: `cargo test -p brepkit-io --test dovetail_cornerclip_intersect_inmem -- --ignored --nocapture`. |
 | `fuse_shelled_box_with_socket_loft` (`crates/operations/src/boolean/tests.rs`) | operations/loft + algo | Non-manifold edge at shelled-box + socket-loft fuse. Root: `loft` builds `EdgeCurve::Line` ring edges (`crates/operations/src/loft.rs`, `rg -n 'EdgeCurve::Line' crates/operations/src/loft.rs`) so an octagonal frustum cannot annihilate an arc-cornered cap. Gated on a curve-preserving loft. Probe: run it `-- --ignored`. |
 | Fillet closed-rim free-edges (latent, no ready repro) | blend | `split_edge_at` in `crates/blend/src/trimmer.rs` rebuilds only the trimmed face's wire, never the neighbor cap face, leaving boundary edges. The d5 repro was reworked to dodge it and now passes. See `fillet-blend`. |
 | Revolve follow-ups (no ignored test) | operations/revolve | Pointed-cone apex merge, annulus/washer-cap merge, partial-turn torus. All stay analytic+exact, merely over-segmented. Probe: `cargo run --release --example approx_census -p brepkit-operations` (`revolve_matrix`). |
+
+Fresh full scenario-matrix baseline (2026-07-07, kernel 2.124.0 + #1029/#1030 overlay,
+`BREPJS_KERNEL=brepkit pnpm exec vitest run --project generators <suite>` in the tool):
+compartment manifold 5/13 (was 0/13; remainder = the lip-corner + tilted-divider rows
+above), honeycombJunction engine-fixed (63k→~3k tris; snapshot pins remain
+kernel-specific), groupedScoop + splitBin manifold PASS, combinedFeatures 3/11
+(handles-panic row above; scoop case near-parity), snapClip 1/4, fit-offset 0/2,
+dovetailKey 1/2 (all three: watertight-STL asserts — re-probe after the lip-corner fix
+lands, they may share it), dovetail suite timeout >25min (cornerclip row above).
 
 The remaining `#[ignore]` entries are diagnostics or slow perf cases, not open bugs:
 the `profile_intersect.rs` box-sphere probes are stale leftovers (box-sphere shipped
