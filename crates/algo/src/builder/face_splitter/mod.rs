@@ -511,11 +511,37 @@ fn integrate_holes_plane(
         .collect();
     // Straight hole edges only feed the section-split crossing set (a section
     // entering the cavity crosses a straight wall). Arc edges are carried
-    // through separately below.
+    // through separately below. "Straight" is geometric, not nominal: a
+    // planar-NURBS extrusion wall's rim is a NurbsCurve edge that is exactly
+    // straight (the tilted-divider cavity), and leaving it to the arc branch
+    // makes the whole pass bail on the section that crosses it — the divider
+    // cap is then never extracted and its top ring stays open.
+    let is_straight = |e: &OrientedPCurveEdge| -> bool {
+        match &e.curve_3d {
+            EdgeCurve::Line => true,
+            EdgeCurve::NurbsCurve(_) => {
+                let chord = e.end_3d - e.start_3d;
+                let len = chord.length();
+                if len < 1e-12 {
+                    return false;
+                }
+                let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                (1..8).all(|k| {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                    let p = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
+                    let v = p - e.start_3d;
+                    let along = v.dot(chord) / len;
+                    let dev_sq = v.dot(v) - along * along;
+                    dev_sq < 1e-14
+                })
+            }
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => false,
+        }
+    };
     let hole_segs: Vec<(Point2, Point2, Point3, Point3)> = inner_wires
         .iter()
         .flatten()
-        .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+        .filter(|e| is_straight(e))
         .map(|e| {
             (
                 frame.project(e.start_3d),
@@ -652,11 +678,7 @@ fn integrate_holes_plane(
     // Arc hole edges: preserve unchanged. Bail if any section crosses an arc's
     // chord (we don't split arcs here, and emitting the arc whole alongside a
     // section that cuts it would leave a dangling crossing).
-    for arc in inner_wires
-        .iter()
-        .flatten()
-        .filter(|e| !matches!(e.curve_3d, EdgeCurve::Line))
-    {
+    for arc in inner_wires.iter().flatten().filter(|e| !is_straight(e)) {
         let a0 = frame.project(arc.start_3d);
         let a1 = frame.project(arc.end_3d);
         for (s0, s1) in &sec_uv {
@@ -1795,16 +1817,66 @@ pub fn split_face_2d(
         // endpoints and chord midpoint all sit inside it. Walking the curve
         // via `evaluate_edge_at_t` also covers closed-circle sections
         // (start == end), where chord sampling collapses to a single point.
+        //
+        // Uniform samples alone are NOT sufficient: a Line section bridging
+        // between two cavities can cross a sliver of material (the 1.2 mm
+        // divider cap between the openings, on a 200+ mm span) that every
+        // uniform probe misses, so the section reads as pure air and the
+        // divider cap is never split out (tilted-divider lip fuse). Probe the
+        // midpoints between consecutive hole-boundary crossings as well —
+        // the same sub-segment structure the hole weave itself uses — so any
+        // material sub-segment, however thin, keeps the section alive.
+        let crossing_midpoint_probes = |s: &SectionEdge| -> Vec<Point2> {
+            if !matches!(s.curve_3d, EdgeCurve::Line) {
+                return Vec::new();
+            }
+            let (Some(s0), Some(s1)) = (to_uv(s.start), to_uv(s.end)) else {
+                return Vec::new();
+            };
+            let mut ts: Vec<f64> = vec![0.0, 1.0];
+            for hole in &original_inner_wires {
+                for e in hole {
+                    let h0 = frame.project(e.start_3d);
+                    let h1 = frame.project(e.end_3d);
+                    if let Some(t) = seg_cross_param(s0, s1, h0, h1) {
+                        ts.push(t);
+                    }
+                }
+            }
+            ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            ts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+            ts.windows(2)
+                .map(|w| {
+                    let tm = f64::midpoint(w[0], w[1]);
+                    Point2::new(
+                        s0.x() + (s1.x() - s0.x()) * tm,
+                        s0.y() + (s1.y() - s0.y()) * tm,
+                    )
+                })
+                .collect()
+        };
         filtered_sections = sections
             .iter()
             .filter(|s| {
-                let all_in_hole = (0..=HOLE_PROBE_SAMPLES).all(|i| {
+                let uniform_in_hole = (0..=HOLE_PROBE_SAMPLES).all(|i| {
                     #[allow(clippy::cast_precision_loss)]
                     let t = i as f64 / HOLE_PROBE_SAMPLES as f64;
                     let p = evaluate_edge_at_t(&s.curve_3d, s.start, s.end, t);
                     to_uv(p).is_some_and(|uv| is_inside_any_hole(&uv, &original_inner_wires))
                 });
-                !all_in_hole
+                if !uniform_in_hole {
+                    return true;
+                }
+                if is_plane {
+                    let probes = crossing_midpoint_probes(s);
+                    if !probes
+                        .iter()
+                        .all(|uv| is_inside_any_hole(uv, &original_inner_wires))
+                    {
+                        return true;
+                    }
+                }
+                false
             })
             .cloned()
             .collect();

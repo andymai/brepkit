@@ -209,9 +209,18 @@ fn honeycomb_cut_residual_documented() {
     // leaned on those sub-tolerance noise splits to stitch part of the wall
     // boundary — its production result (over-shared 0, tool honeycomb scenarios)
     // is unchanged, and production sew heals the raw free edges either way.
+    //
+    // Re-pinned again with the boundary-re-trace section guard (tilted-divider
+    // lip fuse): pcut1 IMPROVED 65 -> 52 (sub-span boundary re-traces no longer
+    // corrupt its cap arrangement) while pcut2 drifted 34 -> 38 (it leaned on a
+    // now-dropped re-trace for part of its wall stitching, the same
+    // noise-dependence as pcut1's earlier re-pins); pcut3 (0) held, and the
+    // production-level tests in this file (`wallcut_step_is_watertight`,
+    // `honeycomb_cut_no_longer_throws`,
+    // `honeycomb_cut_pcut0_is_watertight_and_analytic`) are unchanged.
     let residual_free: &[(&str, usize)] = &[
-        ("a2hcomb_pcut1.bin", 65),
-        ("a2hcomb_pcut2.bin", 35),
+        ("a2hcomb_pcut1.bin", 52),
+        ("a2hcomb_pcut2.bin", 38),
         ("a2hcomb_pcut3.bin", 0),
     ];
     for &(tool, expect_free) in residual_free {
