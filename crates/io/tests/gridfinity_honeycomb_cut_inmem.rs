@@ -211,11 +211,12 @@ fn honeycomb_cut_residual_documented() {
     // is unchanged, and production sew heals the raw free edges either way.
     //
     // Re-pinned again with the boundary-re-trace section guard (tilted-divider
-    // lip fuse): pcut1 IMPROVED 65 -> 52 (sub-span boundary re-traces no longer
-    // corrupt its cap arrangement) while pcut2 drifted 34 -> 38 (it leaned on a
-    // now-dropped re-trace for part of its wall stitching, the same
-    // noise-dependence as pcut1's earlier re-pins); pcut3 (0) held, and the
-    // production-level tests in this file (`wallcut_step_is_watertight`,
+    // lip fuse): pcut1's measured count IMPROVED 65 -> 52 (sub-span boundary
+    // re-traces no longer corrupt its cap arrangement) while pcut2's grew
+    // 34 -> 38, past its old ceiling of 35 (it leaned on a now-dropped
+    // re-trace for part of its wall stitching, the same noise-dependence as
+    // pcut1's earlier re-pins); pcut3 (0) held, and the production-level tests
+    // in this file (`wallcut_step_is_watertight`,
     // `honeycomb_cut_no_longer_throws`,
     // `honeycomb_cut_pcut0_is_watertight_and_analytic`) are unchanged.
     let residual_free: &[(&str, usize)] = &[

@@ -1870,6 +1870,14 @@ fn section_on_existing_boundary(
     // 2×1/1×2 stacking-lip fuse).
     if let Some((ss, se)) = sec_endpoints {
         let weld = tol * 100.0;
+        // Endpoint matching uses a wider band than the closed-section test: a
+        // grazing/tangential intersection can mislocate a section endpoint by
+        // microns ALONG the boundary curve (positional error ~ sqrt of the
+        // solver residual — measured 3.1 µm on the lip-corner arc) while the
+        // section still rides the edge within `tol`. Genuine sub-span split
+        // points (a 45° arc midpoint, a divider crossing) sit millimetres from
+        // the edge endpoints, so 10 µm keeps a 100× separation margin.
+        let endpoint_band = (tol * 1e5).max(weld);
         if (ss - se).length() >= weld
             && let Ok(wire) = topo.wire(face.outer_wire())
         {
@@ -1881,8 +1889,8 @@ fn section_on_existing_boundary(
                     continue;
                 };
                 let (bs, be) = (sv.point(), ev.point());
-                let fwd = (ss - bs).length() < weld && (se - be).length() < weld;
-                let rev = (ss - be).length() < weld && (se - bs).length() < weld;
+                let fwd = (ss - bs).length() < endpoint_band && (se - be).length() < endpoint_band;
+                let rev = (ss - be).length() < endpoint_band && (se - bs).length() < endpoint_band;
                 if fwd || rev {
                     return false;
                 }

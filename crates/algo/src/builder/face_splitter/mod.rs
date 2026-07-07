@@ -416,6 +416,38 @@ fn split_plane_boundary_arcs_at_points(
     result
 }
 
+/// Whether an edge curve is geometrically a straight segment, independent of
+/// its nominal type. A planar-NURBS extrusion wall's rim is a `NurbsCurve`
+/// that is exactly straight (the tilted-divider cavity). Straightness is
+/// decided from the control polygon — a NURBS whose control points are
+/// collinear is straight everywhere, for any trim of the edge — so a trimmed
+/// span of a genuinely curved carrier is never misjudged by sampling only part
+/// of it. The collinearity band is the kernel's default linear tolerance
+/// (1e-7); a control polygon that tight is straight for any splitting purpose.
+fn edge_curve_is_straight(curve: &EdgeCurve) -> bool {
+    match curve {
+        EdgeCurve::Line => true,
+        EdgeCurve::NurbsCurve(n) => {
+            let pts = n.control_points();
+            let (Some(first), Some(last)) = (pts.first(), pts.last()) else {
+                return false;
+            };
+            let chord = *last - *first;
+            let len = chord.length();
+            if len < 1e-12 {
+                return false;
+            }
+            pts.iter().all(|p| {
+                let v = *p - *first;
+                let along = v.dot(chord) / len;
+                let dev_sq = along.mul_add(-along, v.dot(v));
+                dev_sq < 1e-14
+            })
+        }
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => false,
+    }
+}
+
 /// Weave hole boundaries into the section arrangement of a planar face.
 ///
 /// When a holed planar face is cut by sections (e.g. a shelled box top with a
@@ -516,32 +548,10 @@ fn integrate_holes_plane(
     // straight (the tilted-divider cavity), and leaving it to the arc branch
     // makes the whole pass bail on the section that crosses it — the divider
     // cap is then never extracted and its top ring stays open.
-    let is_straight = |e: &OrientedPCurveEdge| -> bool {
-        match &e.curve_3d {
-            EdgeCurve::Line => true,
-            EdgeCurve::NurbsCurve(_) => {
-                let chord = e.end_3d - e.start_3d;
-                let len = chord.length();
-                if len < 1e-12 {
-                    return false;
-                }
-                let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
-                (1..8).all(|k| {
-                    let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
-                    let p = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
-                    let v = p - e.start_3d;
-                    let along = v.dot(chord) / len;
-                    let dev_sq = v.dot(v) - along * along;
-                    dev_sq < 1e-14
-                })
-            }
-            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => false,
-        }
-    };
     let hole_segs: Vec<(Point2, Point2, Point3, Point3)> = inner_wires
         .iter()
         .flatten()
-        .filter(|e| is_straight(e))
+        .filter(|e| edge_curve_is_straight(&e.curve_3d))
         .map(|e| {
             (
                 frame.project(e.start_3d),
@@ -678,7 +688,11 @@ fn integrate_holes_plane(
     // Arc hole edges: preserve unchanged. Bail if any section crosses an arc's
     // chord (we don't split arcs here, and emitting the arc whole alongside a
     // section that cuts it would leave a dangling crossing).
-    for arc in inner_wires.iter().flatten().filter(|e| !is_straight(e)) {
+    for arc in inner_wires
+        .iter()
+        .flatten()
+        .filter(|e| !edge_curve_is_straight(&e.curve_3d))
+    {
         let a0 = frame.project(arc.start_3d);
         let a1 = frame.project(arc.end_3d);
         for (s0, s1) in &sec_uv {
@@ -1835,7 +1849,13 @@ pub fn split_face_2d(
             };
             let mut ts: Vec<f64> = vec![0.0, 1.0];
             for hole in &original_inner_wires {
-                for e in hole {
+                // Only straight hole edges: for those the endpoint chord IS the
+                // edge, so the crossing parameters are exact. A curved rim's
+                // chord would place crossings (and thus the probe midpoints)
+                // off the true geometry; those edges contribute no crossings
+                // here, which errs on the side of keeping the uniform-probe
+                // verdict rather than fabricating a rescue.
+                for e in hole.iter().filter(|e| edge_curve_is_straight(&e.curve_3d)) {
                     let h0 = frame.project(e.start_3d);
                     let h1 = frame.project(e.end_3d);
                     if let Some(t) = seg_cross_param(s0, s1, h0, h1) {
