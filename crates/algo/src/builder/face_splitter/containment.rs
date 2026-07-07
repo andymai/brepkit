@@ -56,8 +56,10 @@ pub(super) fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveE
 
 /// Find a UV point inside the outer wire but outside all holes.
 ///
-/// Tries midpoints between outer wire vertices and the centroid of the first
-/// hole. Falls back to midpoints of outer wire edges nudged outward from holes.
+/// Steps inward from each outer-wire edge midpoint toward the outer polygon's
+/// centroid in small increments, returning the first candidate inside the
+/// outer wire and outside every hole. Falls back to an outer-wire vertex
+/// midpoint, then the raw centroid.
 pub(super) fn find_point_outside_holes(
     outer_pts: &[Point2],
     inner_wires: &[Vec<OrientedPCurveEdge>],
