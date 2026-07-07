@@ -75,7 +75,7 @@ fn near_duplicate_vertex_pairs(topo: &Topology, solid: SolidId, dist: f64) -> us
 
 /// The gridfinity tool's STL manifold oracle: quantize vertices at 1e-4 and
 /// count edges used once (boundary) or more than twice (non-manifold).
-fn quantized_mesh_defects(mesh: &TriangleMesh, quantize: f64) -> (usize, usize) {
+fn quantized_mesh_defects(mesh: &TriangleMesh, quantize: f64) -> (usize, usize, usize) {
     type Q = (i64, i64, i64);
     let q = |p: Point3| -> Q {
         (
@@ -85,16 +85,23 @@ fn quantized_mesh_defects(mesh: &TriangleMesh, quantize: f64) -> (usize, usize) 
         )
     };
     let mut counts: HashMap<(Q, Q), usize> = HashMap::new();
+    let mut collapsed = 0;
     for t in mesh.indices.chunks_exact(3) {
         let keys = [
             q(mesh.positions[t[0] as usize]),
             q(mesh.positions[t[1] as usize]),
             q(mesh.positions[t[2] as usize]),
         ];
+        if keys[0] == keys[1] && keys[1] == keys[2] {
+            // Sub-quantum triangle: invisible to edge counting, but its mere
+            // existence is the defect class this oracle exists to catch.
+            collapsed += 1;
+            continue;
+        }
         for i in 0..3 {
             let (a, b) = (keys[i], keys[(i + 1) % 3]);
             if a == b {
-                continue; // degenerate under quantization; counted via its long edges
+                continue; // degenerate edge; the two long edges still register
             }
             let key = if a <= b { (a, b) } else { (b, a) };
             *counts.entry(key).or_default() += 1;
@@ -102,7 +109,7 @@ fn quantized_mesh_defects(mesh: &TriangleMesh, quantize: f64) -> (usize, usize) 
     }
     let boundary = counts.values().filter(|&&c| c == 1).count();
     let non_manifold = counts.values().filter(|&&c| c > 2).count();
-    (boundary, non_manifold)
+    (boundary, non_manifold, collapsed)
 }
 
 #[test]
@@ -125,7 +132,8 @@ fn lip_fuse_has_no_near_duplicate_corner_vertices() {
     let mesh = tessellate_solid_with_tolerance(&topo, result, 0.01, 5.0_f64.to_radians()).unwrap();
     assert_eq!(boundary_edge_count(&mesh), 0, "one-sided mesh edges");
     assert_eq!(non_manifold_edge_count(&mesh), 0, "non-manifold mesh edges");
-    let (bnd_q, nm_q) = quantized_mesh_defects(&mesh, 1e-4);
+    let (bnd_q, nm_q, collapsed) = quantized_mesh_defects(&mesh, 1e-4);
     assert_eq!(nm_q, 0, "quantized non-manifold STL edges");
     assert_eq!(bnd_q, 0, "quantized boundary STL edges");
+    assert_eq!(collapsed, 0, "sub-quantum sliver triangles");
 }

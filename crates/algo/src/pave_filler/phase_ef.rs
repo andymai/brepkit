@@ -336,8 +336,11 @@ fn check_edge_face_pairs(
             // near-duplicate vertex next to the edge's own endpoint (the
             // gridfinity lip-corner non-manifold STL family). For transversal
             // crossings sin(angle) ~ 1 and the window stays at `tol.linear`;
-            // the cap bounds the grazing window so a genuine crossing farther
-            // along a long edge is never eaten.
+            // the 1e-3 cap bounds the grazing window (dropping a crossing at
+            // that full distance additionally requires sin < 1e-4 — a contact
+            // that flat within a micron of an endpoint is solver noise, not
+            // topology), so a genuine crossing farther along the edge is
+            // never eaten.
             let endpoint_windows: Vec<f64> = crossings
                 .iter()
                 .map(|&(t, pt)| {
