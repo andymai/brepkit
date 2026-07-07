@@ -83,12 +83,28 @@ pub(super) fn find_point_outside_holes(
                     continue;
                 }
                 if let Some(f) = frame {
-                    let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
-                    for k in 1..4 {
-                        let t = (t1 - t0).mul_add(f64::from(k) / 4.0, t0);
-                        let p = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
-                        pts.push(f.project(p));
+                    // Sample in the edge's NATIVE orientation: a wire that
+                    // traverses the edge reversed carries swapped
+                    // start_3d/end_3d, and `domain_with_endpoints` always
+                    // takes the positive parametric span — swapped endpoints
+                    // would select the COMPLEMENTARY arc. Restore wire order
+                    // afterwards so the polygon winding stays consistent.
+                    let (s3, e3) = if e.forward {
+                        (e.start_3d, e.end_3d)
+                    } else {
+                        (e.end_3d, e.start_3d)
+                    };
+                    let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+                    let mut samples: Vec<Point2> = (1..4)
+                        .map(|k| {
+                            let t = (t1 - t0).mul_add(f64::from(k) / 4.0, t0);
+                            f.project(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
+                        })
+                        .collect();
+                    if !e.forward {
+                        samples.reverse();
                     }
+                    pts.extend(samples);
                 } else {
                     // No frame (non-planar surface): keep the chord-midpoint
                     // densification (the historical behavior).
