@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783025496866,
+  "lastUpdate": 1783433643302,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1889,6 +1889,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19114121,
             "range": "± 54773",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "168ac6e4d2808c59b4e259b903f70cbce66b6703",
+          "message": "chore(deps): bump taiki-e/install-action from 2.82.2 to 2.82.6 in the actions group (#1028)\n\nBumps the actions group with 1 update:\n[taiki-e/install-action](https://github.com/taiki-e/install-action).\n\nUpdates `taiki-e/install-action` from 2.82.2 to 2.82.6\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/taiki-e/install-action/releases\">taiki-e/install-action's\nreleases</a>.</em></p>\n<blockquote>\n<h2>2.82.6</h2>\n<ul>\n<li>\n<p>Update <code>vacuum@latest</code> to 0.29.7.</p>\n</li>\n<li>\n<p>Update <code>uv@latest</code> to 0.11.25.</p>\n</li>\n<li>\n<p>Update <code>syft@latest</code> to 1.46.0.</p>\n</li>\n<li>\n<p>Update <code>dprint@latest</code> to 0.55.0.</p>\n</li>\n<li>\n<p>Update <code>cargo-auditable@latest</code> to 0.7.5.</p>\n</li>\n</ul>\n<h2>2.82.5</h2>\n<ul>\n<li>\n<p>Update <code>wasmtime@latest</code> to 46.0.1.</p>\n</li>\n<li>\n<p>Update <code>wasm-bindgen@latest</code> to 0.2.126.</p>\n</li>\n<li>\n<p>Update <code>vacuum@latest</code> to 0.29.6.</p>\n</li>\n<li>\n<p>Update <code>mise@latest</code> to 2026.6.14.</p>\n</li>\n<li>\n<p>Update <code>cargo-rdme@latest</code> to 2.1.0.</p>\n</li>\n</ul>\n<h2>2.82.4</h2>\n<ul>\n<li>\n<p>Update <code>uv@latest</code> to 0.11.24.</p>\n</li>\n<li>\n<p>Update <code>mise@latest</code> to 2026.6.13.</p>\n</li>\n<li>\n<p>Update <code>just@latest</code> to 1.54.0.</p>\n</li>\n<li>\n<p>Update <code>biome@latest</code> to 2.5.1.</p>\n</li>\n</ul>\n<h2>2.82.3</h2>\n<ul>\n<li>\n<p>Update <code>zizmor@latest</code> to 1.26.1.</p>\n</li>\n<li>\n<p>Update <code>wasmtime@latest</code> to 46.0.0.</p>\n</li>\n<li>\n<p>Update <code>tombi@latest</code> to 1.1.5.</p>\n</li>\n<li>\n<p>Update <code>mise@latest</code> to 2026.6.12.</p>\n</li>\n<li>\n<p>Update <code>kingfisher@latest</code> to 1.104.0.</p>\n</li>\n<li>\n<p>Update <code>cargo-tarpaulin@latest</code> to 0.35.5.</p>\n</li>\n<li>\n<p>Update <code>cargo-nextest@latest</code> to 0.9.138.</p>\n</li>\n<li>\n<p>Update <code>cargo-crap@latest</code> to 0.3.0.</p>\n</li>\n<li>\n<p>Update <code>cargo-binstall@latest</code> to 1.20.1.</p>\n</li>\n</ul>\n<!-- raw HTML omitted -->\n</blockquote>\n<p>... (truncated)</p>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/taiki-e/install-action/blob/main/CHANGELOG.md\">taiki-e/install-action's\nchangelog</a>.</em></p>\n<blockquote>\n<h1>Changelog</h1>\n<p>All notable changes to this project will be documented in this\nfile.</p>\n<p>This project adheres to <a href=\"https://semver.org\">Semantic\nVersioning</a>.</p>\n<!-- raw HTML omitted -->\n<h2>[Unreleased]</h2>\n<h2>[2.82.9] - 2026-07-05</h2>\n<ul>\n<li>\n<p>Update <code>vacuum@latest</code> to 0.29.9.</p>\n</li>\n<li>\n<p>Update <code>prek@latest</code> to 0.4.8.</p>\n</li>\n<li>\n<p>Update <code>cargo-tarpaulin@latest</code> to 0.37.0.</p>\n</li>\n<li>\n<p>Update <code>cargo-leptos@latest</code> to 0.3.7.</p>\n</li>\n</ul>\n<h2>[2.82.8] - 2026-07-03</h2>\n<ul>\n<li>\n<p>Update <code>vacuum@latest</code> to 0.29.8.</p>\n</li>\n<li>\n<p>Update <code>uv@latest</code> to 0.11.26.</p>\n</li>\n<li>\n<p>Update <code>typos@latest</code> to 1.48.0.</p>\n</li>\n<li>\n<p>Update <code>trivy@latest</code> to 0.72.0.</p>\n</li>\n<li>\n<p>Update <code>tombi@latest</code> to 1.1.7.</p>\n</li>\n<li>\n<p>Update <code>prek@latest</code> to 0.4.6.</p>\n</li>\n<li>\n<p>Update <code>mise@latest</code> to 2026.7.0.</p>\n</li>\n<li>\n<p>Update <code>just@latest</code> to 1.55.1.</p>\n</li>\n<li>\n<p>Update <code>biome@latest</code> to 2.5.2.</p>\n</li>\n</ul>\n<h2>[2.82.7] - 2026-06-30</h2>\n<ul>\n<li>\n<p>Update <code>tombi@latest</code> to 1.1.6.</p>\n</li>\n<li>\n<p>Update <code>kingfisher@latest</code> to 1.105.0.</p>\n</li>\n<li>\n<p>Update <code>gungraun-runner@latest</code> to 0.19.3.</p>\n</li>\n</ul>\n<!-- raw HTML omitted -->\n</blockquote>\n<p>... (truncated)</p>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/9bcaee1dcae34154180f412e2fa69355a7cda9f6\"><code>9bcaee1</code></a>\nRelease 2.82.6</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/e43cd7ce2e2c5a6d08d652405a0ead8cda7bf2db\"><code>e43cd7c</code></a>\nUpdate <code>vacuum@latest</code> to 0.29.7</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/3761407ad0b5e4e5b42ccb62e48ffa2712e94703\"><code>3761407</code></a>\nUpdate <code>uv@latest</code> to 0.11.25</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/cb6ad0dba1ff078e589e75ae88bb03120688feef\"><code>cb6ad0d</code></a>\nUpdate tombi manifest</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/6022671c93f20efad71663e3adc06d63e7f1ec8a\"><code>6022671</code></a>\nUpdate <code>syft@latest</code> to 1.46.0</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/ab5aae8354703341b0939f4e6c1bb66372b446db\"><code>ab5aae8</code></a>\nUpdate gungraun-runner manifest</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/867613b49949fba1c8fe194d323c7c51b77b24d2\"><code>867613b</code></a>\nUpdate editorconfig-checker manifest</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/c5837ef63439ac9ebc0ecce97e23cca6a4a5aac4\"><code>c5837ef</code></a>\nUpdate <code>dprint@latest</code> to 0.55.0</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/7d41d74582778d0345db89bc1054e86f3802b6d2\"><code>7d41d74</code></a>\nUpdate <code>cargo-auditable@latest</code> to 0.7.5</li>\n<li><a\nhref=\"https://github.com/taiki-e/install-action/commit/bffeee26d4db9be238a4ea78d8826604ebcb594d\"><code>bffeee2</code></a>\nRelease 2.82.5</li>\n<li>Additional commits viewable in <a\nhref=\"https://github.com/taiki-e/install-action/compare/9e1e5806d4a4822de933115878265be9aaa786d9...9bcaee1dcae34154180f412e2fa69355a7cda9f6\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\n[![Dependabot compatibility\nscore](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=taiki-e/install-action&package-manager=github_actions&previous-version=2.82.2&new-version=2.82.6)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore <dependency name> major version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's major version (unless you unignore this specific\ndependency's major version or upgrade to it yourself)\n- `@dependabot ignore <dependency name> minor version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's minor version (unless you unignore this specific\ndependency's minor version or upgrade to it yourself)\n- `@dependabot ignore <dependency name>` will close this group update PR\nand stop Dependabot creating any more for the specific dependency\n(unless you unignore this specific dependency or upgrade to it yourself)\n- `@dependabot unignore <dependency name>` will remove all of the ignore\nconditions of the specified dependency\n- `@dependabot unignore <dependency name> <ignore condition>` will\nremove the ignore condition of the specified dependency and ignore\nconditions\n\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpgrade `taiki-e/install-action` from 2.82.2 to 2.82.6 across CI\nworkflows to keep tool installers current and pull in patch fixes.\nUpdated `.github/workflows/ci.yml`, `mutants.yml`, and `publish.yml`; no\nbehavior changes expected.\n\n<sup>Written for commit dea109b8bab59e0fc110c199896d78f0855132a7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1028?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-07T07:11:27-07:00",
+          "tree_id": "01a7468b2e6822bef00c78b297faa4b92025fe1e",
+          "url": "https://github.com/andymai/brepkit/commit/168ac6e4d2808c59b4e259b903f70cbce66b6703"
+        },
+        "date": 1783433642327,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 735872,
+            "range": "± 4593",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 824169,
+            "range": "± 6968",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11878,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 625586,
+            "range": "± 20790",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19007288,
+            "range": "± 134558",
             "unit": "ns/iter"
           }
         ]
