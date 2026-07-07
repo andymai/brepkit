@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783461015162,
+  "lastUpdate": 1783466720895,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2537,6 +2537,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19392828,
             "range": "± 33919",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c709987ab100e8c50d62ba5cf81b99e16f84f841",
+          "message": "fix(algo): decide planar hole nesting from the whole loop boundary (#1039)\n\n## Problem\n\nThe gridfinity tool's bin × socket-assembly fuse at the z=5 base\ninterface shipped broken geometry in two compartment scenarios:\n\n- **`1.5×6 ±40° no-halfSockets`**: the fuse shipped `free=24` B-Rep\nedges through the evolution path → 64–96 boundary edges in the export\nmesh at every bin corner.\n- **`1×4 2×8 compartments`**: the GFA result failed validation → mesh\nfallback whose output was itself non-manifold (867 all-planar faces,\n`free=113 nm=3`).\n\n## Root cause\n\nAt each bin corner, the bin bottom's rounded-corner arc (r = 3.75)\noverhangs the base socket outline's chamfer by a ~0.1 mm **crescent**\nthat must survive as a real face. The wire builder hands these crescents\nback as CW loops, and the planar loop splitter's hole-promotion pass\ndecided nesting with a **single interior probe**. On a 0.1 mm-thin\nregion the probe slips across the shared boundary into the adjacent\nsocket-square outer, so the crescent stayed a \"hole\"; hole matching then\nprobed its **first vertex** (exactly ON a neighboring boundary, where\nthe strict ray-cast answers false for every outer) and dumped all four\ncrescents onto the first sub-face — one of them geometrically unrelated,\nwith inner wires far outside its own outer wire. That face is\nsame-domain-dropped, so every corner crescent vanished.\n\n## Fix\n\n`loop_containment` decides containment from **every sampled point** of\nthe loop (exact for loops from a planar subdivision):\n\n- `Nested` (all points inside-or-on, ≥1 strictly interior) or\n`BoundaryCoincident` (all points ON the outline) → stays a hole.\n- `Outside` of **every** outer → promoted to a region.\n\nBoundary-coincident loops (whole-edge re-traces of a sibling outline)\ndeliberately stay holes: both promoting and dropping them regressed the\nshelled-cup lip fuse (d3/d4/d5 family) by un-threading the split that\naligns coincident-face partitions.\n\n## Verification\n\n- New fixtures `crates/io/tests/socket_assembly_fuse_inmem.rs` (captured\ntool operands, both fail pre-fix): both fuses now watertight and\nanalytic. The compartments case: 867-face non-manifold fallback →\n**403-face analytic result, 5× faster** (37 ms vs 201 ms).\n- Tool scenario suite (kernel overlay): **compartment manifold 10/13 →\n12/13**. The last failure (`2×6 halfSockets ±40` = 1 NM edge) is a\ndistinct pre-existing residual.\n- Full workspace suites green including `brepkit-wasm --lib gridfinity`\n(27/27).\n- Pre-existing (unchanged by this PR, verified on clean main):\n`binGenerator.scenario.halfSockets` 1×1/1.5×1.5/2×2 emit zero triangles\n— added to the roadmap.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes planar hole nesting in the face splitter by checking containment\nacross the whole loop boundary. This makes the bin × socket-assembly\nfuse watertight and analytic, and removes non-manifold fallbacks.\n\n- **Bug Fixes**\n- Introduced `loop_containment` to decide nesting from all sampled\npoints; promote only when some points are strictly outside every outer.\nNested and boundary-coincident loops (whole-edge re-traces) stay holes;\nkept the first-vertex probe and documented why to preserve the\nshelled-cup lip fuse split.\n- Added regression fixtures for the two failing fuses; compartments case\nnow 403-face analytic (~5× faster). Tool suite improves from 10/13 to\n12/13 manifold.\n\n<sup>Written for commit c07a087d84d8619ce6a77d5cf0848812ea1caac2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1039?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-07T23:23:12Z",
+          "tree_id": "f798dbd9192629c43d84f04eafc4f8e910df47ad",
+          "url": "https://github.com/andymai/brepkit/commit/c709987ab100e8c50d62ba5cf81b99e16f84f841"
+        },
+        "date": 1783466719732,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 793344,
+            "range": "± 5420",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 875592,
+            "range": "± 5005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13700,
+            "range": "± 387",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631441,
+            "range": "± 1152",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20245076,
+            "range": "± 67770",
             "unit": "ns/iter"
           }
         ]
