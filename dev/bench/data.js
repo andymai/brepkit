@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783456681197,
+  "lastUpdate": 1783457064320,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2375,6 +2375,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19382898,
             "range": "± 253479",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "afacd91026261caf58c9a611151ef0dca5e10062",
+          "message": "chore(main): release 2.124.4 (#1036)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.4](https://github.com/andymai/brepkit/compare/v2.124.3...v2.124.4)\n(2026-07-07)\n\n\n### Bug Fixes\n\n* **algo:** drop boundary-re-tracing sections and weave straight NURBS\nhole rims ([#1035](https://github.com/andymai/brepkit/issues/1035))\n([0132c1e](https://github.com/andymai/brepkit/commit/0132c1e8d6b25125077645559cca9e55876fdd77))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.124.4. Fixes NURBS hole handling by removing\nboundary re-tracing and weaving straight hole rims to eliminate\nartifacts and improve robustness.\n\n<sup>Written for commit 199db8dc8caa3d5e720dec37df3d6d236523cdd2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1036?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-07T20:42:13Z",
+          "tree_id": "8e7b7859819c88d3ab1c76fd1acf1bd12107d96b",
+          "url": "https://github.com/andymai/brepkit/commit/afacd91026261caf58c9a611151ef0dca5e10062"
+        },
+        "date": 1783457063915,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 756397,
+            "range": "± 931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 844468,
+            "range": "± 1145",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12285,
+            "range": "± 102",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639272,
+            "range": "± 22481",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19310571,
+            "range": "± 17616",
             "unit": "ns/iter"
           }
         ]
