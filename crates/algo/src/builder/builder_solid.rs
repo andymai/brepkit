@@ -75,8 +75,18 @@ pub fn build_solid_with_origins(
             let surface = face.surface().clone();
             let outer_wire = face.outer_wire();
             let inner_wires = face.inner_wires().to_vec();
-            let reversed_face = Face::new_reversed(outer_wire, inner_wires, surface);
-            face_ids.push(topo.add_face(reversed_face));
+            // `SelectedFace::reversed` is a flip request relative to the
+            // face's CURRENT orientation. A tool face already stored
+            // reversed (e.g. a flattened planar-NURBS extrusion wall)
+            // flips back to forward; constructing `new_reversed`
+            // unconditionally would no-op for it and leave the face
+            // pointing into the result material.
+            let flipped_face = if face.is_reversed() {
+                Face::new(outer_wire, inner_wires, surface)
+            } else {
+                Face::new_reversed(outer_wire, inner_wires, surface)
+            };
+            face_ids.push(topo.add_face(flipped_face));
         } else {
             face_ids.push(sf.face_id);
         }
@@ -1067,9 +1077,20 @@ fn assemble(
         .map_err(|e| AlgoError::AssemblyFailed(format!("outer shell: {e}")))?;
     let outer_id = topo.add_shell(outer_shell);
 
-    // Genuine hole shells (negative signed volume) become inner shells.
+    // Genuine hole shells (negative signed volume) become inner shells. Same
+    // closed-shell requirement as non-outer growth shells above: a cavity
+    // boundary must be watertight in itself. A residual selection fragment
+    // (e.g. a lone coincident-wall duplicate face) is open, and keeping it
+    // as an "inner shell" over-shares its edges against the outer shell.
     let mut inner_ids = Vec::new();
     for hole in &hole_shells {
+        if !shell_is_closed(topo, hole) {
+            log::debug!(
+                "BuilderSolid: dropping open {}-face hole-shell fragment",
+                hole.len()
+            );
+            continue;
+        }
         if let Ok(inner_shell) = Shell::new(hole.clone()) {
             inner_ids.push(topo.add_shell(inner_shell));
         }
