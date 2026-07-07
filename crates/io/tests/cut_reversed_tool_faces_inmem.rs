@@ -8,9 +8,9 @@
 //! copies of kept tool faces with `Face::new_reversed` unconditionally — a
 //! SET, not a TOGGLE — so an already-reversed tool face came out of the cut
 //! unchanged, its effective normal pointing INTO the result material. The
-//! B-Rep still paired every edge (my winding, your winding — the pairing
-//! walk is orientation-blind), but the tessellation emitted those walls
-//! wound backwards: 12 one-sided mesh edges at every deflection, an STL
+//! B-Rep still paired every edge (the pairing walk is orientation-blind),
+//! but the tessellation emitted those walls
+//! wound backwards: 12 one-sided mesh edges at every deflection, an STL that
 //! slicers flag as non-manifold, and a mesh volume short by the inverted
 //! walls' contribution.
 
