@@ -1,0 +1,35 @@
+crates/io/tests/data/socketfuse_nohs_bin.bin
+  s_9c5a4131c73f04::t_42fb4dbcefdfd9 1
+crates/io/tests/data/socketfuse_nohs_sockets.bin
+  s_9c5a4131c73f04::t_42fb4dbcefdfd9 1
+crates/io/tests/data/socketfuse_comps_sockets.bin
+  s_9c5a4131c73f04::t_42fb4dbcefdfd9 1
+crates/io/tests/socket_assembly_fuse_inmem.rs
+  s_9c5a4131c73f04::t_d3f0a0d204e819 1-135
+.claude/skills/roadmap/SKILL.md
+  s_9c5a4131c73f04::t_aebd34ab11016c 126-127
+crates/algo/src/builder/face_splitter/mod.rs
+  s_9c5a4131c73f04::t_56ace3df509c20 2816-2823
+  s_9c5a4131c73f04::t_b9f5d6a5023b72 779-795,797,803-806,809-813
+  s_9c5a4131c73f04::t_4fa2fe3b92b7b0 796,798-799,815-816
+  s_9c5a4131c73f04::t_0fc762a6ca1660 800-802,807-808,814
+  s_9c5a4131c73f04::t_38faebb7c60627 2759-2770,2782
+crates/io/tests/data/socketfuse_comps_bin.bin
+  s_9c5a4131c73f04::t_42fb4dbcefdfd9 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bb4873ec9b9e82714206c954208cfca5575de175",
+  "prompts": {},
+  "sessions": {
+    "s_9c5a4131c73f04": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d31a0f97-8217-40a7-b569-4944dc74d3a6",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
