@@ -1,0 +1,20 @@
+crates/io/tests/cut_reversed_tool_faces_inmem.rs
+  s_571822668c8cb9::t_f557df0dc147af 11-12
+  s_571822668c8cb9::t_08fae63669ccf3 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d8294891e35bd968b87310ddb733ce9753600f39",
+  "prompts": {},
+  "sessions": {
+    "s_571822668c8cb9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7bec0fa-0d68-4082-8679-8525c7fe0368",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
