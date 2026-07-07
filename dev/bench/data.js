@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783433778219,
+  "lastUpdate": 1783439311177,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -1997,6 +1997,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18753122,
             "range": "± 25983",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e209d0cf3555b6cc4f0d18b13628156fc9670db9",
+          "message": "fix(operations): watertight, parity-density tessellation for cylinder/cone bands (#1029)\n\n## Summary\n\nTwo tessellation defects, both root-caused from the gridfinity tool's\nliteral kernel operands (captured via the arena serializer during tool\nprobes) and pinned with committed fixtures:\n\n1. **Ruled-direction interior over-mesh (`interior_grid_resolution`)** —\ncylinder/cone faces fed `dv` (the axial span, **millimeters**) into the\nchord-deviation formula, which expects an **arc angle in radians**. A\n28mm hex-cut corner cylinder meshed at ~7700 triangles; a 2×2×4\nhoneycomb-wall bin blew up to ~63k triangles where ~4.3k is expected\n(~15×). The ruled direction has zero chord sag — two interior rows\nsuffice for CDT quality. Post-fix the same body meshes at ~2.1k\ntriangles, watertight.\n\n2. **Partial-band rim cracks at fine deflection** — non-full-revolution\ncylinder/cone bands (gridfinity socket-profile corner rings) fell\nthrough to the snap mesher, which re-samples the rim independently and\nreconciles by 1e-6 proximity. At export tolerance (0.01mm) its segment\ncount diverges from the shared edge pool's (the #696 off-by-one class),\nleaving ~200 one-sided mesh edges on the compartment cavity cut —\nnon-watertight STL exports (the `compartmentBuilder.scenario.manifold`\nfailure family in the tool). Hole-free partial bands now triangulate via\nCDT over the shared pool ids, watertight by construction. Faces **with**\ninner wires keep the snap path: this CDT does not constrain inner wires\nand would skin holes over.\n\n## Verification\n\n- Replayed the tool's captured operand chain (cavity cut + 44 sequential\nhex cuts): every step watertight (`boundary_edge_count == 0`,\n`non_manifold_edge_count == 0`) at deflections 0.01/0.03/0.1/0.5.\n- New fixtures + tests: `crates/io/tests/tessellation_parity_inmem.rs`\nasserts watertightness across all three tool quality tiers and bounds\nhex-cut body density (pre-fix 14272 triangles, post-fix ~2100, bound\n5000).\n- Full workspace suite green.\n\n## Impact\n\n- Honeycomb wall-pattern bins drop ~15× in triangle count (63k → ~3.4k\nfull body), restoring triangle-count parity.\n- Compartmented-bin STL exports become watertight at export tolerance\n(the 0/13 manifold scenario family).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix tessellation of cylinder/cone bands to be watertight and match\nexpected triangle density. Prevents rim cracks in partial bands at fine\ntolerances and reduces over-meshing (up to ~15× fewer triangles on\nhoneycomb bins).\n\n- Bug Fixes\n- Ruled-direction grid: treat only the angular u direction as\ncurvature-driven; clamp v (rulings) to 2 interior rows. This corrects\nusing dv (mm) as radians and slashes triangle counts.\n- Partial bands: prefer CDT over shared edge ids for hole-free\nrevolution bands; fall back to the snap mesher when inner wires exist.\nEliminates rim cracks at 0.01 mm export tolerance, and drops stale\nmerge-map entries on CDT rollback to avoid invalid vertex references.\n- Tests: added captured tool operands and assertions for watertightness\nacross quality tiers and a bound on mesh density.\n\n<sup>Written for commit 7fb104278b0612050b643a91978523bf2267bbc0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1029?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-07T08:46:08-07:00",
+          "tree_id": "b2cf402cb989a948f1d0ca9bd410dcba2f0a0115",
+          "url": "https://github.com/andymai/brepkit/commit/e209d0cf3555b6cc4f0d18b13628156fc9670db9"
+        },
+        "date": 1783439310252,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 728994,
+            "range": "± 3179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 821907,
+            "range": "± 2530",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11893,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 627718,
+            "range": "± 865",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18783291,
+            "range": "± 350386",
             "unit": "ns/iter"
           }
         ]
