@@ -1,0 +1,32 @@
+crates/io/tests/tessellation_parity_inmem.rs
+  s_571822668c8cb9::t_2a19623cbff1bf 1-81,83-101
+  s_571822668c8cb9::t_301b319036f127 82
+crates/io/tests/data/compart_cavity_cut_body.bin
+  s_571822668c8cb9::t_8d4800438d824b 1
+crates/io/tests/data/compart_cavity_cut_tool.bin
+  s_571822668c8cb9::t_1f3a204e991a2b 1
+crates/io/tests/data/honeycomb_hexcut_body.bin
+  s_571822668c8cb9::t_94b25ac2e54c9a 1
+crates/io/tests/data/honeycomb_hexcut_tool.bin
+  s_571822668c8cb9::t_37baacff3a76d0 1
+crates/operations/src/tessellate/nonplanar.rs
+  s_571822668c8cb9::t_5a5d6e5ca07945 1465-1475
+crates/operations/src/tessellate/solid.rs
+  s_571822668c8cb9::t_eb7edefbc6efef 844-887
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "410b6a957b9d91c0a68406ac58536d3f3a2e3c2d",
+  "prompts": {},
+  "sessions": {
+    "s_571822668c8cb9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7bec0fa-0d68-4082-8679-8525c7fe0368",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
