@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.4](https://github.com/andymai/brepkit/compare/v2.124.3...v2.124.4) (2026-07-07)
+
+
+### Bug Fixes
+
+* **algo:** drop boundary-re-tracing sections and weave straight NURBS hole rims ([#1035](https://github.com/andymai/brepkit/issues/1035)) ([0132c1e](https://github.com/andymai/brepkit/commit/0132c1e8d6b25125077645559cca9e55876fdd77))
+
 ## [2.124.3](https://github.com/andymai/brepkit/compare/v2.124.2...v2.124.3) (2026-07-07)
 
 
