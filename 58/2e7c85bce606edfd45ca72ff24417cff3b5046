@@ -1,0 +1,21 @@
+crates/algo/src/pave_filler/phase_ef.rs
+  s_571822668c8cb9::t_b55671c42b4e0d 339-343
+crates/io/tests/lipcorner_tangent_inmem.rs
+  s_571822668c8cb9::t_eb28a73da6d095 78,88,95-100,104,112,135,138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "582e7c85bce606edfd45ca72ff24417cff3b5046",
+  "prompts": {},
+  "sessions": {
+    "s_571822668c8cb9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7bec0fa-0d68-4082-8679-8525c7fe0368",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
