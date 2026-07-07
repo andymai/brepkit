@@ -2813,14 +2813,17 @@ pub fn split_face_2d(
         });
     }
 
-    // Simple hole matching: each hole goes to the first outer that nests it
-    // (all sampled hole points inside or on the outer — the same criterion the
-    // promotion pass above used to keep it a hole, so a container normally
-    // exists). Matching on the hole's FIRST VERTEX alone was tried and fails:
-    // that vertex often lies exactly on a neighboring sub-face's boundary,
-    // where the strict ray-cast answers false for every outer, and the
-    // dump-on-first-sub-face fallback then attached the hole to an arbitrary
-    // face — even one whose outer wire is nowhere near the hole.
+    // Simple hole matching: each hole goes to the outer that contains its
+    // first vertex (via 2D point-in-polygon), with a first-sub-face fallback.
+    // Deliberately NOT the whole-boundary [`loop_containment`] criterion the
+    // promotion pass uses: a `BoundaryCoincident` hole (the woven image of a
+    // kept whole-edge re-trace section, every point ON a sibling outline)
+    // must not be attached to the outline it duplicates — that pairs the
+    // outline with itself as a zero-area annulus and the shelled-cup lip fuse
+    // loses its lip (whole-boundary matching, strict-interior matching, and
+    // dropping such holes were each tried; all three regress
+    // gridfinity_d4_full_1x1_bin). The first-vertex probe lands those loops in
+    // the surrounding region, threading their edges through the rebuild.
     for hole in holes {
         if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
             let mut assigned = false;
