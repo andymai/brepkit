@@ -1,0 +1,54 @@
+crates/io/Cargo.toml
+  s_f2ad30106907f6::t_ac9f16b8d0ab1b 24
+crates/algo/src/builder/mod.rs
+  s_f2ad30106907f6::t_957227f897925e 186-202
+crates/algo/src/builder/builder_solid.rs
+  s_f2ad30106907f6::t_3096af38bf7212 1195-1224
+  s_f2ad30106907f6::t_49ca2b40f4c317 248-288
+  s_f2ad30106907f6::t_fe41ec6f4cb9e1 96-99
+  s_f2ad30106907f6::t_2365bf9d0f9fa6 1247-1257,1259-1283
+  s_f2ad30106907f6::t_f5d6320dfaa204 1258
+  s_f2ad30106907f6::t_cd52724b572423 194-247
+  s_f2ad30106907f6::t_f6dab7241ed359 183-186
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_f2ad30106907f6::t_8860fe87a4c851 1387-1399
+crates/io/examples/replay_captures.rs
+  s_f2ad30106907f6::t_f3affb183b89bd 75
+crates/algo/src/builder/fill_images_faces.rs
+  s_f2ad30106907f6::t_3c5bd0bbf1365c 478-480
+  s_f2ad30106907f6::t_76922e9e739d9f 310,337-352
+  s_f2ad30106907f6::t_2fb5dfa1c981a5 1651
+  s_f2ad30106907f6::t_7b529564a303f6 1629-1650,1659
+  s_f2ad30106907f6::t_178a6da65ffa0a 1652-1658
+  s_f2ad30106907f6::t_70e478ec41e0da 1868,1900-1914,1930-1934
+  s_f2ad30106907f6::t_780a6030429ebe 1376-1386
+  s_f2ad30106907f6::t_7c3f033d7fa198 1915-1929
+  s_f2ad30106907f6::t_cdea0fad0bca72 311-336
+  s_f2ad30106907f6::t_b0ea94bf8ab763 1395-1410
+  s_f2ad30106907f6::t_25a577cfd04f90 1660-1661
+  s_f2ad30106907f6::t_2bdc28f21623ec 1878-1879
+  s_f2ad30106907f6::t_c2c8bcfbaf8aef 2009
+  s_f2ad30106907f6::t_a32d3952e144e7 1864,1880,1895-1897
+  s_f2ad30106907f6::t_b5c90badcec7b3 1411
+crates/algo/src/builder/face_splitter/mod.rs
+  s_f2ad30106907f6::t_f2d5c764867f3e 514-540,544
+  s_f2ad30106907f6::t_687762fe79d7ee 681
+  s_f2ad30106907f6::t_34e052b1d1e900 1820-1857,1861,1867-1879
+  s_f2ad30106907f6::t_d4f5a984867c9b 2177-2181,2189,2193-2198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f60b8680103bb2dfcb6c892dbd50d28dee631a41",
+  "prompts": {},
+  "sessions": {
+    "s_f2ad30106907f6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9dccc79-bff7-4fc1-97a4-a35352f0c3dc",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
