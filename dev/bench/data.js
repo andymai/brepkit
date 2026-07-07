@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783445849428,
+  "lastUpdate": 1783456681197,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2321,6 +2321,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20218348,
             "range": "± 22499",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0132c1e8d6b25125077645559cca9e55876fdd77",
+          "message": "fix(algo): drop boundary-re-tracing sections and weave straight NURBS hole rims (#1035)\n\n## Summary\n\nA stacking-lip fuse onto a compartmented body emits FF/PaveBlock\nsections that re-trace the lip ring's own boundary edges (the body's\ncorner cylinders and wall planes meet the lip's bottom plane exactly at\nits flush rims). Replaying one captured operand pair from the gridfinity\ntool exposed three stacked defects:\n\n1. **Sub-span boundary re-traces corrupt the arrangement.** Threading a\n45°-split half of a whole corner-arc edge (or a straight run split at a\ndivider crossing) wove a snake wire that multiply-traversed the rim. The\nshell flood-fill saw every junction edge as already-manifold and\norphaned the entire interior (85 faces) as an open fragment, which the\nhole-shell guard silently dropped — the fuse returned the 14-face body\nexterior while still passing the free/over edge checks. Fix:\n`section_on_existing_boundary` rejects sections whose interior lies on\nan existing boundary edge, in both section-source arms.\n- **Exemption (the load-bearing discriminant):** an exact whole-edge\nduplicate on the OUTER wire is kept — threading it routes the face\nthrough the split/rebuild that aligns coincident-face partitions;\ndropping it regressed the plain shelled-cup lip fuses\n(`gridfinity_d3/d4/d5`) to mesh fallback. Inner (hole) wires keep the\nunconditional drop: a hole-ring re-trace weaves the zero-area annulus of\nthe 2×1/1×2 lip-fuse failure.\n2. **Uniform hole probes miss thin material.** The divider cap's bridge\nsections were discarded as pure air: 8 uniform probes over a 246 mm span\nalways missed the 1.2 mm cap sliver between the cavity openings. Fix:\nalso probe midpoints between consecutive hole-boundary crossings — the\nsame sub-segment structure the hole weave itself uses.\n3. **Geometrically straight NURBS rims defeated the hole weave.** The\ntilted cavity rims are straight `NurbsCurve` edges; the weave's nominal\n`Line` filter sent them to the bail-on-crossing arc branch, so the cap\nface was never split. Fix: geometric straightness test.\n\n## Impact\n\n- Tool compartment manifold suite: **7/13 → 9/13** (tilted-divider +\ntop-row-merged lip fuses now watertight and analytic at export\ntolerance).\n- Three halfSockets-tilt cases that previously \"passed\" only via a\nwatertight mesh-fallback mask now pass analytically.\n- Honeycomb pcut1 raw-residual pin **improves 65 → 52**; pcut2 re-pinned\n34 → 38 (same noise-lean class as prior re-pins — production results in\nthat suite unchanged).\n\n## Verification\n\n- New fixtures `crates/io/tests/lipfuse_boundary_retrace_inmem.rs`\n(arena-serialized operands captured from the live tool): both fuses\nassert ≥90/≥100 faces, curved surface types present, zero free B-Rep\nedges, watertight export-tolerance mesh.\n- Full workspace suite green, including `brepkit-wasm --lib gridfinity`\n(d1–d5) and all lip-fuse fixtures (1×1, 2×1, 3×3).\n- Roadmap skill updated in-PR per the living-doc rule.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPrevents boundary re-tracing sections from breaking lip-fuse\narrangements and correctly weaves straight NURBS hole rims. Fixes\ntilted-divider and top-row-merged cases; tool manifold suite improves\n7/13 → 9/13.\n\n- **Bug Fixes**\n- Drop section segments that lie on existing boundary edges to avoid\nsnake wires and open fragments; keep exact whole-edge duplicates on the\nouter rim with a 10 µm endpoint band; still drop all inner (hole)\nre-traces.\n- Improve thin-material detection by probing midpoints between\nhole-boundary crossings on geometrically straight hole edges (exact\nchord crossings), complementing uniform samples.\n- Treat geometrically straight `NurbsCurve` rims as straight using\ncontrol-polygon collinearity, so the hole weave splits faces instead of\nbailing.\n\n<sup>Written for commit 02c0aa78008b6a9ee8c412b2270fc1417617bf07.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1035?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-07T20:35:46Z",
+          "tree_id": "639487e95578126dcfb938cd664ee200133a7fbe",
+          "url": "https://github.com/andymai/brepkit/commit/0132c1e8d6b25125077645559cca9e55876fdd77"
+        },
+        "date": 1783456680204,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 753219,
+            "range": "± 1505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 844721,
+            "range": "± 46078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12053,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 632878,
+            "range": "± 10548",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19382898,
+            "range": "± 253479",
             "unit": "ns/iter"
           }
         ]
