@@ -325,7 +325,56 @@ fn check_edge_face_pairs(
                 _ => find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
             };
 
-            for (t, pt) in crossings {
+            // Endpoint-drop windows, one per crossing and per endpoint,
+            // computed while the face's surface borrow is still live (the
+            // loop below mutates `topo`). A TANGENTIAL (grazing) contact's
+            // position along the curve is only accurate to sqrt-of-residual —
+            // an arc grazing a coplanar wall at its endpoint solves to a
+            // point microns along the arc from the true endpoint despite a
+            // ~1e-12 residual. A fixed `tol.linear` window misses that point
+            // and mints a near-duplicate vertex next to the edge's own
+            // endpoint (the gridfinity lip-corner non-manifold STL family).
+            //
+            // The widened window (tol / |tangent·normal|, capped at 1e-3)
+            // applies ONLY toward an endpoint that itself lies ON the
+            // surface: then the contact IS that endpoint's vertex-face
+            // incidence and the solver merely mislocated it. An endpoint off
+            // the surface keeps the tight `tol.linear` window — a shallow
+            // crossing near (but not at) an off-surface endpoint is genuine
+            // topology and must keep its pave (dropping those regressed the
+            // honeycomb wall-cut raw residual).
+            let on_surface = |p: Point3| distance_to_surface(p, surface) <= tol.linear;
+            let start_on_surface = on_surface(start_pos);
+            let end_on_surface = on_surface(end_pos);
+            let endpoint_windows: Vec<(f64, f64)> = crossings
+                .iter()
+                .map(|&(t, pt)| {
+                    if !start_on_surface && !end_on_surface {
+                        return (tol.linear, tol.linear);
+                    }
+                    let tangent = curve.tangent_with_endpoints(t, start_pos, end_pos);
+                    let normal = match surface {
+                        FaceSurface::Plane { normal, .. } => Some(*normal),
+                        _ => surface.project_point(pt).map(|(u, v)| surface.normal(u, v)),
+                    };
+                    let sin_angle = match (tangent.normalize(), normal) {
+                        (Ok(tangent_unit), Some(n)) => tangent_unit.dot(n).abs(),
+                        _ => 1.0,
+                    };
+                    let widened = (tol.linear / sin_angle.max(1e-9)).min(1e-3);
+                    (
+                        if start_on_surface {
+                            widened
+                        } else {
+                            tol.linear
+                        },
+                        if end_on_surface { widened } else { tol.linear },
+                    )
+                })
+                .collect();
+
+            for ((t, pt), (start_window, end_window)) in crossings.into_iter().zip(endpoint_windows)
+            {
                 if !containments[face_idx].accepts(pt) {
                     log::debug!(
                         "EF: dropping crossing of edge {eid:?} at t={t:.6} — outside face {fid:?} boundary",
@@ -338,10 +387,11 @@ fn check_edge_face_pairs(
                 // it as EF marks the adjacent pave block as lying inside the
                 // face even though the edge merely touches the face there
                 // (e.g. a cap-rim arc tangent to a coplanar wall corner).
-                if (pt - start_pos).length() <= tol.linear || (pt - end_pos).length() <= tol.linear
+                if (pt - start_pos).length() <= start_window
+                    || (pt - end_pos).length() <= end_window
                 {
                     log::debug!(
-                        "EF: dropping endpoint contact of edge {eid:?} at t={t:.6} on face {fid:?}",
+                        "EF: dropping endpoint contact of edge {eid:?} at t={t:.6} on face {fid:?} (windows {start_window:.2e}/{end_window:.2e})",
                     );
                     continue;
                 }
