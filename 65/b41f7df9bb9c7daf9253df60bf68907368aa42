@@ -1,0 +1,28 @@
+crates/io/tests/data/lipcorner_tangent_body.bin
+  s_571822668c8cb9::t_2c500be4c9cd91 1
+.claude/skills/roadmap/SKILL.md
+  s_571822668c8cb9::t_03e83f823f71d6 126
+crates/algo/src/pave_filler/phase_ef.rs
+  s_571822668c8cb9::t_2fc174d2da6e00 328-357
+  s_571822668c8cb9::t_d8c8f862ee0c0f 370-371,374
+crates/io/tests/data/lipcorner_tangent_lip.bin
+  s_571822668c8cb9::t_2c500be4c9cd91 1
+crates/io/tests/lipcorner_tangent_inmem.rs
+  s_571822668c8cb9::t_ed7cc6d71bc00f 1-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "65b41f7df9bb9c7daf9253df60bf68907368aa42",
+  "prompts": {},
+  "sessions": {
+    "s_571822668c8cb9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7bec0fa-0d68-4082-8679-8525c7fe0368",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
