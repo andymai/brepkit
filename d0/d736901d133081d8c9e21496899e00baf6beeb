@@ -1,0 +1,23 @@
+crates/algo/src/pave_filler/phase_ef.rs
+  s_571822668c8cb9::t_258dac0699fa4f 328-349,352-354,364-372,376-377,390
+  s_571822668c8cb9::t_aef33f2c6c4d20 391
+  s_571822668c8cb9::t_9a010d10d7dd1e 394
+crates/io/tests/gridfinity_honeycomb_cut_inmem.rs
+  s_571822668c8cb9::t_c80785b5017c39 198,203-211,213,215
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d0d736901d133081d8c9e21496899e00baf6beeb",
+  "prompts": {},
+  "sessions": {
+    "s_571822668c8cb9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7bec0fa-0d68-4082-8679-8525c7fe0368",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
