@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.124.2](https://github.com/andymai/brepkit/compare/v2.124.1...v2.124.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* **algo:** toggle orientation of flipped cut tool faces, reject open hole shells ([#1030](https://github.com/andymai/brepkit/issues/1030)) ([a20df55](https://github.com/andymai/brepkit/commit/a20df5536da8a7dda1a49c9ecc892e8271480e73))
+* **operations:** watertight, parity-density tessellation for cylinder/cone bands ([#1029](https://github.com/andymai/brepkit/issues/1029)) ([e209d0c](https://github.com/andymai/brepkit/commit/e209d0cf3555b6cc4f0d18b13628156fc9670db9))
+
 ## [2.124.1](https://github.com/andymai/brepkit/compare/v2.124.0...v2.124.1) (2026-07-02)
 
 
