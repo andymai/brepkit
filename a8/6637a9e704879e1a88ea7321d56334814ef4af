@@ -1,0 +1,33 @@
+crates/io/examples/replay_captures.rs
+  s_571822668c8cb9::t_489fad5999ed32 131-136
+crates/topology/src/vertex.rs
+  s_571822668c8cb9::t_c6389ca46a1d04 25-44
+crates/operations/src/boolean/mod.rs
+  s_571822668c8cb9::t_1bd357f8fb4d4a 57-59
+  s_571822668c8cb9::t_1b8eb2cd906abb 980-982
+crates/wasm/src/bindings/probe.rs
+  s_571822668c8cb9::t_e464cde7a0072b 66,101
+crates/io/examples/dump_verts.rs
+  s_571822668c8cb9::t_a6193e0d59f4eb 1-18,20,43-69
+  s_571822668c8cb9::t_246ad0d103cca8 19,21-42
+crates/algo/src/pave_filler/phase_ef.rs
+  s_571822668c8cb9::t_67a9a640767641 350-351,355-357,359-363,373-375
+crates/io/tests/cut_reversed_tool_faces_inmem.rs
+  s_571822668c8cb9::t_76c1dcf4e496b6 11-13,60-63,66-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a86637a9e704879e1a88ea7321d56334814ef4af",
+  "prompts": {},
+  "sessions": {
+    "s_571822668c8cb9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b7bec0fa-0d68-4082-8679-8525c7fe0368",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
