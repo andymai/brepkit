@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783439447842,
+  "lastUpdate": 1783439592889,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2105,6 +2105,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18789634,
             "range": "± 36388",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a20df5536da8a7dda1a49c9ecc892e8271480e73",
+          "message": "fix(algo): toggle orientation of flipped cut tool faces, reject open hole shells (#1030)\n\n## Summary\n\nTwo coupled assembler defects, root-caused from the gridfinity tool's\nliteral compartment-cavity operands (captured with the arena serializer,\ncommitted as fixtures):\n\n1. **Flip is a toggle, not a set.** `SelectedFace::reversed` is a flip\nrequest relative to the face's *current* orientation, but\n`build_solid_with_origins` built flipped copies with\n`Face::new_reversed` unconditionally. A tool face already stored\nreversed (e.g. a planar-NURBS extrusion side wall) came out of a Cut\n*unchanged*, its effective normal pointing INTO the result material. The\nB-Rep still paired every edge (the pairing walk is orientation-blind) so\nfree/over gates passed — but tessellation faithfully emitted those walls\nwound backwards: 12 one-sided mesh edges at every deflection, STL\nexports flagged non-manifold by slicers (the compartmented-bin export\nfamily), and mesh volume short by the inverted walls' contribution.\n\n2. **Open hole-shell fragments.** Correcting the flip surfaced a latent\ngap the buggy flip had masked: a residual coincident-wall duplicate face\nwhose corner-fan sign previously read as an *open growth fragment*\n(dropped by the existing closed-shell requirement on non-outer growth\nshells) now reads negative and became a 1-face \"inner shell\",\nover-sharing its edges against the outer shell (caught by the\n`a2hcomb_pcut1` honeycomb fixture). Hole shells now face the same\nclosed-shell requirement: a cavity boundary must be watertight in\nitself.\n\n## Verification\n\n- New fixture test `crates/io/tests/cut_reversed_tool_faces_inmem.rs`:\nreplays the captured cavity cut; asserts watertight tessellation\n(boundary=0, non-manifold=0) at deflections 0.01/0.1/0.5 **and**\nmesh-volume consistency `vol(cut) = vol(body) − vol(body ∩ tool)`\n(within 2%). Fails pre-fix (12 one-sided edges at every tier), passes\npost-fix.\n- The existing honeycomb fixture suite\n(`gridfinity_honeycomb_cut_inmem`) passes: the `pcut1` result stays\nmanifold (over-shared = 0) with the flipped tool NURBS faces now\ncorrectly oriented in the outer shell.\n- Full workspace suite green.\n\n## Impact\n\nAny cut whose tool solid carries `is_reversed = true` faces\n(planar-NURBS extrusion walls are the common producer) previously\nemitted inverted faces in the result. Tool-level: 5 more compartment\nmanifold scenarios pass; the remainder trace to a separate\nsocket-interface defect under investigation.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes Cut assembly to toggle tool face orientation and drop non-closed\nhole shells. Results are manifold with correct cavity volumes; adds a\nregression test and minor doc-comment cleanup.\n\n- **Bug Fixes**\n- Toggle face orientation: treat `SelectedFace::reversed` as a flip\nrelative to the face’s current orientation instead of always\nconstructing `Face::new_reversed`.\n- Reject open hole shells: require hole shells to be closed before\nadding as inner shells to prevent edge over-sharing from stray\nfragments.\n\n<sup>Written for commit d8294891e35bd968b87310ddb733ce9753600f39.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1030?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-07T15:50:22Z",
+          "tree_id": "0200adcb9738c06b6dfa48a4d6deaac5a4d67067",
+          "url": "https://github.com/andymai/brepkit/commit/a20df5536da8a7dda1a49c9ecc892e8271480e73"
+        },
+        "date": 1783439592568,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 733441,
+            "range": "± 3754",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 822403,
+            "range": "± 2560",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11840,
+            "range": "± 97",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 621291,
+            "range": "± 11769",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18878378,
+            "range": "± 1413809",
             "unit": "ns/iter"
           }
         ]
