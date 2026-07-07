@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783457064320,
+  "lastUpdate": 1783460639840,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2429,6 +2429,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19310571,
             "range": "± 17616",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "43bda38c8876379ee2596cbba7457fa29f35f876",
+          "message": "fix(algo): arc-true hole polygons for the region classifier seed search (#1037)\n\n## Summary\n\n`find_point_outside_holes` — which picks the classifier seed for planar\nregions with holes (thin annular rings especially) — tested candidates\nagainst **chord-approximated** hole polygons. At a rounded corner, the\nchord under-covers the true hole by the arc's sagitta (~0.75 mm for the\nhalfSockets clip's r = 2.55 inset corner arcs), so a seed could be\naccepted in the gap between chord and arc — a point **inside the real\nhole**.\n\nCaptured from the live tool: the halfSockets base-clip cut (a\nrounded-rect slab trimmed by a flared clip tool, leaving a 1.2 mm\nperimeter wall). The wall's ring floor got exactly such a seed,\nclassified **Inside** the tool, and was discarded — an open shell that\nfailed validation, fell back to the mesh boolean (all analytic surfaces\nlost), and poisoned every downstream fuse of the export chain.\n\n## Fix\n\nWhen the plane frame is available (both call sites have it for planar\nfaces), curved hole edges are densified by sampling their **3D curve**\nand projecting through the frame — exact for arcs, and sidestepping the\ndocumented garbage-domain-pcurve trap that motivated chords in the first\nplace. Without a frame, the historical chord-midpoint densification is\nkept. `is_inside_any_hole`'s chord under-approximation is deliberately\nunchanged: for its drop-air-region use, under-covering is the\nconservative direction.\n\n## Impact\n\n- Tool compartment manifold suite: **9/13 → 10/13** — `2×2 crossing\ntilts` closed outright (was 15 non-manifold STL edges), `2×6 halfSockets\n±40` down from 26 non-manifold edges to 1 (small separate residual at\nthe socket interface, tracked on the roadmap).\n- The clip cut itself: 515-face all-planar mesh fallback → 49-face\nwatertight analytic result.\n\n## Verification\n\n- New fixture `crates/io/tests/halfsockets_clipcut_inmem.rs` (captured\noperands): asserts analytic face count, curved surfaces present, zero\nfree B-Rep edges, watertight export-tolerance mesh.\n- Full workspace suite green (pre-commit + pre-push gates), including\nwasm gridfinity d1–d5 and all lip-fuse fixtures.\n- Roadmap updated in-PR per the living-doc rule.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix region-classifier seed selection for planar faces with holes by\ntesting candidates against arc-true hole polygons sampled from the 3D\ncurve and projected to UV, with correct handling of reversed arc edges.\nThis prevents seeds landing in rounded-corner sagitta gaps and restores\na watertight analytic result for the halfSockets clip cut.\n\n- **Bug Fixes**\n- Make hole polygons arc-true for seed rejection by sampling 3D curves\nthrough the plane frame; fall back to chord midpoints when no frame is\navailable.\n- Sample reversed hole arcs in the edge’s native orientation and reverse\nthe samples to preserve wire order; avoids selecting the complementary\narc.\n- Update `find_point_outside_holes` to accept a `frame` and adjust call\nsites; keep `is_inside_any_hole`’s conservative chord\nunder-approximation unchanged.\n- Add regression test `crates/io/tests/halfsockets_clipcut_inmem.rs`\nwith captured operands; the clip cut now yields a 49‑face watertight\nanalytic result (was a 515‑face mesh fallback).\n- Suite impact: 9/13 → 10/13; closes `2×2 crossing tilts`; `2×6\nhalfSockets ±40` improved from 26 non‑manifold edges to 1; roadmap entry\nand seed‑search doc comment corrected.\n\n<sup>Written for commit 6c2beccc63658d6d4c1c81019652cc379870a2bf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1037?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-07T21:41:39Z",
+          "tree_id": "069cc35078bf369452f7b11827b60e80d4978534",
+          "url": "https://github.com/andymai/brepkit/commit/43bda38c8876379ee2596cbba7457fa29f35f876"
+        },
+        "date": 1783460639483,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 752921,
+            "range": "± 24702",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 840801,
+            "range": "± 2462",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11918,
+            "range": "± 53",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 638299,
+            "range": "± 7724",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19473121,
+            "range": "± 51881",
             "unit": "ns/iter"
           }
         ]
