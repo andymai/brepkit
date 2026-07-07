@@ -61,7 +61,52 @@ pub(super) fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveE
 pub(super) fn find_point_outside_holes(
     outer_pts: &[Point2],
     inner_wires: &[Vec<OrientedPCurveEdge>],
+    frame: Option<&super::super::plane_frame::PlaneFrame>,
 ) -> Point2 {
+    // Hole polygons for SEED REJECTION must not UNDER-cover the true hole —
+    // the opposite bias from `is_inside_any_hole`'s chord approximation. A
+    // seed accepted in the sagitta gap between a corner arc's chord and the
+    // arc itself lies inside the real hole and misclassifies the whole region
+    // (the halfSockets clip cut: a 1.2 mm base ring whose inset corner arcs
+    // have a ~0.75 mm sagitta — the ring floor classified Inside the tool and
+    // the whole cut fell back to the mesh boolean). With the plane frame
+    // available, densify curved edges by sampling their 3D curve (exact for
+    // arcs; the stored pcurve can be a garbage-domain Nurbs2D, so it is never
+    // sampled — see `hole_chord_polygon`) and projecting into UV.
+    let hole_polys: Vec<Vec<Point2>> = inner_wires
+        .iter()
+        .map(|hole| {
+            let mut pts: Vec<Point2> = Vec::with_capacity(hole.len() * 4);
+            for e in hole {
+                pts.push(e.start_uv);
+                if matches!(e.curve_3d, brepkit_topology::edge::EdgeCurve::Line) {
+                    continue;
+                }
+                if let Some(f) = frame {
+                    let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                    for k in 1..4 {
+                        let t = (t1 - t0).mul_add(f64::from(k) / 4.0, t0);
+                        let p = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
+                        pts.push(f.project(p));
+                    }
+                } else {
+                    // No frame (non-planar surface): keep the chord-midpoint
+                    // densification (the historical behavior).
+                    pts.push(Point2::new(
+                        0.5 * (e.start_uv.x() + e.end_uv.x()),
+                        0.5 * (e.start_uv.y() + e.end_uv.y()),
+                    ));
+                }
+            }
+            pts
+        })
+        .collect();
+    let in_any_hole = |pt: Point2| -> bool {
+        hole_polys
+            .iter()
+            .any(|poly| poly.len() >= 3 && super::super::classify_2d::point_in_polygon_2d(pt, poly))
+    };
+
     // Strategy: take midpoints between outer wire edge midpoints and the outer
     // boundary -- these are likely in the ring region between outer and inner.
     let centroid_x = outer_pts.iter().map(|p| p.x()).sum::<f64>() / outer_pts.len() as f64;
@@ -84,7 +129,7 @@ pub(super) fn find_point_outside_holes(
                 edge_mid.y() * (1.0 - t) + centroid_y * t,
             );
             if super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
-                && !is_inside_any_hole(&candidate, inner_wires)
+                && !in_any_hole(candidate)
             {
                 return candidate;
             }
