@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783466720895,
+  "lastUpdate": 1783467081712,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2591,6 +2591,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20245076,
             "range": "± 67770",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "567d9e3e71e98399dc78ce7ab064d056403d9b69",
+          "message": "chore(main): release 2.124.6 (#1040)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.6](https://github.com/andymai/brepkit/compare/v2.124.5...v2.124.6)\n(2026-07-07)\n\n\n### Bug Fixes\n\n* **algo:** decide planar hole nesting from the whole loop boundary\n([#1039](https://github.com/andymai/brepkit/issues/1039))\n([c709987](https://github.com/andymai/brepkit/commit/c709987ab100e8c50d62ba5cf81b99e16f84f841))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.124.6 for `brepkit-wasm` with a fix to planar hole nesting\nthat evaluates the full loop boundary to avoid misclassified holes. This\nimproves geometric correctness in planar faces.\n\n- **Bug Fixes**\n- Planar hole nesting now computed from the entire loop boundary,\npreventing incorrect hole inclusion/exclusion in edge cases.\n\n<sup>Written for commit 712f6839d40ebf33c7425a670462a3b0f63fa457.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1040?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-07T23:29:03Z",
+          "tree_id": "e20c62583d3ea224379be4c7c52f33c6b15e61b3",
+          "url": "https://github.com/andymai/brepkit/commit/567d9e3e71e98399dc78ce7ab064d056403d9b69"
+        },
+        "date": 1783467080674,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 747539,
+            "range": "± 2007",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 835666,
+            "range": "± 2414",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11993,
+            "range": "± 244",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 635122,
+            "range": "± 7037",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19248664,
+            "range": "± 24338",
             "unit": "ns/iter"
           }
         ]
