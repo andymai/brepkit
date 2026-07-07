@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783439311177,
+  "lastUpdate": 1783439447842,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2051,6 +2051,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18783291,
             "range": "± 350386",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e059c3bde67155a2b2e6f5d494c71409ac73ca5d",
+          "message": "docs(skills): roadmap — tessellation-parity wave + fresh scenario baseline (#1031)\n\nLiving-doc maintenance required by the roadmap skill itself: records the\n2026-07-07 tessellation-parity wave (#1029, #1030), the fresh full\nscenario-matrix baseline measured against the tool, the new deferred\nrows (stacking-lip corner doubled faces = next target, tilted-divider\nresiduals, honeycomb+handles kernel-poisoning panic), and the \"capture\nbefore assuming GFA\" triage lesson with the probe-kernel recipe pointer.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates `SKILL.md` for the roadmap skill with the 2026-07-07\ntessellation-parity wave (#1029, #1030), a fresh scenario-matrix\nbaseline, and a clear triage note with a probe-kernel capture recipe.\nRecords key results (honeycomb bins 63k→~3k triangles, cavity cuts\nexport watertight, reversed-tool-face cuts no longer invert) and adds\ndeferred rows for stacking-lip corner doubled faces, tilted-divider\nresiduals, and a honeycomb+handles kernel-poisoning panic.\n\n<sup>Written for commit 7e889315677b0d4aaf3b05a6f5c8d30987f5d73c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1031?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-07T15:46:52Z",
+          "tree_id": "feb857a2919de65338a80c8a025c2156a6954700",
+          "url": "https://github.com/andymai/brepkit/commit/e059c3bde67155a2b2e6f5d494c71409ac73ca5d"
+        },
+        "date": 1783439447502,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 723743,
+            "range": "± 5284",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 815360,
+            "range": "± 849",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11954,
+            "range": "± 608",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 623602,
+            "range": "± 29228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18789634,
+            "range": "± 36388",
             "unit": "ns/iter"
           }
         ]
