@@ -1,0 +1,36 @@
+crates/io/tests/intwidth_tangency_inmem.rs
+  s_414bac4295e810::t_4e4474ed7e0ce5 1-131
+crates/math/src/curves.rs
+  s_414bac4295e810::t_31a526e747b3b8 333-348
+crates/io/tests/data/intwidth_hs_bin.bin
+  s_414bac4295e810::t_31a526e747b3b8 1
+crates/math/src/curves/tests.rs
+  s_414bac4295e810::t_b2d3af75258095 154-162,169-171,173-198
+  s_414bac4295e810::t_48ccea22487a8b 163-168,172
+crates/algo/src/pave_filler/helpers.rs
+  s_414bac4295e810::t_48ccea22487a8b 72
+  s_414bac4295e810::t_31a526e747b3b8 48-71,73-82
+crates/algo/src/pave_filler/phase_ef.rs
+  s_414bac4295e810::t_48ccea22487a8b 419
+  s_414bac4295e810::t_31a526e747b3b8 349,362-364,372-405,407-418,420-424,428-429,454-461,463
+.claude/skills/roadmap/SKILL.md
+  s_414bac4295e810::t_97a3fa969dd201 130
+crates/io/tests/data/intwidth_hs_wall_socket.bin
+  s_414bac4295e810::t_31a526e747b3b8 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "50196011a973eb6f0f00a1eea410c56187ef1cf0",
+  "prompts": {},
+  "sessions": {
+    "s_414bac4295e810": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63fe3ad5-bc55-4f1b-8ea9-869254147d73",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
