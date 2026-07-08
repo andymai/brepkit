@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783492657219,
+  "lastUpdate": 1783493037981,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2807,6 +2807,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19485474,
             "range": "± 225726",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "521f250ea2aa3f8d27be68fab7708db757298acd",
+          "message": "chore(main): release 2.124.8 (#1044)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.8](https://github.com/andymai/brepkit/compare/v2.124.7...v2.124.8)\n(2026-07-08)\n\n\n### Bug Fixes\n\n* **algo:** resolve disconnected section loops in the planar arrangement\nsplitter ([#1043](https://github.com/andymai/brepkit/issues/1043))\n([7522187](https://github.com/andymai/brepkit/commit/75221875982746a3c2a7ccdf0181a08136d3682d))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.124.8 fixes the planar arrangement splitter to correctly\nhandle disconnected section loops. This prevents invalid splits and\nstray loops in `brepkit-wasm`.\n\n<sup>Written for commit 71de3fa52f1c3424f98c8c2ee103410f8c21c8ca.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1044?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-08T06:41:29Z",
+          "tree_id": "fa2e45e59325e725f91e0817f54288c199db5186",
+          "url": "https://github.com/andymai/brepkit/commit/521f250ea2aa3f8d27be68fab7708db757298acd"
+        },
+        "date": 1783493037032,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 758807,
+            "range": "± 3046",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 850055,
+            "range": "± 1117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11939,
+            "range": "± 265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639542,
+            "range": "± 38854",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19490456,
+            "range": "± 111907",
             "unit": "ns/iter"
           }
         ]
