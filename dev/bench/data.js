@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783501194168,
+  "lastUpdate": 1783506260044,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3185,6 +3185,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19293736,
             "range": "± 316276",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "190419ae8d55a10bbc04c4146246549235ca27f7",
+          "message": "fix(math,algo): exact tangential intersections at socket-outline wall tangencies (#1051)\n\n## Summary\n\nCloses the **integer-width halfSockets non-manifold export family**\n(`1×6`/`2×6` compartment scenarios at nm=76/136/140, and the `1×4\n2×8-comps` reporter case at nm=12). With this fix the **full compartment\nmanifold scenario matrix is 13/13 at tool level on analytic sockets** —\nthe first honest 13/13 since #1045 made socket geometry analytic.\n\n### Root cause\n\nA half-socket outline's r=4 corner circles are **exactly tangent** to\nthe bin wall lines, and the outline's straight runs continue along those\nwalls from the tangency points — which therefore exist as exact operand\nvertices. Two solvers recomputed those tangential intersections ~1µm off\ninstead of landing on the exact points (a grazing contact's positional\nerror grows as √(2r·residual): a 1e-13 residual at r=4 is a full micron,\nabove vertex-merge tolerance):\n\n1. **`Circle3D::intersect_segment`** solved the near-tangent quadratic\ninto a root pair straddling the foot of the center on the line. Both\nphase EE and phase FF's closed-circle splitter consume it, each minting\na near-duplicate vertex next to the exact one.\n2. **Phase EF's grazing edge×surface refinement** can land anywhere\ninside the tolerance *well* (distance to the surface grows only\nquadratically around a tangency).\n\nThe ~1e-6mm line edges bridging the near-duplicates were used by three\nfaces each (one out-and-back on the bin-bottom web plane), so the\nanalytic fuse tripped the non-manifold gate and fell back to the mesh\nboolean — whose output was itself non-manifold (nm=76 in the export).\n\n### Fix\n\n- `Circle3D::intersect_segment`: when the chord between the two roots\nimplies **sub-tolerance penetration** (`disc ≤ 2r·tol·a`), collapse to\nthe well-conditioned double root — the foot. Genuine secants\n(penetration > tol) keep both crossings (unit-tested both ways).\n- Phase EF: tangential crossings **snap to an existing pave vertex**\nwithin the angle-scaled window (`tol/|tangent·normal|`, capped 1e-3 —\nthe same conditioning model as the #1033 endpoint windows), gated on\nthat vertex lying ON both the crossed surface and the edge's curve. The\nwidened lookup linear-scans pave endpoints because the spatial index\nstencil is exhaustive only at tolerance radius.\n\n### Verification\n\n- Final bin×socket-assembly fuse: 889-face gate-reject + broken mesh\nfallback → **891 analytic faces, free=0/over=0, watertight+manifold at\nexport tolerance, ~40× faster** (193ms vs 7s).\n- Fixture `crates/io/tests/intwidth_tangency_inmem.rs` (captured bin ×\ncaptured wall-adjacent socket): pre-fix `free=20 over=10 bnd=24 nm=10`,\npost-fix clean.\n- Full 30-op capture chain replays clean; **tool matrix 13/13** (all\n1.5×6, 1×6, 2×6, crossing-tilts, and 1×4 2×8-comps cases).\n- Full workspace suites + wasm gridfinity canary green; all prior\nfixtures (crescent, scooplabel, halfsockets, socket-assembly) unchanged;\ntwo new math unit tests pin the collapse and the genuine-secant\nbehavior.\n\nRoadmap updated in the same PR (integer-width row closed with the 13/13\nresult).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes exact wall‑tangency intersections in analytic socket outlines by\ncollapsing near‑tangent circle×segment roots and snapping grazing\nedge×surface crossings, with safeguards for ambiguous junctions. The\nbin×socket fuse stays analytic, watertight, and manifold (tool matrix\n13/13) and runs ~40× faster than the mesh fallback.\n\n- **Bug Fixes**\n- `crates/math`: `Circle3D::intersect_segment` collapses near‑tangent\nroot pairs to the foot when `disc ≤ 2r·tol·a`; genuine secants still\nreturn two hits (unit‑tested).\n- `crates/algo`: Phase EF snaps tangential crossings to an existing pave\nvertex within an angle‑scaled window; adds\n`find_nearby_pave_vertex_widened` to scan pave endpoints, now declines\nto snap if candidates span multiple positions (ambiguous), and requires\nthe candidate to lie on the crossed surface and inside face containment;\nfor line edges, recomputes the exact parameter.\n\n- **Verification**\n- Final fuse: 891 analytic faces; watertight and manifold at export\ntolerance; ~193 ms vs 7 s mesh fallback.\n- New fixture `intwidth_tangency_inmem.rs` (captured operands)\nreproduces the pre‑fix failure and passes post‑fix; all suites and wasm\ngridfinity canary remain green.\n\n<sup>Written for commit a8134e838876420164251fbfdc2746118c72564a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1051?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T10:22:06Z",
+          "tree_id": "1450722f2cb9b7913b0b1e48f73973d09d38ec6e",
+          "url": "https://github.com/andymai/brepkit/commit/190419ae8d55a10bbc04c4146246549235ca27f7"
+        },
+        "date": 1783506259703,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 773266,
+            "range": "± 1685",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 874833,
+            "range": "± 3756",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13051,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 633657,
+            "range": "± 1290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20334222,
+            "range": "± 36138",
             "unit": "ns/iter"
           }
         ]
