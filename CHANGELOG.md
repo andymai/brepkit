@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.9](https://github.com/andymai/brepkit/compare/v2.124.8...v2.124.9) (2026-07-08)
+
+
+### Bug Fixes
+
+* **operations:** curve-preserving loft for sketch arcs and downward stacks ([#1045](https://github.com/andymai/brepkit/issues/1045)) ([c8d644b](https://github.com/andymai/brepkit/commit/c8d644b3137bf1c821b510f4719008c2c5eb77ec))
+
 ## [2.124.8](https://github.com/andymai/brepkit/compare/v2.124.7...v2.124.8) (2026-07-08)
 
 
