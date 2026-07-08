@@ -57,143 +57,18 @@ pub fn boolean(
         use brepkit_algo::classifier::try_build_analytic_classifier;
         let ca = try_build_analytic_classifier(topo, a);
         let cb = try_build_analytic_classifier(topo, b);
-        // Use measure::solid_bounding_box — it expands for surface curvature
-        // (cylinder vertex projection, sphere/torus analytic). The naive
-        // edge-vertex sampler missed cylinder lateral extents because cylinders
-        // only have seam vertices, leaving the AABB center on the lateral
-        // surface where the analytic classifier returns None.
-        let sample_aabb = |topo: &Topology, solid: SolidId| -> Option<(Point3, Point3)> {
-            let bb = crate::measure::solid_bounding_box(topo, solid).ok()?;
-            Some((bb.min, bb.max))
-        };
-        let aabb_a = sample_aabb(topo, a);
-        let aabb_b = sample_aabb(topo, b);
-        // AABB-encloses check (lenient): does `inner` fit inside `outer`?
-        let aabb_encloses =
-            |inner: &Option<(Point3, Point3)>, outer: &Option<(Point3, Point3)>| -> bool {
-                let Some(((i_min, i_max), (o_min, o_max))) = inner.zip(*outer) else {
-                    return false;
-                };
-                let margin = tol.linear;
-                i_min.x() >= o_min.x() - margin
-                    && i_min.y() >= o_min.y() - margin
-                    && i_min.z() >= o_min.z() - margin
-                    && i_max.x() <= o_max.x() + margin
-                    && i_max.y() <= o_max.y() + margin
-                    && i_max.z() <= o_max.z() + margin
-            };
-        // AABB-strictly-contains (strict): outer must also be ≥10% larger in
-        // ALL 3 dims. Used as the no-classifier fallback to detect true
-        // nested containment (e.g., a ring fully inside a shell's cavity)
-        // without false-positives on sparse multi-shell solids (e.g., a
-        // fuse of disjoint boxes whose AABB technically encloses another
-        // solid's AABB while mostly being empty space).
-        let aabb_strictly_contains =
-            |inner: &Option<(Point3, Point3)>, outer: &Option<(Point3, Point3)>| -> bool {
-                if !aabb_encloses(inner, outer) {
-                    return false;
-                }
-                let Some(((i_min, i_max), (o_min, o_max))) = inner.zip(*outer) else {
-                    return false;
-                };
-                let dims = [
-                    (o_max.x() - o_min.x(), i_max.x() - i_min.x()),
-                    (o_max.y() - o_min.y(), i_max.y() - i_min.y()),
-                    (o_max.z() - o_min.z(), i_max.z() - i_min.z()),
-                ];
-                dims.iter()
-                    .all(|(outer_d, inner_d)| *outer_d > *inner_d * 1.1)
-            };
-
-        // AABB enclosure is necessary but NOT sufficient for solid
-        // containment: a non-convex container (notched or hollow) can
-        // AABB-enclose a solid that actually lies in its empty region.
-        // Issue #801: `(a − b) ∪ (a ∩ b)` dropped the `a ∩ b` operand
-        // because the unit cube's bbox fits inside the notched `a − b`'s
-        // bbox, yet the cube lives in the carved-out notch. Confirm the
-        // AABB-only fallback with a real point-in-solid test: reject when
-        // the inner solid's center is provably inside `inner` yet outside
-        // `outer`. By the containment lemma (inner ⊆ outer ⇒ every point
-        // of inner is in outer), that witness can only occur for genuine
-        // non-containment, so it never rejects a true containment.
-        let center_outside = |topo: &Topology,
-                              inner: SolidId,
-                              outer: SolidId,
-                              bb: &Option<(Point3, Point3)>|
-         -> bool {
-            let Some((lo, hi)) = *bb else { return false };
-            let c = Point3::new(
-                0.5 * (lo.x() + hi.x()),
-                0.5 * (lo.y() + hi.y()),
-                0.5 * (lo.z() + hi.z()),
-            );
-            let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
-            let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
-            // Conservative by design: when the AABB center falls in `inner`'s own
-            // concavity (a C/U-shaped solid), `inside_inner` is false and the
-            // witness is disabled, so a false-positive containment could still
-            // slip through. That only ever fails to *reject* — it never rejects a
-            // true containment — so the shortcut stays sound, just not complete.
-            let inside_inner = matches!(
-                crate::classify::classify_point(topo, inner, c, defl, tol.linear),
-                Ok(crate::classify::PointClassification::Inside)
-            );
-            let outside_outer = matches!(
-                crate::classify::classify_point(topo, outer, c, defl, tol.linear),
-                Ok(crate::classify::PointClassification::Outside)
-            );
-            inside_inner && outside_outer
-        };
-
-        // Bidirectional vertex check via the analytic classifier — the
-        // primary signal for identical/containment classification. A vertex
-        // classifying as inside-or-on (None within tolerance band counts
-        // as on) means it sits within the solid's region.
-        let all_b_verts_in_a = ca
-            .as_ref()
-            .is_some_and(|c| all_vertices_inside_or_on(topo, b, c, tol));
-        let all_a_verts_in_b = cb
-            .as_ref()
-            .is_some_and(|c| all_vertices_inside_or_on(topo, a, c, tol));
-        let aabbs_match = aabb_a
-            .zip(aabb_b)
-            .map(|((a_min, a_max), (b_min, b_max))| {
-                let eps = tol.linear;
-                (a_min.x() - b_min.x()).abs() < eps
-                    && (a_min.y() - b_min.y()).abs() < eps
-                    && (a_min.z() - b_min.z()).abs() < eps
-                    && (a_max.x() - b_max.x()).abs() < eps
-                    && (a_max.y() - b_max.y()).abs() < eps
-                    && (a_max.z() - b_max.z()).abs() < eps
-            })
-            .unwrap_or(false);
-
-        // Containment shortcut: A contains B when all B vertices are
-        // inside-or-on A AND A's AABB encloses B's. Falls back to a
-        // strict AABB-only check when the containing solid has no
-        // classifier — the strict check requires ≥10% larger in ALL
-        // three dims so that sparse multi-shell solids (e.g., a fuse
-        // of two disjoint boxes) don't false-positive as "contains
-        // another solid".
-        // Both the analytic-classifier term and the AABB-only fallback can
-        // false-positive when the container is non-convex: the analytic
-        // classifier may mis-report notch points as inside-or-on, and an
-        // AABB encloses a notch's empty volume. Guard the whole determination
-        // with the `center_outside` witness — sound for every path because it
-        // only fires on proven non-containment (see the lemma above).
-        let b_in_a = ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
-            || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a)))
-            && !center_outside(topo, b, a, &aabb_b);
-        let a_in_b = ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
-            || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b)))
-            && !center_outside(topo, a, b, &aabb_a);
+        let TrivialRelation {
+            identical,
+            a_in_b,
+            b_in_a,
+        } = detect_trivial_relation(topo, a, b, ca.as_ref(), cb.as_ref(), tol);
 
         // Identical-solid shortcut: matching AABBs AND every boundary
         // vertex of each solid classifies as inside-or-on the other's
         // analytic classifier. Stronger than a center test (a cube
         // inscribed in a sphere has matching AABBs but cube corners fall
         // outside the sphere) and works for non-convex solids like tori.
-        if aabbs_match && all_b_verts_in_a && all_a_verts_in_b {
+        if identical {
             return match op {
                 BooleanOp::Fuse | BooleanOp::Intersect => Ok(crate::copy::copy_solid(topo, a)?),
                 BooleanOp::Cut => Err(crate::OperationsError::EmptyResult {
@@ -919,8 +794,23 @@ pub fn boolean_with_evolution(
     use brepkit_topology::explorer::solid_faces;
 
     // Faithful path: the GFA reports each result face's true input source.
-    // Identical operands take a non-GFA fast path, so skip them here.
-    if a != b {
+    // Identical/contained operand pairs must NOT take it: those are the
+    // fully-coincident-boundary configurations `boolean` short-circuits
+    // precisely because the raw GFA mis-splits them — coincident walls drop
+    // into an open shell whose position-duplicate free edges pass the
+    // by-edge-id validation gate (every edge id used ≤ 2×), so the broken
+    // result would be returned as "valid". Route them through `boolean`'s
+    // shortcuts below; the geometry heuristic attributes a copied result's
+    // faces exactly (normal + centroid match 1:1).
+    let trivial = {
+        use brepkit_algo::classifier::try_build_analytic_classifier;
+        let tol = brepkit_math::tolerance::Tolerance::new();
+        let ca = try_build_analytic_classifier(topo, a);
+        let cb = try_build_analytic_classifier(topo, b);
+        let rel = detect_trivial_relation(topo, a, b, ca.as_ref(), cb.as_ref(), tol);
+        rel.identical || rel.a_in_b || rel.b_in_a
+    };
+    if a != b && !trivial {
         let input_indices: Vec<usize> = solid_faces(topo, a)?
             .into_iter()
             .chain(solid_faces(topo, b)?)
@@ -1932,6 +1822,164 @@ fn solids_provably_disjoint(topo: &Topology, a: SolidId, b: SolidId, margin: f64
     boxes_a
         .iter()
         .all(|ba| boxes_b.iter().all(|bb| aabbs_clear_gap(ba, bb, margin)))
+}
+
+/// The trivial operand relationships that let [`boolean`] short-circuit
+/// without running the GFA: identical solids and full containment.
+struct TrivialRelation {
+    /// Matching AABBs AND every boundary vertex of each solid classifies
+    /// as inside-or-on the other's analytic classifier.
+    identical: bool,
+    /// A is fully contained in B.
+    a_in_b: bool,
+    /// B is fully contained in A.
+    b_in_a: bool,
+}
+
+/// Detect the trivial operand relationships (identical / contained).
+///
+/// [`boolean`] uses this to take copy/empty shortcuts. [`boolean_with_evolution`]
+/// consults the same detection BEFORE its faithful raw-GFA provenance path:
+/// these are exactly the fully-coincident-boundary configurations the raw GFA
+/// mis-splits (coincident walls dropped into an open shell whose
+/// position-duplicate free edges slip past the by-edge-id validation gate), so
+/// the evolution path must route them through [`boolean`]'s shortcuts instead.
+fn detect_trivial_relation(
+    topo: &Topology,
+    a: SolidId,
+    b: SolidId,
+    ca: Option<&brepkit_algo::classifier::AnalyticClassifier>,
+    cb: Option<&brepkit_algo::classifier::AnalyticClassifier>,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> TrivialRelation {
+    // Use measure::solid_bounding_box — it expands for surface curvature
+    // (cylinder vertex projection, sphere/torus analytic). The naive
+    // edge-vertex sampler missed cylinder lateral extents because cylinders
+    // only have seam vertices, leaving the AABB center on the lateral
+    // surface where the analytic classifier returns None.
+    let sample_aabb = |topo: &Topology, solid: SolidId| -> Option<(Point3, Point3)> {
+        let bb = crate::measure::solid_bounding_box(topo, solid).ok()?;
+        Some((bb.min, bb.max))
+    };
+    let aabb_a = sample_aabb(topo, a);
+    let aabb_b = sample_aabb(topo, b);
+    // AABB-encloses check (lenient): does `inner` fit inside `outer`?
+    let aabb_encloses =
+        |inner: &Option<(Point3, Point3)>, outer: &Option<(Point3, Point3)>| -> bool {
+            let Some(((i_min, i_max), (o_min, o_max))) = inner.zip(*outer) else {
+                return false;
+            };
+            let margin = tol.linear;
+            i_min.x() >= o_min.x() - margin
+                && i_min.y() >= o_min.y() - margin
+                && i_min.z() >= o_min.z() - margin
+                && i_max.x() <= o_max.x() + margin
+                && i_max.y() <= o_max.y() + margin
+                && i_max.z() <= o_max.z() + margin
+        };
+    // AABB-strictly-contains (strict): outer must also be ≥10% larger in
+    // ALL 3 dims. Used as the no-classifier fallback to detect true
+    // nested containment (e.g., a ring fully inside a shell's cavity)
+    // without false-positives on sparse multi-shell solids (e.g., a
+    // fuse of disjoint boxes whose AABB technically encloses another
+    // solid's AABB while mostly being empty space).
+    let aabb_strictly_contains =
+        |inner: &Option<(Point3, Point3)>, outer: &Option<(Point3, Point3)>| -> bool {
+            if !aabb_encloses(inner, outer) {
+                return false;
+            }
+            let Some(((i_min, i_max), (o_min, o_max))) = inner.zip(*outer) else {
+                return false;
+            };
+            let dims = [
+                (o_max.x() - o_min.x(), i_max.x() - i_min.x()),
+                (o_max.y() - o_min.y(), i_max.y() - i_min.y()),
+                (o_max.z() - o_min.z(), i_max.z() - i_min.z()),
+            ];
+            dims.iter()
+                .all(|(outer_d, inner_d)| *outer_d > *inner_d * 1.1)
+        };
+
+    // AABB enclosure is necessary but NOT sufficient for solid
+    // containment: a non-convex container (notched or hollow) can
+    // AABB-enclose a solid that actually lies in its empty region.
+    // Issue #801: `(a − b) ∪ (a ∩ b)` dropped the `a ∩ b` operand
+    // because the unit cube's bbox fits inside the notched `a − b`'s
+    // bbox, yet the cube lives in the carved-out notch. Confirm the
+    // AABB-only fallback with a real point-in-solid test: reject when
+    // the inner solid's center is provably inside `inner` yet outside
+    // `outer`. By the containment lemma (inner ⊆ outer ⇒ every point
+    // of inner is in outer), that witness can only occur for genuine
+    // non-containment, so it never rejects a true containment.
+    let center_outside =
+        |topo: &Topology, inner: SolidId, outer: SolidId, bb: &Option<(Point3, Point3)>| -> bool {
+            let Some((lo, hi)) = *bb else { return false };
+            let c = Point3::new(
+                0.5 * (lo.x() + hi.x()),
+                0.5 * (lo.y() + hi.y()),
+                0.5 * (lo.z() + hi.z()),
+            );
+            let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
+            let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+            // Conservative by design: when the AABB center falls in `inner`'s own
+            // concavity (a C/U-shaped solid), `inside_inner` is false and the
+            // witness is disabled, so a false-positive containment could still
+            // slip through. That only ever fails to *reject* — it never rejects a
+            // true containment — so the shortcut stays sound, just not complete.
+            let inside_inner = matches!(
+                crate::classify::classify_point(topo, inner, c, defl, tol.linear),
+                Ok(crate::classify::PointClassification::Inside)
+            );
+            let outside_outer = matches!(
+                crate::classify::classify_point(topo, outer, c, defl, tol.linear),
+                Ok(crate::classify::PointClassification::Outside)
+            );
+            inside_inner && outside_outer
+        };
+
+    // Bidirectional vertex check via the analytic classifier — the
+    // primary signal for identical/containment classification. A vertex
+    // classifying as inside-or-on (None within tolerance band counts
+    // as on) means it sits within the solid's region.
+    let all_b_verts_in_a = ca.is_some_and(|c| all_vertices_inside_or_on(topo, b, c, tol));
+    let all_a_verts_in_b = cb.is_some_and(|c| all_vertices_inside_or_on(topo, a, c, tol));
+    let aabbs_match = aabb_a
+        .zip(aabb_b)
+        .map(|((a_min, a_max), (b_min, b_max))| {
+            let eps = tol.linear;
+            (a_min.x() - b_min.x()).abs() < eps
+                && (a_min.y() - b_min.y()).abs() < eps
+                && (a_min.z() - b_min.z()).abs() < eps
+                && (a_max.x() - b_max.x()).abs() < eps
+                && (a_max.y() - b_max.y()).abs() < eps
+                && (a_max.z() - b_max.z()).abs() < eps
+        })
+        .unwrap_or(false);
+
+    // Containment: A contains B when all B vertices are inside-or-on A AND
+    // A's AABB encloses B's. Falls back to a strict AABB-only check when the
+    // containing solid has no classifier — the strict check requires ≥10%
+    // larger in ALL three dims so that sparse multi-shell solids (e.g., a
+    // fuse of two disjoint boxes) don't false-positive as "contains another
+    // solid".
+    // Both the analytic-classifier term and the AABB-only fallback can
+    // false-positive when the container is non-convex: the analytic
+    // classifier may mis-report notch points as inside-or-on, and an
+    // AABB encloses a notch's empty volume. Guard the whole determination
+    // with the `center_outside` witness — sound for every path because it
+    // only fires on proven non-containment (see the lemma above).
+    let b_in_a = ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
+        || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a)))
+        && !center_outside(topo, b, a, &aabb_b);
+    let a_in_b = ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
+        || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b)))
+        && !center_outside(topo, a, b, &aabb_a);
+
+    TrivialRelation {
+        identical: aabbs_match && all_b_verts_in_a && all_a_verts_in_b,
+        a_in_b,
+        b_in_a,
+    }
 }
 
 /// Check whether every boundary vertex of `solid` is classified as
