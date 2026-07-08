@@ -1,0 +1,25 @@
+crates/operations/src/boolean/mod.rs
+  s_8a8c446f1ed88d::t_2b62ef2b728a8c 805-810
+  s_8a8c446f1ed88d::t_75c6dd30a4d11a 780-784
+crates/io/tests/dovetail_interior_identity_intersect_inmem.rs
+  s_8a8c446f1ed88d::t_2885083e61ef13 111
+  s_8a8c446f1ed88d::t_9f9eca9d824aaf 122,125-128
+  s_8a8c446f1ed88d::t_cf356578c13a3f 123
+  s_8a8c446f1ed88d::t_fe9b24c3129d4b 112-115,119-121,124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1df55c29514e00e3494151578f621c08ed5ec629",
+  "prompts": {},
+  "sessions": {
+    "s_8a8c446f1ed88d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed01ede9-8360-4c92-93f3-dbd6ad5bd177",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
