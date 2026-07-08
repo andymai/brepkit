@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783476449048,
+  "lastUpdate": 1783476852019,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2699,6 +2699,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19160848,
             "range": "± 23864",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "423f6e273e7931943c5542736a67ffb66f8269b1",
+          "message": "chore(main): release 2.124.7 (#1042)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.7](https://github.com/andymai/brepkit/compare/v2.124.6...v2.124.7)\n(2026-07-08)\n\n\n### Bug Fixes\n\n* **algo:** normalize inner-wire winding at the face splitter entrance\n([#1041](https://github.com/andymai/brepkit/issues/1041))\n([0a77a63](https://github.com/andymai/brepkit/commit/0a77a6346016a2b194d662c47b49b9354693cc06))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.124.7 with a fix that normalizes inner‑wire\nwinding at the face splitter entrance to prevent incorrect face splits\nand reduce topology errors.\n\n<sup>Written for commit 9fb78092d89ce487ea5fd79c9dc6541f3511eb4b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1042?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-08T02:11:52Z",
+          "tree_id": "dadb6e8df237a4ef9d3f8ab1b9c5a7893fbc368d",
+          "url": "https://github.com/andymai/brepkit/commit/423f6e273e7931943c5542736a67ffb66f8269b1"
+        },
+        "date": 1783476851621,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 752071,
+            "range": "± 3383",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 842111,
+            "range": "± 3872",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12079,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 636057,
+            "range": "± 2000",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19349308,
+            "range": "± 259762",
             "unit": "ns/iter"
           }
         ]
