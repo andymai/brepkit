@@ -1,0 +1,37 @@
+crates/algo/src/pave_filler/phase_ff_coplanar.rs
+  s_8a8c446f1ed88d::t_404b11a6f5f0e8 247-260,270-273
+  s_8a8c446f1ed88d::t_33e0e42a0b0ac6 376-408,411-422
+  s_8a8c446f1ed88d::t_39bca778d3b216 409-410
+.claude/skills/roadmap/SKILL.md
+  s_8a8c446f1ed88d::t_f45e6bac848bbc 133
+  s_8a8c446f1ed88d::t_3f0a9f39e51da2 132
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_8a8c446f1ed88d::t_4aa1e72d54f1f1 8
+  s_8a8c446f1ed88d::t_6b3e9f11a34bec 153-207
+crates/io/tests/dovetail_cornerclip_intersect_inmem.rs
+  s_8a8c446f1ed88d::t_9dfaea9f88c1a1 1-3
+  s_8a8c446f1ed88d::t_958d28844c8036 48-58
+  s_8a8c446f1ed88d::t_9791d2b5bb836c 140-142,148-149,151-153
+  s_8a8c446f1ed88d::t_b4d152ea4d2561 157,159,168,173-176,179-180
+  s_8a8c446f1ed88d::t_bda6a2926fc6c6 182
+  s_8a8c446f1ed88d::t_78705d58264a41 210-219
+crates/algo/src/builder/face_splitter/mod.rs
+  s_8a8c446f1ed88d::t_a76078a1462c86 229-236
+  s_8a8c446f1ed88d::t_e01aaeac8a95b3 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "01b8a6067500be26cc4e816ae1b5a12835eddab6",
+  "prompts": {},
+  "sessions": {
+    "s_8a8c446f1ed88d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed01ede9-8360-4c92-93f3-dbd6ad5bd177",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
