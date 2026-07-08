@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783535220154,
+  "lastUpdate": 1783537669168,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3509,6 +3509,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15998121,
             "range": "± 218373",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d2a98fcd5f2b4b43b706b35681ca247433303382",
+          "message": "fix(operations): route trivial operand pairs around the evolution GFA path (#1057)\n\n## Summary\n\nCloses the dominant post-#1054 baseplate residual: the **bnd=108/144 STL\nfamily** across the dovetail, dovetailKey, and fit-offset scenario\nsuites.\n\n**Root**: the tool's export booleans run `boolean_with_evolution` (face\nprovenance for feature tags). Its faithful raw-GFA branch mis-splits\n**identical/contained operand pairs** — the fully-coincident-boundary\nconfiguration that `boolean()` short-circuits on purpose. Coincident\nwalls drop into an open shell whose position-duplicate free edges pass\nthe by-edge-id validation gate (every edge id used ≤2×, so a\npositionally-unpaired edge is invisible), and the broken result is\nreturned as \"valid\".\n\nThe gridfinity interior dovetail tile hits exactly this: with all four\nedges set to `join`, the corner-rounding profile degenerates to a plain\nbox matching the slab bounds, and the identity intersect collapsed 134\nfaces → 38 with 32 free edges. Captured stage probes (`serializeSolid`\nat each generator milestone) localized it; the same operands replay\nclean through `boolean()` (containment shortcut) and broken through the\nevolution path.\n\n**Fix**: extract `boolean()`'s identical/containment detection into\n`detect_trivial_relation` (verbatim move — the logic is unchanged and\n`boolean()`'s behavior is identical) and consult it in\n`boolean_with_evolution` before the faithful path. Trivial pairs route\nthrough `boolean()`'s shortcuts, where the geometry-heuristic evolution\nattributes a copied result's faces exactly (1:1 normal+centroid match).\n\n## Verification\n\n- New fixture tests\n(`crates/io/tests/dovetail_interior_identity_intersect_inmem.rs`, the\ntool's exact serialized 4×4-interior-tile operands): identity intersect\nwatertight with all 134 faces + 64 pocket cones preserved through BOTH\nentries, and the evolution map still attributes faces.\n- `cargo test -p brepkit-wasm --lib gridfinity` 27/27; full workspace\ngreen; clippy `-D warnings` clean.\n- **Tool-verified with a local overlay**: dovetailKey **2/2** (was 1/2),\nfit-offset **2/2** (was 0/2), dovetail suite **6/9** (was 2/9) — 5×4\nmiddle-column, 4×4 interior (both variants), inverted, and magnet tiles\nall closed. Remaining failures (fractional edge tile bnd=4,\ndoubled-dovetail nm=21, A1-corner nm=3) are separate residuals.\n\n## Notes for review\n\n- The existing gridfinity evolution-path fixtures (socket/lip fuses) use\noverlapping operands — `detect_trivial_relation` returns all-false for\nthem, so the faithful provenance path is unchanged there.\n- The detection adds O(faces + vertices) work per evolution boolean\n(classifier build + AABB + vertex classification), negligible against\nGFA cost.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRoutes identical/contained operand pairs around the evolution GFA path\nin `boolean_with_evolution` to stop mis-splitting on coincident walls.\nFixes identity-intersect failures in gridfinity dovetail tiles\n(bnd=108/144) while preserving full face provenance.\n\n- **Bug Fixes**\n- Extracted identical/containment detection into\n`detect_trivial_relation` and use it in both `boolean` and\n`boolean_with_evolution`; skip detection when `a == b`; trivial pairs\ntake `boolean`’s copy/empty shortcuts before evolution attribution.\n- Added fixtures and\n`crates/io/tests/dovetail_interior_identity_intersect_inmem.rs`;\nidentity intersect stays watertight (134 faces, 64 cones) through both\npaths and the evolution map attributes every copied slab face.\n\n<sup>Written for commit 1df55c29514e00e3494151578f621c08ed5ec629.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1057?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T19:05:21Z",
+          "tree_id": "18280406697691a813cc119e37068e1084ef0227",
+          "url": "https://github.com/andymai/brepkit/commit/d2a98fcd5f2b4b43b706b35681ca247433303382"
+        },
+        "date": 1783537668773,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 782602,
+            "range": "± 2114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 880243,
+            "range": "± 8959",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13111,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 634621,
+            "range": "± 678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20327828,
+            "range": "± 29399",
             "unit": "ns/iter"
           }
         ]
