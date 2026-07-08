@@ -155,7 +155,27 @@ the A1-canonical corner tile fell ~597 nm → **nm=3 at 468ms**. Residual family
 bnd=108 (5×4 middle-column, inverted, AND dovetailKey — one shared root), bnd=144
 (4×4 interior ×2 — interior tiles have NO rounded corners, so this is the
 fully-coincident-walls intersect variant), bnd=5 (5×4.5 fractional edge tile, also
-still slow at 265s), nm=6 (magnet variant, 82s), nm=3 (corner tile). combinedFeatures re-read (2026-07-08, 900s runs):
+still slow at 265s), nm=6 (magnet variant, 82s), nm=3 (corner tile).
+
+**bnd=108/144 family CLOSED (PR #1057, 2026-07-08)** (fixture
+`crates/io/tests/dovetail_interior_identity_intersect_inmem.rs`): stage-probe
+capture (`buildBaseplateSolid`'s `probe` callback + `serializeSolid` per milestone —
+NO instrumented kernel needed) localized it to `cornerClipIntersect`; for all-join
+tiles the rounding profile degenerates to a plain box matching the slab bounds, and
+`boolean_with_evolution`'s faithful raw-GFA branch mis-split the fully-coincident
+identity intersect (134 faces → 38, free=32) — accepted as "valid" because
+position-duplicate free edges pass the by-edge-id gate (ids used ≤2×). `boolean()`
+was immune via its identical/containment shortcut. Fix: `detect_trivial_relation`
+extracted and consulted by `boolean_with_evolution` before the faithful path.
+Tool-verified (local overlay): dovetailKey 2/2, fit-offset 2/2, dovetail 6/9 —
+middle-column, interior ×2, inverted, magnet all closed. Remaining dovetail
+residuals: fractional edge tile bnd=4 (+265s perf), doubled-dovetail interior nm=21,
+A1-corner nm=3. DURABLE: the by-edge-id validation gate is BLIND to
+position-duplicate free edges — any "GFA result validated OK" claim about
+watertightness needs the position-quantized check; and the generator's probe hook +
+serializeSolid is the cheap capture path for baseplate ops.
+
+combinedFeatures re-read (2026-07-08, 900s runs):
 "handle holes" + "funnel cutout" PASS at engine level in 62–87s (the tool's per-test
 60s timeout masks them — PERF item); the real defect is "handles + label (back
 skip)": a swallowed panic poisons the wasm borrow flag ("recursive use of an
