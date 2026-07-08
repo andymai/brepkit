@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783500784137,
+  "lastUpdate": 1783501194168,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3131,6 +3131,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19396192,
             "range": "± 82156",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6e0140bf1e6093f1a4f0f90d8d5c2c19c18d0c21",
+          "message": "chore(main): release 2.124.10 (#1050)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.10](https://github.com/andymai/brepkit/compare/v2.124.9...v2.124.10)\n(2026-07-08)\n\n\n### Bug Fixes\n\n* **algo:** orientation-safe interior points for plane sub-faces\n([#1049](https://github.com/andymai/brepkit/issues/1049))\n([90d0c6a](https://github.com/andymai/brepkit/commit/90d0c6a8beac14e8b5a2e3c6c15e2b938bfa2c01))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release 2.124.10 for `brepkit-wasm` fixes orientation-safe\ninterior point selection for plane sub-faces to improve robustness. No\nAPI changes.\n\n- **Bug Fixes**\n- Interior points now respect face orientation on plane sub-faces,\npreventing misclassification and downstream issues like triangulation\nerrors.\n\n<sup>Written for commit a2353e7b163ca343ffc45862d1ab321db06d3e90.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1050?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-08T08:57:39Z",
+          "tree_id": "4207d08956f0cbd3c9913ef7f3c10c474453e9a9",
+          "url": "https://github.com/andymai/brepkit/commit/6e0140bf1e6093f1a4f0f90d8d5c2c19c18d0c21"
+        },
+        "date": 1783501193769,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 752923,
+            "range": "± 4473",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 836615,
+            "range": "± 4466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11931,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 629512,
+            "range": "± 3822",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19293736,
+            "range": "± 316276",
             "unit": "ns/iter"
           }
         ]
