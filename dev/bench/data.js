@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783476852019,
+  "lastUpdate": 1783492657219,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2753,6 +2753,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19349308,
             "range": "± 259762",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "75221875982746a3c2a7ccdf0181a08136d3682d",
+          "message": "fix(algo): resolve disconnected section loops in the planar arrangement splitter (#1043)\n\n## Root cause\n\nA closed section loop lying strictly inside a plane face — touching\nneither the face boundary nor any other section — is a **disconnected\ncomponent** of the arrangement trace graph, so the minimal-face trace\nwalks its cycle once per orientation. The flat emission path\n(`arrangement_regions_from_inputs`, `even_odd_nesting=false`) then:\n\n1. emitted **both** traces as duplicate overlapping regions, and\n2. left the region that geometrically contains the loop **without** the\nloop as an inner wire, so the hole-less container covered the\nduplicates.\n\nDownstream, same-domain detection glued container + duplicates + the\ncoincident opposing faces into one group (`planar_faces_overlap`'s hole\nguards all key on `inner_wires()`, which the woven container doesn't\nhave) and dropped every piece; the assembler's cap fill then patched the\nopenings with membranes lying **inside** solid material. The mesh showed\nsame-direction half-edge pairs along every interior loop rim — `bnd>0`\nwith `nm=0` while the orientation-blind B-Rep checks passed\n`free=0/over=0` — and a −13% signed mesh volume.\n\nHit by the halfSockets `2×2` bin × socket-assembly export fuse: the four\ninterior socket outlines on the bin bottom are exactly such loops\n(smaller halfSockets bins put every outline on the bin boundary, so they\nnever hit this).\n\n## Fix\n\nResolve twin cycle pairs in the flat emission: two traced faces whose\nhalf-edge sets are exact `h ↔ h^1` twins with opposite winding are one\ndisconnected loop. Emit it once as a solid region and attach the\nreversed twin as an inner wire of the smallest region that geometrically\ncontains it, with a hole-safe precomputed interior seed\n(`find_point_outside_holes`). Connected arrangements are unaffected —\ntwin pairs cannot occur there.\n\n## Verification\n\n- New fixture `crates/io/tests/halfsockets_socketfuse_inmem.rs`\n(captured tool operands): fails before, passes after.\n- Both halfSockets capture chains (hs1x1: 6 ops, hs2x2: 18 ops) replay\nfully clean — every op `bnd=0 nm=0`, all analytic; the affected fuse got\n35% faster (83→55ms) and 4 fewer faces (the membranes).\n- Full workspace suite green (40 suites), including the gridfinity wasm\ncanary 27/27.\n- `check-boundaries.sh` clean; clippy/fmt clean.\n\n## Notes\n\nThis closes the defect gating the ready loft branch\n`fix/loft-recognize-sketch-arcs` (curve-preserving socket lofts) — that\nlands separately on top of this.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes duplicate emission of disconnected section loops in the planar\narrangement splitter. Each interior loop is emitted once and its twin is\nattached as a hole, preventing dropped regions and interior membranes in\ndownstream fuses (e.g., the halfSockets 2×2 export).\n\n- **Bug Fixes**\n- Detect twin cycle pairs by matching half-edge sets (`h` ↔ `h^1`) with\nopposite winding.\n- Attach the reversed twin to the smallest containing region using an\nasymmetric all-vertex containment check with boundary tolerance; robust\nto nesting and logs if no parent is found.\n- Build inner wires with correct CW winding and seed interior samples\nwith `find_point_outside_holes`; hole cycles are not emitted. Connected\narrangements are unchanged.\n- Added regression test\n`crates/io/tests/halfsockets_socketfuse_inmem.rs` (captured operands).\nResult is watertight and analytic; the affected fuse runs ~35% faster\nwith fewer faces.\n\n<sup>Written for commit 3a374ae87dc9e077b5f267b1471eb5b31ec9e461.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1043?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T06:35:20Z",
+          "tree_id": "8a370097cebdd13d0fb49c5cc1cca7a4536dc646",
+          "url": "https://github.com/andymai/brepkit/commit/75221875982746a3c2a7ccdf0181a08136d3682d"
+        },
+        "date": 1783492656875,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 754885,
+            "range": "± 1482",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 844264,
+            "range": "± 1623",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11938,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631831,
+            "range": "± 1459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19485474,
+            "range": "± 225726",
             "unit": "ns/iter"
           }
         ]
