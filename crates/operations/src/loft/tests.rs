@@ -991,3 +991,122 @@ fn loft_smooth_three_nonplanar_patches_positive_volume() {
         "smooth non-planar loft must have positive volume, got {vol}"
     );
 }
+
+/// Rounded-rect profile whose corner arcs are stored as `curve` NURBS (the
+/// form a brepjs sketch delivers) or as native circles.
+fn make_rounded_rect_face_at(
+    topo: &mut Topology,
+    half: f64,
+    r: f64,
+    z: f64,
+    nurbs_arcs: bool,
+) -> FaceId {
+    let tol_val = 1e-7;
+    let c = half - r;
+    let corners = [
+        (c, c, 0.0_f64),
+        (-c, c, 90.0),
+        (-c, -c, 180.0),
+        (c, -c, 270.0),
+    ];
+    let pt = |cx: f64, cy: f64, deg: f64| {
+        let a = deg.to_radians();
+        Point3::new(cx + r * a.cos(), cy + r * a.sin(), z)
+    };
+    let mut vids = Vec::new();
+    for &(cx, cy, a0) in &corners {
+        vids.push(topo.add_vertex(Vertex::new(pt(cx, cy, a0), tol_val)));
+        vids.push(topo.add_vertex(Vertex::new(pt(cx, cy, a0 + 90.0), tol_val)));
+    }
+    let mut oes = Vec::new();
+    for (k, &(cx, cy, _)) in corners.iter().enumerate() {
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(cx, cy, z),
+            Vec3::new(0.0, 0.0, 1.0),
+            r,
+        )
+        .unwrap();
+        let curve = if nurbs_arcs {
+            let (a0, a1) = EdgeCurve::Circle(circle.clone()).domain_with_endpoints(
+                topo.vertex(vids[2 * k]).unwrap().point(),
+                topo.vertex(vids[2 * k + 1]).unwrap().point(),
+            );
+            EdgeCurve::NurbsCurve(
+                brepkit_geometry::convert::circle_to_nurbs(&circle, a0, a1).unwrap(),
+            )
+        } else {
+            EdgeCurve::Circle(circle)
+        };
+        let arc = topo.add_edge(Edge::new(vids[2 * k], vids[2 * k + 1], curve));
+        oes.push(OrientedEdge::new(arc, true));
+        let line = topo.add_edge(Edge::new(
+            vids[2 * k + 1],
+            vids[(2 * k + 2) % 8],
+            EdgeCurve::Line,
+        ));
+        oes.push(OrientedEdge::new(line, true));
+    }
+    let wid = topo.add_wire(Wire::new(oes, true).unwrap());
+    topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z,
+        },
+    ))
+}
+
+/// A multi-section rounded-rect loft whose corner arcs arrive as NURBS (the
+/// brepjs sketch form — the gridfinity socket) must produce the same analytic
+/// cone/cylinder corners as one built from native circles, not a faceted
+/// polygon frustum.
+#[test]
+fn loft_rounded_rect_nurbs_arcs_stays_analytic() {
+    let sections: [(f64, f64, f64); 5] = [
+        (20.75, 3.75, 0.0),
+        (20.75, 3.75, 0.9),
+        (19.85, 2.85, 1.7),
+        (19.85, 2.85, 3.5),
+        (18.95, 1.95, 4.75),
+    ];
+    let mut volumes = Vec::new();
+    // (nurbs_arcs, downward): the gridfinity socket combines both — sketch
+    // NURBS arcs AND a downward stack (top section at z=0, lofting to −h),
+    // which winds every profile CW about the stacking axis.
+    for (nurbs_arcs, down) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut topo = Topology::new();
+        let profs: Vec<FaceId> = sections
+            .iter()
+            .map(|&(half, r, z)| {
+                let z = if down { -z } else { z };
+                make_rounded_rect_face_at(&mut topo, half, r, z, nurbs_arcs)
+            })
+            .collect();
+        let solid = loft(&mut topo, &profs).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let curved = faces
+            .iter()
+            .filter(|&&f| {
+                matches!(
+                    topo.face(f).unwrap().surface(),
+                    FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+                )
+            })
+            .count();
+        assert!(
+            curved >= 16,
+            "nurbs_arcs={nurbs_arcs} down={down}: only {curved} cone/cylinder corner faces — \
+             loft faceted the arcs"
+        );
+        volumes.push(crate::measure::solid_volume(&topo, solid, 0.01).unwrap());
+    }
+    for (k, v) in volumes.iter().enumerate().skip(1) {
+        let diff = (volumes[0] - v).abs() / volumes[0];
+        assert!(
+            diff < 1e-3,
+            "variant {k} volume {v} deviates from native upward loft {}",
+            volumes[0]
+        );
+    }
+}

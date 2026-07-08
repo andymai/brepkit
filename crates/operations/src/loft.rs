@@ -409,6 +409,13 @@ fn merge_cocircular_arcs(edges: Vec<ProfileEdgeGeom>) -> Vec<ProfileEdgeGeom> {
 /// Extract a planar profile's outer-wire edges in traversal order, each
 /// oriented so `start`→`end` follows the wire. Returns `None` if the face is
 /// not planar or has inner wires (holes) — the general loft handles those.
+///
+/// NURBS edges are recognized back to their analytic form (a brepjs sketch
+/// delivers rounded-rect corner arcs and even straight runs as NURBS): without
+/// recognition the curve-preserving loft bails on every sketch-built profile
+/// and the polygon path facets the corners — the gridfinity socket loses
+/// ~1-2.5% of its volume to chord wedges and every downstream boolean sees
+/// all-plane socket operands.
 fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdgeGeom>> {
     let face = topo.face(fid).ok()?;
     if !matches!(face.surface(), FaceSurface::Plane { .. }) || !face.inner_wires().is_empty() {
@@ -419,17 +426,29 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
     if oes.len() < 3 {
         return None;
     }
+    let recog_tol = Tolerance::new().linear * 100.0;
     let mut out = Vec::with_capacity(oes.len());
     for oe in oes {
         let edge = topo.edge(oe.edge()).ok()?;
         let s = topo.vertex(edge.start()).ok()?.point();
         let e = topo.vertex(edge.end()).ok()?.point();
         let (start, end) = if oe.is_forward() { (s, e) } else { (e, s) };
-        out.push(ProfileEdgeGeom {
-            curve: edge.curve().clone(),
-            start,
-            end,
-        });
+        let curve = match edge.curve() {
+            EdgeCurve::NurbsCurve(nc) => {
+                match brepkit_geometry::convert::recognize_curve(nc, recog_tol) {
+                    brepkit_geometry::convert::RecognizedCurve::Circle {
+                        center,
+                        normal,
+                        radius,
+                    } => brepkit_math::curves::Circle3D::new(center, normal, radius)
+                        .map_or_else(|_| edge.curve().clone(), EdgeCurve::Circle),
+                    brepkit_geometry::convert::RecognizedCurve::Line { .. } => EdgeCurve::Line,
+                    _ => edge.curve().clone(),
+                }
+            }
+            c => c.clone(),
+        };
+        out.push(ProfileEdgeGeom { curve, start, end });
     }
     Some(merge_cocircular_arcs(out))
 }
@@ -584,10 +603,42 @@ fn try_loft_matching_curved_profiles(
     if axis.length() < tol.linear {
         return Ok(None);
     }
-    for p in &profs {
-        if crate::winding::newell_normal(&junctions(p)).dot(axis) <= 0.0 {
-            return Ok(None);
+    // Profiles wound opposite the stacking axis are reversed, not rejected: a
+    // loft stacked DOWNWARD from CCW-sketched sections (the gridfinity socket,
+    // whose top face sits at z=0 and lofts to −height) winds every profile CW
+    // about the axis. Bailing here sent every such loft to the faceting
+    // polygon path even though its arcs were pristine. Mixed windings stay a
+    // bail — that is degenerate input, not a convention difference.
+    let windings: Vec<f64> = profs
+        .iter()
+        .map(|p| crate::winding::newell_normal(&junctions(p)).dot(axis))
+        .collect();
+    if windings.iter().any(|&w| w.abs() < f64::EPSILON) {
+        return Ok(None);
+    }
+    if windings.iter().all(|&w| w < 0.0) {
+        for p in &mut profs {
+            p.reverse();
+            for e in p.iter_mut() {
+                std::mem::swap(&mut e.start, &mut e.end);
+                // Reversing an arc's endpoints alone selects the complementary
+                // span (the natural circle direction now runs the long way
+                // around); flip the circle normal so the same minor arc is
+                // traced in the opposite direction.
+                if let EdgeCurve::Circle(c) = &e.curve {
+                    match brepkit_math::curves::Circle3D::new(
+                        c.center(),
+                        c.normal() * -1.0,
+                        c.radius(),
+                    ) {
+                        Ok(flipped) => e.curve = EdgeCurve::Circle(flipped),
+                        Err(_) => return Ok(None),
+                    }
+                }
+            }
         }
+    } else if windings.iter().any(|&w| w < 0.0) {
+        return Ok(None);
     }
 
     // 3b. Pre-compute every side face's surface BEFORE mutating `topo`. A
