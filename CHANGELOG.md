@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.7](https://github.com/andymai/brepkit/compare/v2.124.6...v2.124.7) (2026-07-08)
+
+
+### Bug Fixes
+
+* **algo:** normalize inner-wire winding at the face splitter entrance ([#1041](https://github.com/andymai/brepkit/issues/1041)) ([0a77a63](https://github.com/andymai/brepkit/commit/0a77a6346016a2b194d662c47b49b9354693cc06))
+
 ## [2.124.6](https://github.com/andymai/brepkit/compare/v2.124.5...v2.124.6) (2026-07-07)
 
 
