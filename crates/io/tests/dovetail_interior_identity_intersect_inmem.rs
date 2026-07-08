@@ -108,13 +108,23 @@ fn interior_tile_identity_intersect_via_evolution() {
     let mut topo = Topology::new();
     let slab = load("dovetail_interior_slab.bin", &mut topo);
     let round = load("dovetail_interior_round.bin", &mut topo);
+    let slab_face_indices: std::collections::HashSet<usize> = solid_faces(&topo, slab)
+        .unwrap()
+        .into_iter()
+        .map(brepkit_topology::arena::Id::index)
+        .collect();
     let (result, evo) =
         boolean_with_evolution(&mut topo, BooleanOp::Intersect, slab, round).unwrap();
     check_identity_result(&topo, result, "boolean_with_evolution");
-    // The copied result's faces must still carry provenance (the geometry
-    // heuristic maps a copy 1:1) — feature tags depend on it.
-    assert!(
-        !evo.modified.is_empty(),
-        "evolution map must attribute the copied faces"
+    // The copied result must carry FULL provenance: every slab input face maps
+    // to a result face (the geometry heuristic matches a copy 1:1 by
+    // normal + centroid) — feature tags depend on it.
+    let unattributed = slab_face_indices
+        .iter()
+        .filter(|idx| !evo.modified.contains_key(idx))
+        .count();
+    assert_eq!(
+        unattributed, 0,
+        "evolution map must attribute every copied slab face; {unattributed} of 134 missing"
     );
 }

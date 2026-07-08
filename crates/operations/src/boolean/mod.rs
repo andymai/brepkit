@@ -777,10 +777,11 @@ pub fn compound_cut(
 /// (`brepkit_algo::gfa::boolean_with_face_origins`). Because that path runs the
 /// GFA directly, it can take a different route than [`boolean`] (which
 /// short-circuits some cases via AABB/containment fast paths), so its result is
-/// validated; on a GFA error or an invalid result — and for identical operands
-/// — it falls back to [`boolean`] with the geometry heuristic (normal +
-/// centroid). Either way, unmatched input faces are classified as "deleted";
-/// synthesised result faces with no input origin are left unattributed.
+/// validated; on a GFA error or an invalid result — and for identical or
+/// fully-contained operand pairs (`detect_trivial_relation`) — it falls back to
+/// [`boolean`] with the geometry heuristic (normal + centroid). Either way,
+/// unmatched input faces are classified as "deleted"; synthesised result faces
+/// with no input origin are left unattributed.
 ///
 /// # Errors
 ///
@@ -801,8 +802,12 @@ pub fn boolean_with_evolution(
     // by-edge-id validation gate (every edge id used ≤ 2×), so the broken
     // result would be returned as "valid". Route them through `boolean`'s
     // shortcuts below; the geometry heuristic attributes a copied result's
-    // faces exactly (normal + centroid match 1:1).
-    let trivial = {
+    // faces exactly (normal + centroid match 1:1). Detection only runs for
+    // a != b (a == b skips the faithful path regardless) and its cost is
+    // O(faces + vertices) per call; `boolean` re-runs it on the fallback,
+    // which is accepted — deduplicating would mean threading the relation
+    // through `boolean`'s public signature.
+    let trivial = a != b && {
         use brepkit_algo::classifier::try_build_analytic_classifier;
         let tol = brepkit_math::tolerance::Tolerance::new();
         let ca = try_build_analytic_classifier(topo, a);
