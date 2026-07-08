@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.13](https://github.com/andymai/brepkit/compare/v2.124.12...v2.124.13) (2026-07-08)
+
+
+### Bug Fixes
+
+* **operations:** route trivial operand pairs around the evolution GFA path ([#1057](https://github.com/andymai/brepkit/issues/1057)) ([d2a98fc](https://github.com/andymai/brepkit/commit/d2a98fcd5f2b4b43b706b35681ca247433303382))
+
 ## [2.124.12](https://github.com/andymai/brepkit/compare/v2.124.11...v2.124.12) (2026-07-08)
 
 
