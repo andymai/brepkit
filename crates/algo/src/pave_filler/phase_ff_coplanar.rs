@@ -401,6 +401,14 @@ fn matching_arc_section_exists(
         return false;
     };
     let (p_start, p_end) = (sv.point(), ev.point());
+    // Arc midpoint of the boundary edge, so the COMPLEMENTARY arc between the
+    // same two endpoints on the same circle does not count as a match (its
+    // chord section would then be wrongly suppressed while the true span has
+    // no section at all).
+    let (d0, d1) = edge.curve().domain_with_endpoints(p_start, p_end);
+    let edge_mid = edge
+        .curve()
+        .evaluate_with_endpoints(0.5 * (d0 + d1), p_start, p_end);
     let close = |a: Point3, b: Point3| (a - b).length() < tol.linear * 10.0;
     arena.curves.iter().any(|c| {
         let EdgeCurve::Circle(existing) = &c.curve else {
@@ -416,7 +424,9 @@ fn matching_arc_section_exists(
         }
         let s = existing.evaluate(c.t_range.0);
         let e = existing.evaluate(c.t_range.1);
-        (close(s, p_start) && close(e, p_end)) || (close(s, p_end) && close(e, p_start))
+        let m = existing.evaluate(0.5 * (c.t_range.0 + c.t_range.1));
+        close(m, edge_mid)
+            && ((close(s, p_start) && close(e, p_end)) || (close(s, p_end) && close(e, p_start)))
     })
 }
 
