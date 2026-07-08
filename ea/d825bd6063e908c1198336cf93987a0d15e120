@@ -1,0 +1,58 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1756-1771,2742-2747,2765-2767,2810-2815,2973-2987,3021-3027
+crates/operations/examples/loft_probe.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1-117
+crates/io/examples/dump_verts.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1-74
+crates/wasm/src/bindings/probe.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1-231
+crates/algo/src/builder/fill_images_faces.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1360-1371,1622-1633,1849-1878
+  s_d4791f36e0fe3e::t_ceabd0855c33c2 1879-1883
+crates/topology/src/vertex.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 25-45
+crates/operations/src/boolean/mod.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 36-90,109-111,877,980-981
+  s_d4791f36e0fe3e::t_335b5876a80520 982
+crates/io/examples/dump_z5.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1-50
+crates/io/tests/zz_pcut1_probe.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1-188
+crates/algo/src/builder/mod.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 186-217,295-302,452-513
+  s_d4791f36e0fe3e::t_06fba9e24cc0a7 514
+crates/wasm/src/bindings/mod.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 19-20
+crates/io/examples/probe_z5rim.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1-100
+crates/algo/src/lib.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 20-22
+crates/algo/src/builder/builder_solid.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 96-99,183-186,194-309,1216-1245,1268-1305
+  s_d4791f36e0fe3e::t_20e0a21a2da469 1306-1307
+crates/algo/src/classifier/mod.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 68-79,82-88
+  s_d4791f36e0fe3e::t_453cfa5b965d06 89
+crates/io/Cargo.toml
+  s_d4791f36e0fe3e::t_b4684f7aae652c 23
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1387-1399
+crates/io/examples/replay_captures.rs
+  s_d4791f36e0fe3e::t_b4684f7aae652c 1-407
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ead825bd6063e908c1198336cf93987a0d15e120",
+  "prompts": {},
+  "sessions": {
+    "s_d4791f36e0fe3e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05c537ea-ba5b-49ce-8896-e1dc92807963",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
