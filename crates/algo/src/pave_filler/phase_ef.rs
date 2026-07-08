@@ -402,7 +402,15 @@ fn check_edge_face_pairs(
                         arena,
                         pt,
                         snap_window,
-                        |p| distance_to_surface(p, surface) <= tol.linear,
+                        tol.linear,
+                        // The candidate itself must lie on the crossed surface
+                        // AND inside the face's boundary region — the solved
+                        // point passed containment, but the vertex sits up to
+                        // the window away from it.
+                        |p| {
+                            distance_to_surface(p, surface) <= tol.linear
+                                && containments[face_idx].accepts(p)
+                        },
                     )
                     .and_then(|vid| {
                         let vp = topo.vertex(vid).ok()?.point();
