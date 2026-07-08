@@ -97,9 +97,12 @@ pub(super) fn find_point_outside_holes(
                         (e.end_3d, e.start_3d)
                     };
                     let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
-                    let mut samples: Vec<Point2> = (1..4)
+                    // Dense enough for a SINGLE-edge closed hole (a full bore
+                    // circle): 3 interior samples inscribe a square whose
+                    // 0.29r sagitta gap accepts seeds well inside the hole.
+                    let mut samples: Vec<Point2> = (1..16)
                         .map(|k| {
-                            let t = (t1 - t0).mul_add(f64::from(k) / 4.0, t0);
+                            let t = (t1 - t0).mul_add(f64::from(k) / 16.0, t0);
                             f.project(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
                         })
                         .collect();

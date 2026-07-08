@@ -14,6 +14,53 @@ pub(super) fn sample_wire_loop_uv(wire: &[OrientedPCurveEdge]) -> Vec<Point2> {
     sample_wire_loop_uv_periodic(wire, None, None)
 }
 
+/// Sample a plane-face wire loop by evaluating each edge's 3D curve and
+/// projecting through the face's `PlaneFrame` — never the stored pcurve.
+///
+/// Pcurves reach a wire under two orientation conventions (sections carry the
+/// curve's natural parameterization plus a traversal flag; boundary edges are
+/// fit in traversal order but keep the topology orientation flag), so a
+/// pcurve-driven sampler can trace a reversed-boundary arc backwards and fold
+/// the loop polygon into a self-crossing zig-zag. The 3D curve with the
+/// traversal endpoints is orientation-unambiguous. Mirrors the arc-true hole
+/// polygons in `find_point_outside_holes`.
+pub(super) fn sample_wire_loop_uv_via_frame(
+    wire: &[OrientedPCurveEdge],
+    frame: &super::super::plane_frame::PlaneFrame,
+) -> Vec<Point2> {
+    use brepkit_topology::edge::EdgeCurve;
+    const CURVE_SAMPLES: usize = 8;
+
+    let mut pts = Vec::with_capacity(wire.len() * CURVE_SAMPLES);
+    for e in wire {
+        pts.push(e.start_uv);
+        if matches!(e.curve_3d, EdgeCurve::Line) {
+            continue;
+        }
+        // Sample in the edge's NATIVE orientation: `domain_with_endpoints`
+        // always takes the positive parametric span, so swapped endpoints
+        // would select the COMPLEMENTARY arc. Restore wire order afterwards.
+        let (s3, e3) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+        #[allow(clippy::cast_precision_loss)]
+        let mut samples: Vec<Point2> = (1..CURVE_SAMPLES)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(k as f64 / CURVE_SAMPLES as f64, t0);
+                frame.project(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
+            })
+            .collect();
+        if !e.forward {
+            samples.reverse();
+        }
+        pts.extend(samples);
+    }
+    pts
+}
+
 /// Sample UV points along a wire loop with optional periodic unwrapping.
 ///
 /// When `u_period`/`v_period` is set, unwraps consecutive points so the
