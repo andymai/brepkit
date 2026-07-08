@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.11](https://github.com/andymai/brepkit/compare/v2.124.10...v2.124.11) (2026-07-08)
+
+
+### Bug Fixes
+
+* **math,algo:** exact tangential intersections at socket-outline wall tangencies ([#1051](https://github.com/andymai/brepkit/issues/1051)) ([190419a](https://github.com/andymai/brepkit/commit/190419ae8d55a10bbc04c4146246549235ca27f7))
+
 ## [2.124.10](https://github.com/andymai/brepkit/compare/v2.124.9...v2.124.10) (2026-07-08)
 
 
