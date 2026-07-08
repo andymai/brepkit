@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783524068984,
+  "lastUpdate": 1783532741295,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3347,6 +3347,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19900017,
             "range": "± 616274",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bb9b1c9248ea701c6d60895dac914810b294702c",
+          "message": "fix(algo): close dovetail corner-clip intersect chord/arc lens (#1054)\n\n## Summary\n\nCloses the deferred `dovetail_corner_clip_intersect_is_watertight` case:\nthe baseplate corner-rounding Intersect (slab-with-pockets ×\nrounded-rect prism) now returns a compact, watertight, fully analytic\nresult (41 faces, both corner barrel pieces preserved) instead of\nfalling back to a 6116-facet mesh slab that poisoned every downstream\ndovetail connector boolean (~11 min per tile, non-manifold STL).\n\nTwo stacked GFA roots, which only close **together** (chord-fix-only:\nfree 1→39; arc-fix-only: free 41; both: free 0):\n\n### 1. Coplanar chord/arc lens (`phase_ff_coplanar.rs`)\n\nThe FF-coplanar phase projects boundary edges as straight 2D segments,\nso a rounded-corner boundary **arc** became a **chord** section — while\nthe true arc already existed as an FF section (the barrel×cap circle,\nsplit at the operand's diagonal seam vertex). The\n`has_existing_section_at` midpoint dedup can never catch this: emitted\ncircle arcs store the full-circle bbox, whose midpoint is the circle\n**center**. The resulting co-endpoint chord/arc lens breaks the wire\nweave — the chord lands in the outer wire and the true arc is orphaned\nas a zero-area slit (the free edge).\n\nFix: `matching_arc_section_exists` — skip a **Circle** boundary edge\nwhen its exact arc (same circle, same endpoints, shared face) already\nexists as a section. Line boundary edges are never skipped: a\nco-endpoint line/arc pair can be a genuine lens with material between\nthe curves (the torus-box in-tube case).\n\n### 2. Reverse-twin phantom arc splits (`face_splitter`)\n\n`split_sections_at_t_junctions` normalized arc split parameters via\n`domain_with_endpoints`, which always returns the **CCW** span. Sections\nare pushed as forward/reverse pairs — for the reverse twin the CCW span\nis the long complement (315° for a 45° corner arc), so a point on the\ncircle but *outside* the arc normalized to an interior `t` (45/315 =\n1/7), and the split evaluator (shorter-arc convention) minted a\n**phantom vertex on the true arc's interior**. That desynced the\ncoincident caps' partitions and killed their same-domain pairing.\n\nFix: `find_splits_on_section_arc` — section splits use the same\nshorter-arc convention as `evaluate_edge_at_t` (sections are ≤π by\nconstruction). Boundary-edge splitting deliberately keeps the CCW-domain\nconvention: boundary arcs may genuinely exceed π — switching them\nregressed the d1/d3/d4/d5 gridfinity lip fuses (caught by the wasm\ncanary during development, reverted).\n\n## Verification\n\n- `dovetail_corner_clip_intersect_is_watertight` un-ignored and green\n(full operations boolean, no fallback)\n- Raw-GFA guard tightened from `free<=1` to `free==0` (renamed\n`cornerclip_intersect_raw_gfa_stays_watertight`)\n- `cargo test -p brepkit-wasm --lib gridfinity` green (27/27 — the d4/d5\nlip-fuse canary)\n- Full workspace suite green (77 suites; `brepkit-render`\n`compute_mesh_lod` SIGSEGV is pre-existing on main in this environment,\nunrelated)\n- clippy `-D warnings` clean, boundaries clean\n- Roadmap skill updated in-PR (cornerclip row → CLOSED; socket-loft row\nupdated — that case is a different mechanism and remains deferred,\nops-level state unchanged)\n\n## Expected downstream effect\n\nThe corner-rounding intersect is shared by all baseplate generators —\nthe dovetailKey (bnd=108), fit-offset (bnd=184/144), snapClip\n(nm=14/16/11) scenario failures and the >25-min dovetail suite timeout\nall consume its mesh-fallback slab. Tool-side re-probe follows after\nrelease.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the dovetail corner-clip Intersect by removing a chord/arc lens\nand a reverse‑twin arc split bug. The Intersect now returns a compact,\nwatertight analytic result (41 faces; both corner barrel pieces) instead\nof a slow, non‑manifold mesh fallback.\n\n- **Bug Fixes**\n- FF‑coplanar: added `matching_arc_section_exists` to skip projecting a\nCircle boundary edge as a straight chord when the exact arc section\nalready exists; compares center, radius, endpoints, ARC MIDPOINT, and\nrequires parallel normals so same‑center different‑plane circles don’t\nmatch. Line edges are never skipped.\n- Splitter: introduced `find_splits_on_section_arc` and used the\nshorter‑arc convention for Circle section splits only; kept the CCW\ndomain for boundary arcs and all ellipse sections.\n- Tests: un‑ignored `dovetail_corner_clip_intersect_is_watertight` and\ntightened the raw‑GFA guard to `free == 0`; both tests pass.\n- Result: no mesh fallback; analytic output stays small and watertight.\n\n<sup>Written for commit 617db9badf44dac16c4e410d65aafc7d8679e60a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1054?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T10:43:17-07:00",
+          "tree_id": "5a188105ba8a5b19d12e19273e94235cad4aa47d",
+          "url": "https://github.com/andymai/brepkit/commit/bb9b1c9248ea701c6d60895dac914810b294702c"
+        },
+        "date": 1783532740305,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 758795,
+            "range": "± 1612",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 847597,
+            "range": "± 2005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11984,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 643492,
+            "range": "± 1511",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19606209,
+            "range": "± 155253",
             "unit": "ns/iter"
           }
         ]
