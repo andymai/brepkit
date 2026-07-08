@@ -1,0 +1,22 @@
+crates/algo/src/pave_filler/phase_ff_coplanar.rs
+  s_8a8c446f1ed88d::t_57696b15a70498 419-422,426
+crates/io/tests/dovetail_cornerclip_intersect_inmem.rs
+  s_8a8c446f1ed88d::t_b315dd294fb3cf 52-59
+  s_8a8c446f1ed88d::t_4558eb622212fd 176-177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "617db9badf44dac16c4e410d65aafc7d8679e60a",
+  "prompts": {},
+  "sessions": {
+    "s_8a8c446f1ed88d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed01ede9-8360-4c92-93f3-dbd6ad5bd177",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
