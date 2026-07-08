@@ -582,6 +582,28 @@ impl FaceExtent {
         }
     }
 
+    /// Smallest in-face dimension, used to scale the graze-refinement sample
+    /// density in `restrict_curves_to_faces`. Plane: the boundary polygon
+    /// bbox's smaller side. Analytic: the `v` span (axial length for
+    /// cylinders/cones — a coarse but sufficient proxy; the result only
+    /// scales a clamped sample count).
+    fn min_dimension(&self) -> f64 {
+        match self {
+            Self::Plane { poly, .. } => {
+                let (mut min_x, mut max_x) = (f64::INFINITY, f64::NEG_INFINITY);
+                let (mut min_y, mut max_y) = (f64::INFINITY, f64::NEG_INFINITY);
+                for p in poly {
+                    min_x = min_x.min(p.x());
+                    max_x = max_x.max(p.x());
+                    min_y = min_y.min(p.y());
+                    max_y = max_y.max(p.y());
+                }
+                (max_x - min_x).min(max_y - min_y).abs()
+            }
+            Self::Analytic { v0, v1, .. } => (v1 - v0).abs(),
+        }
+    }
+
     fn contains(&self, p: Point3) -> bool {
         match self {
             Self::Plane {
@@ -755,7 +777,48 @@ fn restrict_curves_to_faces(
         // An in-both run spanning fewer than two segments (b1-b0 < 2, i.e. at
         // most two consecutive in-both samples) is a tangency/grazing point —
         // such a curve never splits either face, so drop it.
+        //
+        // The coarse test cannot distinguish a graze from a REAL crossing much
+        // shorter than the curve: a socket-mouth corner circle crossing a 2 mm
+        // dovetail tongue face subtends ~8° of the circle — under one 24-sample
+        // segment — yet properly splits the tongue face (dropping it gaps the
+        // section chain at the corner, the whole top face classifies by a
+        // single interior point, and the cut collapses to an open hole shell).
+        // Before declaring a graze, refine with a sample density scaled to the
+        // SMALLER face extent. A true point tangency stays sub-segment at any
+        // resolution and is still dropped.
         if b1 - b0 < 2 {
+            let approx_len: f64 = (0..N).map(|i| (pt(i + 1) - pt(i)).length()).sum();
+            let min_dim = ext_a
+                .min_dimension()
+                .min(ext_b.min_dimension())
+                .max(tol.linear * 1e3);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let n_fine = ((8.0 * approx_len / min_dim).ceil() as usize).clamp(N, 1024);
+            if n_fine <= N {
+                continue;
+            }
+            let ptf = |i: usize| -> Point3 {
+                #[allow(clippy::cast_precision_loss)]
+                let f = i as f64 / n_fine as f64;
+                let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+            };
+            let inb_fine: Vec<bool> = (0..=n_fine)
+                .map(|i| {
+                    let p = ptf(i);
+                    ext_a.contains(p) && ext_b.contains(p)
+                })
+                .collect();
+            let (f0, f1) = longest_inboth_run(&inb_fine, closed);
+            if f1 - f0 < 2 {
+                continue;
+            }
+            if closed && f1 - f0 < n_fine && !matches!(raw.curve, EdgeCurve::Circle(_)) {
+                out.extend(trim_closed_curve_to_inboth_arc(&raw, f0, f1, n_fine));
+                continue;
+            }
+            out.push(raw);
             continue;
         }
         // A closed ellipse/NURBS loop whose in-both run covers the WHOLE curve

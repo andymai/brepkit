@@ -20,6 +20,7 @@ zip.workspace = true
 [dev-dependencies]
 brepkit-algo.workspace = true
 brepkit-topology = {workspace = true, features = ["test-utils"]}
+env_logger.workspace = true
 proptest.workspace = true
 
 [lints]
