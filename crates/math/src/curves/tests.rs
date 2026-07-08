@@ -151,6 +151,51 @@ fn circle_intersect_segment_no_crossing() {
     assert!(hits.is_empty());
 }
 
+#[test]
+fn circle_intersect_segment_near_tangent_collapses_to_foot() {
+    // The gridfinity wall-tangency case: an r=4 socket-outline corner circle
+    // tangent to a wall line, penetrated by a sub-tolerance residual. The
+    // separate quadratic roots straddle the tangency by sqrt(2r·δ) — a 1e-13
+    // residual already shifts each root a full micron — so the near-tangent
+    // pair must collapse to the well-conditioned double root (the foot of
+    // the center on the line).
+    let tol = 1e-7;
+    let c = Circle3D::new(
+        Point3::new(-16.75, 37.75, 5.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        4.0,
+    )
+    .unwrap();
+    // Line at x = -20.75 + 1.25e-13 (penetrates the circle by ~1.25e-13,
+    // giving a ±1e-6 root pair without the collapse).
+    let x = -20.75 + 1.25e-13;
+    let hits = c.intersect_segment(Point3::new(x, 20.0, 5.0), Point3::new(x, 50.0, 5.0), tol);
+    assert_eq!(hits.len(), 1, "near-tangent pair must collapse to one hit");
+    let (p, _) = hits[0];
+    assert!(
+        (p - Point3::new(x, 37.75, 5.0)).length() < tol,
+        "hit must be the exact foot of the tangency, got ({}, {}, {})",
+        p.x(),
+        p.y(),
+        p.z()
+    );
+}
+
+#[test]
+fn circle_intersect_segment_genuine_secant_keeps_two_hits() {
+    // A real secant (penetration far above tolerance) must still yield two
+    // distinct crossings — the tangent collapse only fires when the chord
+    // implies sub-tolerance penetration.
+    let c = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap();
+    // Line at x = 3.9: penetration δ = 0.1, chord = 2·sqrt(16 − 15.21) ≈ 1.78.
+    let hits = c.intersect_segment(
+        Point3::new(3.9, -5.0, 0.0),
+        Point3::new(3.9, 5.0, 0.0),
+        1e-7,
+    );
+    assert_eq!(hits.len(), 2, "genuine secant must keep both crossings");
+}
+
 // ── Ellipse tests ──────────────────────────────────────────────
 
 #[test]

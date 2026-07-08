@@ -346,12 +346,9 @@ fn check_edge_face_pairs(
             let on_surface = |p: Point3| distance_to_surface(p, surface) <= tol.linear;
             let start_on_surface = on_surface(start_pos);
             let end_on_surface = on_surface(end_pos);
-            let endpoint_windows: Vec<(f64, f64)> = crossings
+            let endpoint_windows: Vec<(f64, f64, f64)> = crossings
                 .iter()
                 .map(|&(t, pt)| {
-                    if !start_on_surface && !end_on_surface {
-                        return (tol.linear, tol.linear);
-                    }
                     let tangent = curve.tangent_with_endpoints(t, start_pos, end_pos);
                     let normal = match surface {
                         FaceSurface::Plane { normal, .. } => Some(*normal),
@@ -362,6 +359,9 @@ fn check_edge_face_pairs(
                         _ => 1.0,
                     };
                     let widened = (tol.linear / sin_angle.max(1e-9)).min(1e-3);
+                    if !start_on_surface && !end_on_surface {
+                        return (tol.linear, tol.linear, widened);
+                    }
                     (
                         if start_on_surface {
                             widened
@@ -369,11 +369,72 @@ fn check_edge_face_pairs(
                             tol.linear
                         },
                         if end_on_surface { widened } else { tol.linear },
+                        widened,
                     )
                 })
                 .collect();
 
-            for ((t, pt), (start_window, end_window)) in crossings.into_iter().zip(endpoint_windows)
+            // Mid-edge tangential junction snap. A grazing contact solved to
+            // within the tolerance WELL (distance to the surface grows only
+            // quadratically away from a tangency, so a whole ~sqrt(2r*tol)
+            // band of the edge sits "on" the surface) lands microns from the
+            // true junction, minting a near-duplicate vertex next to an
+            // exact one that already exists in an operand (a socket outline
+            // arc ending where the outline's straight run continues along
+            // the bin wall). Snap the crossing to an existing pave vertex
+            // within the angle-scaled window when that vertex genuinely lies
+            // on BOTH the crossed surface and this edge's curve — the
+            // incidence checks are what make the widened radius safe. The
+            // pave parameter is recomputed for Line edges (exact foot);
+            // other curve types keep the tight path.
+            let snaps: Vec<Option<(brepkit_topology::vertex::VertexId, f64)>> = crossings
+                .iter()
+                .zip(&endpoint_windows)
+                .map(|(&(t, pt), &(_, _, snap_window))| {
+                    if snap_window <= tol.linear
+                        || find_nearby_vertex(topo, arena, pt, tol).is_some()
+                    {
+                        return None;
+                    }
+                    let _ = t;
+                    super::helpers::find_nearby_pave_vertex_widened(
+                        topo,
+                        arena,
+                        pt,
+                        snap_window,
+                        tol.linear,
+                        // The candidate itself must lie on the crossed surface
+                        // AND inside the face's boundary region — the solved
+                        // point passed containment, but the vertex sits up to
+                        // the window away from it.
+                        |p| {
+                            distance_to_surface(p, surface) <= tol.linear
+                                && containments[face_idx].accepts(p)
+                        },
+                    )
+                    .and_then(|vid| {
+                        let vp = topo.vertex(vid).ok()?.point();
+                        let brepkit_topology::edge::EdgeCurve::Line = &curve else {
+                            return None;
+                        };
+                        let d = end_pos - start_pos;
+                        let len_sq = d.length_squared();
+                        if len_sq < tol.linear * tol.linear {
+                            return None;
+                        }
+                        let s = ((vp - start_pos).dot(d) / len_sq).clamp(0.0, 1.0);
+                        let t_new = (t1 - t0).mul_add(s, t0);
+                        let on_curve = (curve.evaluate_with_endpoints(t_new, start_pos, end_pos)
+                            - vp)
+                            .length()
+                            <= tol.linear;
+                        on_curve.then_some((vid, t_new))
+                    })
+                })
+                .collect();
+
+            for (((t, pt), (start_window, end_window, _)), snap) in
+                crossings.into_iter().zip(endpoint_windows).zip(snaps)
             {
                 if !containments[face_idx].accepts(pt) {
                     log::debug!(
@@ -398,10 +459,16 @@ fn check_edge_face_pairs(
 
                 let existing = find_nearby_vertex(topo, arena, pt, tol);
 
-                let vertex_id = if let Some(vid) = existing {
-                    vid
+                let (vertex_id, t) = if let Some(vid) = existing {
+                    (vid, t)
+                } else if let Some((vid, t_new)) = snap {
+                    log::debug!(
+                        "EF: snapping tangential crossing of edge {eid:?} at t={t:.6} to \
+                         existing vertex {vid:?} (t={t_new:.6})",
+                    );
+                    (vid, t_new)
                 } else {
-                    topo.add_vertex(Vertex::new(pt, tol.linear))
+                    (topo.add_vertex(Vertex::new(pt, tol.linear)), t)
                 };
 
                 let pave = Pave::new(vertex_id, t);

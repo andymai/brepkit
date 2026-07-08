@@ -45,6 +45,60 @@ pub(super) fn find_nearby_pave_vertex(
     None
 }
 
+/// Widened variant of [`find_nearby_pave_vertex`] for tangential contacts.
+///
+/// A grazing crossing's solved position is only accurate to
+/// `sqrt(2 * r * residual)`, so the exact junction vertex can sit microns
+/// outside the linear tolerance. This scans every pave-block endpoint within
+/// `radius` and returns the nearest candidate that passes `accept` (the
+/// caller checks genuine curve/surface incidence, which is what makes the
+/// widened radius safe). If the accepted candidates span more than one
+/// distinct position (beyond `tol_linear` of each other), the contact is
+/// ambiguous — two different junctions inside the window — and `None` is
+/// returned so the caller keeps the solved point rather than merging
+/// distinct junctions. The spatial index is deliberately not used: its
+/// 3x3x3 cell stencil is exhaustive only for radius <= one tolerance cell.
+pub(super) fn find_nearby_pave_vertex_widened(
+    topo: &Topology,
+    arena: &GfaArena,
+    point: Point3,
+    radius: f64,
+    tol_linear: f64,
+    accept: impl Fn(Point3) -> bool,
+) -> Option<VertexId> {
+    let mut best: Option<(f64, Point3, VertexId)> = None;
+    let mut ambiguous = false;
+    for pbs in arena.edge_pave_blocks.values() {
+        for &pb_id in pbs {
+            if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                for vid in [pb.start.vertex, pb.end.vertex] {
+                    let resolved = arena.resolve_vertex(vid);
+                    if let Ok(v) = topo.vertex(resolved) {
+                        let d = (v.point() - point).length();
+                        if d <= radius && accept(v.point()) {
+                            match &best {
+                                Some((bd, bp, _)) => {
+                                    if (v.point() - *bp).length() > tol_linear {
+                                        ambiguous = true;
+                                    }
+                                    if d < *bd {
+                                        best = Some((d, v.point(), resolved));
+                                    }
+                                }
+                                None => best = Some((d, v.point(), resolved)),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if ambiguous {
+        return None;
+    }
+    best.map(|(_, _, v)| v)
+}
+
 /// Add a pave to the appropriate pave block of an edge.
 ///
 /// Finds the pave block whose parameter range contains the pave's

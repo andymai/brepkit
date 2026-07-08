@@ -329,9 +329,23 @@ impl Circle3D {
                 return out;
             }
             let disc = disc.max(0.0);
-            let sqrt_disc = disc.sqrt();
             let s_slack = tol / seg_len_sq.sqrt();
-            for s in [(-b - sqrt_disc) / a, (-b + sqrt_disc) / a] {
+            // Near-tangent collapse. The two roots straddle the foot of the
+            // circle center on the line by half_chord = sqrt(disc/a); the
+            // line's penetration into the circle is δ ≈ half_chord²/(2r).
+            // When δ ≤ tol the configuration is tangent AT TOLERANCE and the
+            // separate roots are conditioning noise (position error grows as
+            // sqrt(2rδ): a 1e-13 residual at r=4 already shifts each root a
+            // full micron, minting near-duplicate vertices next to an exact
+            // tangency vertex). Emit the well-conditioned double root — the
+            // foot itself — instead of the noise pair.
+            let sqrt_disc = disc.sqrt();
+            let roots: &[f64] = if disc <= 2.0 * self.radius * tol * a {
+                &[-b / a]
+            } else {
+                &[(-b - sqrt_disc) / a, (-b + sqrt_disc) / a]
+            };
+            for &s in roots {
                 if s >= -s_slack && s <= 1.0 + s_slack {
                     let s = s.clamp(0.0, 1.0);
                     let p = Point3::new(
