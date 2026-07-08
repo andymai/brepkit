@@ -1,0 +1,33 @@
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_8a8c446f1ed88d::t_2471b29a6cd810 167-169
+  s_8a8c446f1ed88d::t_c7cc0a124079f8 153-166,171-172,174-175,177-196,199-220
+  s_8a8c446f1ed88d::t_1761adf48e48d4 170,173,176,197-198
+  s_8a8c446f1ed88d::t_6f3de52417324a 151-152
+crates/algo/src/builder/face_splitter/mod.rs
+  s_8a8c446f1ed88d::t_c61d5c115ad1ee 240-244,247-248
+  s_8a8c446f1ed88d::t_b962666dd2be3a 35-36
+crates/algo/src/pave_filler/phase_ff.rs
+  s_8a8c446f1ed88d::t_515b90c3fca74a 759-771,775-777,781-784
+  s_8a8c446f1ed88d::t_8db1952d5ad0a2 1456,1466-1474
+  s_8a8c446f1ed88d::t_e52c84bc0707e4 1515,1524,1558,1596,1603,1607,1609
+  s_8a8c446f1ed88d::t_4980fe3b642202 1465,1475-1476
+  s_8a8c446f1ed88d::t_c7299d0e24e156 772-774,778-780,1506-1507
+  s_8a8c446f1ed88d::t_ac4fc5d9fa237d 1430-1455,1457-1464,1477-1504,1508-1510,1512-1513,1516-1523,1525-1538,1540-1557,1559-1595,1597-1602,1604-1606,1608,1610-1622
+  s_8a8c446f1ed88d::t_3f06d899e75a28 1505,1511,1514,1539
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "197da175d609078d0fd0e54c9bb0d492a84ae82b",
+  "prompts": {},
+  "sessions": {
+    "s_8a8c446f1ed88d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed01ede9-8360-4c92-93f3-dbd6ad5bd177",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
