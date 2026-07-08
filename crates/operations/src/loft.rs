@@ -609,11 +609,24 @@ fn try_loft_matching_curved_profiles(
     // about the axis. Bailing here sent every such loft to the faceting
     // polygon path even though its arcs were pristine. Mixed windings stay a
     // bail — that is degenerate input, not a convention difference.
+    // Compare as a cosine (unit normal vs unit axis) so the reliability gate
+    // is dimensionless — a raw Newell·axis dot is area-scaled and a machine-
+    // epsilon test on it would pass geometrically meaningless windings on
+    // near-degenerate profiles straight into the reversal below.
+    let axis_unit = axis * (1.0 / axis.length());
     let windings: Vec<f64> = profs
         .iter()
-        .map(|p| crate::winding::newell_normal(&junctions(p)).dot(axis))
+        .map(|p| {
+            let n = crate::winding::newell_normal(&junctions(p));
+            let len = n.length();
+            if len < tol.linear * tol.linear {
+                0.0
+            } else {
+                n.dot(axis_unit) / len
+            }
+        })
         .collect();
-    if windings.iter().any(|&w| w.abs() < f64::EPSILON) {
+    if windings.iter().any(|&w| w.abs() < 1e-6) {
         return Ok(None);
     }
     if windings.iter().all(|&w| w < 0.0) {
