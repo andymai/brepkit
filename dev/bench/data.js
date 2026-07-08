@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783467081712,
+  "lastUpdate": 1783476449048,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2645,6 +2645,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19248664,
             "range": "± 24338",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0a77a6346016a2b194d662c47b49b9354693cc06",
+          "message": "fix(algo): normalize inner-wire winding at the face splitter entrance (#1041)\n\n## Problem\n\nThe `2×6 halfSockets ±40°` compartment scenario — the last failing case\nof the compartment manifold family — exported a non-manifold STL. A\nfresh operand capture of the export chain isolated the root to an early\n**body × stacking-lip fuse**: it shipped `free=11` B-Rep edges (46\nboundary edges + 1 non-manifold edge in the export mesh) that propagated\nthrough the final socket-assembly fuse.\n\n## Root cause\n\nThe body's cavity cut emits its top-ledge **hole wire wound the SAME way\nas the outer wire** (non-standard). `integrate_holes_plane` weaves hole\npieces trusting their stored orientation, so where the lip's inner\nprofile crossed the hole's tilted-divider diagonal mid-span, the angular\nwire builder traced a **double-cover instead of a partition**: a\nspurious loop spanning the whole opening (kept — a membrane across the\nbin throat with every edge unpaired) plus the real throat-ledge region\nwound CW (hole-matched onto a face that same-domain dropping erased).\n\n## Fix\n\nNormalize inner-wire winding — flipped to oppose the outer wire in the\nprojected UV frame — where original inner wires enter `split_face_2d`.\nThis fixes the weave by construction.\n\nDetection-side alternatives (rerouting mis-woven faces to the even-odd\narrangement, triggered by residual CW holes / area balance / containment\ntests) were tried and rejected: every discriminant also caught the\n**load-bearing** whole-edge re-trace weaves (the shelled-cup d4 lip\nfuse, honeycomb caps) that must stay on the loops path.\n\n## Verification\n\n- New fixture `crates/io/tests/halfsockets_lipfuse_inmem.rs` (captured\ntool operands, fails pre-fix): fuse now watertight and analytic (`free\n11→0, bnd 46→0, nm 1→0`).\n- Tool scenario suite (kernel overlay): **compartment manifold 12/13 →\n13/13 — the family is closed.**\n- Honeycomb raw-residual pins hold exactly (pcut1 52, pcut2 38, pcut3\n0); shelled-wall notch cut, d-series lip fuses, gridfinity wasm suite\n(27/27), full workspace (2148) all green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nNormalize inner-wire winding at the face splitter entrance so inner\nloops always wind opposite the outer loop in UV. Adds robust outer sign\nsampling and a sliver guard, fixing the mis‑woven cavity opening that\nproduced free edges and a non‑manifold STL in `2×6 halfSockets ±40°`,\nclosing the compartment manifold family.\n\n- **Bug Fixes**\n- In `split_face_2d`, for planar faces flip inner loops that match the\nouter’s winding (reverse edges, swap endpoints, toggle `forward`);\ncompute the outer sign from sampled pcurves and skip sliver holes where\n|area| ≤ perimeter×`tol.linear`.\n- Add regression test `crates/io/tests/halfsockets_lipfuse_inmem.rs`\nwith captured operands `hslipfuse_body.bin` and `hslipfuse_lip.bin`;\nresult is watertight and analytic (free 11→0, mesh boundary 46→0, nm\n1→0).\n  - Update roadmap entry to mark compartments at 13/13 passing.\n\n<sup>Written for commit 698a6558f0dbc8d34633bc94eb544bca85093391.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1041?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T02:05:13Z",
+          "tree_id": "7b65a040117babaa92c9c4d83161dfd1c09661d3",
+          "url": "https://github.com/andymai/brepkit/commit/0a77a6346016a2b194d662c47b49b9354693cc06"
+        },
+        "date": 1783476448052,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 744733,
+            "range": "± 1754",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 833359,
+            "range": "± 1143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11801,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 630150,
+            "range": "± 867",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19160848,
+            "range": "± 23864",
             "unit": "ns/iter"
           }
         ]
