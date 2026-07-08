@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.10](https://github.com/andymai/brepkit/compare/v2.124.9...v2.124.10) (2026-07-08)
+
+
+### Bug Fixes
+
+* **algo:** orientation-safe interior points for plane sub-faces ([#1049](https://github.com/andymai/brepkit/issues/1049)) ([90d0c6a](https://github.com/andymai/brepkit/commit/90d0c6a8beac14e8b5a2e3c6c15e2b938bfa2c01))
+
 ## [2.124.9](https://github.com/andymai/brepkit/compare/v2.124.8...v2.124.9) (2026-07-08)
 
 
