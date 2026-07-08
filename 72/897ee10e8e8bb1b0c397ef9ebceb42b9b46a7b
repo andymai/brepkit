@@ -1,0 +1,62 @@
+crates/io/tests/zz_pcut1_probe.rs
+  s_d4791f36e0fe3e::t_42e71c63ce0783 4-9
+  s_d4791f36e0fe3e::t_a177c9a9cae0d6 128-133,150-158,174-175
+  s_d4791f36e0fe3e::t_822c08ede7be15 10,176
+crates/topology/src/vertex.rs
+  s_d4791f36e0fe3e::t_75d723db633119 25
+crates/algo/src/lib.rs
+  s_d4791f36e0fe3e::t_c8a670043ca109 20-22
+crates/wasm/src/bindings/probe.rs
+  s_d4791f36e0fe3e::t_02a5f5e32789f4 14-18
+crates/io/examples/probe_z5rim.rs
+  s_d4791f36e0fe3e::t_83ee05b493a693 41-44
+  s_d4791f36e0fe3e::t_b338567884576f 1,8-40,45-50,55-100
+  s_d4791f36e0fe3e::t_5d52c79949dc52 51-54
+  s_d4791f36e0fe3e::t_42e71c63ce0783 2-7
+crates/algo/src/builder/face_splitter/mod.rs
+  s_d4791f36e0fe3e::t_b1485f79c13596 1745-1755,1772-1780,1789,1793-1795,1797-1798,1800-1801,1811-1812,1815-1818,1821-1843,1845,1847-1848,1852-1862,1866,1870
+  s_d4791f36e0fe3e::t_dc89642fde8abd 1756-1759,1761-1771
+  s_d4791f36e0fe3e::t_6432aca5cc08df 1781-1788,1790-1792,1796,1799,1802-1810,1813-1814,1819-1820,1846
+  s_d4791f36e0fe3e::t_a177c9a9cae0d6 2721-2724,2789-2792
+  s_d4791f36e0fe3e::t_4d65b6ebf04a3f 1760
+crates/algo/src/classifier/mod.rs
+  s_d4791f36e0fe3e::t_abf2bba8dde128 68-79,82-88
+  s_d4791f36e0fe3e::t_cce75d457228cd 89
+crates/algo/src/builder/fill_images_faces.rs
+  s_d4791f36e0fe3e::t_a177c9a9cae0d6 1364-1369,1626-1631,1850-1851,1858-1863,1866-1871
+crates/io/examples/replay_captures.rs
+  s_d4791f36e0fe3e::t_02a5f5e32789f4 254
+  s_d4791f36e0fe3e::t_a177c9a9cae0d6 9-11,139,149,181-187,193-196,199-201,207-212,251-252,263-265,286-287,301-303,305-307,321-323,342-344,360-362,376-383
+  s_d4791f36e0fe3e::t_42e71c63ce0783 12-15,233
+crates/io/examples/dump_verts.rs
+  s_d4791f36e0fe3e::t_42e71c63ce0783 4-9
+crates/io/examples/dump_z5.rs
+  s_d4791f36e0fe3e::t_42e71c63ce0783 2-7
+  s_d4791f36e0fe3e::t_a177c9a9cae0d6 15-16,23-27,39-41,44-46
+crates/algo/src/builder/builder_solid.rs
+  s_d4791f36e0fe3e::t_a177c9a9cae0d6 238-249,272-273,277-285,296-301,1278-1282
+  s_d4791f36e0fe3e::t_fc73540e76be95 228
+crates/algo/src/builder/mod.rs
+  s_d4791f36e0fe3e::t_a177c9a9cae0d6 200-201,203,299,486-488,490-492
+  s_d4791f36e0fe3e::t_c515c7095e7383 295-298,300-302
+  s_d4791f36e0fe3e::t_4d65b6ebf04a3f 459-462,466,471
+crates/operations/examples/loft_probe.rs
+  s_d4791f36e0fe3e::t_a177c9a9cae0d6 25-28,46,60-64,75-76,98-113
+  s_d4791f36e0fe3e::t_de239065db874c 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "72897ee10e8e8bb1b0c397ef9ebceb42b9b46a7b",
+  "prompts": {},
+  "sessions": {
+    "s_d4791f36e0fe3e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05c537ea-ba5b-49ce-8896-e1dc92807963",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
