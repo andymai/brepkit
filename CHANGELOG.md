@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.12](https://github.com/andymai/brepkit/compare/v2.124.11...v2.124.12) (2026-07-08)
+
+
+### Bug Fixes
+
+* **algo:** close dovetail corner-clip intersect chord/arc lens ([#1054](https://github.com/andymai/brepkit/issues/1054)) ([bb9b1c9](https://github.com/andymai/brepkit/commit/bb9b1c9248ea701c6d60895dac914810b294702c))
+
 ## [2.124.11](https://github.com/andymai/brepkit/compare/v2.124.10...v2.124.11) (2026-07-08)
 
 
