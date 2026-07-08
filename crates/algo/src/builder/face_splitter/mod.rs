@@ -3181,6 +3181,14 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     ) {
         let (u_period, v_period) = super::pcurve_compute::surface_periods(&sub_face.surface);
         sample_wire_loop_uv_periodic(&sub_face.outer_wire, u_period, v_period)
+    } else if let (FaceSurface::Plane { .. }, Some(f)) = (&sub_face.surface, frame) {
+        // Plane faces with a frame: sample the 3D curves, never the pcurves.
+        // A wire can mix pcurve orientation conventions (reversed boundary
+        // arcs vs section arcs), and a convention-blind pcurve sampler folds
+        // thin regions (a socket-outline corner crescent) into self-crossing
+        // polygons whose "interior" point lands in the neighboring region —
+        // misclassifying the sub-face and dropping it from the result.
+        sampling::sample_wire_loop_uv_via_frame(&sub_face.outer_wire, f)
     } else {
         sample_wire_loop_uv(&sub_face.outer_wire)
     };
