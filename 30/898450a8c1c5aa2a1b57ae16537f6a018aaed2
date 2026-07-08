@@ -1,0 +1,29 @@
+crates/io/tests/dovetail_interior_identity_intersect_inmem.rs
+  s_8a8c446f1ed88d::t_0417a0f6969f38 81-82
+  s_8a8c446f1ed88d::t_5a518c0d0cdcc0 1-80,83-120
+crates/io/tests/data/dovetail_interior_round.bin
+  s_8a8c446f1ed88d::t_d51f8adbcca146 1
+crates/io/tests/data/dovetail_interior_slab.bin
+  s_8a8c446f1ed88d::t_d51f8adbcca146 1
+crates/operations/src/boolean/mod.rs
+  s_8a8c446f1ed88d::t_0417a0f6969f38 1914-1938
+  s_8a8c446f1ed88d::t_b32d6ca8cb77a2 797-813
+  s_8a8c446f1ed88d::t_7cfb5da21e7045 60-64,71
+  s_8a8c446f1ed88d::t_b8546866f9e2c3 1827-1913,1939-1984
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "30898450a8c1c5aa2a1b57ae16537f6a018aaed2",
+  "prompts": {},
+  "sessions": {
+    "s_8a8c446f1ed88d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed01ede9-8360-4c92-93f3-dbd6ad5bd177",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
