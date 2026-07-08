@@ -1742,21 +1742,116 @@ fn arrangement_regions_from_inputs(
         return (!result.is_empty()).then_some(result);
     }
 
+    // A disconnected component of the arrangement — a closed section loop
+    // touching neither the face boundary nor any other section — is traced
+    // TWICE, once per orientation, because both directed cycles bound a
+    // region of the trace graph. Flat emission would then duplicate the
+    // loop's region AND leave the region that geometrically contains the
+    // loop without a hole for it, so the container overlaps the duplicates
+    // (the halfSockets socket fuse: four interior cell outlines emitted as
+    // twin discs under a hole-less web face, collapsing the whole z=5
+    // interface into one same-domain group that dropped every piece).
+    // Resolve each twin pair: emit one cycle as the solid region and attach
+    // the reversed twin as an inner wire of its direct container.
+    let face_key = |f: &[usize], twin: bool| -> Vec<usize> {
+        let mut k: Vec<usize> = f.iter().map(|&h| if twin { h ^ 1 } else { h }).collect();
+        k.sort_unstable();
+        k
+    };
+    let mut by_key: std::collections::HashMap<Vec<usize>, usize> = std::collections::HashMap::new();
+    for (i, f) in interior.iter().enumerate() {
+        by_key.insert(face_key(f, false), i);
+    }
+    // Pass 1: collect twin pairs — two traced faces whose half-edge sets are
+    // exact twins (h ↔ h^1) with opposite winding. The lower-indexed member
+    // stays a candidate solid region; the other becomes the hole cycle.
+    // Whether the trace winds solid regions CCW or CW depends on the face's
+    // boundary winding in the frame (a cavity wall winds CW), so no sign is
+    // assumed — emission normalizes windings anyway.
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    let mut is_hole_cycle = vec![false; interior.len()];
+    for i in 0..interior.len() {
+        if is_hole_cycle[i] {
+            continue;
+        }
+        let Some(&j) = by_key.get(&face_key(interior[i], true)) else {
+            continue;
+        };
+        if j <= i || is_hole_cycle[j] {
+            continue;
+        }
+        if (face_area(interior[i]) > 0.0) == (face_area(interior[j]) > 0.0) {
+            continue;
+        }
+        is_hole_cycle[j] = true;
+        pairs.push((i, j));
+    }
+    // Pass 2: attach each pair's hole cycle to its direct container — the
+    // smallest-|area| non-hole face whose polygon holds the loop's interior
+    // sample. A kept twin (a nested loop's disc) is a legitimate container.
+    let mut hole_twin: Vec<Option<usize>> = vec![None; interior.len()];
+    for &(keep, hole) in &pairs {
+        let probe = sample_interior_point(&face_poly(interior[keep]));
+        let parent = (0..interior.len())
+            .filter(|&k| {
+                k != keep
+                    && !is_hole_cycle[k]
+                    && super::classify_2d::point_in_polygon_2d(probe, &face_poly(interior[k]))
+            })
+            .min_by(|&a, &b| {
+                face_area(interior[a])
+                    .abs()
+                    .partial_cmp(&face_area(interior[b]).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        if let Some(parent) = parent {
+            hole_twin[hole] = Some(parent);
+        }
+    }
+
+    let mut inner_wires_of: Vec<Vec<Vec<OrientedPCurveEdge>>> = vec![Vec::new(); interior.len()];
+    for (i, parent) in hole_twin.iter().enumerate() {
+        let Some(parent) = *parent else { continue };
+        // Inner wires must wind opposite the outer (CW); build_ccw gives
+        // CCW, so reverse.
+        if let Some(mut w) = build_ccw_wire(interior[i]) {
+            w.reverse();
+            for e in &mut w {
+                std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+                std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+                e.forward = !e.forward;
+            }
+            inner_wires_of[parent].push(w);
+        }
+    }
+
     let mut result = Vec::new();
-    for face in interior {
+    for (i, face) in interior.iter().enumerate() {
+        if is_hole_cycle[i] {
+            continue;
+        }
         let Some(wire) = build_ccw_wire(face) else {
             continue;
+        };
+        let inner = std::mem::take(&mut inner_wires_of[i]);
+        // With holes attached, the generic interior sampler can land inside
+        // one; pin a seed that avoids every hole. Hole-less regions keep
+        // None: a region can be non-convex (an L), so the centroid is
+        // unsafe, and `interior_point_3d` derives a robust interior sample.
+        let precomputed_interior = if inner.is_empty() {
+            None
+        } else {
+            let seed = find_point_outside_holes(&face_poly(face), &inner, Some(frame));
+            Some(frame.evaluate(seed.x(), seed.y()))
         };
         result.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: wire,
-            inner_wires: Vec::new(),
+            inner_wires: inner,
             reversed,
             parent: face_id,
             rank,
-            // Leave None: a region can be non-convex (an L), so the centroid
-            // is unsafe. `interior_point_3d` derives a robust interior sample.
-            precomputed_interior: None,
+            precomputed_interior,
         });
     }
     if result.is_empty() {
