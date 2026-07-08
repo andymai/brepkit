@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783493894951,
+  "lastUpdate": 1783494229794,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2915,6 +2915,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19519548,
             "range": "± 512546",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "06276a7bf9573a63ad413ed7580716a267a4cd7b",
+          "message": "chore(main): release 2.124.9 (#1046)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.9](https://github.com/andymai/brepkit/compare/v2.124.8...v2.124.9)\n(2026-07-08)\n\n\n### Bug Fixes\n\n* **operations:** curve-preserving loft for sketch arcs and downward\nstacks ([#1045](https://github.com/andymai/brepkit/issues/1045))\n([c8d644b](https://github.com/andymai/brepkit/commit/c8d644b3137bf1c821b510f4719008c2c5eb77ec))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release 2.124.9 fixes loft behavior in operations to preserve\ncurve shape for sketch arcs and downward stacks, improving geometry\naccuracy and continuity. Bumps `brepkit-wasm` to 2.124.9.\n\n<sup>Written for commit c4773514ccf3daceb3eac092a339c41407da6919.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1046?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-08T07:01:18Z",
+          "tree_id": "78874958fd652f4f66e79014beeb8e2c7b2b9c88",
+          "url": "https://github.com/andymai/brepkit/commit/06276a7bf9573a63ad413ed7580716a267a4cd7b"
+        },
+        "date": 1783494228797,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 763981,
+            "range": "± 1832",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 853794,
+            "range": "± 965",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12032,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 641962,
+            "range": "± 1894",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19472074,
+            "range": "± 69099",
             "unit": "ns/iter"
           }
         ]
