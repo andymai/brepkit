@@ -1,0 +1,35 @@
+crates/algo/src/pave_filler/phase_ff_coplanar.rs
+  s_414bac4295e810::t_ca51d3e0d12a0e 247-254,264,266-267,277,279-280
+  s_414bac4295e810::t_7d3bb1e22c1c99 268,281
+  s_414bac4295e810::t_2f4f459c9c727f 294,753
+  s_414bac4295e810::t_eec88f0016b527 255-263,265,278
+  s_414bac4295e810::t_b960f8c5467d00 321-327,333-335,345-366,372-378,385,415-425
+  s_414bac4295e810::t_01412d8cc26a35 439,445-453
+crates/io/examples/pair_probe.rs
+  s_414bac4295e810::t_beeb3bc5077309 1-69
+crates/operations/src/boolean/tests.rs
+  s_414bac4295e810::t_a0c19cc987c545 3522,3525,3529-3530
+  s_414bac4295e810::t_a1c122323ad393 3481-3482,3493
+  s_414bac4295e810::t_5d66392f15800d 3470-3480,3483-3492,3494-3521,3523,3528,3531-3539
+  s_414bac4295e810::t_4fb0f285aa84bf 3524,3526-3527
+  s_414bac4295e810::t_47cd70a2d087f9 3447-3457
+crates/io/examples/intwidth_probe.rs
+  s_414bac4295e810::t_9411cfaa1a996a 1-102,134-149
+  s_414bac4295e810::t_67ef23a6bb319b 103-133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "786aac9dea0a1dbcc97420685f6d93c7b9495e13",
+  "prompts": {},
+  "sessions": {
+    "s_414bac4295e810": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63fe3ad5-bc55-4f1b-8ea9-869254147d73",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
