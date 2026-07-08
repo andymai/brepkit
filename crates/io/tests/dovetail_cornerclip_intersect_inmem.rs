@@ -1,6 +1,6 @@
-//! Faithful (currently failing) guard for the baseplate dovetail tile-join
-//! perf + non-manifold defect — root-caused to the corner-rounding INTERSECT,
-//! NOT the connector fuse.
+//! Faithful guard for the baseplate dovetail tile-join perf + non-manifold
+//! defect — root-caused to the corner-rounding INTERSECT, NOT the connector
+//! fuse. CLOSED (see the last doc paragraph); both tests guard the fix.
 //!
 //! The gridfinity tool's `baseplateGenerator.scenario.dovetail.test.ts`
 //! "preferIdenticalPieces stays watertight on a corner tile with 2 join edges"
@@ -45,8 +45,17 @@
 //! walls + 2 corner cylinders). Replaying `Intersect(slab, round)` through the
 //! operations boolean reproduces the mesh fallback natively (no tool needed).
 //!
-//! Marked `#[ignore]` until the coincident-wall + analytic-corner intersect is
-//! fixed: the assertions below encode the watertight+analytic+compact target.
+//! CLOSED: the final two stacked roots were (1) the FF-coplanar phase emitting
+//! straight CHORD sections for the caps' rounded-corner boundary arcs whose
+//! true arcs already existed as sections (a co-endpoint chord/arc lens the
+//! wire weave cannot reconcile — `matching_arc_section_exists` now suppresses
+//! the chord), and (2) `find_splits_on_circle` normalizing split parameters
+//! against the seam-sensitive `domain_with_endpoints` span, which for arcs
+//! whose endpoint angles straddle the circle frame's atan2 seam is the LONG
+//! complement — a point on the circle 45 deg OUTSIDE the arc then split the
+//! arc's interior at a phantom vertex, breaking partition alignment between
+//! the coincident caps (now normalized with the same shorter-arc convention
+//! as `evaluate_edge_at_t`). Both tests below guard the closed state.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -101,8 +110,6 @@ fn edge_health(topo: &Topology, solid: SolidId) -> (usize, usize) {
 }
 
 #[test]
-#[ignore = "open: coincident-wall + analytic-corner intersect drops the boundary; \
-            tool falls back to a 6116-facet mesh slab → slow non-manifold dovetail fuse"]
 fn dovetail_corner_clip_intersect_is_watertight() {
     let mut topo = Topology::new();
     let slab = load("dovetail_cornerclip_slab.bin", &mut topo);
@@ -130,25 +137,26 @@ fn dovetail_corner_clip_intersect_is_watertight() {
         "corner-clip intersect must be watertight (no free edges); got {} faces",
         faces.len()
     );
-    // A clean analytic result is compact: 4 corner cylinders + ~4 wall pieces +
-    // top/bottom caps. A mesh fallback explodes to thousands of planar facets.
+    // A clean analytic result is compact: the rounded corner's two barrel
+    // pieces + wall pieces + pocket walls + top/bottom caps. A mesh fallback
+    // explodes to thousands of planar facets.
     assert!(
         faces.len() < 60,
         "expected a compact analytic result, got {} faces (mesh fallback?)",
         faces.len()
     );
+    // The corner-tile fixture has ONE rounded corner, pre-split at its 45 deg
+    // diagonal into two cylinder barrel faces — both must survive analytically.
     assert!(
-        curved >= 4,
-        "expected the 4 rounded-corner cylinders to survive analytically; \
-         got {curved} curved faces (mesh fallback tessellates them away)"
+        curved >= 2,
+        "expected the rounded corner's 2 cylinder barrel faces to survive \
+         analytically; got {curved} curved faces (mesh fallback tessellates them away)"
     );
 }
 
-/// Layers 1+2 + Stage 2 regression guard (raw GFA, no mesh fallback).
+/// Raw-GFA regression guard (no operations-layer gates, no mesh fallback).
 ///
-/// The full operations `boolean()` above still falls back to a mesh because the
-/// raw GFA result is not yet fully watertight (a residual free=1 splitter
-/// defect). But three independently-correct fixes LAND here:
+/// Five independently-correct fixes land here:
 ///
 ///   Layer 1: `algo::classifier::analytic` rejects an invalid PIPE classifier
 ///            for a fillet-corner cylinder/cone (so the slab's sub-faces
@@ -157,23 +165,21 @@ fn dovetail_corner_clip_intersect_is_watertight() {
 ///   Layer 2: `operations::boolean::flatten_planar_nurbs_faces` aligns the
 ///            flattened plane normal to the NURBS du×dv normal (so a coincident
 ///            wall's same-domain pair comes out same-orientation instead of
-///            being discarded), and
+///            being discarded),
 ///   Stage 2: `algo::classifier::classify_coincident_coplanar` drops a planar
 ///            sub-face that is a wholly-exterior wedge coincident with an
 ///            opposing outer face (the clipped-away corner orphan), via 2D
 ///            containment + a depth probe — instead of the grazing ray-cast
-///            that wrongly keeps it.
+///            that wrongly keeps it,
+///   and the final pair (see the module doc): the FF-coplanar chord/arc lens
+///   suppression + the shorter-arc split-parameter convention in
+///   `find_splits_on_circle`.
 ///
 /// Together they take the raw GFA intersect from an open shell (free≈74, ~9
-/// faces) to free=1 with EVERY pocket wall present and zero over-shared edges.
-///
-/// The residual free=1 (one chord-vs-arc leg on the z=-5 cap at the rounded
-/// corner) is the co-circular-arc section-generation defect (the cap adopts a
-/// straight chord where the corner cylinder uses the arc) — NOT a
-/// classification problem. Closing it un-ignores
-/// `dovetail_corner_clip_intersect_is_watertight` above.
+/// faces) to fully watertight with EVERY pocket wall present and zero
+/// over-shared edges.
 #[test]
-fn cornerclip_intersect_raw_gfa_reaches_free_le_1() {
+fn cornerclip_intersect_raw_gfa_stays_watertight() {
     use brepkit_algo::bop::BooleanOp as RawOp;
     use brepkit_algo::gfa;
     use brepkit_operations::boolean::flatten_planar_nurbs_faces_for_tests;
@@ -201,15 +207,16 @@ fn cornerclip_intersect_raw_gfa_reaches_free_le_1() {
     );
     // Layers 1+2: open shell (free≈74) → free=4 (two corner-triangle orphans on
     // each of the z=0 / z=-5 caps). Stage 2 (coincident-coplanar classification)
-    // drops both orphans by 2D containment → free=1. The residual 1 is a chord-
-    // vs-arc section-generation defect on the bottom cap (the
-    // co-circular-arc-split family), NOT a classification problem — do not tighten
-    // to 0 here.
-    assert!(
-        free <= 1,
-        "Layers 1+2 + Stage 2 should bring the raw GFA intersect to free<=1; got free={free} \
-         over {} faces (regression — a pipe-classifier, plane-sign, or coincident-cap \
-         classification bug returned)",
+    // drops both orphans by 2D containment → free=1. The final residual (the
+    // chord/arc lens the coplanar phase emitted for the corner boundary arcs +
+    // the phantom seam-straddle arc breaks in `find_splits_on_circle`) is fixed,
+    // so the raw intersect is fully watertight.
+    assert_eq!(
+        free,
+        0,
+        "raw GFA intersect must be watertight; got free={free} over {} faces \
+         (regression — a pipe-classifier, plane-sign, coincident-cap classification, \
+         coplanar chord/arc lens, or seam-straddle arc-split bug returned)",
         faces.len()
     );
 

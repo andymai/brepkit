@@ -244,7 +244,20 @@ fn process_coplanar_pair(
     // cavity wall) reaches the wall edge and the wall partitions; a fully-inside
     // edge is kept whole. Skip true shared-boundary edges (both endpoints on the
     // same target edge) and edges already sectioned by the regular FF phase.
-    for &(_, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_b {
+    //
+    // A CIRCLE boundary edge projects here as its straight CHORD — wrong
+    // geometry whenever the sagitta exceeds tolerance. When the true arc is
+    // already present as a section (the barrel face sharing that arc meets
+    // the coplanar partner plane in exactly this circle, so the regular FF
+    // phase emits it split at the same operand vertices), emitting the chord
+    // too would hand the splitter a co-endpoint chord/arc lens that the
+    // endpoint-keyed edge merge cannot reconcile — the weave then routes the
+    // face boundary along the chord and orphans the true arc (the rounded-
+    // corner cap defect). Skip the chord when its exact arc section exists.
+    for &(b_eid, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_b {
+        if matching_arc_section_exists(topo, arena, face_a, face_b, b_eid, tol) {
+            continue;
+        }
         if !is_shared_boundary_edge(p2d_start, p2d_end, &edges_a, tol.linear)
             && let Some((c_start, c_end)) =
                 clip_section_to_polygon(p2d_start, p2d_end, p3d_start, p3d_end, &poly_a, tol.linear)
@@ -254,7 +267,10 @@ fn process_coplanar_pair(
         }
     }
 
-    for &(_, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_a {
+    for &(a_eid, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_a {
+        if matching_arc_section_exists(topo, arena, face_a, face_b, a_eid, tol) {
+            continue;
+        }
         if !is_shared_boundary_edge(p2d_start, p2d_end, &edges_b, tol.linear)
             && let Some((c_start, c_end)) =
                 clip_section_to_polygon(p2d_start, p2d_end, p3d_start, p3d_end, &poly_b, tol.linear)
@@ -355,6 +371,53 @@ fn face_boundary_edges_2d(
     }
 
     Ok(edges)
+}
+
+/// True when `eid` is a Circle boundary edge whose exact arc already exists as
+/// a section curve involving either face of the coplanar pair: same circle
+/// (center + radius within tolerance) and same endpoints (either orientation).
+///
+/// Such an edge's chord projection must NOT become a section — the chord and
+/// the true arc share both endpoints, and that lens breaks the downstream
+/// wire weave (see the rounded-corner cap comment at the call sites). Line
+/// boundary edges always return `false`; a co-endpoint line/arc pair can be a
+/// genuine lens with material between the two (the in-tube torus-box case) and
+/// must keep both curves.
+fn matching_arc_section_exists(
+    topo: &Topology,
+    arena: &GfaArena,
+    face_a: FaceId,
+    face_b: FaceId,
+    eid: brepkit_topology::edge::EdgeId,
+    tol: Tolerance,
+) -> bool {
+    let Ok(edge) = topo.edge(eid) else {
+        return false;
+    };
+    let EdgeCurve::Circle(circle) = edge.curve() else {
+        return false;
+    };
+    let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+        return false;
+    };
+    let (p_start, p_end) = (sv.point(), ev.point());
+    let close = |a: Point3, b: Point3| (a - b).length() < tol.linear * 10.0;
+    arena.curves.iter().any(|c| {
+        let EdgeCurve::Circle(existing) = &c.curve else {
+            return false;
+        };
+        let shares_face =
+            c.face_a == face_a || c.face_a == face_b || c.face_b == face_a || c.face_b == face_b;
+        if !shares_face
+            || (existing.center() - circle.center()).length() > tol.linear * 10.0
+            || (existing.radius() - circle.radius()).abs() > tol.linear * 10.0
+        {
+            return false;
+        }
+        let s = existing.evaluate(c.t_range.0);
+        let e = existing.evaluate(c.t_range.1);
+        (close(s, p_start) && close(e, p_end)) || (close(s, p_end) && close(e, p_start))
+    })
 }
 
 /// True when a boundary edge is a shared boundary segment of the target face:

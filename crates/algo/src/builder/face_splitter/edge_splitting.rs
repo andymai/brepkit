@@ -5,7 +5,7 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceSurface;
 
 use super::super::pcurve_compute::{
-    compute_pcurve_on_surface, evaluate_edge_at_t, project_point_on_surface,
+    compute_pcurve_on_surface, evaluate_edge_at_t, project_point_on_surface, shorter_arc_delta,
 };
 use super::super::plane_frame::PlaneFrame;
 use super::super::split_types::OrientedPCurveEdge;
@@ -140,6 +140,61 @@ pub(super) fn find_splits_on_circle(
             continue;
         }
         let t_norm = normalize_angle_in_span(angle, t0, span);
+        if t_norm <= tol || t_norm >= 1.0 - tol {
+            continue;
+        }
+        splits.push((t_norm, sp));
+    }
+    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    splits
+}
+
+/// Find split parameters on an open arc SECTION edge, using the SHORTER-arc
+/// convention that `evaluate_edge_at_t` uses.
+///
+/// Section arcs are ≤ π by construction (the FF closed-circle emitter splits
+/// longer spans), and `split_face_2d` pushes each section as a forward/reverse
+/// PAIR. `domain_with_endpoints` assumes CCW traversal, so for the REVERSE twin
+/// it returns the LONG complement span (e.g. 315 deg for a 45 deg corner arc)
+/// — under which a point on the circle but OUTSIDE the arc normalizes to an
+/// interior `t`, and the split evaluator (shorter-arc) then mints a phantom
+/// vertex on the true arc's interior, breaking partition alignment between
+/// coincident caps. The shorter-arc parameterization here matches the
+/// evaluator for both twins. Boundary-edge splitting keeps the CCW-domain
+/// convention (`find_splits_on_circle`) — boundary arcs may genuinely exceed π.
+pub(super) fn find_splits_on_section_arc(
+    edge: &OrientedPCurveEdge,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    let project_eval = |p: Point3| -> Option<(f64, Point3)> {
+        match &edge.curve_3d {
+            EdgeCurve::Circle(c) => Some((c.project(p), c.evaluate(c.project(p)))),
+            EdgeCurve::Ellipse(e) => Some((e.project(p), e.evaluate(e.project(p)))),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+        }
+    };
+    let Some((a0, _)) = project_eval(edge.start_3d) else {
+        return Vec::new();
+    };
+    let Some((a1, _)) = project_eval(edge.end_3d) else {
+        return Vec::new();
+    };
+    let delta = shorter_arc_delta(a1 - a0);
+    if delta.abs() < 1e-14 {
+        return Vec::new();
+    }
+    let mut splits = Vec::new();
+    for &sp in split_pts_3d {
+        crate::perf::bump_face_split_probe();
+        let Some((angle, closest)) = project_eval(sp) else {
+            continue;
+        };
+        if (sp - closest).length() > tol {
+            continue;
+        }
+        let t_norm = shorter_arc_delta(angle - a0) / delta;
         if t_norm <= tol || t_norm >= 1.0 - tol {
             continue;
         }

@@ -32,8 +32,7 @@ use conversion::{
     uv_endpoints_from_pcurve,
 };
 use edge_splitting::{
-    find_splits_on_circle, find_splits_on_ellipse, find_splits_on_line,
-    split_boundary_edges_at_3d_points,
+    find_splits_on_line, find_splits_on_section_arc, split_boundary_edges_at_3d_points,
 };
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic};
 use special_cases::{
@@ -227,8 +226,14 @@ fn split_sections_at_t_junctions(
             // corners), so scan the full endpoint set for them; the
             // O(sections²) pressure comes from the many Line sections, which the
             // grid prunes. `find_splits_on_*` exclude the edge's own endpoints.
-            EdgeCurve::Circle(circle) => find_splits_on_circle(circle, &edge, &endpoints, tol),
-            EdgeCurve::Ellipse(ellipse) => find_splits_on_ellipse(ellipse, &edge, &endpoints, tol),
+            // Sections use the shorter-arc parameterization: each is pushed as
+            // a forward/reverse PAIR, and the CCW-domain convention returns the
+            // long complement span for the reverse twin (phantom interior
+            // splits from points outside the arc — see
+            // `find_splits_on_section_arc`).
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                find_splits_on_section_arc(&edge, &endpoints, tol)
+            }
             // Only endpoints near a line section's bounding box can land on it;
             // the grid query returns exactly that subset, preserving the former
             // full scan's result. A NURBS section (rare here) has no specialized
