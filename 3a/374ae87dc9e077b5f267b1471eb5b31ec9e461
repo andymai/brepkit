@@ -1,0 +1,20 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_d4791f36e0fe3e::t_4584b262de7032 1821-1830
+  s_d4791f36e0fe3e::t_e52d78411f1230 1790-1796,1799-1800,1803-1811
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3a374ae87dc9e077b5f267b1471eb5b31ec9e461",
+  "prompts": {},
+  "sessions": {
+    "s_d4791f36e0fe3e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05c537ea-ba5b-49ce-8896-e1dc92807963",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
