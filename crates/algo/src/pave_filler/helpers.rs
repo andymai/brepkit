@@ -45,6 +45,41 @@ pub(super) fn find_nearby_pave_vertex(
     None
 }
 
+/// Widened variant of [`find_nearby_pave_vertex`] for tangential contacts.
+///
+/// A grazing crossing's solved position is only accurate to
+/// `sqrt(2 * r * residual)`, so the exact junction vertex can sit microns
+/// outside the linear tolerance. This scans every pave-block endpoint within
+/// `radius` and returns the nearest candidate that passes `accept` (the
+/// caller checks genuine curve/surface incidence, which is what makes the
+/// widened radius safe). The spatial index is deliberately not used: its
+/// 3x3x3 cell stencil is exhaustive only for radius <= one tolerance cell.
+pub(super) fn find_nearby_pave_vertex_widened(
+    topo: &Topology,
+    arena: &GfaArena,
+    point: Point3,
+    radius: f64,
+    accept: impl Fn(Point3) -> bool,
+) -> Option<VertexId> {
+    let mut best: Option<(f64, VertexId)> = None;
+    for pbs in arena.edge_pave_blocks.values() {
+        for &pb_id in pbs {
+            if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                for vid in [pb.start.vertex, pb.end.vertex] {
+                    let resolved = arena.resolve_vertex(vid);
+                    if let Ok(v) = topo.vertex(resolved) {
+                        let d = (v.point() - point).length();
+                        if d <= radius && best.is_none_or(|(bd, _)| d < bd) && accept(v.point()) {
+                            best = Some((d, resolved));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(_, v)| v)
+}
+
 /// Add a pave to the appropriate pave block of an edge.
 ///
 /// Finds the pave block whose parameter range contains the pave's
