@@ -1,0 +1,27 @@
+crates/io/tests/data/hslipfuse_body.bin
+  s_9c5a4131c73f04::t_db02899a577604 1
+crates/io/tests/halfsockets_lipfuse_inmem.rs
+  s_9c5a4131c73f04::t_b880fda278c31e 1-120
+crates/io/tests/data/hslipfuse_lip.bin
+  s_9c5a4131c73f04::t_db02899a577604 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_9c5a4131c73f04::t_769344101015d6 1852-1883
+.claude/skills/roadmap/SKILL.md
+  s_9c5a4131c73f04::t_5670e158acee79 126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e44eac64881004a3300522b9a6b5fca33075f042",
+  "prompts": {},
+  "sessions": {
+    "s_9c5a4131c73f04": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d31a0f97-8217-40a7-b569-4944dc74d3a6",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
