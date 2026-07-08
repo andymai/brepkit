@@ -1787,16 +1787,28 @@ fn arrangement_regions_from_inputs(
         pairs.push((i, j));
     }
     // Pass 2: attach each pair's hole cycle to its direct container — the
-    // smallest-|area| non-hole face whose polygon holds the loop's interior
-    // sample. A kept twin (a nested loop's disc) is a legitimate container.
+    // smallest-|area| non-hole face that contains the whole loop. As in the
+    // even-odd nesting pass, containment is the asymmetric all-vertices +
+    // strictly-larger-area test: a single interior probe would tie for
+    // nested loops (the outer loop's probe can land inside the inner loop's
+    // kept disc, parenting the hole to the wrong face) and rejects
+    // boundary-touching containers without a tolerance band. A kept twin (a
+    // nested loop's disc) is a legitimate container.
     let mut hole_twin: Vec<Option<usize>> = vec![None; interior.len()];
     for &(keep, hole) in &pairs {
-        let probe = sample_interior_point(&face_poly(interior[keep]));
+        let loop_poly = face_poly(interior[keep]);
+        let loop_area = face_area(interior[keep]).abs();
         let parent = (0..interior.len())
             .filter(|&k| {
-                k != keep
-                    && !is_hole_cycle[k]
-                    && super::classify_2d::point_in_polygon_2d(probe, &face_poly(interior[k]))
+                if k == keep || is_hole_cycle[k] || face_area(interior[k]).abs() <= loop_area {
+                    return false;
+                }
+                let poly = face_poly(interior[k]);
+                let eps = super::classify_2d::boundary_eps(&poly);
+                loop_poly.iter().all(|&v| {
+                    super::classify_2d::point_in_polygon_2d(v, &poly)
+                        || super::classify_2d::distance_to_polygon_boundary(v, &poly) <= eps
+                })
             })
             .min_by(|&a, &b| {
                 face_area(interior[a])
@@ -1806,6 +1818,16 @@ fn arrangement_regions_from_inputs(
             });
         if let Some(parent) = parent {
             hole_twin[hole] = Some(parent);
+        } else {
+            // No container found (pathological: chord-sampled candidate
+            // polygons under-covering a curved boundary). The loop's region
+            // is still emitted once via `keep`; only the container's hole is
+            // lost. Emitting the twin instead would recreate the duplicate
+            // overlapping region this pass exists to prevent.
+            log::debug!(
+                "arrangement twin loop found no containing region for face {face_id:?}; \
+                 hole not attached"
+            );
         }
     }
 
