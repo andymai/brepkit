@@ -49,13 +49,14 @@
 //! straight CHORD sections for the caps' rounded-corner boundary arcs whose
 //! true arcs already existed as sections (a co-endpoint chord/arc lens the
 //! wire weave cannot reconcile — `matching_arc_section_exists` now suppresses
-//! the chord), and (2) `find_splits_on_circle` normalizing split parameters
-//! against the seam-sensitive `domain_with_endpoints` span, which for arcs
-//! whose endpoint angles straddle the circle frame's atan2 seam is the LONG
-//! complement — a point on the circle 45 deg OUTSIDE the arc then split the
-//! arc's interior at a phantom vertex, breaking partition alignment between
-//! the coincident caps (now normalized with the same shorter-arc convention
-//! as `evaluate_edge_at_t`). Both tests below guard the closed state.
+//! the chord), and (2) section-arc T-junction splits normalizing their split
+//! parameters against the `domain_with_endpoints` span, which is always the
+//! CCW range — the LONG complement for the reverse twin of a section pair —
+//! so a point on the circle 45 deg OUTSIDE the arc split the arc's interior
+//! at a phantom vertex, breaking partition alignment between the coincident
+//! caps (circle sections now use `find_splits_on_section_arc`, the same
+//! shorter-arc convention as `evaluate_edge_at_t`). Both tests below guard
+//! the closed state.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -172,8 +173,8 @@ fn dovetail_corner_clip_intersect_is_watertight() {
 ///            containment + a depth probe — instead of the grazing ray-cast
 ///            that wrongly keeps it,
 ///   and the final pair (see the module doc): the FF-coplanar chord/arc lens
-///   suppression + the shorter-arc split-parameter convention in
-///   `find_splits_on_circle`.
+///   suppression + the shorter-arc split-parameter convention for circle
+///   sections in `find_splits_on_section_arc`.
 ///
 /// Together they take the raw GFA intersect from an open shell (free≈74, ~9
 /// faces) to fully watertight with EVERY pocket wall present and zero

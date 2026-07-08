@@ -416,9 +416,14 @@ fn matching_arc_section_exists(
         };
         let shares_face =
             c.face_a == face_a || c.face_a == face_b || c.face_b == face_a || c.face_b == face_b;
+        // Same geometric circle: center + radius + carrier plane (normals
+        // parallel either way — cross-product test). Same-center same-radius
+        // circles in DIFFERENT planes (two great circles of a sphere) can
+        // still share two endpoints and must not match.
         if !shares_face
             || (existing.center() - circle.center()).length() > tol.linear * 10.0
             || (existing.radius() - circle.radius()).abs() > tol.linear * 10.0
+            || existing.normal().cross(circle.normal()).length() > tol.angular.max(1e-9)
         {
             return false;
         }
