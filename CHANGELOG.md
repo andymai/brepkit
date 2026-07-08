@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.124.8](https://github.com/andymai/brepkit/compare/v2.124.7...v2.124.8) (2026-07-08)
+
+
+### Bug Fixes
+
+* **algo:** resolve disconnected section loops in the planar arrangement splitter ([#1043](https://github.com/andymai/brepkit/issues/1043)) ([7522187](https://github.com/andymai/brepkit/commit/75221875982746a3c2a7ccdf0181a08136d3682d))
+
 ## [2.124.7](https://github.com/andymai/brepkit/compare/v2.124.6...v2.124.7) (2026-07-08)
 
 
