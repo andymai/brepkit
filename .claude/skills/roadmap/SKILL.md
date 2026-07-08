@@ -143,6 +143,26 @@ kernel-specific), groupedScoop + splitBin manifold PASS, combinedFeatures 3/11
 dovetailKey 1/2 (all three: watertight-STL asserts — re-probe after the lip-corner fix
 lands, they may share it), dovetail suite timeout >25min (cornerclip row above).
 
+Baseplate re-probe on published 2.124.12 (2026-07-08, post-#1054): partial movement,
+no closures — snapClip 0/4 (nm 14 unchanged, key 16→12, 0.6mm-nozzle 11→**1**, clip
+volume 46.78 vs 46.6±0.05), fit-offset 0/2 (loose bnd 184→144, at-floor 144
+unchanged), dovetailKey 1/2 (bnd=108 unchanged). The #1054 fixture was the CORNER
+tile (one rounded corner); the residuals live in the other tile/connector configs —
+next step is a fresh operand capture of one failing case (dovetailKey bnd=108 or the
+nm=1 nozzle case) on ≥2.124.12. The full dovetail suite: **>25-min timeout →
+355s total** (mesh-fallback slab gone in-tool; most tiles now 0.3–1.5s), 2/9 pass;
+the A1-canonical corner tile fell ~597 nm → **nm=3 at 468ms**. Residual family:
+bnd=108 (5×4 middle-column, inverted, AND dovetailKey — one shared root), bnd=144
+(4×4 interior ×2 — interior tiles have NO rounded corners, so this is the
+fully-coincident-walls intersect variant), bnd=5 (5×4.5 fractional edge tile, also
+still slow at 265s), nm=6 (magnet variant, 82s), nm=3 (corner tile). combinedFeatures re-read (2026-07-08, 900s runs):
+"handle holes" + "funnel cutout" PASS at engine level in 62–87s (the tool's per-test
+60s timeout masks them — PERF item); the real defect is "handles + label (back
+skip)": a swallowed panic poisons the wasm borrow flag ("recursive use of an
+object" from a later `getSolidFaces` inside brepjs translate) — generator
+catch-and-continue sites (`wallPatternCompound.ts` etc.) hide the panic text; dig
+with a node-level panic hook.
+
 The remaining `#[ignore]` entries are diagnostics or slow perf cases, not open bugs:
 the `profile_intersect.rs` box-sphere probes are stale leftovers (box-sphere shipped
 analytic in #1006), `staircase_fuse_with_cylinders` is a ~2 min perf run, and the two
