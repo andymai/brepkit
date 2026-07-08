@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783494229794,
+  "lastUpdate": 1783494913401,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2969,6 +2969,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19472074,
             "range": "± 69099",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e564fb85ac47adf59f0fd37831e201cbb2b12c82",
+          "message": "docs(roadmap): post-merge tool matrix — halfSockets closed, new fractional-width family (#1047)\n\nRoadmap-only update after #1043 + #1045 merged, recording the post-merge\ntool scenario matrix:\n\n- **halfSockets suite: 8/11** — the 3 fails are kernel-pin snapshots\n(benign by design); triangle counts now run ~45% above the reference\npins because analytic feet replace sparse faceted planes (noted as a\npossible density follow-up, not a defect class).\n- **New deferred row: post-loft fractional-width halfSockets family** —\n`1.5×6 halfSockets` baseline + all tilt variants fail bnd=104\n(tilt-independent, deterministic), `1×4 2×8-comps` nm=12. Discriminated:\na #1043-only (pre-loft) kernel passes the same cases, so this is\nnew-geometry un-masking from the analytic sockets, not a regression.\nFirst probe documented (fresh capture via the rebased probe branch).\n- Caveat added to the compartments 13/13 row (measured on pre-loft\nfaceted sockets; closed roots stay closed).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap matrix after #1043 and #1045 to reflect post-merge\ntool results. Closes the halfSockets suite and adds a new post-loft\nfractional-width family to track.\n\n- **Roadmap updates**\n- halfSockets: 8/11 passing; 3 are benign kernel-pin snapshots. Triangle\ncount ~+45% vs reference due to analytic feet (tessellation follow-up,\nnot a defect).\n- Compartments row: adds pre-loft caveat; closed roots still replay\nclean. Probes rebased to `probe/boolean-capture-2`.\n- New fractional-width family: `1.5×6 halfSockets` baseline + all tilts\nfail with bnd=104; `1×4 2×8-comps` STL shows nm=12. Deterministic,\ntilt-independent, and not a regression (pre-loft kernel passes). First\nprobe captured.\n\n<sup>Written for commit c27bcc263e2343b33d9f5e3727ad1408e79a99d9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1047?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T07:12:54Z",
+          "tree_id": "0fc45b7d138bb29549efafdadae4b0b78e96d7f6",
+          "url": "https://github.com/andymai/brepkit/commit/e564fb85ac47adf59f0fd37831e201cbb2b12c82"
+        },
+        "date": 1783494913021,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 753122,
+            "range": "± 1479",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 847733,
+            "range": "± 1625",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11897,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 635127,
+            "range": "± 3936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19617054,
+            "range": "± 60892",
             "unit": "ns/iter"
           }
         ]
