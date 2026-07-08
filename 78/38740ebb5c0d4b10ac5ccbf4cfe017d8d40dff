@@ -1,0 +1,26 @@
+crates/operations/examples/loft_probe.rs
+  s_9c5a4131c73f04::t_9b38bad9eabc26 1-11,13-59,61,63-65,67-78,80-85,94-95,97-102,105,107,109-110
+  s_9c5a4131c73f04::t_979f9bacb3b7a3 103
+  s_9c5a4131c73f04::t_8b87489d622914 12,60,62,66
+  s_9c5a4131c73f04::t_7d110148edd9c0 79,86-93,96,104,106,108
+crates/operations/src/loft.rs
+  s_9c5a4131c73f04::t_5c7a7814159879 624-637
+  s_9c5a4131c73f04::t_68ce5cd177d181 606-623,638,640-641
+  s_9c5a4131c73f04::t_7d110148edd9c0 412-418,429,436-451
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7838740ebb5c0d4b10ac5ccbf4cfe017d8d40dff",
+  "prompts": {},
+  "sessions": {
+    "s_9c5a4131c73f04": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d31a0f97-8217-40a7-b569-4944dc74d3a6",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
