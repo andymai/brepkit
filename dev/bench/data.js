@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783506619134,
+  "lastUpdate": 1783524068984,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3293,6 +3293,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19526399,
             "range": "± 484891",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "97069b1f50389aecd96d9fa12c8bfe3ad2023590",
+          "message": "docs(roadmap): fresh socket-loft fuse diagnosis (#1053)\n\nRoadmap-maintenance PR (the living-doc mandate): records the fresh\n`fuse_shelled_box_with_socket_loft` diagnosis measured on post-#1051\nmain.\n\n- Raw GFA improved euler 36→9 across the tessellation-parity wave; the\neuler=−54 headline is the mesh-fallback output, not the analytic result.\n- The 2026-06-13 plan's Layers 1–2 are effectively done: the cup cap now\nsplits `arrangement n=5` (interior + 4 crescents, the intended shape).\n- Two residual roots identified and recorded with probes: co-endpoint\narc/chord lenses collapsed by `merge_duplicate_edges` (sanctioned\nsplitter-side midpoint-split pattern, torus-box precedent), and ~25µm\nphantom arc-break vertices minted from face-splitter UV data\n(VERTEX_WATCH-verified as builder-side, not pave-phase).\n\nNo code changes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap with a fresh diagnosis for\n`fuse_shelled_box_with_socket_loft`.\nIt documents raw GFA improving Euler 36→9 (mesh fallback is −54),\nconfirms Layers 1–2 are complete (cup splits into interior + four\ncrescents), and records the two remaining roots—arc/chord lens collapse\nunder `merge_duplicate_edges` and splitter-minted phantom arc-break\nvertices—plus next probes via `RAW_GFA` and `DUMP_ARR`.\n\n<sup>Written for commit 844acb57e037e3a5bd1828ccd5a73556c26100c5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1053?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T15:18:48Z",
+          "tree_id": "9c3c3a3d9d8a5e2713f17e54cd688f1d4272e778",
+          "url": "https://github.com/andymai/brepkit/commit/97069b1f50389aecd96d9fa12c8bfe3ad2023590"
+        },
+        "date": 1783524068345,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 746221,
+            "range": "± 1691",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 842061,
+            "range": "± 1444",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11941,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 635092,
+            "range": "± 2530",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19900017,
+            "range": "± 616274",
             "unit": "ns/iter"
           }
         ]
