@@ -1860,13 +1860,23 @@ pub fn split_face_2d(
     // (the halfSockets body's cavity cut), so fix the winding here where the
     // wires enter the splitter.
     let original_inner_wires: Vec<Vec<OrientedPCurveEdge>> = if is_plane {
-        let outer_uv: Vec<Point2> = wire_pts.iter().map(|&p| frame.project(p)).collect();
-        let outer_sign = signed_area_2d(&outer_uv) >= 0.0;
+        let outer_sign = signed_area_2d(&sample_wire_loop_uv(&boundary_edges)) >= 0.0;
         original_inner_wires
             .into_iter()
             .map(|mut hole| {
                 let pts = sample_wire_loop_uv(&hole);
-                if pts.len() >= 3 && (signed_area_2d(&pts) >= 0.0) == outer_sign {
+                if pts.len() < 3 {
+                    return hole;
+                }
+                let area = signed_area_2d(&pts);
+                // A sliver hole encloses less area than a tol-wide band along
+                // its own perimeter; its winding sign is numeric noise, so
+                // leave it untouched rather than flip on noise.
+                let mut perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+                if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+                    perimeter += (*last - *first).length();
+                }
+                if area.abs() > perimeter * tol.linear && (area >= 0.0) == outer_sign {
                     hole.reverse();
                     for edge in &mut hole {
                         std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
