@@ -150,6 +150,76 @@ pub(super) fn find_splits_on_circle(
     splits
 }
 
+/// Find split parameters on a marched-NURBS SECTION edge by sampled
+/// point-to-curve projection.
+///
+/// The chord-based `find_splits_on_line` misses a junction point that lies on
+/// the CURVE but off its chord (a plane×cone conic bulges millimetres past the
+/// chord), so a section chain meeting the conic mid-span never splits it and
+/// the weave breaks (the dovetail tongue-relief cone cap). Parameters use the
+/// same normalized-[0,1]-over-`domain_with_endpoints` convention as
+/// `evaluate_edge_at_t`'s NURBS arm.
+pub(super) fn find_splits_on_nurbs_section(
+    edge: &OrientedPCurveEdge,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    if std::env::var("ZZ_NO_NSPLIT").is_ok() {
+        return find_splits_on_line(edge, split_pts_3d, tol);
+    }
+    let n_samples = 64usize;
+    let eval_at =
+        |t: f64| -> Point3 { evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t) };
+    let samples: Vec<Point3> = (0..=n_samples)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            eval_at(i as f64 / n_samples as f64)
+        })
+        .collect();
+    let mut splits: Vec<(f64, Point3)> = Vec::new();
+    for &sp in split_pts_3d {
+        crate::perf::bump_face_split_probe();
+        // Nearest sample, then ternary-refine the distance over the two
+        // neighbouring segments.
+        let (mut best_i, mut best_d) = (0usize, f64::MAX);
+        for (i, s) in samples.iter().enumerate() {
+            let d = (*s - sp).length();
+            if d < best_d {
+                best_d = d;
+                best_i = i;
+            }
+        }
+        if best_d > tol * 100.0 {
+            continue;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let (mut lo, mut hi) = (
+            best_i.saturating_sub(1) as f64 / n_samples as f64,
+            (best_i + 1).min(n_samples) as f64 / n_samples as f64,
+        );
+        for _ in 0..50 {
+            let m1 = lo + (hi - lo) / 3.0;
+            let m2 = hi - (hi - lo) / 3.0;
+            if (eval_at(m1) - sp).length() < (eval_at(m2) - sp).length() {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        let t = f64::midpoint(lo, hi);
+        if (eval_at(t) - sp).length() > tol {
+            continue;
+        }
+        if t <= tol || t >= 1.0 - tol {
+            continue;
+        }
+        splits.push((t, sp));
+    }
+    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    splits
+}
+
 /// Find split parameters on an open CIRCLE SECTION edge, using the
 /// SHORTER-arc convention that `evaluate_edge_at_t` uses.
 ///

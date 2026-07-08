@@ -756,6 +756,32 @@ fn restrict_curves_to_faces(
             continue;
         }
 
+        // OPEN marched-NURBS conic (plane×cone hyperbola/parabola from the
+        // `Points` fit): clip it to EXACT crossings with the plane face's
+        // straight boundary edges. The generic sample-clip below keeps open
+        // curves whole "for the downstream splitter to trim" — but the
+        // splitter never clips an open curved section to a plane face's
+        // boundary, so a conic spanning the whole cone extent leaves the face
+        // unsplit (the dovetail tongue-relief family: tip/flank faces never
+        // partition, the whole face classifies by one interior point, and the
+        // cut collapses to an open hole shell). Exact endpoints matter: they
+        // land ON boundary edges within tolerance so
+        // `split_boundary_edges_at_3d_points` anchors them, and the same
+        // crossing points chain with the adjacent faces' sections (a point on
+        // the shared edge and on the cone lies on BOTH faces' conics).
+        if let Some(pieces) =
+            trim_open_curve_to_plane_face_lines(topo, fa, surf_a, surf_b, &raw, &ext_a, &ext_b, tol)
+        {
+            out.extend(pieces);
+            continue;
+        }
+        if let Some(pieces) =
+            trim_open_curve_to_plane_face_lines(topo, fb, surf_b, surf_a, &raw, &ext_b, &ext_a, tol)
+        {
+            out.extend(pieces);
+            continue;
+        }
+
         let pt = |i: usize| -> Point3 {
             #[allow(clippy::cast_precision_loss)]
             let f = i as f64 / N as f64;
@@ -1399,6 +1425,199 @@ fn solve_segment_quadratic(a: f64, b: f64, c: f64, sp: Point3, d: Vec3) -> Vec<P
     push_s((-b - sq) / (2.0 * a));
     push_s((-b + sq) / (2.0 * a));
     pts
+}
+
+/// Clip an OPEN marched-NURBS section to its in-face span(s) at EXACT
+/// crossings with a plane face's straight boundary edges.
+///
+/// Gated (returns `None`, deferring to the generic sample-clip, otherwise):
+/// - `raw` is an open `NurbsCurve` (the plane×cone hyperbola/parabola fit;
+///   lines are clipped by `clip_line_to_face`, circles/ellipses have exact
+///   paths of their own),
+/// - `plane_face`'s extent is planar and ALL its boundary edges (outer and
+///   inner wires) are straight `Line` edges — the polygon then IS the exact
+///   boundary,
+/// - every sampled curve point lies in the face's plane (the section of this
+///   pair genuinely lives on the plane face).
+///
+/// Each boundary crossing is found on the sampled 2D polyline, then refined by
+/// bisecting the signed side-of-boundary-line function in curve parameter —
+/// machine-precision endpoints ON the boundary edge, so
+/// `split_boundary_edges_at_3d_points` anchors them and adjacent faces'
+/// sections (which cross the same shared edges at the same 3D points) chain
+/// into a closed loop. Kept spans are the intervals between consecutive
+/// crossings whose midpoints lie inside the face polygon (outside its holes)
+/// AND inside the partner face's extent.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn trim_open_curve_to_plane_face_lines(
+    topo: &Topology,
+    plane_face: FaceId,
+    plane_surf: &FaceSurface,
+    other_surf: &FaceSurface,
+    raw: &RawCurve,
+    ext_plane: &FaceExtent,
+    ext_other: &FaceExtent,
+    tol: Tolerance,
+) -> Option<Vec<RawCurve>> {
+    use crate::builder::classify_2d::point_in_polygon_2d;
+    use brepkit_math::vec::Point2;
+
+    if std::env::var("ZZ_NO_CLIP").is_ok() {
+        return None;
+    }
+    // Gated to CONE partners: the plane x cone conic (the `Points`-fit
+    // hyperbola/parabola) is the configuration whose whole-curve sections
+    // leave small plane faces unsplit (the dovetail tongue relief). Marched
+    // sections against NURBS/cylinder partners stay on the generic path —
+    // the honeycomb wall-cut weave is calibrated against those staying whole
+    // (clipping them regressed its over-share pin).
+    if !matches!(other_surf, FaceSurface::Cone(_)) {
+        return None;
+    }
+    if !matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
+        return None;
+    }
+    if (raw.p_start - raw.p_end).length() < 1e-7 {
+        return None;
+    }
+    if !matches!(plane_surf, FaceSurface::Plane { .. }) {
+        return None;
+    }
+    let FaceExtent::Plane {
+        frame, poly, holes, ..
+    } = ext_plane
+    else {
+        return None;
+    };
+    // All boundary edges must be straight lines — the extent polygon is then
+    // the exact boundary (curved edges are sampled into it, which would make
+    // the "exact" crossing land on a chord instead of the real edge).
+    let face = topo.face(plane_face).ok()?;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let wire = topo.wire(wid).ok()?;
+        for oe in wire.edges() {
+            if !matches!(topo.edge(oe.edge()).ok()?.curve(), EdgeCurve::Line) {
+                return None;
+            }
+        }
+    }
+
+    let n_samples = 64usize;
+    let eval_at =
+        |t: f64| -> Point3 { raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end) };
+    // The section must lie in the plane (frame round-trip). Sampled check.
+    let sample_t = |i: usize| -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let f = i as f64 / n_samples as f64;
+        raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f
+    };
+    for i in 0..=n_samples {
+        let p = eval_at(sample_t(i));
+        let uv = frame.project(p);
+        if (frame.evaluate(uv.x(), uv.y()) - p).length() > tol.linear * 10.0 {
+            return None;
+        }
+    }
+
+    // Signed side of a boundary segment's carrier line at curve parameter t.
+    let side = |t: f64, a: Point2, b: Point2| -> f64 {
+        let uv = frame.project(eval_at(t));
+        (b.x() - a.x()).mul_add(uv.y() - a.y(), -((b.y() - a.y()) * (uv.x() - a.x())))
+    };
+
+    // Collect refined crossing parameters against every boundary segment
+    // (outer polygon + hole polygons).
+    let mut crossings: Vec<f64> = Vec::new();
+    let mut scan_polygon = |ring: &[Point2]| {
+        let m = ring.len();
+        for j in 0..m {
+            let (a, b) = (ring[j], ring[(j + 1) % m]);
+            let seg_len = (b.x() - a.x()).hypot(b.y() - a.y());
+            if seg_len < tol.linear {
+                continue;
+            }
+            for i in 0..n_samples {
+                let (t_lo, t_hi) = (sample_t(i), sample_t(i + 1));
+                let (s_lo, s_hi) = (side(t_lo, a, b), side(t_hi, a, b));
+                if s_lo == 0.0 || s_lo * s_hi >= 0.0 {
+                    continue;
+                }
+                // Bisect the side function to the carrier-line crossing.
+                let (mut lo, mut hi, mut sl) = (t_lo, t_hi, s_lo);
+                for _ in 0..60 {
+                    let mid = f64::midpoint(lo, hi);
+                    let sm = side(mid, a, b);
+                    if sm * sl < 0.0 {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                        sl = sm;
+                    }
+                }
+                let t_star = f64::midpoint(lo, hi);
+                let uv = frame.project(eval_at(t_star));
+                // On the SEGMENT (not just its carrier line), with endpoint
+                // slack — a crossing at a face corner belongs to both
+                // adjacent segments.
+                let w = ((uv.x() - a.x()) * (b.x() - a.x()) + (uv.y() - a.y()) * (b.y() - a.y()))
+                    / (seg_len * seg_len);
+                if !(-1e-6..=1.0 + 1e-6).contains(&w) {
+                    continue;
+                }
+                if !crossings.iter().any(|&c| (c - t_star).abs() < 1e-9) {
+                    crossings.push(t_star);
+                }
+            }
+        }
+    };
+    scan_polygon(poly);
+    for h in holes {
+        scan_polygon(h);
+    }
+
+    // Whole curve inside (or outside) the face: no crossings — keep or drop
+    // by a single interior test; deferring (None) would hand the generic
+    // sample-clip a curve this path has already proven in-plane, so decide
+    // here for consistency.
+    let inside_face = |uv: Point2| -> bool {
+        point_in_polygon_2d(uv, poly) && !holes.iter().any(|h| point_in_polygon_2d(uv, h))
+    };
+    let mut ts: Vec<f64> = Vec::with_capacity(crossings.len() + 2);
+    ts.push(raw.t_range.0);
+    crossings.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    ts.extend(crossings);
+    ts.push(raw.t_range.1);
+    ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+
+    let mut pieces = Vec::new();
+    for w in ts.windows(2) {
+        let (t0, t1) = (w[0], w[1]);
+        let span_len = {
+            let (p0, p1) = (eval_at(t0), eval_at(t1));
+            (p1 - p0).length()
+        };
+        if span_len < tol.linear {
+            continue;
+        }
+        let t_mid = f64::midpoint(t0, t1);
+        let p_mid = eval_at(t_mid);
+        if !inside_face(frame.project(p_mid)) || !ext_other.contains(p_mid) {
+            continue;
+        }
+        let (p0, p1) = (eval_at(t0), eval_at(t1));
+        let sub_pts: Vec<Point3> = (0..=8)
+            .map(|k| eval_at(t0 + (t1 - t0) * (f64::from(k) / 8.0)))
+            .collect();
+        let bbox = Aabb3::try_from_points(sub_pts)?;
+        pieces.push(RawCurve {
+            curve: raw.curve.clone(),
+            bbox: bbox.expanded(tol.linear),
+            t_range: (t0, t1),
+            p_start: p0,
+            p_end: p1,
+        });
+    }
+    Some(pieces)
 }
 
 /// Longest contiguous run of `true` in `inb` (samples `0..=N`). For a closed
