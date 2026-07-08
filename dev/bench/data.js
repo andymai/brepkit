@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783533072303,
+  "lastUpdate": 1783535220154,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3455,6 +3455,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20534895,
             "range": "± 326057",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ce7d8dda8b50dc638b49af4d6af60288e29ad780",
+          "message": "docs(roadmap): post-#1054 baseplate re-probe baseline (#1056)\n\nLiving-doc update after #1054 released as 2.124.12 and the baseplate\nsuites were re-probed tool-side.\n\n**Headline**: the dovetail scenario suite went from a >25-minute timeout\nto **355s total** — the corner-rounding intersect no longer\nmesh-falls-back, so connector fuses stopped consuming the 6116-facet\nslab. The A1-canonical corner tile dropped from ~597 non-manifold STL\nedges (11 min/tile) to nm=3 at 468ms.\n\nRecords the residual failure families for the next fix cycles:\n- bnd=108: 5×4 middle-column + inverted + dovetailKey (one shared root)\n- bnd=144: 4×4 interior tiles — no rounded corners, i.e. the\nfully-coincident-walls intersect variant\n- bnd=5 + 265s: 5×4.5 fractional edge tile; nm=6 magnet variant; nm=3\ncorner tile\n- snapClip: partial movement (nozzle case nm 11→1), clip-solid nm is a\nseparate (fillet-family) root\n- combinedFeatures honeycomb+handles: 'handle holes'/'funnel cutout'\nPASS at engine level in 62–87s (masked by the 60s per-test timeout —\nperf item); the real defect is the 'handles + label (back skip)'\nswallowed panic that poisons the wasm borrow flag.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap with the post-#1054 re-probe baseline on 2.124.12.\nNotes the dovetail suite speedup (>25 min → 355s), the A1 corner tile\nimprovement (~597 non‑manifold edges → 3 at 468ms), the remaining\nfailure families (bnd=108/144/5; nm=6/3), and a swallowed‑panic defect\nin combinedFeatures that’s hidden by the 60s test timeout.\n\n<sup>Written for commit 907f8bf6d774737d5240bd5ada0f36faeb1e9f0a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1056?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T11:24:51-07:00",
+          "tree_id": "3e76e3f94eca899288ba26eb6f11b2790fac4619",
+          "url": "https://github.com/andymai/brepkit/commit/ce7d8dda8b50dc638b49af4d6af60288e29ad780"
+        },
+        "date": 1783535219136,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 613460,
+            "range": "± 13091",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 697047,
+            "range": "± 15643",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9468,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 506417,
+            "range": "± 2161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15998121,
+            "range": "± 218373",
             "unit": "ns/iter"
           }
         ]
