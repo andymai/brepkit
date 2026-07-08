@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783532741295,
+  "lastUpdate": 1783533072303,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3401,6 +3401,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19606209,
             "range": "± 155253",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5131efb8d957bd7685eaf36ddec8a07a8b807848",
+          "message": "chore(main): release 2.124.12 (#1055)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.124.12](https://github.com/andymai/brepkit/compare/v2.124.11...v2.124.12)\n(2026-07-08)\n\n\n### Bug Fixes\n\n* **algo:** close dovetail corner-clip intersect chord/arc lens\n([#1054](https://github.com/andymai/brepkit/issues/1054))\n([bb9b1c9](https://github.com/andymai/brepkit/commit/bb9b1c9248ea701c6d60895dac914810b294702c))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.124.12. Fixes an algorithm issue where\nchord/arc intersections in dovetail corner-clip cases didn’t close the\nlens.\n\n- **Bug Fixes**\n- Properly closes the dovetail corner-clip lens for chord–arc\nintersections to prevent small gaps in geometry.\n\n<sup>Written for commit 4fbb2162466aa31b27537867bac69ada76142f3f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1055?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-08T17:48:48Z",
+          "tree_id": "8ba88fa817da118a312bca21500b3f632965d18c",
+          "url": "https://github.com/andymai/brepkit/commit/5131efb8d957bd7685eaf36ddec8a07a8b807848"
+        },
+        "date": 1783533070677,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 792343,
+            "range": "± 2743",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 906956,
+            "range": "± 14937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13142,
+            "range": "± 107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 644754,
+            "range": "± 2142",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20534895,
+            "range": "± 326057",
             "unit": "ns/iter"
           }
         ]
