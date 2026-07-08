@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783494913401,
+  "lastUpdate": 1783496225002,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3023,6 +3023,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19617054,
             "range": "± 60892",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0647ce1eee7214cc697fa1178fcaa1ff2544c113",
+          "message": "docs(roadmap): make compartment and halfSockets row titles match their status (#1048)\n\nFollow-up to #1047, addressing the two Copilot consistency findings that\nlanded after its merge:\n\n- The compartment row was titled \"CLOSED, 13/13 pass\" while its own\ncaveat said the tool matrix no longer reads 13/13. Retitled to make the\ndurable claim explicit: the six roots are closed; the 13/13 score was\nmeasured on pre-loft geometry, and the live matrix lives in the\nfractional-width row.\n- The \"halfSockets faceted-loft family\" row described a fixed defect\nunder a name implying it was still present, and ended with a\nself-contradictory \"CLOSED except …\". Retitled to \"halfSockets loft\nfaceting — CLOSED (#1045)\" and pointed remaining suite work at the\nfractional-width row.\n\nRoadmap-only; no code changes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRetitled two roadmap rows for clarity and consistency. The compartment\nrow now explicitly calls out six closed roots and timestamps the 13/13\nscore to pre-loft geometry; the halfSockets loft faceting row is marked\nCLOSED (#1045) and points remaining work to the fractional-width row.\n\n<sup>Written for commit 79f9995212aa54734ed866f887985ae2ed5bafdb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1048?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T07:34:42Z",
+          "tree_id": "447040759f712181bd16c9bc593bdf6627e8aadf",
+          "url": "https://github.com/andymai/brepkit/commit/0647ce1eee7214cc697fa1178fcaa1ff2544c113"
+        },
+        "date": 1783496224657,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 755715,
+            "range": "± 1485",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 847767,
+            "range": "± 9736",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12001,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 635381,
+            "range": "± 2109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19562648,
+            "range": "± 50958",
             "unit": "ns/iter"
           }
         ]
