@@ -1,0 +1,25 @@
+crates/io/examples/replay_captures.rs
+  s_414bac4295e810::t_011ad0c6bef9d9 257-305
+  s_414bac4295e810::t_fccef1ee7ac2c2 127-134,136,138-139
+crates/io/examples/fracwidth_probe.rs
+  s_414bac4295e810::t_f4457aa446c17b 34
+  s_414bac4295e810::t_e3f12eb8820050 1-33,35-71
+crates/io/examples/scoop_probe.rs
+  s_414bac4295e810::t_1e16053af79dfe 1-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e11686ca482099ade5a4a00435aa70a564e8244f",
+  "prompts": {},
+  "sessions": {
+    "s_414bac4295e810": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63fe3ad5-bc55-4f1b-8ea9-869254147d73",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
