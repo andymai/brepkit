@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783493037981,
+  "lastUpdate": 1783493894951,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -2861,6 +2861,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19490456,
             "range": "± 111907",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c8d644b3137bf1c821b510f4719008c2c5eb77ec",
+          "message": "fix(operations): curve-preserving loft for sketch arcs and downward stacks (#1045)\n\n## What\n\nTwo independent bails sent every real-world loft to the faceting polygon\npath:\n\n1. **NURBS profile edges** (the form a brepjs sketch can deliver) failed\nthe curve-type gate. `profile_oriented_edges` now recognizes NURBS edges\nback to their analytic form before matching.\n2. **Profiles wound opposite the stacking axis** were rejected outright\n— a loft stacked *downward* from CCW-sketched sections (the gridfinity\nsocket: top face at z=0, lofting to −height) winds every profile CW\nabout the axis. Such profiles are now reversed instead: edge order\nflipped, endpoints swapped, and arc circle normals negated (endpoint\nswapping alone selects the complementary arc span).\n\n## Impact\n\nEvery gridfinity socket loft previously came out ALL-PLANE — a\nz-histogram localized a 1.2–2.5% bin-volume deficit entirely to the z0–5\nfeet. With this fix the sockets are exact analytic (cones + cylinders),\nand tool-level volume parity is EXACT on the probed bins (13527.2 vs\n13527.3 reference).\n\n## Relationship to #1043\n\nThe analytic sockets initially un-masked the z=5 interface defect (hs2×2\nfuse bnd=314, −13% export volume) that gated this branch — that was the\narrangement disconnected-loop bug, fixed and merged in #1043. This\nbranch is rebased on top; both halfSockets capture chains replay fully\nclean (every op bnd=0 nm=0, analytic).\n\nSupersedes the old `fix/loft-recognize-sketch-arcs` branch (same loft\ncommit, rebased; the old branch can be deleted).\n\n## Verification\n\n- New unit tests in `crates/operations/src/loft/tests.rs` (NURBS-profile\nand downward-stack lofts stay analytic).\n- `loft_probe` example: 4/4 variants analytic (8 cones + 8 cylinders),\nidentical volume.\n- Full workspace suite green; gridfinity wasm canary 27/27.\n- Note: `fuse_shelled_box_with_socket_loft` (ignored) still fails\neuler≠2 even with this fix — the \"gated on curve-preserving loft\"\nframing was wrong; roadmap updated to reflect it needs fresh diagnosis.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMake the loft curve-preserving for sketch-built profiles by recognizing\nNURBS arcs and safely handling downward-stacked sections. Gridfinity\nsockets now loft to analytic cones/cylinders instead of a faceted\nfrustum, restoring volume parity with the reference.\n\n- **Bug Fixes**\n- Recognize NURBS profile edges back to analytic `Circle`/`Line` in\n`profile_oriented_edges`, so curve-matching no longer falls back to\npolygon faceting.\n- Reverse downward-stacked profiles using a dimensionless cosine gate\n(stable winding detection); flip edge order, swap endpoints, and negate\ncircle normals. Mixed or degenerate windings still bail.\n- Add rounded-rect loft tests in `crates/operations/src/loft/tests.rs`\ncovering native/NURBS arcs and up/down stacks; roadmap updated.\n\n<sup>Written for commit 9af4ae12330d8ef9c371c014f159fc5ccfe46838.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1045?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T06:55:43Z",
+          "tree_id": "dc75439dca44c4732354865b1ff3d9bce9cd54c7",
+          "url": "https://github.com/andymai/brepkit/commit/c8d644b3137bf1c821b510f4719008c2c5eb77ec"
+        },
+        "date": 1783493893953,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 756434,
+            "range": "± 1641",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 845938,
+            "range": "± 1766",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11874,
+            "range": "± 378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631355,
+            "range": "± 1452",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19519548,
+            "range": "± 512546",
             "unit": "ns/iter"
           }
         ]
