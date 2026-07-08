@@ -1849,6 +1849,38 @@ pub fn split_face_2d(
         })
         .collect();
 
+    // Normalize hole winding: an inner wire must wind OPPOSITE the outer wire
+    // in the projected UV frame for every consumer that trusts stored
+    // orientation — `integrate_holes_plane` weaves hole pieces as-is, and a
+    // same-winding hole makes the angular wire builder trace the material
+    // region wound CW plus a spurious loop spanning the opening wound CCW
+    // (the halfSockets lip fuse shipped that loop as a membrane across the
+    // bin throat while the real ledge region vanished with the face it was
+    // hole-matched onto). Upstream operations can emit same-winding holes
+    // (the halfSockets body's cavity cut), so fix the winding here where the
+    // wires enter the splitter.
+    let original_inner_wires: Vec<Vec<OrientedPCurveEdge>> = if is_plane {
+        let outer_uv: Vec<Point2> = wire_pts.iter().map(|&p| frame.project(p)).collect();
+        let outer_sign = signed_area_2d(&outer_uv) >= 0.0;
+        original_inner_wires
+            .into_iter()
+            .map(|mut hole| {
+                let pts = sample_wire_loop_uv(&hole);
+                if pts.len() >= 3 && (signed_area_2d(&pts) >= 0.0) == outer_sign {
+                    hole.reverse();
+                    for edge in &mut hole {
+                        std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
+                        std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
+                        edge.forward = !edge.forward;
+                    }
+                }
+                hole
+            })
+            .collect()
+    } else {
+        original_inner_wires
+    };
+
     // A section edge lying entirely inside an existing hole runs through
     // air, not face material (a tool passing through a cavity opening still
     // intersects the face's surface plane inside the hole). Keeping it would
