@@ -1,0 +1,19 @@
+crates/operations/src/loft.rs
+  s_d4791f36e0fe3e::t_0a0b85182909c3 612-616,619-627,629
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9af4ae12330d8ef9c371c014f159fc5ccfe46838",
+  "prompts": {},
+  "sessions": {
+    "s_d4791f36e0fe3e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "05c537ea-ba5b-49ce-8896-e1dc92807963",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
