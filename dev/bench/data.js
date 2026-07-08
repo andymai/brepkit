@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783496225002,
+  "lastUpdate": 1783500784137,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3077,6 +3077,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19562648,
             "range": "± 50958",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "90d0c6a8beac14e8b5a2e3c6c15e2b938bfa2c01",
+          "message": "fix(algo): orientation-safe interior points for plane sub-faces (#1049)\n\n## Summary\n\nCloses the post-loft **fractional-width halfSockets export family**:\nevery `1.5×6 halfSockets` compartment scenario (baseline + all tilt\nvariants) exported with 104 mesh boundary edges, clustered at the four\nbin corners on the z=5 socket×body interface.\n\n### Root cause\n\nAt each bin corner, the analytic socket outline's r=4 circle (tangent to\nboth bin wall lines, new geometry since #1045) and the bin's r=3.75\ncorner arc bound a ~0.1–0.25 mm sliver on the bin bottom. The\narrangement split emitted the sliver region correctly — but\n`interior_point_3d` built the region's UV polygon from stored\n**pcurves**, which reach a wire under two orientation conventions:\n\n- **section arcs** carry the curve's natural parameterization plus a\ntraversal flag;\n- **boundary arcs** are fit in traversal order but keep the topology\norientation flag.\n\nThe flag-driven sampler traced reversed boundary arcs **backwards**,\nfolding the sliver polygon into a self-crossing zig-zag whose \"interior\"\npoint landed in the adjacent socket-imprint region. The classifier then\nread solid material at the wrong point, marked the sliver `Inside`, and\ndropped it — 5 unpaired rim edges per corner (socket r=4 arc + two bin\nr=3.75 arc pieces + two 0.25 mm wall stubs).\n\n### Fix\n\n- `interior_point_3d` now samples plane-face wire polygons from each\nedge's **3D curve through the face's `PlaneFrame`**\n(orientation-unambiguous — the same arc-true pattern as\n`find_point_outside_holes`), never the pcurves. Deliberately scoped to\ninterior-point computation: widening it to the shared\n`sample_wire_loop_uv` changes split decisions and regressed the\nscooplabel over-share pin.\n- `find_point_outside_holes` hole polygons densified 3 → 15 interior\nsamples: a single-edge closed bore hole sampled at 4 points is an\ninscribed square whose sagitta gap accepted annulus seeds well inside\nthe bore (caught by the drilled-tube volume regression test).\n\n### Verification\n\n- New fixture `crates/io/tests/fracwidth_corner_crescent_inmem.rs`:\ncaptured 1.5×6 halfSockets bin × captured corner half-socket (translated\n+5z to its final-assembly position). Pre-fix: 5 free rim edges, bnd=40;\npost-fix: watertight, manifold, analytic.\n- Fresh 40-op capture of the full 1.5×6 export chain replays clean\n(every op free=0/bnd=0/nm=0, analytic).\n- Tool-level: all six `1.5×6` compartment manifold variants pass. The\nremaining integer-width non-manifold failures (`1×6`/`2×6`,\nnm=76/136/140) are **pre-existing** — counts identical under a pre-fix\nkernel build (77/136) — and now tracked as their own roadmap row.\n- Full workspace suites + wasm gridfinity canary green; honeycomb pins\nand all prior fixtures (scooplabel, halfsockets, socket-assembly,\nlipfuse) unchanged.\n\nRoadmap updated in the same PR (crescent row closed, integer-width nm\nfamily row added).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the dropped corner crescent on plane sub-faces by sampling wire\npolygons from 3D curves via the face `PlaneFrame`, removing the 104\nboundary-edge artifact in all `1.5×6 halfSockets` exports. Also\ndensifies hole sampling to avoid seeds slipping inside single-edge\ncircular bores.\n\n- **Bug Fixes**\n- `interior_point_3d` (plane faces): sample each edge’s 3D curve through\nthe `PlaneFrame` instead of pcurves to avoid mixed-orientation folds;\nkeep `sample_wire_loop_uv` unchanged.\n- `find_point_outside_holes`: increase interior samples from 3 to 15 to\nclose the sagitta gap in bore holes.\n- Added regression fixture `fracwidth_corner_crescent_inmem.rs` with\ncaptured bin/socket operands; result stays analytic and watertight;\nroadmap updated.\n\n<sup>Written for commit b963eef282b3f13e4c96d94cb5f429afec6d64c4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1049?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-08T08:50:48Z",
+          "tree_id": "dbc9defa754c9d689b1440671d7f8165436b1332",
+          "url": "https://github.com/andymai/brepkit/commit/90d0c6a8beac14e8b5a2e3c6c15e2b938bfa2c01"
+        },
+        "date": 1783500783761,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 747424,
+            "range": "± 2194",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 837647,
+            "range": "± 3331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11896,
+            "range": "± 153",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 633008,
+            "range": "± 60306",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19396192,
+            "range": "± 82156",
             "unit": "ns/iter"
           }
         ]
