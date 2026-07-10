@@ -32,8 +32,8 @@ use conversion::{
     uv_endpoints_from_pcurve,
 };
 use edge_splitting::{
-    find_splits_on_ellipse, find_splits_on_line, find_splits_on_section_arc,
-    split_boundary_edges_at_3d_points,
+    find_splits_on_ellipse, find_splits_on_line, find_splits_on_nurbs_section,
+    find_splits_on_section_arc, split_boundary_edges_at_3d_points,
 };
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic};
 use special_cases::{
@@ -237,11 +237,15 @@ fn split_sections_at_t_junctions(
             // domain-based splitter.
             EdgeCurve::Circle(_) => find_splits_on_section_arc(&edge, &endpoints, tol),
             EdgeCurve::Ellipse(ellipse) => find_splits_on_ellipse(ellipse, &edge, &endpoints, tol),
+            // A marched-NURBS section (a plane×cone conic) bulges past its
+            // chord like an arc — a junction endpoint mid-curve is invisible
+            // to the chord-based search, so use sampled point-to-curve
+            // projection over the full endpoint set (conics are rare).
+            EdgeCurve::NurbsCurve(_) => find_splits_on_nurbs_section(&edge, &endpoints, tol),
             // Only endpoints near a line section's bounding box can land on it;
             // the grid query returns exactly that subset, preserving the former
-            // full scan's result. A NURBS section (rare here) has no specialized
-            // splitter, so the chord-based line search is the closest match.
-            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+            // full scan's result.
+            EdgeCurve::Line => {
                 find_splits_on_line(&edge, &candidates_near(edge.start_3d, edge.end_3d), tol)
             }
         };

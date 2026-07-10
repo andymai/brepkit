@@ -364,12 +364,14 @@ pub(super) fn tessellate_planar(
                     ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
                 }
                 .clamp(8, 4096);
+                let forward = oe.is_forward()
+                    != super::edge_sampling::nurbs_runs_end_to_start(topo, edge, nurbs)?;
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| nurbs.evaluate(t),
                     &|i| u0 + (u1 - u0) * (i as f64) / (n_samples as f64),
                     n_samples,
-                    oe.is_forward(),
+                    forward,
                     &mut positions,
                 );
             }

@@ -290,11 +290,41 @@ pub(super) fn sample_edge(
         }
         EdgeCurve::NurbsCurve(nurbs) => {
             let (u0, u1) = nurbs.domain();
-            sample_uniform(nurbs, u0, u1, n)
+            let mut pts = sample_uniform(nurbs, u0, u1, n);
+            // Normalize to edge (start→end vertex) order so every consumer's
+            // `is_forward` walk holds even for section edges whose stored
+            // curve runs end→start.
+            if nurbs_runs_end_to_start(topo, edge, nurbs)? {
+                pts.reverse();
+            }
+            pts
         }
     };
 
     Ok(points)
+}
+
+/// Whether an open NURBS edge's stored curve runs from the edge's END vertex
+/// back to its START vertex. GFA section edges can store traversal-order
+/// vertices over an unreversed curve, so a sampler that walks the knot domain
+/// trusting `oe.is_forward()` alone folds the boundary polyline back on
+/// itself (a double-covered strip along the shared section curve).
+pub(super) fn nurbs_runs_end_to_start(
+    topo: &Topology,
+    edge: &brepkit_topology::edge::Edge,
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+) -> Result<bool, crate::OperationsError> {
+    if edge.start() == edge.end() {
+        return Ok(false);
+    }
+    let s = topo.vertex(edge.start())?.point();
+    let e = topo.vertex(edge.end())?.point();
+    let (u0, u1) = nurbs.domain();
+    let p0 = nurbs.evaluate(u0);
+    let p1 = nurbs.evaluate(u1);
+    let aligned = (p0 - s).length() + (p1 - e).length();
+    let flipped = (p0 - e).length() + (p1 - s).length();
+    Ok(flipped < aligned)
 }
 
 /// Sample a wire into a list of 3D positions, skipping consecutive duplicates.
@@ -421,12 +451,13 @@ pub(super) fn sample_wire_positions(
                     sag_n.max(turn_n)
                 }
                 .clamp(8, 4096);
+                let forward = oe.is_forward() != nurbs_runs_end_to_start(topo, edge, nurbs)?;
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| nurbs.evaluate(t),
                     &|i| u0 + (u1 - u0) * (i as f64) / (n_samples as f64),
                     n_samples,
-                    oe.is_forward(),
+                    forward,
                     &mut positions,
                 );
             }

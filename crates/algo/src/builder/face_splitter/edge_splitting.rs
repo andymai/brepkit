@@ -150,6 +150,81 @@ pub(super) fn find_splits_on_circle(
     splits
 }
 
+/// Find split parameters on a marched-NURBS SECTION edge by sampled
+/// point-to-curve projection.
+///
+/// The chord-based `find_splits_on_line` misses a junction point that lies on
+/// the CURVE but off its chord (a plane×cone conic bulges millimetres past the
+/// chord), so a section chain meeting the conic mid-span never splits it and
+/// the weave breaks (the dovetail tongue-relief cone cap). Parameters use the
+/// same normalized-[0,1]-over-`domain_with_endpoints` convention as
+/// `evaluate_edge_at_t`'s NURBS arm, returned in order ALONG THE EDGE
+/// (descending `t` when the stored curve runs `end_3d` → `start_3d`).
+pub(super) fn find_splits_on_nurbs_section(
+    edge: &OrientedPCurveEdge,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    let n_samples = 64usize;
+    let eval_at =
+        |t: f64| -> Point3 { evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t) };
+    let samples: Vec<Point3> = (0..=n_samples)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            eval_at(i as f64 / n_samples as f64)
+        })
+        .collect();
+    let mut splits: Vec<(f64, Point3)> = Vec::new();
+    for &sp in split_pts_3d {
+        crate::perf::bump_face_split_probe();
+        // Nearest sample, then ternary-refine the distance over the two
+        // neighbouring segments.
+        let (mut best_i, mut best_d) = (0usize, f64::MAX);
+        for (i, s) in samples.iter().enumerate() {
+            let d = (*s - sp).length();
+            if d < best_d {
+                best_d = d;
+                best_i = i;
+            }
+        }
+        if best_d > tol * 100.0 {
+            continue;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let (mut lo, mut hi) = (
+            best_i.saturating_sub(1) as f64 / n_samples as f64,
+            (best_i + 1).min(n_samples) as f64 / n_samples as f64,
+        );
+        for _ in 0..50 {
+            let m1 = lo + (hi - lo) / 3.0;
+            let m2 = hi - (hi - lo) / 3.0;
+            if (eval_at(m1) - sp).length() < (eval_at(m2) - sp).length() {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        let t = f64::midpoint(lo, hi);
+        if (eval_at(t) - sp).length() > tol {
+            continue;
+        }
+        if t <= tol || t >= 1.0 - tol {
+            continue;
+        }
+        splits.push((t, sp));
+    }
+    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    // `t` runs over the natural knot domain, which for the REVERSE twin of a
+    // section pair runs end→start relative to the edge. The piece-building
+    // loop walks `start_3d` → `end_3d`, so hand it splits in EDGE order —
+    // ascending-t pieces on a reversed twin overlap once there are ≥2 splits.
+    if (samples[n_samples] - edge.start_3d).length() < (samples[0] - edge.start_3d).length() {
+        splits.reverse();
+    }
+    splits
+}
+
 /// Find split parameters on an open CIRCLE SECTION edge, using the
 /// SHORTER-arc convention that `evaluate_edge_at_t` uses.
 ///
@@ -228,4 +303,68 @@ pub(super) fn find_splits_on_ellipse(
     splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
     splits
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::nurbs::fitting::interpolate;
+    use brepkit_math::vec::{Point2, Vec2};
+
+    fn parabola_section_edge(reversed: bool) -> OrientedPCurveEdge {
+        let pts: Vec<Point3> = (0..=8)
+            .map(|k| {
+                let x = -2.0 + 4.0 * f64::from(k) / 8.0;
+                Point3::new(x, x * x, 0.0)
+            })
+            .collect();
+        let nurbs = interpolate(&pts, 3).unwrap();
+        let (start_3d, end_3d) = if reversed {
+            (pts[8], pts[0])
+        } else {
+            (pts[0], pts[8])
+        };
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::NurbsCurve(nurbs),
+            pcurve: Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(1.0, 0.0),
+            start_3d,
+            end_3d,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    #[test]
+    fn nurbs_section_splits_ordered_along_forward_edge() {
+        let edge = parabola_section_edge(false);
+        let eval = |t: f64| evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+        let (sp_a, sp_b) = (eval(0.3), eval(0.7));
+        let splits = find_splits_on_nurbs_section(&edge, &[sp_b, sp_a], 1e-3);
+        assert_eq!(splits.len(), 2);
+        assert!((splits[0].1 - sp_a).length() < 1e-6);
+        assert!((splits[1].1 - sp_b).length() < 1e-6);
+    }
+
+    #[test]
+    fn nurbs_section_splits_ordered_along_reversed_twin() {
+        // The reverse twin stores the SAME curve but swapped endpoints, so
+        // ascending natural-domain `t` runs end→start; the splits must come
+        // back ordered from `start_3d` (nearest first) or the piece-building
+        // loop emits overlapping pieces.
+        let edge = parabola_section_edge(true);
+        let eval = |t: f64| evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+        let (sp_a, sp_b) = (eval(0.3), eval(0.7));
+        let splits = find_splits_on_nurbs_section(&edge, &[sp_a, sp_b], 1e-3);
+        assert_eq!(splits.len(), 2);
+        assert!((splits[0].1 - sp_b).length() < 1e-6);
+        assert!((splits[1].1 - sp_a).length() < 1e-6);
+        let d0 = (splits[0].1 - edge.start_3d).length();
+        let d1 = (splits[1].1 - edge.start_3d).length();
+        assert!(d0 < d1, "splits must walk start_3d → end_3d");
+    }
 }
