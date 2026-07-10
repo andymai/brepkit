@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783717718232,
+  "lastUpdate": 1783717879232,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3941,6 +3941,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20388650,
             "range": "± 33788",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8b783b78e5721a63a894e82c6ea0413b69b674ae",
+          "message": "feat(operations): merge analytic revolve segments — apex cone, annulus caps, partial-turn torus (#1062)\n\n## Root cause\n\nThe analytic full-revolution fast path over-segmented three profile\nshapes even though every face stayed exact analytic:\n\n- **Pointed cone (apex on axis):** an apex-touching profile edge\nrevolved into 4 on-axis NURBS wall patches instead of one\ndegenerate-seam cone wall (census: 12 faces).\n- **Washer (off-axis rectangle):** each annulus cap was split into 4\nplanar sectors instead of one plane face carrying the smaller rim as a\nhole wire (census: 16 faces).\n- **Partial turn of a circle profile:** fell off the analytic path\nentirely instead of building one trimmed `Torus` band plus two disc\ncaps.\n\nFixing these exposed three latent defects downstream:\n\n1. Torus bands with a doubled seam cracked under tessellation — CDT\ndegenerates on the fully-wrapping UV image and the snap path re-samples\nrims independently.\n2. `planar_cap_signed_volume` trusted stored hole-wire winding; a\nboolean's same-wound inner rim **added** its disc (drilled tube read\n1487 vs the true 420π ≈ 1319.47).\n3. `analytic_torus_signed_volume` used raw `[v_min, v_max]` for the\nperiodic tube angle, so a rim at z = −1.8e−16 projecting to v = 2π−ε\nintegrated the complementary arc (647.53 vs 888.26).\n\n## Fix\n\n- `revolve.rs`: classify profile edges for the analytic path —\napex-touching walls build the degenerate seam wire; annulus caps keep\nthe smaller rim as a hole wire with winding-derived orientation; a\npartial-turn circle profile builds one trimmed `Torus` band + 2 disc\ncaps with exact `V = π·R·ρ²·Δu` via the new\n`partial_torus_sector_volume` (seam-arc sweep angle cross-checked\nagainst the cap-plane dihedral).\n- `tessellate/nonplanar.rs`: new `tessellate_torus_two_rim_band` —\nstructured band from shared rim-pool vertices, handling both rim\norientations (constant-v latitude rims and constant-u tube rims); sweep\nside chosen by the doubled seam arc's midpoint.\n- `measure/volume.rs`: `planar_cap_signed_volume` now subtracts holes by\nmagnitude (winding-agnostic — a hole is inside the outer by definition);\nthe torus integrator picks the periodic v-range gap-wise like u, keeping\nthe 2-sample >π ambiguity guard.\n\n## Verification\n\n- Census (`approx_census`, `revolve_matrix`): pointed cone 12→2 faces,\nwasher 16→4, half-disc 8→2, new `circle 120° (trimmed Torus)` row at 3\nfaces; frustum/cylinder unchanged at 3 — all rows exact analytic, none\nregressed.\n- New/strengthened fixture tests in `crates/operations/src/revolve.rs`:\n- `revolve_circle_partial_turn_is_trimmed_torus` — 3-face topology,\nvalidate, watertight at 2 deflections, mesh-signed-volume material\ncheck, exact volume to 1e-9\n- `revolve_arc_profile_reversed_edge_torus_band` — reversed-arc-edge\nprofile; pins the torus v-seam integrator bug\n- `revolve_pointed_cone_apex_band_volume_is_exact` — 2-face apex-merged\ntopology, watertight, volume tolerance tightened 1e-3 → 1e-9\n- `revolve_washer_walls_are_exact_cylinders` — 4 faces, annulus caps\ncarry hole wires, watertight, exact volume\n- `revolve_arc_profile_edge_is_torus_band` — 2 faces, one periodic torus\nband, watertight\n- `cargo fmt --check`, `clippy --all-targets -D warnings`,\n`check-boundaries.sh` clean; gridfinity canary 27/27; operations volume\n+ tessellate suites green.\n\nDiscovered and roadmap-logged (not fixed here): both ray-cast\nclassifiers misread a torus band whose wire has <3 distinct vertices as\na full surface, so interior points classify Outside; repro is the\npartial-turn test's 3-face solid.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMerged the analytic revolve path to produce minimal exact faces for apex\ncones, annulus caps, and partial‑turn circle profiles, with NURBS‑arc\nseam support and a one‑sided guard for axis‑straddling profiles. This\ncuts face counts and keeps meshes watertight with exact volumes.\n\n- **New Features**\n- Apex-touching wall builds one periodic cone with a degenerate seam\n(12→2 faces).\n- Annulus caps are single planar faces that keep the smaller rim as a\nhole; walls reuse the original profile edge as the seam, and face\nnormals come from the profile’s (radial, axial) winding (washer 16→4).\n- Partial-turn circle builds one trimmed `Torus` band plus two disc caps\nwith exact volume V = π·R·ρ²·Δu; the structured torus-band tessellator\nuses shared rim vertices, accepts NURBS-circle seams, supports both rim\norientations, and picks the swept side via the seam arc’s midpoint.\n\n- **Bug Fixes**\n- `planar_cap_signed_volume` now subtracts hole wires by magnitude\n(fixes same-wound inner rims adding area).\n- `analytic_torus_signed_volume` picks the periodic v-range gap-wise to\navoid integrating the complementary tube arc near v ≈ 2π.\n- Torus band tessellation avoids CDT/snap cracks on fully-wrapping UVs\nand accepts NURBS seam edges; the analytic path defers for\naxis‑straddling profiles to prevent wrong outer/inner rim selection.\n\n<sup>Written for commit ccbfd5b8699767bdf51e1f20b105a33d31db542c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1062?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-10T21:06:55Z",
+          "tree_id": "ab72dda93adde18941dbb8427da9be70134c412b",
+          "url": "https://github.com/andymai/brepkit/commit/8b783b78e5721a63a894e82c6ea0413b69b674ae"
+        },
+        "date": 1783717878169,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 765867,
+            "range": "± 1259",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 851103,
+            "range": "± 1749",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11977,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 634404,
+            "range": "± 4434",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19629583,
+            "range": "± 90941",
             "unit": "ns/iter"
           }
         ]
