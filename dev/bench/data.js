@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783538090305,
+  "lastUpdate": 1783716447237,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3617,6 +3617,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19512442,
             "range": "± 272605",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4fe072fc086c3ebc2094b24c13e715884b2baf89",
+          "message": "feat(wasm): capture panic text for post-poison diagnosis (#1059)\n\n## Root cause\n\n`wasm32-unknown-unknown` compiles with `panic=abort` (verify: `rustc\n--print cfg --target wasm32-unknown-unknown`). A panic inside any\n`BrepKernel` method therefore traps inside the wasm-bindgen shim's\n`WasmRefCell` borrow scope: the `RefMut` never drops, the object's\nborrow flag stays locked forever, and every subsequent call throws\n\"recursive use of an object detected which would lead to unsafe aliasing\nin rust\" — masking the original panic text. `catch_unwind` is\nstructurally inert on this target, so the four existing manual wrap\nsites (fillet x2 in `bindings/operations.rs`, `compound_cut` in\n`bindings/booleans.rs`, fillet in `bindings/batch.rs`) protect only\nnative test consumers, and the `#[wasm_binding]` proc-macro is unwired\n(not a dependency of `brepkit-wasm`, zero usages, and its poisoned-path\nmessage references a nonexistent `reset()`). No Rust code can reset the\nborrow flag; the only recovery is a new `BrepKernel`.\n\nThe one thing that CAN be saved is the panic text: the panic hook still\nruns before the abort.\n\n## Fix\n\nNew `crates/wasm/src/panics.rs`:\n- `install_hook()` — idempotent chained panic hook, installed by\n`BrepKernel::new` (and thus `Default`). Records message + location into\na static and mirrors it to `console.error` as `[brepkit] panic: ...`\nbefore the abort, so the root cause survives JS callers that swallow the\ntrap's `RuntimeError`.\n- Free functions `lastPanicMessage()` / `clearLastPanicMessage()` —\nremain callable after the kernel object is poisoned (they never touch\nits borrow flag), so JS can read the root-cause text post-mortem.\n\nAlso swept: zero bare `Instant::now()` reachable from wasm (all\ncfg-gated `timer_now` or test-only).\n\nThe 2026-07-08 combinedFeatures \"handles + label (back skip)\"\nswallowed-panic case does NOT reproduce on stock 2.124.13 (independent\noverlay re-run: 1/1 structural pass, ~154s, no panic) — likely closed by\nthe #1054/#1057 GFA merges. If the family resurfaces it now self-reports\nvia `lastPanicMessage()`. Roadmap and wasm-bindings skill updated with\nthe abort semantics and the diagnosis recipe.\n\n## Verification\n\n- New regression test: `crates/wasm/src/panics.rs`\n`tests::hook_records_panic_message_and_location` (hook records panic\nmessage + location; clear resets)\n- `cargo test -p brepkit-wasm`: 229 passed, 0 failed\n- Canary: `cargo test -p brepkit-wasm --lib gridfinity`: 27 passed\n- `cargo build -p brepkit-wasm --target wasm32-unknown-unknown`: clean\n- `cargo fmt --all --check`, `cargo clippy --all-targets -- -D\nwarnings`, `./scripts/check-boundaries.sh`: all clean\n- Pre-push hook (full workspace tests + cargo-deny): passed\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a panic-capture hook for wasm so panic text survives `panic=abort`\nand can be read from JS after a poisoned kernel, improving post-mortem\ndebugging without changing op behavior.\n\n- **New Features**\n- New `crates/wasm/src/panics.rs` installs a chained panic hook (from\n`BrepKernel::new`); records the last panic and mirrors it to\n`console.error` as “[brepkit] panic: …”.\n- Adds `lastPanicMessage()` and `clearLastPanicMessage()` free\nfunctions; remain callable after borrow poisoning.\n- Exposes the module via `pub mod panics`; docs note\n`wasm32-unknown-unknown` is `panic=abort` and `catch_unwind` is inert on\nwasm.\n\n- **Bug Fixes**\n- Stabilized the regression test by serializing access to the\nprocess-global panic state to avoid parallel test races.\n\n<sup>Written for commit 01f7728f6fa2212e458e33426a8ddbb789ddd861.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1059?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-10T20:45:07Z",
+          "tree_id": "18771963ad88f361d6e353f7850cc89ba2f22f41",
+          "url": "https://github.com/andymai/brepkit/commit/4fe072fc086c3ebc2094b24c13e715884b2baf89"
+        },
+        "date": 1783716446212,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 757775,
+            "range": "± 908",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 845992,
+            "range": "± 12228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12073,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 637833,
+            "range": "± 1834",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19489802,
+            "range": "± 1442820",
             "unit": "ns/iter"
           }
         ]
