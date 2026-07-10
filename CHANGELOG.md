@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.125.2](https://github.com/andymai/brepkit/compare/v2.125.1...v2.125.2) (2026-07-10)
+
+
+### Bug Fixes
+
+* **operations:** make mesh-boolean fallback output conforming and manifold ([#1061](https://github.com/andymai/brepkit/issues/1061)) ([5011607](https://github.com/andymai/brepkit/commit/5011607dfdb1b142005b532627d944287bbdd67b))
+
 ## [2.125.1](https://github.com/andymai/brepkit/compare/v2.125.0...v2.125.1) (2026-07-10)
 
 
