@@ -1533,25 +1533,34 @@ fn trim_open_curve_to_plane_face_lines(
             if seg_len < tol.linear {
                 continue;
             }
+            // A sample landing numerically ON the carrier line zeroes BOTH
+            // adjacent products, so a pure sign-change test would skip the
+            // crossing entirely; record such a sample as the crossing itself.
+            let on_eps = seg_len * 1e-12;
             for i in 0..n_samples {
                 let (t_lo, t_hi) = (sample_t(i), sample_t(i + 1));
                 let (s_lo, s_hi) = (side(t_lo, a, b), side(t_hi, a, b));
-                if s_lo == 0.0 || s_lo * s_hi >= 0.0 {
+                let t_star = if s_lo.abs() <= on_eps {
+                    t_lo
+                } else if s_hi.abs() <= on_eps {
+                    t_hi
+                } else if s_lo * s_hi > 0.0 {
                     continue;
-                }
-                // Bisect the side function to the carrier-line crossing.
-                let (mut lo, mut hi, mut sl) = (t_lo, t_hi, s_lo);
-                for _ in 0..60 {
-                    let mid = f64::midpoint(lo, hi);
-                    let sm = side(mid, a, b);
-                    if sm * sl < 0.0 {
-                        hi = mid;
-                    } else {
-                        lo = mid;
-                        sl = sm;
+                } else {
+                    // Bisect the side function to the carrier-line crossing.
+                    let (mut lo, mut hi, mut sl) = (t_lo, t_hi, s_lo);
+                    for _ in 0..60 {
+                        let mid = f64::midpoint(lo, hi);
+                        let sm = side(mid, a, b);
+                        if sm * sl < 0.0 {
+                            hi = mid;
+                        } else {
+                            lo = mid;
+                            sl = sm;
+                        }
                     }
-                }
-                let t_star = f64::midpoint(lo, hi);
+                    f64::midpoint(lo, hi)
+                };
                 let uv = frame.project(eval_at(t_star));
                 // On the SEGMENT (not just its carrier line), with endpoint
                 // slack — a crossing at a face corner belongs to both
@@ -1599,6 +1608,7 @@ fn trim_open_curve_to_plane_face_lines(
                 .project_point(eval_at(t))
                 .map(|(u, _)| wrap(u - g))
         };
+        let ang_eps = 1e-12_f64;
         for &g in &[gap.0, gap.1] {
             for i in 0..n_samples {
                 let (t_lo, t_hi) = (sample_t(i), sample_t(i + 1));
@@ -1606,22 +1616,30 @@ fn trim_open_curve_to_plane_face_lines(
                     continue;
                 };
                 // Only local edge crossings: a sign flip π away is the wrap
-                // seam of the offset function, not a window-edge crossing.
-                if s_lo == 0.0 || s_lo * s_hi >= 0.0 || s_lo.abs() > 1.0 || s_hi.abs() > 1.0 {
+                // seam of the offset function, not a window-edge crossing. A
+                // sample numerically ON the window edge zeroes both adjacent
+                // products, defeating the sign-change test — record it as the
+                // crossing itself (its companion must still be local).
+                let t_star = if s_lo.abs() <= ang_eps && s_hi.abs() <= 1.0 {
+                    t_lo
+                } else if s_hi.abs() <= ang_eps && s_lo.abs() <= 1.0 {
+                    t_hi
+                } else if s_lo * s_hi > 0.0 || s_lo.abs() > 1.0 || s_hi.abs() > 1.0 {
                     continue;
-                }
-                let (mut lo, mut hi, mut sl) = (t_lo, t_hi, s_lo);
-                for _ in 0..60 {
-                    let mid = f64::midpoint(lo, hi);
-                    let Some(sm) = angle_to(mid, g) else { break };
-                    if sm * sl < 0.0 {
-                        hi = mid;
-                    } else {
-                        lo = mid;
-                        sl = sm;
+                } else {
+                    let (mut lo, mut hi, mut sl) = (t_lo, t_hi, s_lo);
+                    for _ in 0..60 {
+                        let mid = f64::midpoint(lo, hi);
+                        let Some(sm) = angle_to(mid, g) else { break };
+                        if sm * sl < 0.0 {
+                            hi = mid;
+                        } else {
+                            lo = mid;
+                            sl = sm;
+                        }
                     }
-                }
-                let t_star = f64::midpoint(lo, hi);
+                    f64::midpoint(lo, hi)
+                };
                 if !crossings.iter().any(|&c| (c - t_star).abs() < 1e-9) {
                     crossings.push(t_star);
                 }
@@ -1670,10 +1688,12 @@ fn trim_open_curve_to_plane_face_lines(
         // marched conic (garbage UV endpoints on the cone face, a corrupt
         // refit pcurve on the plane face). `curve_split` preserves the
         // parameterization, so `t_range` stays `(t0, t1)` and the trimmed
-        // curve's knot domain IS that span.
+        // curve's knot domain IS that span. A failed split (numerical, near a
+        // knot) must NOT fall back to the untrimmed curve — that is exactly
+        // the corrupt state described above — so defer the WHOLE curve to the
+        // generic sample-clip instead.
         let piece_curve = match &raw.curve {
-            EdgeCurve::NurbsCurve(n) => trim_nurbs_to_span(n, t0, t1)
-                .map_or_else(|| raw.curve.clone(), EdgeCurve::NurbsCurve),
+            EdgeCurve::NurbsCurve(n) => EdgeCurve::NurbsCurve(trim_nurbs_to_span(n, t0, t1)?),
             other => other.clone(),
         };
         pieces.push(RawCurve {
