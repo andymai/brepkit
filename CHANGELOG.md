@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.126.0](https://github.com/andymai/brepkit/compare/v2.125.2...v2.126.0) (2026-07-10)
+
+
+### Features
+
+* **operations:** merge analytic revolve segments — apex cone, annulus caps, partial-turn torus ([#1062](https://github.com/andymai/brepkit/issues/1062)) ([8b783b7](https://github.com/andymai/brepkit/commit/8b783b78e5721a63a894e82c6ea0413b69b674ae))
+
+
+### Bug Fixes
+
+* **algo:** close the dovetail tongue-relief cut family ([#1063](https://github.com/andymai/brepkit/issues/1063)) ([a633c5f](https://github.com/andymai/brepkit/commit/a633c5fc947315c7a4fe69b03672b22beff84412))
+
 ## [2.125.2](https://github.com/andymai/brepkit/compare/v2.125.1...v2.125.2) (2026-07-10)
 
 
