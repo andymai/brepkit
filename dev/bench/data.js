@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783717319191,
+  "lastUpdate": 1783717718232,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3887,6 +3887,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20670813,
             "range": "± 42785",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6126459fd348528b4892a9d361a4d58396a93085",
+          "message": "chore(main): release 2.125.2 (#1066)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.125.2](https://github.com/andymai/brepkit/compare/v2.125.1...v2.125.2)\n(2026-07-10)\n\n\n### Bug Fixes\n\n* **operations:** make mesh-boolean fallback output conforming and\nmanifold ([#1061](https://github.com/andymai/brepkit/issues/1061))\n([5011607](https://github.com/andymai/brepkit/commit/5011607dfdb1b142005b532627d944287bbdd67b))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.125.2 for `brepkit-wasm` fixes the mesh-boolean fallback to\nensure conforming, manifold meshes. This improves the reliability of\nboolean operations in edge cases.\n\n- **Bug Fixes**\n- Mesh-boolean fallback now outputs conforming, manifold meshes to\nprevent non-manifold artifacts.\n\n<sup>Written for commit 6f2440a57beff6edbeac15b336dcc3698ca4c265.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1066?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-10T21:06:10Z",
+          "tree_id": "818d33f71a0e6d03c74eebc46e6321864537d502",
+          "url": "https://github.com/andymai/brepkit/commit/6126459fd348528b4892a9d361a4d58396a93085"
+        },
+        "date": 1783717717113,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 776307,
+            "range": "± 1567",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 875911,
+            "range": "± 20283",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13111,
+            "range": "± 147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631576,
+            "range": "± 764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20388650,
+            "range": "± 33788",
             "unit": "ns/iter"
           }
         ]
