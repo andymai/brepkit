@@ -1,0 +1,38 @@
+crates/wasm/src/kernel.rs
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 57
+.claude/skills/roadmap/SKILL.md
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 132,135,179-185
+.release-please-manifest.json
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 2
+crates/operations/tests/regress_blend_trim_neighbor_split.rs
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 1-176
+crates/wasm/src/lib.rs
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 16
+crates/wasm/Cargo.toml
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 10
+.claude/skills/wasm-bindings/SKILL.md
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 30,48-49
+crates/wasm/src/panics.rs
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 1-97
+CHANGELOG.md
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 3-9
+crates/blend/src/trimmer.rs
+  s_7f4494de1ca5a8::t_d80a5d037cd15a 16,181-193,220-221,223,266-267,271,273,278,280,325-326,335-394,650-656,660-668,828-1016
+  s_7f4494de1ca5a8::t_cedc6363a6fb05 1017
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "9317980e418d4ca6257d666d529147f49c009b10",
+  "prompts": {},
+  "sessions": {
+    "s_7f4494de1ca5a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a289991e-64c7-4b51-9e83-9571d530005f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
