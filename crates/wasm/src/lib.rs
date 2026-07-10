@@ -13,6 +13,7 @@ mod handles;
 mod helpers;
 pub mod kernel;
 mod logging;
+pub mod panics;
 pub mod shapes;
 mod state;
 mod types;
