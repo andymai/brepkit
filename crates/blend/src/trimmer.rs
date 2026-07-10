@@ -13,7 +13,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::vertex::{Vertex, VertexId};
-use brepkit_topology::wire::{OrientedEdge, Wire};
+use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::BlendError;
 
@@ -178,6 +178,13 @@ pub fn trim_face(
     let hit_a = &hits[0];
     let hit_b = &hits[1];
 
+    // Both hits on one edge would need an intermediate va→vb sub-edge along
+    // the original curve; v1 only handles hits on different edges. Bail
+    // before the splits so no wires are mutated on the failure path.
+    if hit_a.edge_idx == hit_b.edge_idx {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    }
+
     let va_id = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
     let vb_id = topo.add_vertex(Vertex::new(hit_b.point_3d, VERTEX_TOL));
 
@@ -204,21 +211,10 @@ pub fn trim_face(
     let mut chain2: Vec<OrientedEdge> = Vec::new();
 
     chain1.push(sub_a2);
-    if hit_a.edge_idx != hit_b.edge_idx {
-        for i in (hit_a.edge_idx + 1)..hit_b.edge_idx {
-            chain1.push(oriented_edges[i]);
-        }
-        chain1.push(sub_b1);
+    for i in (hit_a.edge_idx + 1)..hit_b.edge_idx {
+        chain1.push(oriented_edges[i]);
     }
-    // If same edge, sub_a2 already ends at the split and sub_b1 starts there;
-    // we handle this by noting sub_a2's end is va and sub_b1's start is also
-    // the original edge's start — but actually if they are on the same edge
-    // the sub-edges already cover the range. We need an intermediate edge:
-    // from va to vb along the original edge. This case is complex; for v1
-    // we only handle the common case of hits on different edges.
-    if hit_a.edge_idx == hit_b.edge_idx {
-        return Err(BlendError::TrimmingFailure { face: face_id });
-    }
+    chain1.push(sub_b1);
 
     chain2.push(sub_b2);
     for i in (hit_b.edge_idx + 1)..n_edges {
@@ -261,19 +257,21 @@ pub fn trim_face(
     let cross = contact_dir.cross(to_sample);
     let chain1_is_left = face_normal.dot(cross) > 0.0;
 
+    // chain1 runs va→…→vb, so the contact edge (va→vb) closes it REVERSED;
+    // chain2 runs vb→…→va and closes with the contact edge forward.
     let (kept_chain, contact_forward) = match keep_side {
         TrimSide::Left => {
             if chain1_is_left {
-                (chain1, true) // contact va→vb closes the loop
+                (chain1, false)
             } else {
-                (chain2, false) // contact vb→va closes the loop
+                (chain2, true)
             }
         }
         TrimSide::Right => {
             if chain1_is_left {
-                (chain2, false)
+                (chain2, true)
             } else {
-                (chain1, true)
+                (chain1, false)
             }
         }
     };
@@ -318,12 +316,60 @@ fn split_edge_at(
     let e1_id = topo.add_edge(Edge::new(start_vid, split_vertex, curve.clone()));
     let e2_id = topo.add_edge(Edge::new(split_vertex, end_vid, curve));
 
+    propagate_split(topo, oe.edge(), oe.is_forward(), e1_id, e2_id)?;
+
     // Both sub-edges are traversed forward in the oriented direction
     // because we constructed them S→V and V→E matching the traversal.
     Ok((
         OrientedEdge::new(e1_id, true),
         OrientedEdge::new(e2_id, true),
     ))
+}
+
+/// Rewrite every wire referencing the split edge to use its two sub-edges.
+///
+/// A boundary edge crossed by a contact curve is usually shared with a
+/// neighbor face that is not itself trimmed (a cap or rim face). Rebuilding
+/// only the trimmed face's wire would leave that neighbor referencing the
+/// old unsplit edge: the kept sub-edge and the stale edge each end up used
+/// by a single face, opening the shell along the shared span.
+///
+/// `split_forward` is the traversal direction the sub-edges were built in:
+/// `e1` runs oriented-start→vertex and `e2` vertex→oriented-end for an
+/// occurrence with that orientation; an opposite occurrence traverses
+/// `e2` then `e1`, both reversed.
+fn propagate_split(
+    topo: &mut Topology,
+    old_edge: EdgeId,
+    split_forward: bool,
+    e1: EdgeId,
+    e2: EdgeId,
+) -> Result<(), BlendError> {
+    let mut updates: Vec<(WireId, Vec<OrientedEdge>, bool)> = Vec::new();
+    for (wid, wire) in topo.wires().iter() {
+        if !wire.edges().iter().any(|oe| oe.edge() == old_edge) {
+            continue;
+        }
+        let mut new_edges: Vec<OrientedEdge> = Vec::with_capacity(wire.edges().len() + 1);
+        for oe in wire.edges() {
+            if oe.edge() == old_edge {
+                if oe.is_forward() == split_forward {
+                    new_edges.push(OrientedEdge::new(e1, true));
+                    new_edges.push(OrientedEdge::new(e2, true));
+                } else {
+                    new_edges.push(OrientedEdge::new(e2, false));
+                    new_edges.push(OrientedEdge::new(e1, false));
+                }
+            } else {
+                new_edges.push(*oe);
+            }
+        }
+        updates.push((wid, new_edges, wire.is_closed()));
+    }
+    for (wid, edges, closed) in updates {
+        *topo.wire_mut(wid)? = Wire::new(edges, closed)?;
+    }
+    Ok(())
 }
 
 /// Compute a local 2D coordinate frame for a planar face.
@@ -578,31 +624,6 @@ pub fn trim_face_general(
     let va = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
     let vb = topo.add_vertex(Vertex::new(hit_b.point_3d, VERTEX_TOL));
 
-    let oe_a = edge_data_uv[hit_a.edge_idx].0;
-    let edge_a = topo.edge(oe_a.edge())?;
-    let (sa, ea) = if oe_a.is_forward() {
-        (edge_a.start(), edge_a.end())
-    } else {
-        (edge_a.end(), edge_a.start())
-    };
-    let curve_a = edge_a.curve().clone();
-
-    let oe_b = edge_data_uv[hit_b.edge_idx].0;
-    let edge_b = topo.edge(oe_b.edge())?;
-    let (sb, eb) = if oe_b.is_forward() {
-        (edge_b.start(), edge_b.end())
-    } else {
-        (edge_b.end(), edge_b.start())
-    };
-    let curve_b = edge_b.curve().clone();
-
-    let ea_pre = topo.add_edge(Edge::new(sa, va, curve_a.clone()));
-    let ea_post = topo.add_edge(Edge::new(va, ea, curve_a));
-    let eb_pre = topo.add_edge(Edge::new(sb, vb, curve_b.clone()));
-    let eb_post = topo.add_edge(Edge::new(vb, eb, curve_b));
-
-    let contact_eid = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
-
     // Build the trimmed wire loop: walk the boundary, replacing split edges,
     // inserting the contact edge at the appropriate point.
     let idx_a = hit_a.edge_idx;
@@ -612,6 +633,15 @@ pub fn trim_face_general(
     if idx_a == idx_b {
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
+
+    let oe_a = edge_data_uv[hit_a.edge_idx].0;
+    let oe_b = edge_data_uv[hit_b.edge_idx].0;
+    let (sub_a1, sub_a2) = split_edge_at(topo, &oe_a, va)?;
+    let (sub_b1, sub_b2) = split_edge_at(topo, &oe_b, vb)?;
+    let (ea_pre, ea_post) = (sub_a1.edge(), sub_a2.edge());
+    let (eb_pre, eb_post) = (sub_b1.edge(), sub_b2.edge());
+
+    let contact_eid = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
 
     // Build "left" side wire: edges from idx_a..idx_b + contact edge.
     // New split edges (ea_post, eb_pre, etc.) are created in traversal order,
@@ -769,6 +799,123 @@ mod tests {
             pts.iter()
                 .any(|p| (p.0 - 0.5).abs() < 1e-10 && (p.1 - 1.0).abs() < 1e-10),
             "expected intersection at (0.5, 1, 0)"
+        );
+    }
+
+    /// Attach a neighbor square below the shared bottom edge `e0` of
+    /// [`make_square_face`], in the y=0 plane. The neighbor traverses `e0`
+    /// reversed (manifold convention).
+    fn attach_neighbor_below(
+        topo: &mut Topology,
+        v0: VertexId,
+        v1: VertexId,
+        e0: EdgeId,
+    ) -> FaceId {
+        let v4 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, -1.0), VERTEX_TOL));
+        let v5 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, -1.0), VERTEX_TOL));
+        let e5 = topo.add_edge(Edge::new(v0, v5, EdgeCurve::Line));
+        let e6 = topo.add_edge(Edge::new(v5, v4, EdgeCurve::Line));
+        let e7 = topo.add_edge(Edge::new(v4, v1, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, false),
+                OrientedEdge::new(e5, true),
+                OrientedEdge::new(e6, true),
+                OrientedEdge::new(e7, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.add_wire(wire);
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, -1.0, 0.0),
+            d: 0.0,
+        };
+        topo.add_face(Face::new(wire_id, Vec::new(), surface))
+    }
+
+    /// Verify each oriented edge's end vertex matches the next one's start.
+    fn assert_wire_connected(topo: &Topology, face_id: FaceId) {
+        let wire = topo.wire(topo.face(face_id).unwrap().outer_wire()).unwrap();
+        let oes = wire.edges();
+        for i in 0..oes.len() {
+            let cur = topo.edge(oes[i].edge()).unwrap();
+            let next_oe = oes[(i + 1) % oes.len()];
+            let next = topo.edge(next_oe.edge()).unwrap();
+            assert_eq!(
+                oes[i].oriented_end(cur),
+                next_oe.oriented_start(next),
+                "wire of face {face_id:?} is disconnected at position {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn split_propagates_into_neighbor_wire() {
+        let mut topo = Topology::new();
+        let (face_id, verts, edges) = make_square_face(&mut topo);
+        let neighbor = attach_neighbor_below(&mut topo, verts[0], verts[1], edges[0]);
+
+        // Vertical contact line at x = 0.5 splits e0 (shared with the
+        // neighbor) and e2 (unshared).
+        let contact_3d = vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
+        let contact_uv = vec![(0.5, 0.0), (0.5, 1.0)];
+        let result = trim_face(&mut topo, face_id, &contact_3d, &contact_uv, TrimSide::Left)
+            .expect("trim should succeed");
+
+        // The neighbor must no longer reference the stale unsplit edge.
+        let neighbor_wire = topo
+            .wire(topo.face(neighbor).unwrap().outer_wire())
+            .unwrap();
+        assert!(
+            neighbor_wire.edges().iter().all(|oe| oe.edge() != edges[0]),
+            "neighbor still references the split edge {:?}",
+            edges[0]
+        );
+        assert_eq!(
+            neighbor_wire.edges().len(),
+            5,
+            "neighbor wire should gain one edge from the split"
+        );
+        assert_wire_connected(&topo, neighbor);
+        assert_wire_connected(&topo, result.trimmed_face);
+
+        // The neighbor's replacement must traverse v1 -> split vertex -> v0
+        // (it referenced e0 reversed), passing through the split point.
+        let split_v = result
+            .new_vertices
+            .iter()
+            .copied()
+            .find(|&vid| {
+                let p = topo.vertex(vid).unwrap().point();
+                p.y().abs() < 1e-9
+            })
+            .expect("split vertex on the shared edge");
+        assert!(
+            neighbor_wire.edges().iter().any(|oe| {
+                let e = topo.edge(oe.edge()).unwrap();
+                oe.oriented_start(e) == split_v
+            }),
+            "neighbor wire should pass through the split vertex"
+        );
+
+        // Exactly one sub-edge of the shared split is used by both the
+        // trimmed face and the neighbor (the kept side); the other is used
+        // by the neighbor alone.
+        let trimmed_wire = topo
+            .wire(topo.face(result.trimmed_face).unwrap().outer_wire())
+            .unwrap();
+        let shared_subs: Vec<EdgeId> = neighbor_wire
+            .edges()
+            .iter()
+            .map(OrientedEdge::edge)
+            .filter(|eid| trimmed_wire.edges().iter().any(|toe| toe.edge() == *eid))
+            .collect();
+        assert_eq!(
+            shared_subs.len(),
+            1,
+            "exactly one sub-edge should be shared between the trimmed face \
+             and the neighbor, got {shared_subs:?}"
         );
     }
 
