@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783716447237,
+  "lastUpdate": 1783716782190,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3671,6 +3671,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19489802,
             "range": "± 1442820",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3fc10a29db913d1f346249d757ad3552f42b1299",
+          "message": "chore(main): release 2.125.0 (#1064)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.125.0](https://github.com/andymai/brepkit/compare/v2.124.13...v2.125.0)\n(2026-07-10)\n\n\n### Features\n\n* **wasm:** capture panic text for post-poison diagnosis\n([#1059](https://github.com/andymai/brepkit/issues/1059))\n([4fe072f](https://github.com/andymai/brepkit/commit/4fe072fc086c3ebc2094b24c13e715884b2baf89))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.125.0 adds panic text capture in `brepkit-wasm` to improve\npost-poison diagnosis and make failures easier to debug.\n\n<sup>Written for commit 043ad6d6c73b0c4501d152e49866bac8ba1d28c2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1064?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-10T20:50:32Z",
+          "tree_id": "a8ba2521e9746ce852a712433e4dde8e59702052",
+          "url": "https://github.com/andymai/brepkit/commit/3fc10a29db913d1f346249d757ad3552f42b1299"
+        },
+        "date": 1783716781168,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 762094,
+            "range": "± 1672",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 846445,
+            "range": "± 1071",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12025,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 634763,
+            "range": "± 1552",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19562690,
+            "range": "± 188538",
             "unit": "ns/iter"
           }
         ]
