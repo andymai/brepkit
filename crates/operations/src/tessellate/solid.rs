@@ -12,7 +12,7 @@ use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_d
 use super::mesh_ops::{dedupe_coincident_triangles, weld_boundary_vertices};
 use super::nonplanar::{
     tessellate_latitude_band_shared, tessellate_nonplanar_cdt, tessellate_nonplanar_snap,
-    tessellate_revolution_band_shared, tessellate_torus_notch_band,
+    tessellate_revolution_band_shared, tessellate_torus_notch_band, tessellate_torus_two_rim_band,
 };
 use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
@@ -947,7 +947,22 @@ pub(super) fn tessellate_face_with_shared_edges(
                 point_to_global,
             )?;
 
+        // A full-revolution torus band between two closed rims (an analytic
+        // revolve's arc-profile wall, seamed by its doubled profile arc) is
+        // structured from the shared rim vertices, like the cylinder/cone
+        // standard band — CDT degenerates on its fully-u-wrapping UV image and
+        // the snap path re-samples the rims into cracks.
         let handled_band = handled_notch
+            || (matches!(face_data.surface(), FaceSurface::Torus(_))
+                && tessellate_torus_two_rim_band(
+                    topo,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    edge_global_indices,
+                    merged,
+                    point_to_global,
+                )?)
             || (matches!(
                 face_data.surface(),
                 FaceSurface::Sphere(_) | FaceSurface::Torus(_)

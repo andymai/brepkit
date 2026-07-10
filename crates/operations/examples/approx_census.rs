@@ -369,16 +369,16 @@ fn surf_tags(topo: &Topology, s: SolidId) -> String {
 /// Revolve survey: each profile-edge type revolves into its exact analytic
 /// surface of revolution — axis-parallel line → `Cylinder`, oblique line →
 /// `Cone`, perpendicular line → `Plane`, circular arc → `Torus`. A fully-analytic
-/// full revolution with disc caps builds ONE periodic face per profile edge
-/// (frustum/cylinder → 3 faces, matching the primitives); profiles with a
-/// pointed-cone apex or an annulus cap keep the segmented (analytic but
-/// over-segmented) bands — still NURBS-free for the walls.
+/// full revolution builds ONE periodic face per profile edge (frustum/cylinder
+/// → 3 faces, matching the primitives; pointed-cone apex → degenerate seam
+/// wall; annulus caps keep the smaller rim as a hole wire); a partial turn of a
+/// circle profile builds one trimmed `Torus` band plus two disc caps.
 fn revolve_matrix() {
     println!("\nREVOLVE (profile edges → analytic surfaces of revolution):");
     let z = Point3::new(0.0, 0.0, 0.0);
     let zdir = Vec3::new(0.0, 0.0, 1.0);
 
-    let cases: [(&str, &[(f64, f64)]); 3] = [
+    let cases: [(&str, &[(f64, f64)]); 4] = [
         // Oblique outer wall → Cone, perpendicular caps → Plane (solid frustum,
         // caps reach the axis).
         (
@@ -394,6 +394,12 @@ fn revolve_matrix() {
         (
             "pointed cone (apex on axis)",
             &[(5.0, 0.0), (0.0, 12.0), (0.0, 0.0)],
+        ),
+        // Off-axis rectangle → washer: two cylinder walls + two annulus caps
+        // (each keeping its inner rim as a hole wire).
+        (
+            "washer (annulus caps w/ hole)",
+            &[(3.0, 0.0), (5.0, 0.0), (5.0, 8.0), (3.0, 8.0)],
         ),
     ];
     for (name, pts) in cases {
@@ -427,6 +433,49 @@ fn revolve_matrix() {
             &[format!("err: {e}")],
         ),
     }
+
+    // Partial turn of a full-circle profile → ONE trimmed `Torus` band + two
+    // planar disc caps (not segmented patches).
+    let mut topo = Topology::new();
+    match build_circle_profile(&mut topo) {
+        Ok(face) => report_revolve_angle(
+            &mut topo,
+            "circle 120° (trimmed Torus)",
+            face,
+            z,
+            zdir,
+            2.0 * std::f64::consts::FRAC_PI_3,
+        ),
+        Err(e) => report(
+            "revolve",
+            "circle 120° (trimmed Torus) [build ERR]",
+            0.0,
+            0,
+            &[format!("err: {e}")],
+        ),
+    }
+}
+
+/// Build a full-circle profile clearing the axis (centre at radius 6, ρ = 2)
+/// for the partial-turn trimmed-torus case.
+fn build_circle_profile(topo: &mut Topology) -> Result<FaceId, Box<dyn Error>> {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+    let circ = Circle3D::new(Point3::new(6.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 2.0)?;
+    let p0 = circ.evaluate(0.0);
+    let v0 = topo.add_vertex(Vertex::new(p0, 1e-7));
+    let eid = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(circ)));
+    let wire = Wire::new(vec![OrientedEdge::new(eid, true)], true)?;
+    let wid = topo.add_wire(wire);
+    Ok(topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: 0.0,
+        },
+    )))
 }
 
 /// Build the half-disc profile (a semicircle arc bulging away from the axis,
@@ -466,9 +515,21 @@ fn build_half_disc_profile(topo: &mut Topology) -> Result<FaceId, Box<dyn Error>
 /// (so any `brepkit_approx` probe that fires is surfaced), with the analytic
 /// surface-type breakdown appended.
 fn report_revolve(topo: &mut Topology, name: &str, face: FaceId, z: Point3, zdir: Vec3) {
+    report_revolve_angle(topo, name, face, z, zdir, std::f64::consts::TAU);
+}
+
+/// [`report_revolve`] with an explicit sweep angle (for partial-turn cases).
+fn report_revolve_angle(
+    topo: &mut Topology,
+    name: &str,
+    face: FaceId,
+    z: Point3,
+    zdir: Vec3,
+    angle: f64,
+) {
     let _ = drain();
     let t = Instant::now();
-    let res = revolve(topo, face, z, zdir, std::f64::consts::TAU);
+    let res = revolve(topo, face, z, zdir, angle);
     let ms = t.elapsed().as_secs_f64() * 1000.0;
     let mut ev = drain();
     match res {
