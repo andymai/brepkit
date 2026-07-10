@@ -179,9 +179,15 @@ pub fn trim_face(
     let hit_b = &hits[1];
 
     // Both hits on one edge would need an intermediate va→vb sub-edge along
-    // the original curve; v1 only handles hits on different edges. Bail
-    // before the splits so no wires are mutated on the failure path.
-    if hit_a.edge_idx == hit_b.edge_idx {
+    // the original curve; v1 only handles hits on different edges. The
+    // EdgeId comparison also rejects two hits on distinct wire positions of
+    // a repeated (seam-style) edge: the second split_edge_at would re-split
+    // the original edge that the first propagate_split already rewrote out
+    // of every wire, leaving the second sub-edge pair orphaned. Bail before
+    // the splits so no wires are mutated on the failure path.
+    if hit_a.edge_idx == hit_b.edge_idx
+        || edge_data[hit_a.edge_idx].0.edge() == edge_data[hit_b.edge_idx].0.edge()
+    {
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
 
@@ -368,6 +374,20 @@ fn propagate_split(
     }
     for (wid, edges, closed) in updates {
         *topo.wire_mut(wid)? = Wire::new(edges, closed)?;
+    }
+    // Drop registry pcurves keyed by the now-unreferenced edge so per-face
+    // enumeration (pcurves_for_face) cannot pick up a stale full-span entry.
+    // The sub-edges deliberately get none: downstream consumers regenerate
+    // lazily (boolean assembly) or fall back to direct surface projection
+    // (tessellation), matching every other edge the blend engine creates.
+    let stale_faces: Vec<FaceId> = topo
+        .pcurves()
+        .pcurves_for_edge(old_edge)
+        .into_iter()
+        .map(|(fid, _)| fid)
+        .collect();
+    for fid in stale_faces {
+        topo.pcurves_mut().remove(old_edge, fid);
     }
     Ok(())
 }
@@ -621,21 +641,24 @@ pub fn trim_face_general(
 
     let hit_a = &hits[0];
     let hit_b = &hits[1];
-    let va = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
-    let vb = topo.add_vertex(Vertex::new(hit_b.point_3d, VERTEX_TOL));
 
     // Build the trimmed wire loop: walk the boundary, replacing split edges,
     // inserting the contact edge at the appropriate point.
     let idx_a = hit_a.edge_idx;
     let idx_b = hit_b.edge_idx;
 
-    // Both hits on the same edge: degenerate case
-    if idx_a == idx_b {
+    let oe_a = edge_data_uv[idx_a].0;
+    let oe_b = edge_data_uv[idx_b].0;
+
+    // Same wire position, or two positions of a repeated (seam-style) edge:
+    // the second split would re-split the edge the first propagate_split
+    // already rewrote out of every wire. Bail before any mutation.
+    if idx_a == idx_b || oe_a.edge() == oe_b.edge() {
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
 
-    let oe_a = edge_data_uv[hit_a.edge_idx].0;
-    let oe_b = edge_data_uv[hit_b.edge_idx].0;
+    let va = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
+    let vb = topo.add_vertex(Vertex::new(hit_b.point_3d, VERTEX_TOL));
     let (sub_a1, sub_a2) = split_edge_at(topo, &oe_a, va)?;
     let (sub_b1, sub_b2) = split_edge_at(topo, &oe_b, vb)?;
     let (ea_pre, ea_post) = (sub_a1.edge(), sub_a2.edge());
@@ -916,6 +939,79 @@ mod tests {
             1,
             "exactly one sub-edge should be shared between the trimmed face \
              and the neighbor, got {shared_subs:?}"
+        );
+    }
+
+    #[test]
+    fn seam_style_repeated_edge_bails_without_mutation() {
+        let mut topo = Topology::new();
+
+        // Slit face: one edge traversed forward then reversed, so the same
+        // EdgeId occupies two wire positions — the seam configuration. A
+        // crossing contact line hits both positions.
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), VERTEX_TOL));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), VERTEX_TOL));
+        let e_seam = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_seam, true),
+                OrientedEdge::new(e_seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.add_wire(wire);
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let face_id = topo.add_face(Face::new(wire_id, Vec::new(), surface));
+
+        let n_vertices = topo.num_vertices();
+        let n_edges = topo.num_edges();
+
+        let contact_3d = vec![Point3::new(0.5, -1.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
+        let contact_uv = vec![(0.5, -1.0), (0.5, 1.0)];
+        let result = trim_face(&mut topo, face_id, &contact_3d, &contact_uv, TrimSide::Left);
+        assert!(
+            matches!(result, Err(BlendError::TrimmingFailure { .. })),
+            "two hits on one repeated edge must be rejected"
+        );
+
+        // The failure path must not have mutated anything: no minted
+        // vertices/edges and the wire still references the seam edge twice.
+        assert_eq!(topo.num_vertices(), n_vertices);
+        assert_eq!(topo.num_edges(), n_edges);
+        let wire = topo.wire(wire_id).unwrap();
+        assert_eq!(wire.edges().len(), 2);
+        assert!(wire.edges().iter().all(|oe| oe.edge() == e_seam));
+    }
+
+    #[test]
+    fn propagate_split_drops_stale_pcurve_entries() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::pcurve::PCurve;
+
+        let mut topo = Topology::new();
+        let (face_id, verts, edges) = make_square_face(&mut topo);
+        let neighbor = attach_neighbor_below(&mut topo, verts[0], verts[1], edges[0]);
+
+        let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
+        topo.pcurves_mut().set(
+            edges[0],
+            neighbor,
+            PCurve::new(Curve2D::Line(line), 0.0, 1.0),
+        );
+
+        let contact_3d = vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
+        let contact_uv = vec![(0.5, 0.0), (0.5, 1.0)];
+        trim_face(&mut topo, face_id, &contact_3d, &contact_uv, TrimSide::Left)
+            .expect("trim should succeed");
+
+        assert!(
+            !topo.pcurves().contains(edges[0], neighbor),
+            "stale pcurve entry for the replaced edge must be removed"
         );
     }
 

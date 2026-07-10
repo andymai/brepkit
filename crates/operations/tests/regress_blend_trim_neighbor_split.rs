@@ -168,9 +168,9 @@ fn fillet_v2_box_edge_propagates_boundary_splits() {
     // keep-side selection defect), not the propagation defect.
     let mesh =
         tessellate_solid_with_tolerance(&topo, result.solid, 0.01, 5.0_f64.to_radians()).unwrap();
+    let bnd = boundary_edge_count(&mesh);
     assert!(
-        boundary_edge_count(&mesh) < 28,
-        "T-junction cracks along propagated splits should be gone; bnd = {}",
-        boundary_edge_count(&mesh)
+        bnd < 28,
+        "T-junction cracks along propagated splits should be gone; bnd = {bnd}"
     );
 }
