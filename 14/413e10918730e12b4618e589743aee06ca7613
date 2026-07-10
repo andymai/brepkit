@@ -1,0 +1,50 @@
+.claude/skills/roadmap/SKILL.md
+  s_7f4494de1ca5a8::t_fcdfddeb6e0d8f 193-199
+  s_7f4494de1ca5a8::t_a06ad3986ae63d 172-192,200-205
+crates/operations/src/tessellate/edge_sampling.rs
+  s_7f4494de1ca5a8::t_3bbf3aeeebdd57 293-300
+  s_7f4494de1ca5a8::t_0a689f06f11f4a 454,460
+  s_7f4494de1ca5a8::t_c90028ee5b562f 307-329
+crates/algo/src/classifier/ray_cast.rs
+  s_7f4494de1ca5a8::t_b830742d8fd47c 506-511
+  s_7f4494de1ca5a8::t_4d4e28f20cfe0d 47-58
+  s_7f4494de1ca5a8::t_20749fd9d7220b 354-402
+  s_7f4494de1ca5a8::t_c49cbf95913179 621-639,642,645-646,650-681,686-691
+  s_7f4494de1ca5a8::t_e93142c01d5c2c 682-685
+  s_7f4494de1ca5a8::t_9014ae17068dc1 640-641,643-644,647-649
+crates/algo/src/pave_filler/phase_ff.rs
+  s_7f4494de1ca5a8::t_85827dd83b6c3b 1575-1629
+  s_7f4494de1ca5a8::t_a619835d45b978 1666-1678,1680,1690-1707
+  s_7f4494de1ca5a8::t_94298948597ea5 1630-1631,1708-1710
+crates/io/tests/dovetail_relief_cut_inmem.rs
+  s_7f4494de1ca5a8::t_df456c9def0fb7 1-24,33-36,38,41,43-44,47,50-54,56-57,60-86,104,107-134,136,138-141,143-148,152-154,156-157,159-162,164
+  s_7f4494de1ca5a8::t_42073cdf5d16ca 25-32
+  s_7f4494de1ca5a8::t_0c576186532b0a 87,90
+  s_7f4494de1ca5a8::t_ec8004d0193216 155,163
+crates/operations/src/tessellate/planar.rs
+  s_7f4494de1ca5a8::t_b389730474312c 367-368,374
+crates/io/tests/data/dovetail_relief_cutter_m38.bin
+  s_7f4494de1ca5a8::t_2b800e4e956935 1
+crates/io/tests/data/dovetail_relief_cutter_m4.bin
+  s_7f4494de1ca5a8::t_e7a8747d589f5e 1
+crates/io/tests/data/dovetail_relief_tongue_m38.bin
+  s_7f4494de1ca5a8::t_1158ba67f9539a 1
+crates/io/tests/data/dovetail_relief_tongue_m4.bin
+  s_7f4494de1ca5a8::t_bee87300dbd127 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "14413e10918730e12b4618e589743aee06ca7613",
+  "prompts": {},
+  "sessions": {
+    "s_7f4494de1ca5a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a289991e-64c7-4b51-9e83-9571d530005f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
