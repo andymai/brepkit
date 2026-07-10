@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783723254167,
+  "lastUpdate": 1783723770713,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4211,6 +4211,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18575795,
             "range": "± 322161",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c9626ea7ac66bcea8de12c06cb5b8c52eaa640c4",
+          "message": "fix(algo): make plane-plane FF section clipping robust to collinear boundary edges (#1069)\n\n## Root cause\n\n`fuse_shelled_box_with_socket_loft` (long-ignored, mesh-fallback output\nwith euler −54): the socket wall facets meet the box bottom plane\nexactly along their top chords, so every plane×plane FF section line is\ncollinear with a clip-polygon edge. `clip_line_to_polygon`\n(`crates/algo/src/pave_filler/phase_ff.rs`) judged parallelism with an\nabsolute epsilon (`denom.abs() < 1e-15`) on an unnormalized dot product\nwhose natural scale here is |n|·|d| ≈ 100, so the collinear edge read as\na genuine crossing and the span was clipped by the ratio of two roundoff\nresidues. Result: a nondeterministic subset of sections emitted (18/36,\nseveral sliver-length partials), an inconsistent bottom-face partition,\nand the previously mapped downstream symptoms (over-shared chord edges,\nphantom arc-break vertices) were noise from the missing/partial\nsections.\n\n## Fix\n\nScale-relative parallel + outside thresholds: treat the edge as parallel\nwhen `|denom| < |n|·|d|·1e-9` (i.e. sin(angle) < 1e-9) and use a\n`|n|`-relative distance band for the outside rejection, so on-boundary\nlines take the parallel path deterministically. This is the recurring\ntangential-contact conditioning class, fixed at the primitive.\n\nPost-fix, raw GFA output equals the gated operations output (no\nfallback): F=55/E=148/V=96, watertight (every edge exactly 2-use by id),\nmanifold, analytic (4 corner cylinder barrels preserved), volume =\noperand sum, deterministic across fresh processes.\n\nThe test is un-ignored with strengthened assertions: hole-aware Euler\n(the shelled cup's top rim is a genuine annulus face, so naive V−E+F is\n2+1 — the old naive `euler==2` assert was wrong for this shape),\nid-level edge-use==2 watertightness, analytic face census (≥4 cylinders,\n<100 faces), and volume-sum.\n\nKnown residual (documented in the roadmap row, deliberately below engine\ncoincidence semantics): the 32 chord/arc corner lenses at z=0 (height 19\nµm = r(1−cos 5.625°)) collapse to the chord via the endpoint-keyed edge\nmerge; full crescent fidelity needs the midpoint-split cascade and is\nonly worth chasing if a consumer needs sub-20 µm corner fidelity.\n\n## Verification\n\n- `cargo fmt --all --check`, `cargo clippy --all-targets -- -D\nwarnings`, `./scripts/check-boundaries.sh` — clean\n- `fuse_shelled_box_with_socket_loft` green across repeated fresh\nprocesses\n- operations lib suite 765+ passed / 0 failed; algo suite 152/0\n- Canary: `cargo test -p brepkit-wasm --lib gridfinity` — 27/0\n- Full `cargo test --release -p brepkit-io` calibrated fixture set — 31\ntargets, 0 failures (pins unmoved)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMake plane–plane FF section clipping robust for collinear edges and\nnear-parallel/degenerate cases using scale‑relative checks. This removes\nnondeterministic partial section emission in the socket‑loft fuse and\nrestores a deterministic, watertight analytic result.\n\n- **Bug Fixes**\n- In `crates/algo/src/pave_filler/phase_ff.rs` (`clip_line_to_polygon`),\njudge parallelism relative to |n|·|d| (sin(angle) < 1e-9) and use a\n|n|-relative outside band; reject zero‑length segments, skip zero‑length\npolygon edges, and only drop near‑parallel spans when both endpoints are\noutside. Prevents treating on‑boundary lines as crossings and\nsliver/empty spans.\n- Un-ignored and strengthened `fuse_shelled_box_with_socket_loft` in\n`crates/operations/src/boolean/tests.rs`: checks edge-use==2\nwatertightness, analytic face count, ≥4 cylinder faces, volume equals\noperand sum, and hole‑aware Euler.\n- Added focused unit tests in `phase_ff.rs` for collinear-span keep,\nparallel-outside drop, zero-length drop, and near-parallel entering;\nupdated `.claude/skills/roadmap/SKILL.md` to mark the case closed.\n\n<sup>Written for commit 4f8b4d15c2353007735c9546f598be0a3534772a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1069?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-10T22:47:31Z",
+          "tree_id": "008d8647e51bb63ad06964443bf0096fc732eabc",
+          "url": "https://github.com/andymai/brepkit/commit/c9626ea7ac66bcea8de12c06cb5b8c52eaa640c4"
+        },
+        "date": 1783723770273,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 613785,
+            "range": "± 3982",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 687965,
+            "range": "± 902",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10228,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 495357,
+            "range": "± 11575",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16230639,
+            "range": "± 532691",
             "unit": "ns/iter"
           }
         ]
