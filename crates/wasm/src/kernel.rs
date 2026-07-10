@@ -54,6 +54,7 @@ impl BrepKernel {
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new() -> Self {
+        crate::panics::install_hook();
         Self {
             topo: Rc::new(Topology::new()),
             assemblies: Vec::new(),
