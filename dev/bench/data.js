@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783717168701,
+  "lastUpdate": 1783717319191,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3833,6 +3833,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19905334,
             "range": "± 120368",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5011607dfdb1b142005b532627d944287bbdd67b",
+          "message": "fix(operations): make mesh-boolean fallback output conforming and manifold (#1061)\n\n## Root cause\n\nThe mesh-boolean safety net (the path `boolean()` falls back to when the\nanalytic GFA result fails its gates) itself emitted open / non-manifold\nmeshes on coincident-wall contact. Three stacked defects:\n\n1. **T-junctions:** the splitter fan-split each intersected triangle in\nisolation — an on-edge insertion point was never propagated to the\nneighbor triangle sharing that edge, so co-refined triangles did not\nconform across shared edges.\n2. **Coplanar contact collapsed:** contact between coplanar triangles\nwas reduced to a single \"longest segment\" instead of full mutual edge\nclipping, so neither mesh conformed to the other's edges inside the\nshared plane.\n3. **Winding coin-flip:** the generalized-winding-number classifier was\nconsulted for sub-triangles lying exactly on the other mesh's surface,\nwhere winding is exactly 1/2 — inside/outside became a coin flip on\nshared walls.\n\nOn the captured dovetail relief pair the raw fallback emitted bnd=11 and\nthe full `boolean()` export bnd=15 nm=1; the same path produced the\nnm=76 integer-width socket-fuse exports.\n\n## Fix\n\nRewrite `crates/operations/src/mesh_boolean.rs` as conforming\nco-refinement:\n\n- Per-host CDT re-triangulation with a **global cross-triangle\nedge-point map**, so points landing on a triangle edge are fed to the\nneighbor sharing that edge (no T-junctions). The legacy fan split\nremains only as a per-triangle fallback when CDT fails.\n- **Mutual coplanar edge clipping** (`coplanar_corefine_segments`): each\nmesh conforms to the other's edges inside a shared plane.\n- Explicit **`OnSame` / `OnOpp` coincident-surface classification**\nconsumed by assembly (mesh A owns the single kept copy of any coincident\nregion), instead of asking the winding number where it is exactly 1/2.\n- `MeshBooleanResult` self-reports position-welded boundary /\nnon-manifold edge counts; `boolean/mod.rs::mesh_boolean_fallback`\nwarn-logs a non-watertight fallback result instead of consuming it\nsilently.\n- The issue-#696 planar-midpoint-drop metadata path\n(`mesh_boolean_with_metadata` + `infer_planar_triangle_flags`) is\ndeleted — conforming splits subsume it, and all #696-era tests pass.\n\n## Verification\n\n- New fixture regression test\n`crates/io/tests/relief_meshbool_fallback_inmem.rs` on the tool's exact\nserialized operands (`crates/io/tests/data/relief_tongue.bin` /\n`relief_cutter.bin`):\n- `relief_cut_raw_mesh_boolean_is_manifold` — raw `mesh_boolean` path,\nbnd=0 nm=0 with self-check flags\n- `relief_cut_boolean_fallback_export_is_manifold` — full `boolean()`\nfallback export at export tolerance, quantized health check + volume\nsanity\n- New unit tests in `mesh_boolean.rs`:\n`mesh_boolean_overlapping_cut_watertight`,\n`mesh_boolean_coincident_wall_cut`, `mesh_boolean_coincident_wall_fuse`,\n`mesh_boolean_coplanar_top_stack_fuse` (9/9 lib tests pass)\n- Fixed build emits bnd=0 nm=0 at every quantization grid 1e-3..1e-6,\nverified for all 6 relief-op operand variants (fix proven load-bearing\nby A/B against a rebuilt baseline)\n- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,\n`./scripts/check-boundaries.sh` all clean\n- Canary `cargo test -p brepkit-wasm --lib gridfinity`: 27/27\n- Full workspace suites green (render compute suite passes standalone; a\nparallel-run wgpu contention SIGSEGV is environmental)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRewrite the mesh-boolean fallback to produce closed, 2‑manifold,\nconforming results on coincident-wall contact. Also clamp coincident\nclassification to the co‑refinement tolerance to keep near‑disjoint\nfuses intact and warn on non‑watertight output.\n\n- **Bug Fixes**\n- Conforming co-refinement: per-triangle CDT re-triangulation with a\nglobal edge-point map to remove T-junctions.\n- Mutual coplanar edge clipping so each mesh conforms to the other's\nedges in shared planes.\n- Explicit coincident-surface classes (`OnSame`/`OnOpp`) to avoid\nwinding-number 1/2 coin flips; mesh A owns coincident regions.\n- `MeshBooleanResult` reports boundary/non-manifold edge counts;\n`boolean()` fallback now warns on non-watertight output.\n- Clamp `OnSame`/`OnOpp` on-surface window to the intersection tolerance\nto avoid dropping facing walls on near-disjoint solids; add a\nnear-disjoint fuse regression test.\n- Share `COINCIDENT_DEDUPE_GRID` between coincident-triangle dedupe and\nthe output self-check; scale the crossing-resolution round cap with\nsegment count and warn on exhaustion.\n\n- **Migration**\n- Remove `mesh_boolean_with_metadata` and `infer_planar_triangle_flags`.\nCall `mesh_boolean(...)` directly; conforming splits subsume the old\nplanarity path.\n\n<sup>Written for commit 9317980e418d4ca6257d666d529147f49c009b10.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1061?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-10T20:59:13Z",
+          "tree_id": "b02eb4f3365e2017e8ca4d9f0a7df3de50ee94f3",
+          "url": "https://github.com/andymai/brepkit/commit/5011607dfdb1b142005b532627d944287bbdd67b"
+        },
+        "date": 1783717318108,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 782315,
+            "range": "± 1475",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 881054,
+            "range": "± 1286",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13275,
+            "range": "± 117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 632966,
+            "range": "± 1464",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20670813,
+            "range": "± 42785",
             "unit": "ns/iter"
           }
         ]
