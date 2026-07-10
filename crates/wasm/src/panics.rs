@@ -70,8 +70,16 @@ mod tests {
 
     use super::*;
 
+    // LAST_PANIC is process-global and cargo test runs threads in parallel:
+    // every test that reads or clears it must hold this lock, or a concurrent
+    // caught panic can overwrite the slot between steps.
+    static PANIC_STATE: Mutex<()> = Mutex::new(());
+
     #[test]
     fn hook_records_panic_message_and_location() {
+        let _guard = PANIC_STATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _kernel = crate::kernel::BrepKernel::new();
         clear_last_panic_message();
         assert_eq!(last_panic_message(), None);
