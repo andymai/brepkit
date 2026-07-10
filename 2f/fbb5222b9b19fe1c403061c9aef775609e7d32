@@ -1,0 +1,33 @@
+.claude/skills/roadmap/SKILL.md
+  s_7f4494de1ca5a8::t_f2c682b31814b7 137
+crates/operations/src/classify.rs
+  s_7f4494de1ca5a8::t_946aa684a68639 384-389,422-513,517,682
+  s_7f4494de1ca5a8::t_657bc7ba3d381f 674
+  s_7f4494de1ca5a8::t_5f083dc11f6837 963-999,1002-1007,1009-1047,1050-1051,1053-1065,1067
+  s_7f4494de1ca5a8::t_f1e1ed017f605b 514-516,518-523,672-673,675-676,1066,1068-1070
+crates/operations/src/revolve.rs
+  s_7f4494de1ca5a8::t_f619948aa550ed 2281-2304
+crates/check/src/util.rs
+  s_7f4494de1ca5a8::t_96f960df41a935 256-310,313-314,330-333
+crates/check/src/classify/mod.rs
+  s_7f4494de1ca5a8::t_447757e8973ba1 410-566
+crates/check/src/classify/ray_surface.rs
+  s_7f4494de1ca5a8::t_30b013c317d1bb 118-121,123-126
+  s_7f4494de1ca5a8::t_6127339aabaef3 360-412
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "2ffbb5222b9b19fe1c403061c9aef775609e7d32",
+  "prompts": {},
+  "sessions": {
+    "s_7f4494de1ca5a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a289991e-64c7-4b51-9e83-9571d530005f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
