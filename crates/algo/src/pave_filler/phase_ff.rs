@@ -3533,6 +3533,7 @@ fn clip_line_to_polygon(
         })
         .sum();
     let sign = if area2 >= 0.0 { 1.0 } else { -1.0 };
+    let d_len = dx.hypot(dy);
     let mut t_min = 0.0_f64;
     let mut t_max = 1.0_f64;
     for i in 0..n {
@@ -3543,8 +3544,17 @@ fn clip_line_to_polygon(
         let ny = ex * sign;
         let denom = nx * dx + ny * dy;
         let num = nx * (start.0 - polygon[i].0) + ny * (start.1 - polygon[i].1);
-        if denom.abs() < 1e-15 {
-            if num < -1e-10 {
+        // Parallelism must be judged relative to |n|·|d|: `denom` is an
+        // unnormalized dot product, so an absolute epsilon misreads a section
+        // line COLLINEAR with a polygon edge (a coplanar partner face meeting
+        // the clip face exactly along that edge — e.g. a lofted wall's top
+        // chord lying in the partner cap's plane) as a genuine crossing. The
+        // ratio −num/denom of two roundoff residues then clips the span to a
+        // garbage sliver or empties it, and which of the two happens varies
+        // per edge — nondeterministic partial section emission.
+        let n_len = nx.hypot(ny);
+        if denom.abs() < n_len * d_len * 1e-9 {
+            if num < -n_len * 1e-9 {
                 return None;
             }
             continue;

@@ -3228,10 +3228,19 @@ fn non_convex_face_survives_subsequent_cut() {
 /// planar faces. The analytic boolean handles this fuse (both are "analytic"
 /// surface types: plane + cylinder).
 ///
-/// Expected: manifold solid with euler=2, no boundary edges.
-/// Observed: non-manifold topology, cylinder faces appear disconnected.
+/// Expected: watertight manifold solid (hole-aware euler 2 — the shelled
+/// box's top rim is a genuine annulus face, so naive V−E+F is 2+1), every
+/// edge used exactly twice, cylinder barrel faces preserved, and volume equal
+/// to the operand sum (the interiors are disjoint, meeting only at z=0).
+///
+/// Regression coverage: the socket wall facets meet the box bottom plane
+/// exactly along their top chords, so every plane×plane FF section line is
+/// COLLINEAR with a clip-polygon edge — `clip_line_to_polygon`'s absolute
+/// parallel epsilon read those as crossings of roundoff residues and emitted
+/// a nondeterministic subset of partial sections (18/36, some sliver-length),
+/// leaving the bottom face partition inconsistent (euler 12, 9 over-shared
+/// edges, mesh fallback at the operations gate).
 #[test]
-#[ignore = "known bug: non-manifold edge at shelled-box + socket fuse boundary"]
 fn fuse_shelled_box_with_socket_loft() {
     use brepkit_math::curves::Circle3D;
 
@@ -3463,10 +3472,58 @@ fn fuse_shelled_box_with_socket_loft() {
         eprintln!("manifold issues: {issues:?}");
     }
 
-    assert!(fused_vol > 0.0, "fused volume should be positive");
+    // Watertight: every edge of every wire is used exactly twice, and the
+    // face count stays in the analytic range (a mesh fallback is hundreds of
+    // all-planar faces).
+    let fused_faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
+    let mut edge_use: std::collections::HashMap<brepkit_topology::edge::EdgeId, usize> =
+        std::collections::HashMap::new();
+    let mut inner_wire_count: i64 = 0;
+    for &fid in &fused_faces {
+        let face = topo.face(fid).unwrap();
+        inner_wire_count += face.inner_wires().len() as i64;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *edge_use.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    let bad_edges = edge_use.values().filter(|&&uses| uses != 2).count();
+    assert_eq!(
+        bad_edges, 0,
+        "every edge should be used exactly twice (watertight manifold)"
+    );
     assert!(
-        euler == 2,
-        "fused euler should be 2, got {euler} (F={f}, E={e}, V={v})"
+        fused_faces.len() < 100,
+        "analytic fuse expected, got {} faces (mesh fallback?)",
+        fused_faces.len()
+    );
+
+    // The corner barrel faces must survive as analytic cylinders.
+    let cyl_faces = fused_faces
+        .iter()
+        .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .count();
+    assert!(
+        cyl_faces >= 4,
+        "fused solid should keep the 4 corner cylinder faces, got {cyl_faces}"
+    );
+
+    // The operand interiors are disjoint (they meet only across z=0), so the
+    // fused volume is their sum.
+    let expected_vol = shelled_vol + socket_vol;
+    assert!(
+        (fused_vol - expected_vol).abs() < expected_vol * 0.005,
+        "fused volume {fused_vol:.1} should equal operand sum {expected_vol:.1}"
+    );
+
+    assert!(fused_vol > 0.0, "fused volume should be positive");
+    // Hole-aware Euler: each inner wire (the shelled box's top rim is a
+    // genuine annulus) adds 1 to naive V−E+F for a genus-0 solid.
+    assert!(
+        euler - inner_wire_count == 2,
+        "fused hole-aware euler should be 2, got {} (F={f}, E={e}, V={v}, holes={inner_wire_count})",
+        euler - inner_wire_count
     );
     assert!(is_manifold, "fused solid should be manifold");
 }
