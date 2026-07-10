@@ -611,6 +611,14 @@ fn try_analytic_full_revolution(
             pts2.push(chart(q));
         }
     }
+    // One-sided invariant: `e_r` comes from the profile's own farthest point,
+    // so a valid (non-self-overlapping) profile has x = radial distance ≥ 0
+    // everywhere. A negative x means the wire reaches across the axis; the
+    // winding/orientation logic and outer/inner rim selection below assume
+    // one-sidedness, so defer such profiles to the segmented path.
+    if pts2.iter().any(|&(x, _)| x < -lin) {
+        return Ok(None);
+    }
     let mut area2 = 0.0_f64;
     let mut scale = 0.0_f64;
     for i in 0..pts2.len() {
@@ -1918,6 +1926,138 @@ mod tests {
         // distance). Because the solid is fully analytic (torus walls + planar
         // disc caps, no NURBS), the volume is integrated analytically — exact and
         // deflection-independent, not the inscribed-mesh approximation.
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let expected = PI * PI * d * rho * rho;
+        assert!(
+            (vol - expected).abs() / expected < 1e-9,
+            "half-torus tube volume {expected}, got {vol}"
+        );
+    }
+
+    #[test]
+    fn revolve_axis_straddling_profile_defers_analytic_path() {
+        // A rectangle profile crossing the revolution axis (x ∈ [−1, 3]): its
+        // sweep self-overlaps, so the analytic path's one-sided chart invariant
+        // (x = radial distance ≥ 0) does not hold — the cap edges' endpoints
+        // land on opposite chart sides and outer/inner rim selection would be
+        // meaningless. The analytic path must DEFER, not build wrong topology.
+        let mut topo = Topology::new();
+        let corners = [
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+            Point3::new(3.0, 0.0, 2.0),
+            Point3::new(-1.0, 0.0, 2.0),
+        ];
+        let vids: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let eids: Vec<_> = (0..4)
+            .map(|i| topo.add_edge(Edge::new(vids[i], vids[(i + 1) % 4], EdgeCurve::Line)))
+            .collect();
+        let wire = Wire::new(
+            eids.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let face = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 0.0,
+            },
+        ));
+        let result = try_analytic_full_revolution(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            true,
+        )
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "axis-straddling profile must defer to the segmented path"
+        );
+    }
+
+    #[test]
+    fn revolve_nurbs_circle_arc_profile_torus_band_watertight() {
+        // Same half-disc profile as `revolve_arc_profile_edge_is_torus_band`,
+        // but the arc edge is a rational-quadratic NURBS circle (how imported
+        // profiles usually carry arcs). `profile_arc_center_radius` recognises
+        // it, so the torus band's doubled SEAM edge is a `NurbsCurve` — the
+        // two-rim band tessellator must accept that seam instead of falling
+        // back to the crack-prone CDT/snap path.
+        use brepkit_math::curves::Circle3D;
+        use std::f64::consts::FRAC_PI_2;
+
+        let mut topo = Topology::new();
+        let (d, rho) = (10.0_f64, 3.0_f64);
+        let circ = Circle3D::new(Point3::new(d, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), rho).unwrap();
+        let nurbs =
+            brepkit_geometry::convert::circle_to_nurbs(&circ, -FRAC_PI_2, FRAC_PI_2).unwrap();
+        let p_bot = circ.evaluate(-FRAC_PI_2);
+        let p_top = circ.evaluate(FRAC_PI_2);
+        let v_bot = topo.add_vertex(Vertex::new(p_bot, 1e-7));
+        let v_top = topo.add_vertex(Vertex::new(p_top, 1e-7));
+        let e_arc = topo.add_edge(Edge::new(v_bot, v_top, EdgeCurve::NurbsCurve(nurbs)));
+        let e_dia = topo.add_edge(Edge::new(v_top, v_bot, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_arc, true),
+                OrientedEdge::new(e_dia, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let face = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 0.0,
+            },
+        ));
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let shell = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        assert_eq!(
+            shell.faces().len(),
+            2,
+            "NURBS-arc half-disc takes the analytic path"
+        );
+        assert_eq!(
+            shell
+                .faces()
+                .iter()
+                .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Torus(_)))
+                .count(),
+            1,
+            "the recognised NURBS arc is ONE periodic torus band"
+        );
+
+        for defl in [0.1_f64, 0.02] {
+            let mesh = crate::tessellate::tessellate_solid(&topo, solid, defl).unwrap();
+            assert_eq!(
+                mesh_boundary_edges(&mesh),
+                0,
+                "NURBS-arc half-disc mesh must be watertight at deflection {defl}"
+            );
+        }
+
         let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
         let expected = PI * PI * d * rho * rho;
         assert!(
