@@ -37,8 +37,9 @@ pub struct MeshBooleanResult {
 
 /// Position-weld grid for the output self-check. Seam vertices are shared
 /// verbatim between the two split meshes, so anything below feature scale
-/// works; 1e-6 matches the coincident-triangle dedupe grid in `mesh_ops`.
-const SELF_CHECK_GRID: f64 = 1e-6;
+/// works; sharing the `mesh_ops` coincident-triangle dedupe grid keeps the
+/// self-check and the downstream dedupe measuring on the same weld grid.
+const SELF_CHECK_GRID: f64 = crate::tessellate::COINCIDENT_DEDUPE_GRID;
 
 /// Perform a mesh boolean operation between two triangle meshes.
 ///
@@ -627,6 +628,9 @@ struct HostSplit {
 /// Quantized undirected edge key for the cross-triangle edge-point map.
 type EdgeKey = ((i64, i64, i64), (i64, i64, i64));
 
+/// The float-to-int cast saturates (Rust `as` semantics), so coordinates
+/// beyond ±i64::MAX/S ≈ ±9.2e9 units collapse onto the same key instead of
+/// wrapping; models are expected to stay far inside that bound.
 fn edge_key(a: Point3, b: Point3) -> EdgeKey {
     const S: f64 = 1.0e9;
     #[allow(clippy::cast_possible_truncation)]
@@ -703,12 +707,15 @@ fn split_mesh_conforming(
             }
         }
 
-        // Split segments at mutual transversal crossings.
+        // Split segments at mutual transversal crossings. Each round resolves
+        // one crossing, so the cap scales with the possible crossing count
+        // instead of a fixed budget that dense hosts could silently exhaust.
+        let max_rounds = 16 + seg_idx.len() * seg_idx.len();
         let mut changed = true;
-        let mut guard = 0;
-        while changed && guard < 16 {
+        let mut rounds = 0;
+        while changed && rounds < max_rounds {
             changed = false;
-            guard += 1;
+            rounds += 1;
             'outer: for si in 0..seg_idx.len() {
                 for sj in (si + 1)..seg_idx.len() {
                     let (a0, a1) = seg_idx[si];
@@ -729,6 +736,12 @@ fn split_mesh_conforming(
                     }
                 }
             }
+        }
+        if changed {
+            log::warn!(
+                "mesh boolean: crossing resolution on host triangle {host} exhausted \
+                 {max_rounds} rounds; unresolved crossings may force a non-conforming fan split"
+            );
         }
 
         // Split segments at collinear interior points (chained seams from
@@ -1228,7 +1241,10 @@ fn classify_split_triangles(
     other_bvh: &Bvh,
     tolerance: f64,
 ) -> Vec<TriState> {
-    let eps_on = tolerance.max(1e-9) * 10.0;
+    // Must not exceed the contact/co-refinement tolerance: faces farther
+    // apart than `tolerance` are never co-refined, so classifying them
+    // OnSame/OnOpp would drop them in assembly and open the result.
+    let eps_on = tolerance.max(1e-9);
     split
         .triangles
         .iter()
@@ -1760,6 +1776,33 @@ mod tests {
         assert!(
             (vol - 33.0).abs() < 1e-7,
             "stacked volume should be 32 + 1 = 33, got {vol}"
+        );
+    }
+
+    #[test]
+    fn mesh_boolean_near_disjoint_fuse_keeps_facing_walls() {
+        // Two boxes separated by a gap wider than the intersection tolerance
+        // but inside a naive "coincident" window: the facing walls are never
+        // co-refined, so classifying them OnOpp would drop them and open both
+        // solids. They must classify Outside and survive the fuse intact.
+        let gap = 5e-7;
+        let a = box_mesh_half_extents(Point3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0));
+        let b = box_mesh_half_extents(Point3::new(1.0 + gap, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0));
+
+        let result = mesh_boolean(&a, &b, BooleanOp::Fuse, 1e-7).unwrap();
+        assert_eq!(
+            result.mesh.indices.len() / 3,
+            24,
+            "near-disjoint fuse must keep all 24 triangles"
+        );
+        assert_eq!(
+            result.boundary_edge_count, 0,
+            "near-disjoint fuse should be closed"
+        );
+        let vol = mesh_signed_volume(&result.mesh);
+        assert!(
+            (vol - 16.0).abs() < 1e-6,
+            "near-disjoint fused volume should be 16, got {vol}"
         );
     }
 

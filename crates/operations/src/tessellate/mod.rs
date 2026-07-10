@@ -35,6 +35,7 @@ use brepkit_topology::face::FaceId;
 
 // Re-export all public items.
 pub use face::{tessellate_with_uvs, tessellate_with_uvs_a};
+pub(crate) use mesh_ops::COINCIDENT_DEDUPE_GRID;
 pub use mesh_ops::{
     EdgeLines, boundary_edge_count, is_watertight, non_manifold_edge_count, sample_solid_edges,
     sample_solid_edges_filtered,
