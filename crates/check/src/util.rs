@@ -11,6 +11,7 @@ use crate::CheckError;
 /// Compute the normal of a polygon via Newell's method.
 ///
 /// Returns a unit-length normal, or `(0,0,1)` for degenerate polygons.
+#[must_use]
 pub fn polygon_normal(verts: &[Point3]) -> Vec3 {
     let mut nx = 0.0;
     let mut ny = 0.0;
@@ -38,6 +39,7 @@ pub const CLOSED_CURVE_SAMPLES: usize = 32;
 /// Sample a closed-edge curve at `n` evenly spaced parameter values.
 ///
 /// Returns an empty vector for `Line` edges (geometry determined by vertices).
+#[must_use]
 pub fn sample_edge_curve(curve: &EdgeCurve, n: usize) -> Vec<Point3> {
     match curve {
         EdgeCurve::Circle(c) => (0..n)
@@ -119,43 +121,53 @@ pub fn wire_polygon(
             // cleanly with adjacent edges; the curve's own parameter origin
             // is unrelated to the vertex.
             let seam_pt = topo.vertex(start_vid)?.point();
-            let t0 = match curve {
-                EdgeCurve::Circle(c) => Some(c.project(seam_pt)),
-                EdgeCurve::Ellipse(e) => Some(e.project(seam_pt)),
-                EdgeCurve::NurbsCurve(_) | EdgeCurve::Line => None,
-            };
             // Traversal must start at the seam vertex in both directions:
-            // forward covers [t0, t0 + TAU), reversed covers (t0, t0 + TAU]
+            // forward covers [t0, t0 + period), reversed covers (t0, t0 + period]
             // walked backwards — the next edge supplies the closing point.
             #[allow(clippy::cast_precision_loss)]
-            let params = |n: usize| -> Vec<f64> {
+            let params = |n: usize, period: f64| -> Vec<f64> {
                 if forward {
-                    (0..n)
-                        .map(|i| std::f64::consts::TAU.mul_add((i as f64) / (n as f64), 0.0))
-                        .collect()
+                    (0..n).map(|i| period * (i as f64) / (n as f64)).collect()
                 } else {
                     (1..=n)
                         .rev()
-                        .map(|i| std::f64::consts::TAU.mul_add((i as f64) / (n as f64), 0.0))
+                        .map(|i| period * (i as f64) / (n as f64))
                         .collect()
                 }
             };
-            let sampled: Vec<Point3> = match (curve, t0) {
-                (EdgeCurve::Circle(c), Some(t0)) => params(CLOSED_CURVE_SAMPLES)
-                    .into_iter()
-                    .map(|dt| c.evaluate(t0 + dt))
-                    .collect(),
-                (EdgeCurve::Ellipse(e), Some(t0)) => params(CLOSED_CURVE_SAMPLES)
-                    .into_iter()
-                    .map(|dt| e.evaluate(t0 + dt))
-                    .collect(),
-                _ => {
-                    let mut s = sample_edge_curve(curve, CLOSED_CURVE_SAMPLES);
-                    if !forward {
-                        s.reverse();
-                    }
-                    s
+            let sampled: Vec<Point3> = match curve {
+                EdgeCurve::Circle(c) => {
+                    let t0 = c.project(seam_pt);
+                    params(CLOSED_CURVE_SAMPLES, std::f64::consts::TAU)
+                        .into_iter()
+                        .map(|dt| c.evaluate(t0 + dt))
+                        .collect()
                 }
+                EdgeCurve::Ellipse(e) => {
+                    let t0 = e.project(seam_pt);
+                    params(CLOSED_CURVE_SAMPLES, std::f64::consts::TAU)
+                        .into_iter()
+                        .map(|dt| e.evaluate(t0 + dt))
+                        .collect()
+                }
+                EdgeCurve::NurbsCurve(nc) => {
+                    let (u0, u1) = nc.domain();
+                    let span = u1 - u0;
+                    if span.is_finite() && span > 0.0 {
+                        let t0 = nurbs_seam_parameter(nc, seam_pt, u0, u1);
+                        params(CLOSED_CURVE_SAMPLES, span)
+                            .into_iter()
+                            .map(|dt| nc.evaluate(u0 + (t0 - u0 + dt).rem_euclid(span)))
+                            .collect()
+                    } else {
+                        let mut s = sample_edge_curve(curve, CLOSED_CURVE_SAMPLES);
+                        if !forward {
+                            s.reverse();
+                        }
+                        s
+                    }
+                }
+                EdgeCurve::Line => vec![],
             };
             pts.extend(sampled);
             prev_end = Some(start_vid);
@@ -253,6 +265,28 @@ fn aabb_include(aabb: &mut Aabb3, p: Point3) {
     *aabb = aabb.union(Aabb3 { min: p, max: p });
 }
 
+/// Squared distance below which the seam vertex counts as coincident with
+/// the curve's domain start (linear tolerance 1e-7, squared).
+const SEAM_COINCIDENT_SQ: f64 = 1e-14;
+
+/// Parameter of the seam vertex on a closed NURBS rim.
+///
+/// Closed NURBS edges normally place their seam vertex at the curve's domain
+/// start; when they do not, sampling from the domain origin breaks phase
+/// coherence with adjacent edges, so the vertex is projected onto the curve.
+fn nurbs_seam_parameter(
+    nc: &brepkit_math::nurbs::curve::NurbsCurve,
+    seam_pt: Point3,
+    u0: f64,
+    u1: f64,
+) -> f64 {
+    if (nc.evaluate(u0) - seam_pt).length_squared() <= SEAM_COINCIDENT_SQ {
+        return u0;
+    }
+    brepkit_math::nurbs::projection::project_point_to_curve(nc, seam_pt, 1e-9)
+        .map_or(u0, |proj| proj.parameter.clamp(u0, u1))
+}
+
 /// Expand an AABB to cover the full extent of a curved edge.
 ///
 /// Vertex endpoints alone under-represent curved edges — a closed circle
@@ -337,6 +371,7 @@ pub fn face_aabb(topo: &Topology, face_id: FaceId) -> Result<Aabb3, CheckError> 
 
 /// Test whether a 3D point lies inside a 3D polygon by projecting onto the
 /// dominant axis plane (the plane most aligned with the polygon normal).
+#[must_use]
 pub fn point_in_polygon_3d(point: &Point3, polygon: &[Point3], normal: &Vec3) -> bool {
     use brepkit_math::predicates::point_in_polygon;
 
@@ -362,4 +397,46 @@ pub fn point_in_polygon_3d(point: &Point3, polygon: &[Point3], normal: &Vec3) ->
     };
 
     point_in_polygon(proj_pt, &proj_poly)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    #[test]
+    fn wire_polygon_anchors_closed_nurbs_rim_at_seam_vertex() {
+        let radius = 2.0;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+        let nurbs = circle_to_nurbs(&circle, 0.0, std::f64::consts::TAU).unwrap();
+        // Seam vertex deliberately away from the curve's domain start.
+        let seam_pt = circle.evaluate(1.1);
+
+        let mut topo = Topology::new();
+        let v = topo.add_vertex(Vertex::new(seam_pt, 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(nurbs)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+
+        let pts = wire_polygon(&topo, wire).unwrap();
+        assert_eq!(pts.len(), CLOSED_CURVE_SAMPLES);
+        assert!(
+            (pts[0] - seam_pt).length() < 1e-6,
+            "first sample {:?} not anchored at seam {:?}",
+            pts[0],
+            seam_pt
+        );
+        for p in &pts {
+            assert!(
+                (p.x().hypot(p.y()) - radius).abs() < 1e-9,
+                "sample off the rim circle: {p:?}"
+            );
+        }
+    }
 }

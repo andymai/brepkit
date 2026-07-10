@@ -385,8 +385,10 @@ where
     // samples closed edges from the curve's own parameter origin, so a wire
     // chaining two rim circles (a partial-revolve torus band) enters the
     // periodic unwrap at incoherent phases and the UV polygon shears into a
-    // self-inconsistent parallelogram that rejects real hits.
-    let verts = seam_anchored_face_polygon(topo, face_id)?;
+    // self-inconsistent parallelogram that rejects real hits. The check
+    // crate's sampler anchors each closed edge at its seam vertex, keeping
+    // consecutive edges phase-coherent through the unwrap.
+    let verts = brepkit_check::util::face_polygon(topo, face_id)?;
 
     // Detect degenerate boundary: a "full-surface" face whose wire has fewer than
     // 3 distinct vertices (e.g. a torus with only seam edges, where all boundary
@@ -417,108 +419,6 @@ where
     }
 
     Ok(crossings)
-}
-
-/// Number of sample points for closed-curve edges in the UV boundary.
-const CLOSED_CURVE_SAMPLES: usize = 32;
-
-/// Build a boundary polygon for UV containment, sampling each closed edge
-/// starting at its seam vertex and re-deriving traversal direction from
-/// vertex connectivity (mirrors `brepkit_check`'s boundary sampler).
-///
-/// Unlike `boolean::face_polygon` (whose sampling is calibrated for band
-/// fragment sharing and must not change), this keeps consecutive edges
-/// phase-coherent so periodic unwrapping stays continuous across the wire.
-fn seam_anchored_face_polygon(
-    topo: &Topology,
-    face_id: FaceId,
-) -> Result<Vec<Point3>, OperationsError> {
-    use brepkit_topology::edge::EdgeCurve;
-
-    let face = topo.face(face_id)?;
-    let wire = topo.wire(face.outer_wire())?;
-    let mut pts = Vec::new();
-    let mut prev_end: Option<brepkit_topology::vertex::VertexId> = None;
-
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
-        let curve = edge.curve();
-        let start_vid = edge.start();
-        let end_vid = edge.end();
-        let forward = match prev_end {
-            Some(pe) if start_vid == pe && end_vid != pe => true,
-            Some(pe) if end_vid == pe && start_vid != pe => false,
-            _ => oe.is_forward(),
-        };
-        let is_closed_edge = start_vid == end_vid
-            && matches!(
-                curve,
-                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
-            );
-        if is_closed_edge {
-            // Start sampling at the edge's seam vertex so the polygon chains
-            // cleanly with adjacent edges; the curve's own parameter origin
-            // is unrelated to the vertex.
-            let seam_pt = topo.vertex(start_vid)?.point();
-            let t0 = match curve {
-                EdgeCurve::Circle(c) => Some(c.project(seam_pt)),
-                EdgeCurve::Ellipse(e) => Some(e.project(seam_pt)),
-                EdgeCurve::NurbsCurve(_) | EdgeCurve::Line => None,
-            };
-            // Traversal must start at the seam vertex in both directions:
-            // forward covers [t0, t0 + TAU), reversed covers (t0, t0 + TAU]
-            // walked backwards — the next edge supplies the closing point.
-            #[allow(clippy::cast_precision_loss)]
-            let params = |n: usize| -> Vec<f64> {
-                if forward {
-                    (0..n)
-                        .map(|i| std::f64::consts::TAU * (i as f64) / (n as f64))
-                        .collect()
-                } else {
-                    (1..=n)
-                        .rev()
-                        .map(|i| std::f64::consts::TAU * (i as f64) / (n as f64))
-                        .collect()
-                }
-            };
-            match (curve, t0) {
-                (EdgeCurve::Circle(c), Some(t0)) => {
-                    pts.extend(
-                        params(CLOSED_CURVE_SAMPLES)
-                            .into_iter()
-                            .map(|dt| c.evaluate(t0 + dt)),
-                    );
-                }
-                (EdgeCurve::Ellipse(e), Some(t0)) => {
-                    pts.extend(
-                        params(CLOSED_CURVE_SAMPLES)
-                            .into_iter()
-                            .map(|dt| e.evaluate(t0 + dt)),
-                    );
-                }
-                (EdgeCurve::NurbsCurve(nc), _) => {
-                    let (u0, u1) = nc.domain();
-                    let n = CLOSED_CURVE_SAMPLES;
-                    #[allow(clippy::cast_precision_loss)]
-                    let mut sampled: Vec<Point3> = (0..n)
-                        .map(|i| nc.evaluate(u0 + (u1 - u0) * (i as f64) / (n as f64)))
-                        .collect();
-                    if !forward {
-                        sampled.reverse();
-                    }
-                    pts.extend(sampled);
-                }
-                _ => {}
-            }
-            prev_end = Some(start_vid);
-        } else {
-            let vid = if forward { start_vid } else { end_vid };
-            pts.push(topo.vertex(vid)?.point());
-            prev_end = Some(if forward { end_vid } else { start_vid });
-        }
-    }
-
-    Ok(pts)
 }
 
 /// Unwrap a step in a periodic (angular) coordinate.
