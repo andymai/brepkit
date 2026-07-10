@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783716928233,
+  "lastUpdate": 1783717168701,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3779,6 +3779,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19528518,
             "range": "± 884122",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "775774723b537c4dfcbaf51afdde7037e1df5cfb",
+          "message": "chore(main): release 2.125.1 (#1065)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.125.1](https://github.com/andymai/brepkit/compare/v2.125.0...v2.125.1)\n(2026-07-10)\n\n\n### Bug Fixes\n\n* **blend:** propagate trimmer edge splits into neighbor face wires\n([#1060](https://github.com/andymai/brepkit/issues/1060))\n([f44d487](https://github.com/andymai/brepkit/commit/f44d487a9bf4615fdc34e62a60961dfca5fceac2))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.125.1 for `brepkit-wasm`, fixing blend topology by propagating\ntrimmer edge splits to neighboring face wires. This prevents desynced\nface wires during blends and addresses #1060.\n\n<sup>Written for commit 7cb2d143aba09a0b5a65cfca69afa49404e2a015.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1065?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-10T20:57:01Z",
+          "tree_id": "8d5e68997548ea99e2f7a477842b881ba2df2e66",
+          "url": "https://github.com/andymai/brepkit/commit/775774723b537c4dfcbaf51afdde7037e1df5cfb"
+        },
+        "date": 1783717167629,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 768080,
+            "range": "± 1231",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 853258,
+            "range": "± 1466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12111,
+            "range": "± 124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639297,
+            "range": "± 15200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19905334,
+            "range": "± 120368",
             "unit": "ns/iter"
           }
         ]
