@@ -253,10 +253,65 @@ fn aabb_include(aabb: &mut Aabb3, p: Point3) {
     *aabb = aabb.union(Aabb3 { min: p, max: p });
 }
 
+/// Expand an AABB to cover the full extent of a curved edge.
+///
+/// Vertex endpoints alone under-represent curved edges — a closed circle
+/// edge has ONE vertex, collapsing the box to a point and starving any
+/// AABB prefilter (a plane cap bounded by a single rim circle was never
+/// offered to the classifier's BVH, dropping its ray crossings). Circle
+/// and ellipse use the exact full-curve extent (a conservative superset
+/// for partial arcs); NURBS uses the control-point convex hull.
+fn expand_aabb_for_curve(aabb: &mut Aabb3, curve: &EdgeCurve) {
+    match curve {
+        EdgeCurve::Line => {}
+        EdgeCurve::Circle(c) => {
+            let cen = c.center();
+            let r = c.radius();
+            let (u, v) = (c.u_axis(), c.v_axis());
+            let ext = [
+                r * u.x().hypot(v.x()),
+                r * u.y().hypot(v.y()),
+                r * u.z().hypot(v.z()),
+            ];
+            aabb_include(
+                aabb,
+                Point3::new(cen.x() - ext[0], cen.y() - ext[1], cen.z() - ext[2]),
+            );
+            aabb_include(
+                aabb,
+                Point3::new(cen.x() + ext[0], cen.y() + ext[1], cen.z() + ext[2]),
+            );
+        }
+        EdgeCurve::Ellipse(e) => {
+            let cen = e.center();
+            let (a, b) = (e.semi_major(), e.semi_minor());
+            let (u, v) = (e.u_axis(), e.v_axis());
+            let ext = [
+                (a * u.x()).hypot(b * v.x()),
+                (a * u.y()).hypot(b * v.y()),
+                (a * u.z()).hypot(b * v.z()),
+            ];
+            aabb_include(
+                aabb,
+                Point3::new(cen.x() - ext[0], cen.y() - ext[1], cen.z() - ext[2]),
+            );
+            aabb_include(
+                aabb,
+                Point3::new(cen.x() + ext[0], cen.y() + ext[1], cen.z() + ext[2]),
+            );
+        }
+        EdgeCurve::NurbsCurve(nc) => {
+            for &p in nc.control_points() {
+                aabb_include(aabb, p);
+            }
+        }
+    }
+}
+
 /// Compute the axis-aligned bounding box of a face.
 ///
-/// Starts from the wire vertex positions and then expands for surface
-/// curvature (spheres, cylinders, tori, NURBS).
+/// Starts from the wire vertex positions, expands for curved-edge extent,
+/// then expands for surface curvature (spheres, cylinders, tori, NURBS).
 ///
 /// # Errors
 ///
@@ -272,6 +327,10 @@ pub fn face_aabb(topo: &Topology, face_id: FaceId) -> Result<Aabb3, CheckError> 
     }
     let mut aabb = Aabb3::try_from_points(points.iter().copied())
         .ok_or_else(|| CheckError::ClassificationFailed("face has no vertices".into()))?;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        expand_aabb_for_curve(&mut aabb, edge.curve());
+    }
     expand_aabb_for_surface(&mut aabb, face.surface());
     Ok(aabb)
 }
