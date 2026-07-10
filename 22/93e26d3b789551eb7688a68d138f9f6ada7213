@@ -1,0 +1,24 @@
+crates/blend/src/trimmer.rs
+  s_7f4494de1ca5a8::t_7d0b4e6b7b8eff 945-1017
+  s_7f4494de1ca5a8::t_f61474b7cbd6ca 378-391
+  s_7f4494de1ca5a8::t_7c8fb244cf7a65 182-190
+  s_7f4494de1ca5a8::t_98ffe89b80f045 650-656,660-661
+crates/operations/tests/regress_blend_trim_neighbor_split.rs
+  s_7f4494de1ca5a8::t_9613dcfa0d638d 171,173-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "2293e26d3b789551eb7688a68d138f9f6ada7213",
+  "prompts": {},
+  "sessions": {
+    "s_7f4494de1ca5a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a289991e-64c7-4b51-9e83-9571d530005f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
