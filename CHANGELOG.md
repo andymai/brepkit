@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.2](https://github.com/andymai/brepkit/compare/v2.126.1...v2.126.2) (2026-07-10)
+
+
+### Bug Fixes
+
+* **algo:** make plane-plane FF section clipping robust to collinear boundary edges ([#1069](https://github.com/andymai/brepkit/issues/1069)) ([c9626ea](https://github.com/andymai/brepkit/commit/c9626ea7ac66bcea8de12c06cb5b8c52eaa640c4))
+
 ## [2.126.1](https://github.com/andymai/brepkit/compare/v2.126.0...v2.126.1) (2026-07-10)
 
 
