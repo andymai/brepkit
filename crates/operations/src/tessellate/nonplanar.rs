@@ -152,6 +152,236 @@ pub(super) fn tessellate_revolution_band_shared(
     Ok(true)
 }
 
+/// Tessellate a torus band bounded by two closed rim circles and seamed by ONE
+/// doubled open arc edge, in either orientation:
+///   * constant-`v` rims (latitude circles wrapping the ring angle `u`) — a
+///     full analytic revolve of a profile arc, seamed by that arc; interior
+///     full-`u` rows are swept along the tube angle;
+///   * constant-`u` rims (tube circles wrapping `v`) — a PARTIAL-turn revolve
+///     of a full circle profile, seamed by the vertex's sweep arc; interior
+///     full-`v` rings are swept along the ring angle.
+///
+/// The rims split their periodic direction into two arcs; the seam arc's
+/// midpoint picks which one the band covers (sweeping the wrong one would skin
+/// the band across the material). Both rims reuse their SHARED pool vertices,
+/// so the band meets its neighbour caps/walls crack-free — the CDT path
+/// degenerates on these fully-wrapping UV images and the snap path re-samples
+/// the rims independently (the #696 crack class).
+///
+/// Returns `Ok(false)` (caller falls back to CDT/snap) for any other torus
+/// face.
+pub(super) fn tessellate_torus_two_rim_band(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<bool, crate::OperationsError> {
+    use std::f64::consts::TAU;
+    let FaceSurface::Torus(torus) = face_data.surface() else {
+        return Ok(false);
+    };
+    if !face_data.inner_wires().is_empty() {
+        return Ok(false);
+    }
+
+    let wire = topo.wire(face_data.outer_wire())?;
+    let mut rim_edge_ids: Vec<usize> = Vec::new();
+    let mut seam: Option<(brepkit_topology::edge::EdgeId, usize)> = None;
+    for oe in wire.edges() {
+        let e = topo.edge(oe.edge())?;
+        let closed = e.start() == e.end();
+        match e.curve() {
+            EdgeCurve::Circle(_) if closed => {
+                let idx = oe.edge().index();
+                if !rim_edge_ids.contains(&idx) {
+                    rim_edge_ids.push(idx);
+                }
+            }
+            // A NURBS seam is the analytic revolve of a recognised NURBS-circle
+            // profile arc: the band reuses that original edge as its seam, and
+            // the seam is only midpoint-sampled (via the EdgeCurve delegates)
+            // to pick the covered arc, so any open curve type is safe here.
+            EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) if !closed => match &mut seam {
+                None => seam = Some((oe.edge(), 1)),
+                Some((eid, uses)) if *eid == oe.edge() => *uses += 1,
+                Some(_) => return Ok(false),
+            },
+            EdgeCurve::Circle(_)
+            | EdgeCurve::NurbsCurve(_)
+            | EdgeCurve::Line
+            | EdgeCurve::Ellipse(_) => return Ok(false),
+        }
+    }
+    let Some((seam_eid, 2)) = seam else {
+        return Ok(false);
+    };
+    if rim_edge_ids.len() != 2 {
+        return Ok(false);
+    }
+
+    let (t1, t2, t3) = (torus.clone(), torus.clone(), torus.clone());
+    let project = move |p: Point3| t1.project_point(p);
+    let surf_eval = move |u: f64, v: f64| t2.evaluate(u, v);
+    let surf_normal = move |u: f64, v: f64| t3.normal(u, v);
+
+    // Circular mean and max wrapped deviation of a set of angles.
+    let circ_mean_spread = |angles: &[f64]| -> (f64, f64) {
+        let (mut sx, mut sy) = (0.0_f64, 0.0_f64);
+        for &a in angles {
+            sx += a.cos();
+            sy += a.sin();
+        }
+        let mean = sy.atan2(sx);
+        let spread = angles
+            .iter()
+            .map(|&a| {
+                let d = (a - mean + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+                d.abs()
+            })
+            .fold(0.0_f64, f64::max);
+        (mean.rem_euclid(TAU), spread)
+    };
+
+    // Project each rim's shared pool vertices (wrap-safe: a rim at angle 0
+    // projects samples on both sides of the period).
+    let mut raw: Vec<Vec<(f64, f64, u32)>> = Vec::with_capacity(2);
+    for &re in &rim_edge_ids {
+        let Some(gids) = edge_global_indices.get(&re) else {
+            return Ok(false);
+        };
+        let mut seen: DetHashSet<u32> = DetHashSet::default();
+        let mut pts: Vec<(f64, f64, u32)> = Vec::with_capacity(gids.len());
+        for &g in gids {
+            if !seen.insert(g) {
+                continue;
+            }
+            let (u, v) = project(merged.positions[g as usize]);
+            pts.push((u, v, g));
+        }
+        if pts.len() < 3 {
+            return Ok(false);
+        }
+        raw.push(pts);
+    }
+
+    // Both rims must be constant in the SAME parameter: constant-v (latitude
+    // rims, swept along the tube angle) or constant-u (tube rims, swept along
+    // the ring angle).
+    let spread_of = |pts: &[(f64, f64, u32)], pick_u: bool| -> (f64, f64) {
+        let angles: Vec<f64> = pts
+            .iter()
+            .map(|&(u, v, _)| if pick_u { u } else { v })
+            .collect();
+        circ_mean_spread(&angles)
+    };
+    let (u_stats0, v_stats0) = (spread_of(&raw[0], true), spread_of(&raw[0], false));
+    let (u_stats1, v_stats1) = (spread_of(&raw[1], true), spread_of(&raw[1], false));
+    let lat_mode = if v_stats0.1 <= 1e-6 && v_stats1.1 <= 1e-6 {
+        true
+    } else if u_stats0.1 <= 1e-6 && u_stats1.1 <= 1e-6 {
+        false
+    } else {
+        return Ok(false);
+    };
+    let (lvl0, lvl1) = if lat_mode {
+        (v_stats0.0, v_stats1.0)
+    } else {
+        (u_stats0.0, u_stats1.0)
+    };
+
+    // Rings keyed by the wrapping parameter, sorted, covering its full circle.
+    let mut rims: Vec<LatRing> = Vec::with_capacity(2);
+    for pts in &raw {
+        let mut ring: LatRing = pts
+            .iter()
+            .map(|&(u, v, g)| if lat_mode { (u, g) } else { (v, g) })
+            .collect();
+        ring.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let max_gap = ring
+            .windows(2)
+            .map(|w| w[1].0 - w[0].0)
+            .chain(std::iter::once(ring[0].0 + TAU - ring[ring.len() - 1].0))
+            .fold(0.0_f64, f64::max);
+        if max_gap > std::f64::consts::PI {
+            return Ok(false);
+        }
+        rims.push(ring);
+    }
+
+    // The seam arc's midpoint picks which of the two swept-parameter arcs
+    // between the rims the band covers.
+    let seam_edge = topo.edge(seam_eid)?;
+    let sp = topo.vertex(seam_edge.start())?.point();
+    let ep = topo.vertex(seam_edge.end())?.point();
+    let (d0, d1) = seam_edge.curve().domain_with_endpoints(sp, ep);
+    let seam_mid = seam_edge
+        .curve()
+        .evaluate_with_endpoints(f64::midpoint(d0, d1), sp, ep);
+    let (mid_u, mid_v) = project(seam_mid);
+    let mid = if lat_mode { mid_v } else { mid_u };
+    let fwd_span = (lvl1 - lvl0).rem_euclid(TAU);
+    if fwd_span < 1e-9 || (TAU - fwd_span) < 1e-9 {
+        return Ok(false);
+    }
+    let mid_off = (mid - lvl0).rem_euclid(TAU);
+    let sweep = if mid_off <= fwd_span {
+        fwd_span
+    } else {
+        -(TAU - fwd_span)
+    };
+
+    // Interior rows along the swept parameter; each row wraps the other
+    // parameter's full circle.
+    let (sweep_radius, wrap_radius) = if lat_mode {
+        (
+            torus.minor_radius(),
+            torus.major_radius() + torus.minor_radius(),
+        )
+    } else {
+        (
+            torus.major_radius() + torus.minor_radius(),
+            torus.minor_radius(),
+        )
+    };
+    let n_rows =
+        segments_for_chord_deviation_a(sweep_radius, sweep.abs(), deflection, angular_tol, true)
+            .max(1);
+    let full_circle_cols =
+        segments_for_chord_deviation_a(wrap_radius, TAU, deflection, angular_tol, true);
+    let n_cols = rims[0].len().max(rims[1].len()).max(full_circle_cols);
+
+    let emit = make_band_emit(&project, &surf_normal);
+    let mut prev_ring: LatRing = rims[0].clone();
+    for i in 1..n_rows {
+        #[allow(clippy::cast_precision_loss)]
+        let t = i as f64 / n_rows as f64;
+        let level = lvl0 + sweep * t;
+        let mut row: LatRing = Vec::with_capacity(n_cols);
+        for j in 0..n_cols {
+            #[allow(clippy::cast_precision_loss)]
+            let a = TAU * (j as f64) / (n_cols as f64);
+            let (u, v) = if lat_mode { (a, level) } else { (level, a) };
+            let p = surf_eval(u, v);
+            let key = point_merge_key(p, MERGE_GRID);
+            let gid = *point_to_global.entry(key).or_insert_with(|| {
+                #[allow(clippy::cast_possible_truncation)]
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(p);
+                merged.normals.push(surf_normal(u, v));
+                idx
+            });
+            row.push((a, gid));
+        }
+        stitch_rings(merged, &prev_ring, &row, &emit);
+        prev_ring = row;
+    }
+    stitch_rings(merged, &prev_ring, &rims[1], &emit);
+    Ok(true)
+}
+
 /// A boundary ring of a latitude band: each entry is `(u_angle, global_id)`,
 /// with `u_angle ∈ [0, 2π)`. Sorted ascending by angle so two rings align by
 /// longitude during stitching.

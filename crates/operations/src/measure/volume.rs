@@ -231,8 +231,9 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
 /// Returns `None` (defer to tessellation) unless EVERY face fits the revolution
 /// signature, so this does NOT fire for boolean results that merely have an
 /// arc-bounded planar face (a rounded-rect cap, an arc-frame lip):
-///   * no NURBS face, and no face carries inner wires (a bored solid is handled
-///     by [`analytic_faces_solid_volume`]; a holed planar cap is deferred);
+///   * no NURBS face; inner wires only on PLANAR caps (an annulus cap
+///     subtracts its holes; a bored-quadric solid is handled by
+///     [`analytic_faces_solid_volume`] instead);
 ///   * at least one quadric wall (cylinder/cone/torus) — it is a revolution;
 ///   * every cylinder/cone/torus shares ONE axis line;
 ///   * every planar face is a circular disc/annulus/sector whose bounding
@@ -275,7 +276,14 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     for &fid in &faces {
         let face = topo.face(fid).ok()?;
         if !face.inner_wires().is_empty() {
-            return None;
+            // Only a holed PLANAR cap is integrable here: an annulus cap (a
+            // washer-style revolve, a coaxially bored tube) subtracts its holes
+            // inside `planar_cap_signed_volume`, and the second pass still
+            // requires every arc — inner wires included — to be centred on the
+            // shared axis. A holed quadric wall has no hole-aware integrator.
+            if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+                return None;
+            }
         }
         match face.surface() {
             FaceSurface::Sphere(_) => return None,
@@ -710,6 +718,7 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     let mut cyl: Option<(Point3, Vec3, f64)> = None; // (origin, axis, radius)
     let mut cone_params: Option<(Point3, Vec3)> = None; // (apex, axis)
     let mut torus_params: Option<(f64, f64)> = None; // (major_r, minor_r)
+    let mut torus_face_id: Option<FaceId> = None;
     let mut planes: Vec<(Vec3, f64)> = Vec::new();
     let mut plane_face_ids: Vec<FaceId> = Vec::new();
 
@@ -755,6 +764,7 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                     return None;
                 }
                 torus_params = Some((t.major_radius(), t.minor_radius()));
+                torus_face_id = Some(fid);
             }
         }
     }
@@ -869,12 +879,138 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         && cyl.is_none()
         && cone_params.is_none()
         && sphere_r.is_none()
-        && planes.is_empty()
     {
-        return Some(2.0 * PI * PI * r_major * r_minor * r_minor);
+        if planes.is_empty() {
+            return Some(2.0 * PI * PI * r_major * r_minor * r_minor);
+        }
+        // A partial-revolve torus sector: one trimmed band + two planar disc
+        // caps that both contain the torus axis.
+        if planes.len() == 2
+            && let Some(tid) = torus_face_id
+            && let Some(v) =
+                partial_torus_sector_volume(topo, tid, r_major, r_minor, &planes, &plane_face_ids)
+        {
+            return Some(v);
+        }
+        return None;
     }
 
     None
+}
+
+/// Exact volume of a partial-revolve torus sector: one `Torus` band trimmed to
+/// a sweep `Δu` plus two planar disc caps whose planes contain the torus axis,
+/// each bounded by a single closed tube circle (radius = minor, centre at
+/// major distance from the axis). `V = (Δu / 2π) · 2π²·R·r² = π·R·r²·Δu`.
+///
+/// `Δu` is read from the band's axis-centred seam arc, whose CCW start→end
+/// span is the swept angle by the codebase-wide arc convention, and
+/// cross-checked against the dihedral between the cap planes. Returns `None`
+/// (defer to tessellation) unless every guard pins the structure.
+fn partial_torus_sector_volume(
+    topo: &Topology,
+    torus_face: FaceId,
+    r_major: f64,
+    r_minor: f64,
+    planes: &[(Vec3, f64)],
+    plane_face_ids: &[FaceId],
+) -> Option<f64> {
+    use std::f64::consts::{PI, TAU};
+
+    let face = topo.face(torus_face).ok()?;
+    let FaceSurface::Torus(t) = face.surface() else {
+        return None;
+    };
+    let center = t.center();
+    let center_vec = Vec3::new(center.x(), center.y(), center.z());
+    let axis_d = t.z_axis().normalize().ok()?;
+    let tol = 1e-7 * r_major.max(1.0);
+
+    // Both cap planes must contain the torus axis line.
+    for &(n, d) in planes {
+        let n_unit = n.normalize().ok()?;
+        if n_unit.dot(axis_d).abs() > 1e-9 {
+            return None;
+        }
+        if (n.dot(center_vec) - d).abs() > tol {
+            return None;
+        }
+    }
+
+    // Each cap must be a single closed tube circle: radius = minor, centre at
+    // major distance from the axis.
+    for &fid in plane_face_ids {
+        let cap = topo.face(fid).ok()?;
+        if !cap.inner_wires().is_empty() {
+            return None;
+        }
+        let wire = topo.wire(cap.outer_wire()).ok()?;
+        let edges = wire.edges();
+        if edges.len() != 1 {
+            return None;
+        }
+        let edge = topo.edge(edges[0].edge()).ok()?;
+        if edge.start() != edge.end() {
+            return None;
+        }
+        let brepkit_topology::edge::EdgeCurve::Circle(c) = edge.curve() else {
+            return None;
+        };
+        if (c.radius() - r_minor).abs() > tol {
+            return None;
+        }
+        let off = c.center() - center;
+        let perp = off - axis_d * off.dot(axis_d);
+        if (perp.length() - r_major).abs() > tol {
+            return None;
+        }
+    }
+
+    // The band's seam: a non-closed Circle edge centred ON the axis. Its CCW
+    // start→end span is the swept angle.
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut sweep: Option<f64> = None;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        if edge.start() == edge.end() {
+            continue;
+        }
+        let brepkit_topology::edge::EdgeCurve::Circle(c) = edge.curve() else {
+            continue;
+        };
+        let off = c.center() - center;
+        let perp = off - axis_d * off.dot(axis_d);
+        // The seam must be centred on the axis AND wound about +axis — an
+        // antiparallel normal would make the CCW span read the complement.
+        if perp.length() > tol
+            || c.normal().cross(axis_d).length() > 1e-9
+            || c.normal().dot(axis_d) < 0.0
+        {
+            continue;
+        }
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        let delta = (c.project(ep) - c.project(sp)).rem_euclid(TAU);
+        match sweep {
+            None => sweep = Some(delta),
+            Some(prev) if (prev - delta).abs() < 1e-9 => {}
+            Some(_) => return None,
+        }
+    }
+    let du = sweep?;
+    if !(1e-12..=TAU - 1e-12).contains(&du) {
+        return None;
+    }
+
+    // Cross-check: the outward cap normals of a Δu sector satisfy
+    // n₀·n₁ = −cos(Δu) (n₀ = −t̂, n₁ = t̂ rotated by Δu about the axis).
+    let n0 = planes[0].0.normalize().ok()?;
+    let n1 = planes[1].0.normalize().ok()?;
+    if (n0.dot(n1) + du.cos()).abs() > 1e-6 {
+        return None;
+    }
+
+    Some(PI * r_major * r_minor * r_minor * du)
 }
 
 /// Minimum |n . axis| for a plane to be considered a perpendicular cap face
@@ -1270,17 +1406,65 @@ fn planar_cap_signed_volume(
         Err(_) => return Ok(None),
     };
     let (ex, ey) = (frame.x, frame.y);
+
+    // Hole areas subtract by MAGNITUDE, not by trusting the stored hole-wire
+    // winding: boolean results can emit an inner rim wound the SAME way as the
+    // outer (the #1045 hole-winding class), which would ADD the hole's disc.
+    // A hole is inside the outer by definition, so |outer| − Σ|hole| is the
+    // geometric area either way.
+    let (outer_area2, mut arc_edges) =
+        match planar_wire_signed_area2(topo, face.outer_wire(), ex, ey)? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+    let mut area_mag2 = outer_area2.abs();
+    for &iw in face.inner_wires() {
+        let Some((hole_area2, hole_arcs)) = planar_wire_signed_area2(topo, iw, ex, ey)? else {
+            return Ok(None);
+        };
+        arc_edges += hole_arcs;
+        area_mag2 -= hole_area2.abs();
+    }
+    if area_mag2 < 0.0 {
+        return Ok(None); // holes exceed the outer boundary — not a sane cap
+    }
+
+    // Only claim a circular CAP (disc / annulus / sector) — a face with no arc
+    // edge is an ordinary polygon (e.g. a box face), which the tessellation path
+    // already integrates exactly; deferring it keeps this analytic path scoped to
+    // genuine revolve caps and out of arbitrary planar-faced solids.
+    if arc_edges == 0 {
+        return Ok(None);
+    }
+
+    // `area_mag2/2` is the geometric area. The divergence-theorem contribution
+    // is (1/3)·(p·n̂_out)·|A|, where the outward normal is `+normal` for a
+    // forward face and `−normal` for a reversed one, so `p·n̂_out = ±d` (the
+    // plane offset along that outward normal). The sign therefore comes only
+    // from the outward offset, not from the wire winding.
+    let area = area_mag2 / 2.0;
+    let d_out = if face.is_reversed() { -d } else { d };
+    Ok(Some(d_out * area / 3.0))
+}
+
+/// Green's-theorem signed doubled area (`∮(x dy − y dx)`) of one planar wire in
+/// the `(ex, ey)` frame, plus its circular-arc edge count. `Ok(None)` when an
+/// edge is neither a line nor a circular arc, so the caller falls back to
+/// tessellation.
+fn planar_wire_signed_area2(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    ex: Vec3,
+    ey: Vec3,
+) -> Result<Option<(f64, usize)>, crate::OperationsError> {
     let to_2d = |p: Point3| {
         let v = Vec3::new(p.x(), p.y(), p.z());
         (v.dot(ex), v.dot(ey))
     };
-
     let tol_lin = brepkit_math::tolerance::Tolerance::default().linear;
     let mut area2: f64 = 0.0; // accumulates 2·A (Green's ∮(x dy − y dx))
     let mut arc_edges = 0_usize;
-    // The outer wire bounds positive area; inner wires (holes) are wound opposite
-    // the outer wire, so their Green's sum is already negative and subtracts.
-    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+    {
         let wire = topo.wire(wire_id)?;
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
@@ -1378,24 +1562,7 @@ fn planar_cap_signed_volume(
             }
         }
     }
-
-    // Only claim a circular CAP (disc / annulus / sector) — a face with no arc
-    // edge is an ordinary polygon (e.g. a box face), which the tessellation path
-    // already integrates exactly; deferring it keeps this analytic path scoped to
-    // genuine revolve caps and out of arbitrary planar-faced solids.
-    if arc_edges == 0 {
-        return Ok(None);
-    }
-
-    // `area2/2` is the SIGNED area in the `+normal` frame; its magnitude is the
-    // geometric area. The divergence-theorem contribution is
-    // (1/3)·(p·n̂_out)·|A|, where the outward normal is `+normal` for a forward
-    // face and `−normal` for a reversed one, so `p·n̂_out = ±d` (the plane offset
-    // along that outward normal). The sign therefore comes only from the outward
-    // offset, not from the wire winding.
-    let area = (area2 / 2.0).abs();
-    let d_out = if face.is_reversed() { -d } else { d };
-    Ok(Some(d_out * area / 3.0))
+    Ok(Some((area2, arc_edges)))
 }
 
 /// Exact signed volume contribution of a conical face via the divergence
@@ -1725,24 +1892,33 @@ fn analytic_torus_signed_volume(
         return Ok(0.0);
     }
 
-    // The minor (v) range is taken as the raw [min, max] span, which is only
-    // correct when the band does NOT straddle the v = 0/2π seam. A band given by
-    // just two distinct minor angles spanning MORE than π is ambiguous: the true
-    // arc could be the short complementary side (e.g. a fillet's concave quarter
-    // rim, whose endpoints are 270° apart but whose band is the 90° short side).
-    // Without an interior minor sample to disambiguate, decline so the caller
-    // falls back to tessellation rather than integrate the wrong portion.
-    {
+    // The minor (v) angle is periodic, so the raw [min, max] span is wrong for
+    // a band whose samples straddle the v = 0/2π seam: a rim at the outer
+    // equator can project to v = 2π−ε from float noise, turning a [0, π] band
+    // into a phantom [π/2, 2π] complement (a −27% "exact" volume). With enough
+    // samples (≥3 distinct), pick the range gap-wise like `u` does — the band
+    // is the complement of the largest angular gap. A band given by just two
+    // distinct minor angles spanning MORE than π stays ambiguous either way
+    // (e.g. a fillet's concave quarter rim, whose endpoints are 270° apart but
+    // whose band is the 90° short side), so decline and fall back to
+    // tessellation rather than integrate the wrong portion.
+    let (v_min, v_max) = {
         let mut sorted = v_vals.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         sorted.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
-        if sorted.len() < 3 && (v_max - v_min) > std::f64::consts::PI + 1e-9 {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: "torus band minor range is ambiguous (seam-straddling, no interior sample)"
-                    .into(),
-            });
+        if sorted.len() < 3 {
+            if (v_max - v_min) > std::f64::consts::PI + 1e-9 {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason:
+                        "torus band minor range is ambiguous (seam-straddling, no interior sample)"
+                            .into(),
+                });
+            }
+            (v_min, v_max)
+        } else {
+            compute_angular_range(&mut v_vals)
         }
-    }
+    };
 
     let u_range = compute_angular_range(&mut u_vals);
 
@@ -2273,8 +2449,10 @@ mod regression_tests {
         // A coaxial tube (cylinder r=5 h=20 with a coaxial r=2 bore cut through
         // it). Its holed analytic faces (annular planar caps with inner wires +
         // two cylinder walls) must NOT hit a hole-FILLING analytic fast-path —
-        // they route to hole-aware tessellation, giving the bore-subtracted
-        // volume V = π·(5²−2²)·20 = π·420, not the solid-cylinder π·500.
+        // they route to the hole-aware revolution integrator (which subtracts
+        // cap holes by MAGNITUDE, immune to a boolean's same-wound inner rims),
+        // giving the bore-subtracted V = π·(5²−2²)·20 = π·420, not the
+        // solid-cylinder π·500.
         use std::f64::consts::PI;
         let mut topo = Topology::new();
         let outer = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
