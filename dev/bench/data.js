@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783723770713,
+  "lastUpdate": 1783724157931,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4265,6 +4265,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16230639,
             "range": "± 532691",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "548cd27324abc783208c051436842f52255c521d",
+          "message": "chore(main): release 2.126.2 (#1071)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.2](https://github.com/andymai/brepkit/compare/v2.126.1...v2.126.2)\n(2026-07-10)\n\n\n### Bug Fixes\n\n* **algo:** make plane-plane FF section clipping robust to collinear\nboundary edges ([#1069](https://github.com/andymai/brepkit/issues/1069))\n([c9626ea](https://github.com/andymai/brepkit/commit/c9626ea7ac66bcea8de12c06cb5b8c52eaa640c4))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPublish `brepkit-wasm` v2.126.2 with a fix that makes plane–plane FF\nsection clipping robust when boundary edges are collinear, preventing\nbad sections and errors.\n\n<sup>Written for commit 6010c868d3edf64e7ee80bb7b1d8ae8103b0af89.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1071?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-10T22:53:35Z",
+          "tree_id": "4b982a6d66b232f2f39263ad653244cc0073e75a",
+          "url": "https://github.com/andymai/brepkit/commit/548cd27324abc783208c051436842f52255c521d"
+        },
+        "date": 1783724157510,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 755073,
+            "range": "± 4647",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 844885,
+            "range": "± 1531",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12078,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 632729,
+            "range": "± 4544",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19503250,
+            "range": "± 19119",
             "unit": "ns/iter"
           }
         ]
