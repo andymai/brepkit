@@ -44,6 +44,18 @@ enum FaceGeom {
         /// excluded. `None` for a full-period lateral.
         u_gap: Option<(f64, f64)>,
     },
+    /// A conical face without inner wires, full-period or partial-arc.
+    /// Crossings come from the ray/double-cone quadratic filtered to the
+    /// face's slant range (`v` = distance from apex along the generator,
+    /// which also rejects mirror-nappe hits) and angular patch. The flat
+    /// polygon fallback mis-counts crossings against a strongly curved
+    /// tapered corner patch, flipping the parity for nearby points.
+    Cone {
+        surface: brepkit_math::surfaces::ConicalSurface,
+        v_min: f64,
+        v_max: f64,
+        u_gap: Option<(f64, f64)>,
+    },
 }
 
 /// Classify a point by ray casting against the solid's faces.
@@ -339,6 +351,55 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             }
         }
 
+        // Conical faces without inner wires: collect analytically. `v` is the
+        // slant distance from the apex, so projecting the boundary polygon
+        // yields the patch's `[v_min, v_max]`; a closed circle edge marks a
+        // full-period band (no angular trim), otherwise the largest angular
+        // gap trims the patch like the partial-arc cylinder path above.
+        if let brepkit_topology::face::FaceSurface::Cone(cone) = face.surface()
+            && face.inner_wires().is_empty()
+        {
+            let wire = topo.wire(face.outer_wire())?;
+            let mut has_closed_circle = false;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
+                    && edge.start() == edge.end()
+                {
+                    has_closed_circle = true;
+                    break;
+                }
+            }
+            let verts = wire_polygon(topo, face.outer_wire())?;
+            if verts.len() >= 3 {
+                let mut pv_min = f64::INFINITY;
+                let mut pv_max = f64::NEG_INFINITY;
+                let mut u_samples = Vec::with_capacity(verts.len());
+                for p in &verts {
+                    let (u, v) = cone.project_point(*p);
+                    pv_min = pv_min.min(v);
+                    pv_max = pv_max.max(v);
+                    u_samples.push(u);
+                }
+                if pv_min.is_finite() && pv_max > pv_min {
+                    let u_gap = if has_closed_circle {
+                        Some(None)
+                    } else {
+                        largest_u_gap(&u_samples).map(Some)
+                    };
+                    if let Some(u_gap) = u_gap {
+                        result.push(FaceGeom::Cone {
+                            surface: cone.clone(),
+                            v_min: pv_min,
+                            v_max: pv_max,
+                            u_gap,
+                        });
+                        continue;
+                    }
+                }
+            }
+        }
+
         let verts = wire_polygon(topo, face.outer_wire())?;
         if verts.len() < 3 {
             continue;
@@ -442,6 +503,12 @@ fn ray_geom_crossings(origin: Point3, ray_dir: Vec3, geom: &FaceGeom, tol: Toler
             *u_gap,
             tol,
         ),
+        FaceGeom::Cone {
+            surface,
+            v_min,
+            v_max,
+            u_gap,
+        } => ray_cone_crossings(origin, ray_dir, surface, (*v_min, *v_max), *u_gap, tol),
     }
 }
 
@@ -545,6 +612,77 @@ fn ray_cylinder_crossings(
             if u_in_gap(u, gap) {
                 continue;
             }
+        }
+        crossings += 1;
+    }
+    crossings
+}
+
+/// Count ray crossings with a bounded conical face.
+///
+/// Solves the ray/double-cone quadratic (zero set of `cos²a·h² − sin²a·ρ²`
+/// around the apex, `h` axial and `ρ` radial) and counts roots whose slant
+/// parameter `v` falls within the face's range — mirror-nappe hits project to
+/// `v < 0` and are rejected by the same filter. Near-tangent grazes count as
+/// zero crossings, preserving parity. A ray along a generator degenerates the
+/// quadratic to a linear equation with a single crossing.
+fn ray_cone_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::surfaces::ConicalSurface,
+    v_range: (f64, f64),
+    u_gap: Option<(f64, f64)>,
+    tol: Tolerance,
+) -> i32 {
+    let (v_min, v_max) = v_range;
+    let axis = surface.axis();
+    let m = origin - surface.apex();
+    let sin_a = surface.half_angle().sin();
+    let sin2 = sin_a * sin_a;
+
+    // Cone condition `cos²a·h² = sin²a·ρ²` (h axial, ρ radial) reduces to
+    // `h² − sin²a·|w|² = 0` for w around the apex.
+    let d_a = ray_dir.dot(axis);
+    let m_a = m.dot(axis);
+    let a = sin2.mul_add(-ray_dir.dot(ray_dir), d_a * d_a);
+    let half_b = sin2.mul_add(-ray_dir.dot(m), d_a * m_a);
+    let c = sin2.mul_add(-m.dot(m), m_a * m_a);
+
+    let r_max = surface.radius_at(v_min.abs().max(v_max.abs()));
+    let mut roots = [None, None];
+    if a.abs() < 1e-14 {
+        if half_b.abs() < 1e-14 {
+            return 0;
+        }
+        roots[0] = Some(-c / (2.0 * half_b));
+    } else {
+        let disc = half_b.mul_add(half_b, -(a * c));
+        if disc < 1e-12 * a.abs() * r_max * r_max {
+            return 0;
+        }
+        let sqrt_disc = disc.sqrt();
+        roots[0] = Some((-half_b - sqrt_disc) / a);
+        roots[1] = Some((-half_b + sqrt_disc) / a);
+    }
+
+    let mut crossings = 0;
+    for t in roots.into_iter().flatten() {
+        if t <= tol.linear {
+            continue;
+        }
+        let hit = Point3::new(
+            origin.x() + ray_dir.x() * t,
+            origin.y() + ray_dir.y() * t,
+            origin.z() + ray_dir.z() * t,
+        );
+        let (u, v) = surface.project_point(hit);
+        if v < v_min - tol.linear || v > v_max + tol.linear {
+            continue;
+        }
+        if let Some(gap) = u_gap
+            && u_in_gap(u, gap)
+        {
+            continue;
         }
         crossings += 1;
     }

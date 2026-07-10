@@ -1462,9 +1462,6 @@ fn trim_open_curve_to_plane_face_lines(
     use crate::builder::classify_2d::point_in_polygon_2d;
     use brepkit_math::vec::Point2;
 
-    if std::env::var("ZZ_NO_CLIP").is_ok() {
-        return None;
-    }
     // Gated to CONE partners: the plane x cone conic (the `Points`-fit
     // hyperbola/parabola) is the configuration whose whole-curve sections
     // leave small plane faces unsplit (the dovetail tongue relief). Marched
@@ -1575,6 +1572,63 @@ fn trim_open_curve_to_plane_face_lines(
         scan_polygon(h);
     }
 
+    // Crossings of the PARTNER (cone) face's angular window edges. A conic
+    // through a rounded corner spans past the quarter face's seam ruling onto
+    // the neighbouring wall — the out-of-window half is a section of the
+    // unbounded cone only, and threading it splits a phantom lens off the
+    // plane face (the dovetail tongue tip). Bisect the RAW wrapped angular
+    // offset to the gap edge (NOT `u_in_gap`, whose 1e-6 rad margin would
+    // land the endpoint microns off the seam and mint a fresh vertex instead
+    // of snapping to the EF pave vertex the seam ruling already owns).
+    if let FaceExtent::Analytic {
+        surface: other_surface,
+        u_gap: Some(gap),
+        ..
+    } = ext_other
+    {
+        let wrap = |d: f64| -> f64 {
+            let w = d.rem_euclid(std::f64::consts::TAU);
+            if w > std::f64::consts::PI {
+                w - std::f64::consts::TAU
+            } else {
+                w
+            }
+        };
+        let angle_to = |t: f64, g: f64| -> Option<f64> {
+            other_surface
+                .project_point(eval_at(t))
+                .map(|(u, _)| wrap(u - g))
+        };
+        for &g in &[gap.0, gap.1] {
+            for i in 0..n_samples {
+                let (t_lo, t_hi) = (sample_t(i), sample_t(i + 1));
+                let (Some(s_lo), Some(s_hi)) = (angle_to(t_lo, g), angle_to(t_hi, g)) else {
+                    continue;
+                };
+                // Only local edge crossings: a sign flip π away is the wrap
+                // seam of the offset function, not a window-edge crossing.
+                if s_lo == 0.0 || s_lo * s_hi >= 0.0 || s_lo.abs() > 1.0 || s_hi.abs() > 1.0 {
+                    continue;
+                }
+                let (mut lo, mut hi, mut sl) = (t_lo, t_hi, s_lo);
+                for _ in 0..60 {
+                    let mid = f64::midpoint(lo, hi);
+                    let Some(sm) = angle_to(mid, g) else { break };
+                    if sm * sl < 0.0 {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                        sl = sm;
+                    }
+                }
+                let t_star = f64::midpoint(lo, hi);
+                if !crossings.iter().any(|&c| (c - t_star).abs() < 1e-9) {
+                    crossings.push(t_star);
+                }
+            }
+        }
+    }
+
     // Whole curve inside (or outside) the face: no crossings — keep or drop
     // by a single interior test; deferring (None) would hand the generic
     // sample-clip a curve this path has already proven in-plane, so decide
@@ -1609,8 +1663,21 @@ fn trim_open_curve_to_plane_face_lines(
             .map(|k| eval_at(t0 + (t1 - t0) * (f64::from(k) / 8.0)))
             .collect();
         let bbox = Aabb3::try_from_points(sub_pts)?;
+        // Trim the stored NURBS geometry to the kept span. Downstream
+        // consumers normalize over `domain_with_endpoints`, which for a NURBS
+        // is the FULL knot domain regardless of endpoints — an untrimmed
+        // piece would pcurve-fit, UV-project, and tessellate the WHOLE
+        // marched conic (garbage UV endpoints on the cone face, a corrupt
+        // refit pcurve on the plane face). `curve_split` preserves the
+        // parameterization, so `t_range` stays `(t0, t1)` and the trimmed
+        // curve's knot domain IS that span.
+        let piece_curve = match &raw.curve {
+            EdgeCurve::NurbsCurve(n) => trim_nurbs_to_span(n, t0, t1)
+                .map_or_else(|| raw.curve.clone(), EdgeCurve::NurbsCurve),
+            other => other.clone(),
+        };
         pieces.push(RawCurve {
-            curve: raw.curve.clone(),
+            curve: piece_curve,
             bbox: bbox.expanded(tol.linear),
             t_range: (t0, t1),
             p_start: p0,
@@ -1618,6 +1685,27 @@ fn trim_open_curve_to_plane_face_lines(
         });
     }
     Some(pieces)
+}
+
+/// Extract the `[t0, t1]` sub-curve of a NURBS curve, preserving the original
+/// parameterization (the result's knot domain is exactly `[t0, t1]`).
+fn trim_nurbs_to_span(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    use brepkit_math::traits::ParametricCurve;
+    let (d0, d1) = ParametricCurve::domain(n);
+    let eps = (d1 - d0).abs() * 1e-9;
+    let mut cur = n.clone();
+    if t1 < d1 - eps {
+        cur = curve_split(&cur, t1).ok()?.0;
+    }
+    if t0 > d0 + eps {
+        cur = curve_split(&cur, t0).ok()?.1;
+    }
+    Some(cur)
 }
 
 /// Longest contiguous run of `true` in `inb` (samples `0..=N`). For a closed

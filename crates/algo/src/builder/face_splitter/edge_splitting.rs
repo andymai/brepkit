@@ -164,9 +164,6 @@ pub(super) fn find_splits_on_nurbs_section(
     split_pts_3d: &[Point3],
     tol: f64,
 ) -> Vec<(f64, Point3)> {
-    if std::env::var("ZZ_NO_NSPLIT").is_ok() {
-        return find_splits_on_line(edge, split_pts_3d, tol);
-    }
     let n_samples = 64usize;
     let eval_at =
         |t: f64| -> Point3 { evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t) };

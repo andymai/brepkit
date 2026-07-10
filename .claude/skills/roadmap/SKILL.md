@@ -169,11 +169,40 @@ was immune via its identical/containment shortcut. Fix: `detect_trivial_relation
 extracted and consulted by `boolean_with_evolution` before the faithful path.
 Tool-verified (local overlay): dovetailKey 2/2, fit-offset 2/2, dovetail 6/9 —
 middle-column, interior ×2, inverted, magnet all closed. Remaining dovetail
-residuals: fractional edge tile bnd=4 (+265s perf), doubled-dovetail interior nm=21,
-A1-corner nm=3. DURABLE: the by-edge-id validation gate is BLIND to
-position-duplicate free edges — any "GFA result validated OK" claim about
-watertightness needs the position-quantized check; and the generator's probe hook +
-serializeSolid is the cheap capture path for baseplate ops.
+residuals: fractional edge tile bnd=4 (+265s perf), A1-corner nm=3. DURABLE: the
+by-edge-id validation gate is BLIND to position-duplicate free edges — any "GFA
+result validated OK" claim about watertightness needs the position-quantized
+check; and the generator's probe hook + serializeSolid is the cheap capture path
+for baseplate ops.
+
+**Doubled-dovetail interior nm=21 (tongue-relief cut) CLOSED at engine level
+(2026-07-10)** (fixture `crates/io/tests/dovetail_relief_cut_inmem.rs`): each
+relieved nub — cut(6-face trapezoid tongue prism, tapered socket pocket) —
+arrived at the connector fuse already broken (bnd=13-15 nm=1-2 per nub through
+BOTH boolean entries); the fuse merely accumulated 12 nubs' damage. FOUR stacked
+roots (the fixture doc comment carries the full map): (1) restrict 24-sample
+graze test dropped a real ~8° socket-mouth corner crossing → refine to the
+smaller face extent; (2) open marched-NURBS conic sections kept whole → exact
+clip to the plane face's straight boundary edges + the cone partner's
+angular-window rulings, TRIMMING the stored NURBS to each kept span
+(`domain_with_endpoints` is the full knot domain), plus sampled-projection
+T-junction splits (`find_splits_on_nurbs_section`); (3) the ray-cast classifier
+had NO analytic cone path — tapered corner patches fell to the flat
+Newell-polygon fallback, which mis-counts crossings for interior points ~0.2 mm
+inside the pocket walls, keeping two in-chunk pieces (`FaceGeom::Cone` added,
+mirroring the partial-arc cylinder path); (4) GFA section edges can store
+traversal-order vertices over an unreversed NURBS curve — a B-Rep-clean result
+whose tessellation folds the boundary polyline (mesh nm on a watertight B-Rep);
+fixed in the SAMPLERS by endpoint alignment (`nurbs_runs_end_to_start` in
+`tessellate/edge_sampling.rs`) — normalizing vertex order at the minting site
+(`instantiate_wire_edge`) instead broke the calibrated torus-box notch
+landscape, do not retry. All six captured nub operand pairs: 8-face
+analytic nub, bnd=0 nm=0, both entries. Tool-side re-probe of the doubled
+dovetail suite pending fresh capture (the old stage fixtures embed pre-fix
+broken nubs). DIAGNOSTIC LESSON: sub-face classification against a coned cutter
+was silently polygon-approximated — when a kept-piece pattern matches "inside
+the cutter but classified Outside", check `collect_face_geoms` coverage for the
+partner's surface types before touching the splitter.
 
 combinedFeatures re-read (2026-07-08, 900s runs):
 "handle holes" + "funnel cutout" PASS at engine level in 62–87s (the tool's per-test
