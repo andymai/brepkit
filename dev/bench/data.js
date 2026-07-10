@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783716782190,
+  "lastUpdate": 1783716928233,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3725,6 +3725,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19562690,
             "range": "± 188538",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f44d487a9bf4615fdc34e62a60961dfca5fceac2",
+          "message": "fix(blend): propagate trimmer edge splits into neighbor face wires (#1060)\n\n## Root cause\n\n`split_edge_at` in `crates/blend/src/trimmer.rs` rebuilt only the\ntrimmed face's wire when a fillet contact curve crossed a boundary edge\nmid-edge. A neighbor cap/rim face sharing that boundary edge kept\nreferencing the stale unsplit edge, so the stale edge and the kept\nsub-edge each ended up used by exactly one face — opening the shell\nalong the shared span (box single-edge `fillet_v2`: 16 free B-Rep edges,\n28 boundary mesh edges at export tolerance).\n\n## Fix\n\n- New `propagate_split` rewrites **every** wire referencing the split\nedge onto its two sub-edges, honoring each occurrence's traversal\norientation (snapshot-then-allocate over `topo.wires()`).\n- `trim_face`'s closing contact-edge orientation was inverted: chain1\nruns va→…→vb, so the va→vb contact edge must close it **reversed** —\ntrimmed wires were silently disconnected head-to-tail.\n- `trim_face_general`'s inline edge splits are now routed through\n`split_edge_at`, so they propagate too.\n- Same-edge double-hit now bails **before** any wires are mutated.\n\n## Verification\n\n- New unit test\n`crates/blend/src/trimmer.rs::tests::split_propagates_into_neighbor_wire`\n— trims a square with an attached neighbor face traversing the shared\nedge reversed; asserts no stale-edge refs, wire connectivity, and\nexactly one shared sub-edge.\n- New regression test\n`crates/operations/tests/regress_blend_trim_neighbor_split.rs::fillet_v2_box_edge_propagates_boundary_splits`\n— fails on main exactly on \"stale pre-split edge still referenced\"\n(independently re-verified by swapping in main's trimmer.rs); passes\nwith the fix. Asserts stale refs 0, no over-shared edges, all wires\nconnected, end faces gain both split vertices (4→6 edges), and boundary\nmesh edges drop below the pre-fix 28.\n- Measured: free B-Rep edges 16→12, boundary mesh edges 28→22 at export\ntolerance (0.01mm/5°). Residual 12 free edges are separately\ncharacterized v2 trim gaps, documented in the roadmap row (keep-side\nselection degeneracy, `create_blend_face` duplicate contact edges,\nmissing end-cap notch trim, chamfer_v2 external-tangent branch).\n- `cargo fmt` clean; `clippy --all-targets -D warnings` clean;\n`check-boundaries.sh` pass; brepkit-blend 94/94; canary `cargo test -p\nbrepkit-wasm --lib gridfinity` 27/27.\n- Roadmap row updated: latent → CLOSED, with the four discovered\nstill-open v2 trim gaps recorded.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPropagates boundary-edge splits from the blend trimmer into all neighbor\nface wires to prevent open shells and T-junction cracks. Also fixes\ncontact-edge orientation, ensures inline splits propagate, rejects\nrepeated-edge hits, and cleans up stale pcurves.\n\n- **Bug Fixes**\n- New `propagate_split` rewrites every wire referencing the split edge\nonto its two sub-edges, preserving each occurrence’s orientation; inline\nboundary splits now route through `split_edge_at` so they propagate.\n- Fixed `trim_face` closing contact-edge orientation (chain1 closes with\n`va→vb` reversed).\n- Rejects same-edge and seam-style repeated-edge double hits before any\nwire mutations.\n- Drops stale per-face pcurve entries for the replaced edge so\nregistries can’t reference the old span.\n- Added unit and regression tests; box single-edge `fillet_v2`: free\nedges 16→12, boundary mesh edges 28→22, stale-edge refs 0.\n\n<sup>Written for commit 2293e26d3b789551eb7688a68d138f9f6ada7213.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1060?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-10T20:50:36Z",
+          "tree_id": "29c5f3fc79802a2b7b8c3ff4c52bfe48e57e31ab",
+          "url": "https://github.com/andymai/brepkit/commit/f44d487a9bf4615fdc34e62a60961dfca5fceac2"
+        },
+        "date": 1783716927225,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 758095,
+            "range": "± 1320",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 845211,
+            "range": "± 3322",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11881,
+            "range": "± 108",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 636465,
+            "range": "± 957",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19528518,
+            "range": "± 884122",
             "unit": "ns/iter"
           }
         ]
