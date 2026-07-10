@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783718435923,
+  "lastUpdate": 1783722816943,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4103,6 +4103,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19441957,
             "range": "± 23095",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6e21bdfab809f4d54288a5678aed398b1e2cfeac",
+          "message": "fix(check,operations): classify trimmed-torus bands correctly (#1068)\n\n## Root cause\n\nThe trimmed-torus band produced by a partial-turn circle revolve (R=6,\nrho=2, 2pi/3 sweep; 3-face solid) misclassified 7/12 probe points —\nevery interior point read Outside in BOTH the check and operations\nray-cast classifiers. Three stacked roots, all instrumentation-verified:\n\n1. **Both local Ferrari ray-torus quartic solvers were numerically\nbroken** (`crates/check/src/classify/ray_surface.rs`,\n`crates/operations/src/classify.rs`): for oblique irrational rays at\nmoderate radii they missed real roots (zero roots for rays cast from\ninside the tube) AND emitted off-surface spurious roots (a \"hit\" at\nz=4.6 on a torus spanning z in [-2, 2]), flipping crossing parity. The\nsmall axis-aligned unit tests never exposed either failure mode.\n2. **check-only:** `face_aabb` (`crates/check/src/util.rs`) collapsed\neach cap disc — a single closed-circle wire has ONE vertex, and Plane\nsurfaces get no curvature expansion — to a point AABB, so the\nclassifier's BVH prefilter never offered the caps and their ray\ncrossings were silently dropped from the parity count.\n3. **operations-only:** `boolean::face_polygon` samples closed rims from\nthe curve's own parameter origin, so the band wire's two rim circles\nentered the periodic unwrap at incoherent phases and the UV boundary\nsheared into a self-inconsistent parallelogram that rejected real band\nhits.\n\nThe previously hypothesized mechanism (\"<3 distinct vertices trips the\ndegenerate full-surface branch\") was wrong — both crates densify closed\nedges into a 66-point polygon and the UV containment itself worked.\n\n## Fix\n\n- Both classifiers now delegate ray-torus intersection to\n`brepkit_math::analytic_intersection::intersect_line_torus`\n(residual-verified Durand-Kerner with Newton polish); the dead local\ncubic/quartic solvers are deleted.\n- `face_aabb` expands per-edge via `expand_aabb_for_curve`: exact\nfull-curve extent for circles/ellipses (conservative superset for\npartial arcs), control-point hull for NURBS.\n- A seam-anchored boundary sampler local to `classify.rs` keeps\nconsecutive closed edges phase-coherent through the periodic unwrap.\n`boolean::face_polygon` is untouched — its sampling is calibrated for\nband-fragment sharing.\n\nDiscovered, deliberately left open (roadmap row updated): the algo\nray-cast classifier (`crates/algo/src/classifier/ray_cast.rs`) has no\nTorus arm at all — torus faces fall to the flat Newell-polygon fallback.\nCalibrated boolean landscapes pin its current behavior, so it needs its\nown re-probe before adding the arm.\n\n## Verification\n\n- New regression tests: `partial_turn_torus_band_classification` +\n`full_turn_torus_classification` (operations),\n`partial_torus_band_interior_points` +\n`face_aabb_covers_closed_circle_boundary` (check),\n`ray_torus_oblique_from_inside_tube` (check ray_surface);\n`revolve_circle_partial_turn_is_trimmed_torus` now asserts ray-cast\nprobes directly.\n- 12/12 probe points correct in both stacks (was 5/12).\n- `cargo fmt --all --check`, `cargo clippy --all-targets -- -D\nwarnings`, `scripts/check-boundaries.sh` clean.\n- brepkit-check 47/47; operations classify 22/22, revolve 25/25;\ngridfinity canary 27/27; full `cargo test --workspace --release` exit 0.\n- Rebased onto 2.126.0 release head; all of the above re-verified\npost-rebase.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes ray-cast misclassification of partial-turn circle revolves\n(trimmed torus band + two disc caps) in both `check` and `operations`.\nInterior points now classify correctly as Inside.\n\n- **Bug Fixes**\n- Replaced local torus quartic with\n`brepkit_math::analytic_intersection::intersect_line_torus`; removed\nbroken cubic/quartic solvers.\n- `check`: `face_aabb` now expands per-edge extents (exact for\ncircles/ellipses; NURBS control-hull) so single-circle caps are included\nby the BVH.\n- Shared seam-anchored UV boundary sampler: `check::util::face_polygon`\n(now public) keeps closed circle/ellipse/NURBS rims phase-coherent\nthrough periodic unwrap; `operations` now delegates to it;\n`boolean::face_polygon` unchanged.\n\n<sup>Written for commit a4db67b472345fe24653215cb6716a7883b2c4da.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1068?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-10T22:31:24Z",
+          "tree_id": "699c2665fb3f1a2e9992d89aa03f8f2bcdcca457",
+          "url": "https://github.com/andymai/brepkit/commit/6e21bdfab809f4d54288a5678aed398b1e2cfeac"
+        },
+        "date": 1783722816580,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 794230,
+            "range": "± 2010",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 893195,
+            "range": "± 750",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13422,
+            "range": "± 192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 646170,
+            "range": "± 2730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20725906,
+            "range": "± 261650",
             "unit": "ns/iter"
           }
         ]
