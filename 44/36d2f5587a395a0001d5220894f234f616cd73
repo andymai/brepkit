@@ -1,0 +1,33 @@
+crates/operations/src/mesh_boolean.rs
+  s_7f4494de1ca5a8::t_59c51984787cfa 1761-1762
+  s_7f4494de1ca5a8::t_cab46038193f8a 1718-1719
+  s_7f4494de1ca5a8::t_7a2329da1f7f31 1740-1741
+  s_7f4494de1ca5a8::t_b5b7979ee429a1 4-7,15,18,29-35,38-42,46-54,66-68,70-71,73-75,78-79,90-95,98-129,134,136,140-142,144,150,160-165,167,172-173,176,182,189-192,199,201-204,206,215,222,231,239-241,244,262-267,273,283,288-290,293,295-303,305-306,311,313,315,317,321-322,324-330,332-350,352-361,363,365-377,380-384,386-411,414,417,611-647,649,651,657-666,668,671-799,808-829,831,833-835,840-856,867-893,895-905,907-981,983-999,1003-1032,1035-1057,1064,1205-1218,1220-1231,1240-1256,1258-1262,1267-1348,1395-1400,1404-1405,1413,1415-1417,1433,1435-1437,1552-1556,1560,1563-1570,1620-1634,1671-1677,1679-1717,1720-1739,1742-1760
+  s_7f4494de1ca5a8::t_5ad5095ef39bd9 143
+crates/io/tests/relief_meshbool_fallback_inmem.rs
+  s_7f4494de1ca5a8::t_d465d27bf2285b 1-141
+crates/operations/src/boolean/mod.rs
+  s_7f4494de1ca5a8::t_7f908c986c9494 2131-2140
+.claude/skills/roadmap/SKILL.md
+  s_7f4494de1ca5a8::t_7c9d9dd4e6637c 131
+crates/io/tests/data/relief_cutter.bin
+  s_7f4494de1ca5a8::t_76d0cfbef96040 1
+crates/io/tests/data/relief_tongue.bin
+  s_7f4494de1ca5a8::t_b220fff6ca4de5 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "4436d2f5587a395a0001d5220894f234f616cd73",
+  "prompts": {},
+  "sessions": {
+    "s_7f4494de1ca5a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a289991e-64c7-4b51-9e83-9571d530005f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
