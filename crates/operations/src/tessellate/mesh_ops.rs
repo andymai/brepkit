@@ -9,6 +9,14 @@ use brepkit_topology::solid::SolidId;
 use super::TriangleMesh;
 use super::edge_sampling::sample_edge;
 
+/// 1µm position-quantization grid for coincident-triangle dedupe: tight
+/// enough that legitimately distinct CAD features (down to ~10µm geometry
+/// like thin plates) keep separate keys, while still merging post-merge
+/// floating-point noise in coincident vertices that boundary-vertex welding
+/// didn't catch. Shared with the mesh-boolean output self-check so both
+/// measure manifoldness on the same weld grid.
+pub const COINCIDENT_DEDUPE_GRID: f64 = 1e-6;
+
 /// Check if a mesh is a closed 2-manifold.
 ///
 /// Returns `true` iff every edge is shared by exactly 2 triangles: no gaps
@@ -86,11 +94,7 @@ pub(super) fn dedupe_coincident_triangles(
     mesh: &mut TriangleMesh,
     tri_faces: Option<&mut Vec<u32>>,
 ) {
-    /// 1µm grid: tight enough that legitimately distinct CAD features (down to
-    /// ~10µm geometry like thin plates) keep separate keys, while still
-    /// merging post-merge floating-point noise in coincident vertices that
-    /// boundary-vertex welding didn't catch.
-    const POS_GRID: f64 = 1e-6;
+    const POS_GRID: f64 = COINCIDENT_DEDUPE_GRID;
 
     type TriKey = [(i64, i64, i64); 3];
     type TriRefs = Vec<(usize, bool)>;

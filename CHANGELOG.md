@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.125.1](https://github.com/andymai/brepkit/compare/v2.125.0...v2.125.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **blend:** propagate trimmer edge splits into neighbor face wires ([#1060](https://github.com/andymai/brepkit/issues/1060)) ([f44d487](https://github.com/andymai/brepkit/commit/f44d487a9bf4615fdc34e62a60961dfca5fceac2))
+
+## [2.125.0](https://github.com/andymai/brepkit/compare/v2.124.13...v2.125.0) (2026-07-10)
+
+
+### Features
+
+* **wasm:** capture panic text for post-poison diagnosis ([#1059](https://github.com/andymai/brepkit/issues/1059)) ([4fe072f](https://github.com/andymai/brepkit/commit/4fe072fc086c3ebc2094b24c13e715884b2baf89))
+
 ## [2.124.13](https://github.com/andymai/brepkit/compare/v2.124.12...v2.124.13) (2026-07-08)
 
 
