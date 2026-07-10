@@ -3533,6 +3533,10 @@ fn clip_line_to_polygon(
         })
         .sum();
     let sign = if area2 >= 0.0 { 1.0 } else { -1.0 };
+    let d_len = dx.hypot(dy);
+    if d_len < 1e-12 {
+        return None;
+    }
     let mut t_min = 0.0_f64;
     let mut t_max = 1.0_f64;
     for i in 0..n {
@@ -3543,8 +3547,25 @@ fn clip_line_to_polygon(
         let ny = ex * sign;
         let denom = nx * dx + ny * dy;
         let num = nx * (start.0 - polygon[i].0) + ny * (start.1 - polygon[i].1);
-        if denom.abs() < 1e-15 {
-            if num < -1e-10 {
+        // Parallelism must be judged relative to |n|·|d|: `denom` is an
+        // unnormalized dot product, so an absolute epsilon misreads a section
+        // line COLLINEAR with a polygon edge (a coplanar partner face meeting
+        // the clip face exactly along that edge — e.g. a lofted wall's top
+        // chord lying in the partner cap's plane) as a genuine crossing. The
+        // ratio −num/denom of two roundoff residues then clips the span to a
+        // garbage sliver or empties it, and which of the two happens varies
+        // per edge — nondeterministic partial section emission.
+        let n_len = nx.hypot(ny);
+        if n_len < 1e-12 {
+            continue;
+        }
+        if denom.abs() < n_len * d_len * 1e-9 {
+            // A near-parallel segment can still drift across the edge by up
+            // to d_len·1e-9 over its length, so dropping on the start point
+            // alone would discard a segment that genuinely enters the face —
+            // reject only when BOTH endpoints sit outside the band
+            // (num + denom is the end point's signed offset).
+            if num < -n_len * 1e-9 && num + denom < -n_len * 1e-9 {
                 return None;
             }
             continue;
@@ -3834,6 +3855,39 @@ mod tests {
     fn clip_outside() {
         let poly = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         assert!(clip_line_to_polygon((2.0, 0.5), (3.0, 0.5), &poly).is_none());
+    }
+
+    #[test]
+    fn clip_collinear_with_edge_keeps_full_span() {
+        // Roundoff-scale residues off the bottom edge of a scale-100 square:
+        // the natural scale of the unnormalized denom is |n|·|d| ≈ 8000, so
+        // an absolute parallel epsilon reads this as a genuine crossing and
+        // clips the span to the ratio of two residues (t_max = 0.5 here).
+        let poly = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+        let r = clip_line_to_polygon((10.0, 1e-13), (90.0, -1e-13), &poly).unwrap();
+        assert!(r.0.abs() < 1e-9 && (r.1 - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clip_near_parallel_entering_segment_is_kept() {
+        // Within the parallel band (sin(angle) < 1e-9) a long segment can
+        // still drift across the edge: start 2e-8 outside, end 2e-8 inside.
+        // Rejecting on the start point alone would drop it entirely.
+        let poly = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+        let r = clip_line_to_polygon((10.0, -2e-8), (90.0, 2e-8), &poly).unwrap();
+        assert!((r.1 - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clip_parallel_outside_edge_is_dropped() {
+        let poly = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+        assert!(clip_line_to_polygon((10.0, -0.5), (90.0, -0.5), &poly).is_none());
+    }
+
+    #[test]
+    fn clip_zero_length_segment_is_dropped() {
+        let poly = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        assert!(clip_line_to_polygon((0.5, 0.5), (0.5, 0.5), &poly).is_none());
     }
 
     #[test]
