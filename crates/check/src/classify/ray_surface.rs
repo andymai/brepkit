@@ -115,36 +115,15 @@ pub fn ray_sphere(origin: Point3, direction: Vec3, sph: &SphericalSurface) -> Sm
 
 /// Intersect a ray with a torus.
 ///
-/// Returns up to 4 positive-t values (quartic equation).
-#[allow(clippy::similar_names)]
+/// Returns up to 4 positive-t values (quartic equation). Delegates to the
+/// residual-verified quartic root finder in `brepkit_math` — a local Ferrari
+/// solver previously both missed real roots and emitted off-surface spurious
+/// ones for oblique rays at moderate radii, flipping crossing parity.
 pub fn ray_torus(origin: Point3, direction: Vec3, tor: &ToroidalSurface) -> SmallVec<[f64; 4]> {
-    let z_axis = tor.z_axis();
-    let x_axis = tor.x_axis();
-    let y_axis = tor.y_axis();
-
-    let ov = origin - tor.center();
-    let o = Vec3::new(ov.dot(x_axis), ov.dot(y_axis), ov.dot(z_axis));
-    let d = Vec3::new(
-        direction.dot(x_axis),
-        direction.dot(y_axis),
-        direction.dot(z_axis),
-    );
-
-    let big_r = tor.major_radius();
-    let small_r = tor.minor_radius();
-
-    let sum_d_sq = d.dot(d);
-    let sum_od = o.dot(d);
-    let sum_o_sq = o.dot(o);
-    let k = sum_o_sq - small_r * small_r - big_r * big_r;
-
-    let c4 = sum_d_sq * sum_d_sq;
-    let c3 = 4.0 * sum_d_sq * sum_od;
-    let c2 = 2.0 * sum_d_sq * k + 4.0 * sum_od * sum_od + 4.0 * big_r * big_r * d.z() * d.z();
-    let c1 = 4.0 * k * sum_od + 8.0 * big_r * big_r * o.z() * d.z();
-    let c0 = k * k - 4.0 * big_r * big_r * (small_r * small_r - o.z() * o.z());
-
-    solve_quartic(c4, c3, c2, c1, c0)
+    brepkit_math::analytic_intersection::intersect_line_torus(tor, origin, direction)
+        .into_iter()
+        .filter(|&t| t > RAY_T_MIN)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -190,9 +169,6 @@ pub fn solve_quadratic(a: f64, b: f64, c: f64) -> SmallVec<[f64; 4]> {
 }
 
 /// Solve `a*t^2 + b*t + c = 0` returning ALL real roots (no positive filter).
-///
-/// Used internally by `solve_quartic` where the quadratic variable `u` is not
-/// the ray parameter — the positive filter is applied later after the shift.
 fn solve_quadratic_all(a: f64, b: f64, c: f64) -> SmallVec<[f64; 4]> {
     let mut roots = SmallVec::new();
 
@@ -230,208 +206,6 @@ fn solve_quadratic_all(a: f64, b: f64, c: f64) -> SmallVec<[f64; 4]> {
         roots.swap(0, 1);
     }
 
-    roots
-}
-
-/// Find one real root of `t^3 + p*t + q = 0` (depressed cubic).
-fn solve_cubic_one_real(p: f64, q: f64) -> f64 {
-    let disc = q * q / 4.0 + p * p * p / 27.0;
-    if disc >= 0.0 {
-        let sqrt_disc = disc.sqrt();
-        let u = (-q / 2.0 + sqrt_disc).cbrt();
-        let v = (-q / 2.0 - sqrt_disc).cbrt();
-        u + v
-    } else {
-        // Three real roots — use trigonometric method, return first.
-        let r = (-p * p * p / 27.0).sqrt();
-        let theta = (-q / (2.0 * r)).acos();
-        2.0 * r.cbrt() * (theta / 3.0).cos()
-    }
-}
-
-/// Solve `a*t^3 + b*t^2 + c*t + d = 0` returning positive roots.
-pub fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> SmallVec<[f64; 4]> {
-    if a.abs() < NEAR_ZERO {
-        return solve_quadratic(b, c, d);
-    }
-
-    // Normalize: t^3 + pt^2 + qt + r = 0
-    let p = b / a;
-    let q = c / a;
-    let r = d / a;
-
-    // Depress: substitute t = u - p/3
-    let p_shift = q - p * p / 3.0;
-    let q_shift = 2.0 * p * p * p / 27.0 - p * q / 3.0 + r;
-
-    let disc = q_shift * q_shift / 4.0 + p_shift * p_shift * p_shift / 27.0;
-
-    let mut roots = SmallVec::new();
-
-    if disc > NEAR_ZERO {
-        // One real root.
-        let u = solve_cubic_one_real(p_shift, q_shift);
-        let t = u - p / 3.0;
-        if t > RAY_T_MIN {
-            roots.push(t);
-        }
-    } else {
-        // Three real roots via trigonometric method.
-        let r_mag = (-p_shift * p_shift * p_shift / 27.0).sqrt();
-        if r_mag.abs() < NEAR_ZERO {
-            let t = -p / 3.0;
-            if t > RAY_T_MIN {
-                roots.push(t);
-            }
-            return roots;
-        }
-        let theta = (-q_shift / (2.0 * r_mag)).clamp(-1.0, 1.0).acos();
-        let cbrt_r = r_mag.cbrt();
-        for k in 0..3 {
-            #[allow(clippy::cast_precision_loss)]
-            let angle = (theta + 2.0 * std::f64::consts::PI * k as f64) / 3.0;
-            let t = 2.0 * cbrt_r * angle.cos() - p / 3.0;
-            if t > RAY_T_MIN {
-                roots.push(t);
-            }
-        }
-    }
-
-    roots.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-    roots
-}
-
-/// Solve `a*t^3 + b*t^2 + c*t + d = 0` returning ALL real roots (no positive filter).
-///
-/// Used internally by `solve_quartic` for the resolvent cubic, where the
-/// cubic variable is not the ray parameter and negative roots are valid.
-fn solve_cubic_all(a: f64, b: f64, c: f64, d: f64) -> SmallVec<[f64; 4]> {
-    if a.abs() < NEAR_ZERO {
-        return solve_quadratic_all(b, c, d);
-    }
-
-    // Normalize: t^3 + pt^2 + qt + r = 0
-    let p = b / a;
-    let q = c / a;
-    let r = d / a;
-
-    // Depress: substitute t = u - p/3
-    let p_shift = q - p * p / 3.0;
-    let q_shift = 2.0 * p * p * p / 27.0 - p * q / 3.0 + r;
-
-    let disc = q_shift * q_shift / 4.0 + p_shift * p_shift * p_shift / 27.0;
-
-    let mut roots = SmallVec::new();
-
-    if disc > NEAR_ZERO {
-        // One real root.
-        let u = solve_cubic_one_real(p_shift, q_shift);
-        roots.push(u - p / 3.0);
-    } else {
-        // Three real roots via trigonometric method.
-        let r_mag = (-p_shift * p_shift * p_shift / 27.0).sqrt();
-        if r_mag.abs() < NEAR_ZERO {
-            roots.push(-p / 3.0);
-            return roots;
-        }
-        let theta = (-q_shift / (2.0 * r_mag)).clamp(-1.0, 1.0).acos();
-        let cbrt_r = r_mag.cbrt();
-        for k in 0..3 {
-            #[allow(clippy::cast_precision_loss)]
-            let angle = (theta + 2.0 * std::f64::consts::PI * k as f64) / 3.0;
-            roots.push(2.0 * cbrt_r * angle.cos() - p / 3.0);
-        }
-    }
-
-    roots.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-    roots
-}
-
-/// Solve `c4*t^4 + c3*t^3 + c2*t^2 + c1*t + c0 = 0` returning positive real roots.
-///
-/// Uses depressed quartic reduction followed by Ferrari's method.
-#[allow(clippy::many_single_char_names)]
-pub fn solve_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> SmallVec<[f64; 4]> {
-    if c4.abs() < NEAR_ZERO {
-        return solve_cubic(c3, c2, c1, c0);
-    }
-
-    // Normalize: t^4 + a*t^3 + b*t^2 + c*t + d = 0
-    let a = c3 / c4;
-    let b = c2 / c4;
-    let c = c1 / c4;
-    let d = c0 / c4;
-
-    // Depressed quartic via substitution t = u - a/4:
-    // u^4 + p*u^2 + q*u + r = 0
-    let a2 = a * a;
-    let p = b - 3.0 * a2 / 8.0;
-    let q = c - a * b / 2.0 + a2 * a / 8.0;
-    let r = d - a * c / 4.0 + a2 * b / 16.0 - 3.0 * a2 * a2 / 256.0;
-    let shift = -a / 4.0;
-
-    let mut roots = SmallVec::new();
-
-    if q.abs() < NEAR_ZERO {
-        // Biquadratic: u^4 + p*u^2 + r = 0
-        let inner_roots = solve_quadratic_all(1.0, p, r);
-        for ir in &inner_roots {
-            if *ir >= 0.0 {
-                let s = ir.sqrt();
-                let t1 = s + shift;
-                let t2 = -s + shift;
-                if t1 > RAY_T_MIN {
-                    roots.push(t1);
-                }
-                if t2 > RAY_T_MIN {
-                    roots.push(t2);
-                }
-            }
-        }
-    } else {
-        // Ferrari's method: find y from the resolvent cubic
-        // y^3 - (p/2)*y^2 - r*y + (r*p/2 - q^2/8) = 0
-        let cubic_roots = solve_cubic_all(1.0, -p / 2.0, -r, r * p / 2.0 - q * q / 8.0);
-
-        // Pick the largest real root for numerical stability
-        let y = cubic_roots.iter().copied().reduce(f64::max).unwrap_or(0.0);
-
-        // Factor: (u^2 + s*u + t1)(u^2 - s*u + t2) = 0
-        // where s = sqrt(2y - p), t1 = y + q/(2s), t2 = y - q/(2s)
-        let disc = (2.0 * y - p).max(0.0);
-        let s = disc.sqrt();
-
-        if s.abs() < NEAR_ZERO {
-            // Degenerate: try biquadratic with adjusted r
-            let inner_roots = solve_quadratic_all(1.0, p, r);
-            for ir in &inner_roots {
-                if *ir >= 0.0 {
-                    let sq = ir.sqrt();
-                    let t1 = sq + shift;
-                    let t2 = -sq + shift;
-                    if t1 > RAY_T_MIN {
-                        roots.push(t1);
-                    }
-                    if t2 > RAY_T_MIN {
-                        roots.push(t2);
-                    }
-                }
-            }
-        } else {
-            let w = q / (2.0 * s);
-            let quad1 = solve_quadratic_all(1.0, s, y + w);
-            let quad2 = solve_quadratic_all(1.0, -s, y - w);
-
-            for &u in quad1.iter().chain(quad2.iter()) {
-                let t = u + shift;
-                if t > RAY_T_MIN {
-                    roots.push(t);
-                }
-            }
-        }
-    }
-
-    roots.sort_by(|x: &f64, y_val: &f64| x.partial_cmp(y_val).unwrap_or(std::cmp::Ordering::Equal));
     roots
 }
 
@@ -581,6 +355,59 @@ mod tests {
                 (dist_to_tube - tor.minor_radius()).abs() < 1e-6,
                 "hit not on torus surface"
             );
+        }
+    }
+
+    /// Regression: oblique irrational rays from inside the tube of an
+    /// R=6, r=2 torus. The old Ferrari solver returned zero roots for some of
+    /// these rays and off-surface spurious roots for others (hits at |z| > r
+    /// on a torus spanning z in `[-r, r]`), flipping classification parity.
+    #[test]
+    fn ray_torus_oblique_from_inside_tube() {
+        let tor = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0, 2.0).unwrap();
+        let dirs = [
+            Vec3::new(
+                0.573_576_436_351_046,
+                0.740_535_693_464_567_5,
+                0.350_889_803_483_932_2,
+            ),
+            Vec3::new(
+                -0.350_889_803_483_932_2,
+                0.573_576_436_351_046,
+                0.740_535_693_464_567_5,
+            ),
+            Vec3::new(
+                0.740_535_693_464_567_5,
+                -0.350_889_803_483_932_2,
+                0.573_576_436_351_046,
+            ),
+        ];
+        // Tube-center origins at several azimuths, plus off-center interiors.
+        let mut origins = Vec::new();
+        for theta in [0.05_f64, std::f64::consts::PI / 3.0, 2.0, 4.5] {
+            origins.push(Point3::new(6.0 * theta.cos(), 6.0 * theta.sin(), 0.0));
+            origins.push(Point3::new(4.5 * theta.cos(), 4.5 * theta.sin(), 0.5));
+        }
+        for origin in origins {
+            for dir in dirs {
+                let hits = ray_torus(origin, dir, &tor);
+                // A forward ray from inside the tube must exit: at least one hit.
+                assert!(
+                    !hits.is_empty(),
+                    "no roots for origin {origin:?} dir {dir:?}"
+                );
+                for &t in &hits {
+                    let p = origin + dir * t;
+                    let pv = p - tor.center();
+                    let z = pv.dot(tor.z_axis());
+                    let r_major = (pv - tor.z_axis() * z).length();
+                    let dist_to_tube = ((r_major - tor.major_radius()).powi(2) + z * z).sqrt();
+                    assert!(
+                        (dist_to_tube - tor.minor_radius()).abs() < 1e-6,
+                        "spurious off-surface root t={t} for origin {origin:?} dir {dir:?}"
+                    );
+                }
+            }
         }
     }
 }

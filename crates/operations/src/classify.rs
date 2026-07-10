@@ -381,8 +381,14 @@ where
         return Ok(0);
     }
 
-    // Build UV boundary polygon from face wire
-    let verts = face_polygon(topo, face_id)?;
+    // The UV boundary needs seam-anchored sampling: `boolean::face_polygon`
+    // samples closed edges from the curve's own parameter origin, so a wire
+    // chaining two rim circles (a partial-revolve torus band) enters the
+    // periodic unwrap at incoherent phases and the UV polygon shears into a
+    // self-inconsistent parallelogram that rejects real hits. The check
+    // crate's sampler anchors each closed edge at its seam vertex, keeping
+    // consecutive edges phase-coherent through the unwrap.
+    let verts = brepkit_check::util::face_polygon(topo, face_id)?;
 
     // Detect degenerate boundary: a "full-surface" face whose wire has fewer than
     // 3 distinct vertices (e.g. a torus with only seam edges, where all boundary
@@ -563,39 +569,17 @@ fn ray_sphere_roots(
 }
 
 /// Compute ray-torus intersection parameters (quartic).
+///
+/// Delegates to the residual-verified quartic root finder in `brepkit_math` —
+/// a local Ferrari solver previously both missed real roots and emitted
+/// off-surface spurious ones for oblique rays at moderate radii, flipping
+/// crossing parity.
 fn ray_torus_roots(
     origin: Point3,
     direction: Vec3,
     tor: &brepkit_math::surfaces::ToroidalSurface,
 ) -> Vec<f64> {
-    // Transform to torus-local coordinates.
-    let z_axis = tor.z_axis();
-    let x_axis = tor.x_axis();
-    let y_axis = z_axis.cross(x_axis);
-
-    let ov = origin - tor.center();
-    let o = Vec3::new(ov.dot(x_axis), ov.dot(y_axis), ov.dot(z_axis));
-    let d = Vec3::new(
-        direction.dot(x_axis),
-        direction.dot(y_axis),
-        direction.dot(z_axis),
-    );
-
-    let big_r = tor.major_radius();
-    let small_r = tor.minor_radius();
-
-    let sum_d_sq = d.dot(d);
-    let sum_od = o.dot(d);
-    let sum_o_sq = o.dot(o);
-    let k = sum_o_sq - small_r * small_r - big_r * big_r;
-
-    let c4 = sum_d_sq * sum_d_sq;
-    let c3 = 4.0 * sum_d_sq * sum_od;
-    let c2 = 2.0 * sum_d_sq * k + 4.0 * sum_od * sum_od + 4.0 * big_r * big_r * d.z() * d.z();
-    let c1 = 4.0 * k * sum_od + 8.0 * big_r * big_r * o.z() * d.z();
-    let c0 = k * k - 4.0 * big_r * big_r * (small_r * small_r - o.z() * o.z());
-
-    solve_quartic(c4, c3, c2, c1, c0)
+    brepkit_math::analytic_intersection::intersect_line_torus(tor, origin, direction)
 }
 
 /// Count ray crossings for a NURBS face using ray-surface intersection.
@@ -738,118 +722,6 @@ fn solve_quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
     roots
 }
 
-/// Solve a cubic a·t³ + b·t² + c·t + d = 0, returning all real roots.
-fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
-    if a.abs() < NEAR_ZERO {
-        return solve_quadratic(b, c, d);
-    }
-
-    let p = b / a;
-    let q = c / a;
-    let r = d / a;
-
-    // Depressed cubic u³ + dp·u + dq = 0, where t = u - p/3.
-    let p2 = p * p;
-    let dp = q - p2 / 3.0;
-    let dq = r - p * q / 3.0 + 2.0 * p2 * p / 27.0;
-
-    let disc = dq * dq / 4.0 + dp * dp * dp / 27.0;
-    let shift = -p / 3.0;
-
-    if disc > RAY_T_MIN {
-        // One real root.
-        let sqrt_disc = disc.sqrt();
-        let u = (-dq / 2.0 + sqrt_disc).cbrt() + (-dq / 2.0 - sqrt_disc).cbrt();
-        vec![u + shift]
-    } else if disc < -RAY_T_MIN {
-        // Three real roots (casus irreducibilis — trigonometric method).
-        // dp < 0 here, so -dp/3 > 0.
-        // m = sqrt(-dp/3) = cbrt(sqrt(-dp³/27)); factor in each root is 2·m.
-        let m = (-dp / 3.0).sqrt();
-        let theta = (-dq / (2.0 * m * m * m)).clamp(-1.0, 1.0).acos();
-        let tau = std::f64::consts::TAU;
-        vec![
-            2.0 * m * (theta / 3.0).cos() + shift,
-            2.0 * m * ((theta + tau) / 3.0).cos() + shift,
-            2.0 * m * ((theta + 2.0 * tau) / 3.0).cos() + shift,
-        ]
-    } else {
-        // Repeated root.
-        if dq.abs() < NEAR_ZERO {
-            vec![shift] // triple root
-        } else {
-            let u = (dq / 2.0).cbrt();
-            vec![-2.0 * u + shift, u + shift]
-        }
-    }
-}
-
-/// Solve a quartic equation via Ferrari's method.
-#[allow(clippy::many_single_char_names)]
-fn solve_quartic(a: f64, b: f64, c: f64, d: f64, e: f64) -> Vec<f64> {
-    if a.abs() < NEAR_ZERO * NEAR_ZERO {
-        return solve_cubic(b, c, d, e);
-    }
-
-    let p = b / a;
-    let q = c / a;
-    let r = d / a;
-    let s = e / a;
-
-    // Resolvent cubic: y³ - q·y² + (p·r - 4s)·y - (p²s - 4qs + r²) = 0
-    let rc_b = -q;
-    let rc_c = p * r - 4.0 * s;
-    let rc_d = -(p * p * s - 4.0 * q * s + r * r);
-
-    let y = solve_cubic_one_real(rc_b, rc_c, rc_d);
-
-    let disc1 = p * p * 0.25 - q + y;
-    if disc1 < -HALF_SPACE_EPS {
-        return Vec::new();
-    }
-    let disc1 = disc1.max(0.0).sqrt();
-
-    let disc2a = y * y * 0.25 - s;
-    if disc2a < -HALF_SPACE_EPS {
-        return Vec::new();
-    }
-    let disc2 = disc2a.max(0.0).sqrt();
-
-    let sign = if p * y * 0.5 - r >= 0.0 { 1.0 } else { -1.0 };
-
-    let mut roots = Vec::with_capacity(4);
-    roots.extend(solve_quadratic(
-        1.0,
-        p * 0.5 + disc1,
-        y * 0.5 + sign * disc2,
-    ));
-    roots.extend(solve_quadratic(
-        1.0,
-        p * 0.5 - disc1,
-        y * 0.5 - sign * disc2,
-    ));
-    roots
-}
-
-/// Find one real root of t³ + b·t² + c·t + d = 0 via Cardano.
-fn solve_cubic_one_real(b: f64, c: f64, d: f64) -> f64 {
-    let p = c - b * b / 3.0;
-    let q = d - b * c / 3.0 + 2.0 * b * b * b / 27.0;
-
-    let disc = q * q / 4.0 + p * p * p / 27.0;
-
-    let u = if disc >= 0.0 {
-        let sqrt_disc = disc.sqrt();
-        (-q / 2.0 + sqrt_disc).cbrt() + (-q / 2.0 - sqrt_disc).cbrt()
-    } else {
-        let r = (-p * p * p / 27.0).sqrt();
-        let theta = (-q / (2.0 * r)).clamp(-1.0, 1.0).acos();
-        2.0 * r.cbrt() * (theta / 3.0).cos()
-    };
-
-    u - b / 3.0
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -988,35 +860,114 @@ mod tests {
         assert_eq!(result, PointClassification::Outside);
     }
 
-    #[test]
-    fn cubic_three_roots() {
-        // (t-1)(t-2)(t-3) = t³ - 6t² + 11t - 6
-        let mut roots = solve_cubic(1.0, -6.0, 11.0, -6.0);
-        roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert_eq!(roots.len(), 3, "expected 3 roots, got {}", roots.len());
-        assert!((roots[0] - 1.0).abs() < 1e-8);
-        assert!((roots[1] - 2.0).abs() < 1e-8);
-        assert!((roots[2] - 3.0).abs() < 1e-8);
+    /// Build the partial-turn revolve of a circle profile: one trimmed torus
+    /// band (wire = 2 closed rims + doubled seam) plus 2 planar disc caps.
+    fn make_partial_torus(
+        topo: &mut Topology,
+        big_r: f64,
+        rho: f64,
+        angle: f64,
+    ) -> brepkit_topology::solid::SolidId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let circ =
+            Circle3D::new(Point3::new(big_r, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), rho).unwrap();
+        let p0 = circ.evaluate(0.0);
+        let v0 = topo.add_vertex(Vertex::new(p0, 1e-7));
+        let eid = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(circ)));
+        let wire = Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap();
+        let wid = topo.add_wire(wire);
+        let face = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 0.0,
+            },
+        ));
+        crate::revolve::revolve(
+            topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            angle,
+        )
+        .unwrap()
     }
 
+    /// Regression: the trimmed-torus band of a partial-turn revolve. Two
+    /// stacked defects made every interior point read Outside: the local
+    /// Ferrari ray-torus quartic missed real roots and emitted off-surface
+    /// spurious ones, and the UV boundary sampled closed rim circles from the
+    /// curve's parameter origin, so the two rims entered the periodic unwrap
+    /// at incoherent phases and the UV polygon rejected real band hits.
     #[test]
-    fn cubic_one_root() {
-        // t³ + t + 2 = 0 has one real root at t = -1
-        // (t+1)(t² - t + 2) = t³ + 2  ... no that's not right
-        // Let's use t³ + 3t + 4: discriminant = 16 + 4 > 0 → one real root
-        let roots = solve_cubic(1.0, 0.0, 3.0, 4.0);
-        assert_eq!(roots.len(), 1, "expected 1 root, got {}", roots.len());
+    fn partial_turn_torus_band_classification() {
+        let (big_r, rho, angle) = (6.0_f64, 2.0_f64, 2.0 * PI / 3.0);
+        let mut topo = Topology::new();
+        let solid = make_partial_torus(&mut topo, big_r, rho, angle);
+
+        let mid = angle / 2.0;
+        let inside = [
+            Point3::new(big_r * mid.cos(), big_r * mid.sin(), 0.0),
+            Point3::new(big_r * mid.cos(), big_r * mid.sin(), 1.0),
+            Point3::new(big_r * mid.cos(), big_r * mid.sin(), -1.0),
+            Point3::new(big_r * 0.05f64.cos(), big_r * 0.05f64.sin(), 0.0),
+            Point3::new(
+                big_r * (angle - 0.05).cos(),
+                big_r * (angle - 0.05).sin(),
+                0.0,
+            ),
+            Point3::new((big_r - 1.5) * mid.cos(), (big_r - 1.5) * mid.sin(), 0.0),
+            Point3::new((big_r + 1.5) * mid.cos(), (big_r + 1.5) * mid.sin(), 0.0),
+        ];
+        for p in inside {
+            let result = classify_point(&topo, solid, p, 0.05, 1e-6).unwrap();
+            assert_eq!(result, PointClassification::Inside, "probe {p:?}");
+        }
+
+        let outside = [
+            Point3::new(big_r * mid.cos(), big_r * mid.sin(), 2.5),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(-big_r, 0.0, 0.0),
+            Point3::new(
+                big_r * (angle + 0.1).cos(),
+                big_r * (angle + 0.1).sin(),
+                0.0,
+            ),
+            Point3::new(big_r * (-0.1f64).cos(), big_r * (-0.1f64).sin(), 0.0),
+        ];
+        for p in outside {
+            let result = classify_point(&topo, solid, p, 0.05, 1e-6).unwrap();
+            assert_eq!(result, PointClassification::Outside, "probe {p:?}");
+        }
     }
 
+    /// A full-turn revolve (single closed torus face, seam edges only) must
+    /// keep classifying correctly alongside the partial-band fix.
     #[test]
-    fn quartic_degenerate_to_cubic() {
-        // a ≈ 0: effectively t³ - 6t² + 11t - 6 = 0 → roots 1,2,3
-        let mut roots = solve_quartic(0.0, 1.0, -6.0, 11.0, -6.0);
-        roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert_eq!(roots.len(), 3, "expected 3 roots, got {}", roots.len());
-        assert!((roots[0] - 1.0).abs() < 1e-8);
-        assert!((roots[1] - 2.0).abs() < 1e-8);
-        assert!((roots[2] - 3.0).abs() < 1e-8);
+    fn full_turn_torus_classification() {
+        let (big_r, rho) = (6.0_f64, 2.0_f64);
+        let mut topo = Topology::new();
+        let solid = make_partial_torus(&mut topo, big_r, rho, 2.0 * PI);
+
+        for theta in [0.0_f64, 1.0, 2.5, 4.0, 5.5] {
+            let p = Point3::new(big_r * theta.cos(), big_r * theta.sin(), 0.0);
+            let result = classify_point(&topo, solid, p, 0.05, 1e-6).unwrap();
+            assert_eq!(result, PointClassification::Inside, "tube center {theta}");
+        }
+        for p in [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(big_r, 0.0, 2.5),
+            Point3::new(2.0 * big_r, 0.0, 0.0),
+        ] {
+            let result = classify_point(&topo, solid, p, 0.05, 1e-6).unwrap();
+            assert_eq!(result, PointClassification::Outside, "probe {p:?}");
+        }
     }
 
     #[test]
@@ -1073,22 +1024,5 @@ mod tests {
     fn quadratic_no_roots() {
         let roots = solve_quadratic(1.0, 0.0, 1.0);
         assert!(roots.is_empty());
-    }
-
-    #[test]
-    fn quartic_known_roots() {
-        let mut roots = solve_quartic(1.0, -10.0, 35.0, -50.0, 24.0);
-        assert!(roots.len() >= 4, "expected 4 roots, got {}", roots.len());
-        roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let sorted = roots;
-        for (i, &expected) in [1.0, 2.0, 3.0, 4.0].iter().enumerate() {
-            assert!(
-                (sorted[i] - expected).abs() < 1e-6,
-                "root {} expected {}, got {}",
-                i,
-                expected,
-                sorted[i]
-            );
-        }
     }
 }

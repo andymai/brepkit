@@ -2278,12 +2278,30 @@ mod tests {
 
         let report = crate::validate::validate_solid(&topo, solid).unwrap();
         assert!(report.is_valid(), "partial torus invalid: {report:?}");
-        // Material check: the watertight mesh's SIGNED volume (positive ⇒
-        // outward-wound) must approach the closed form from below — a band
-        // swept on the wrong side of the tube, or an inside-out shell, lands
-        // nowhere near it. (Ray-cast classification is not usable here: the
-        // band's wire has only 2 distinct vertices, so the UV-containment
-        // classifiers degrade it to a full-surface face and misclassify.)
+
+        // Material check: ray-cast classification at intent-encoding probes.
+        let mid = angle / 2.0;
+        for (p, expect) in [
+            (
+                Point3::new(big_r * mid.cos(), big_r * mid.sin(), 0.0),
+                crate::classify::PointClassification::Inside,
+            ),
+            (
+                Point3::new(big_r * mid.cos(), big_r * mid.sin(), 2.5),
+                crate::classify::PointClassification::Outside,
+            ),
+            (
+                Point3::new(-big_r, 0.0, 0.0),
+                crate::classify::PointClassification::Outside,
+            ),
+        ] {
+            let got = crate::classify::classify_point(&topo, solid, p, 0.05, 1e-6).unwrap();
+            assert_eq!(got, expect, "probe {p:?}");
+        }
+
+        // The watertight mesh's SIGNED volume (positive ⇒ outward-wound) must
+        // approach the closed form from below — a band swept on the wrong
+        // side of the tube, or an inside-out shell, lands nowhere near it.
         let expected = PI * big_r * rho * rho * angle;
         for defl in [0.1_f64, 0.02] {
             let mesh = crate::tessellate::tessellate_solid(&topo, solid, defl).unwrap();

@@ -407,4 +407,161 @@ mod tests {
         let result = classify_point(&topo, solid, neg, &opts).unwrap();
         assert_eq!(result, PointClassification::Outside);
     }
+
+    /// Build the 3-face solid a partial-turn circle revolve produces: one
+    /// trimmed torus band (u in `[0, angle]`, full tube wrap; wire = two
+    /// closed rim circles + a doubled seam arc, only 2 distinct vertices)
+    /// plus two planar disc caps each bounded by a single closed circle.
+    fn make_partial_torus_band(topo: &mut Topology, big_r: f64, rho: f64, angle: f64) -> SolidId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::shell::Shell;
+        use brepkit_topology::solid::Solid;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let (sin_a, cos_a) = angle.sin_cos();
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(big_r, 0.0, -rho), 1e-7));
+        let v2 = topo.add_vertex(Vertex::new(
+            Point3::new(big_r * cos_a, big_r * sin_a, -rho),
+            1e-7,
+        ));
+
+        let rim1 =
+            Circle3D::new(Point3::new(big_r, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), rho).unwrap();
+        let rim2 = Circle3D::new(
+            Point3::new(big_r * cos_a, big_r * sin_a, 0.0),
+            Vec3::new(-sin_a, cos_a, 0.0),
+            rho,
+        )
+        .unwrap();
+        let seam =
+            Circle3D::new(Point3::new(0.0, 0.0, -rho), Vec3::new(0.0, 0.0, 1.0), big_r).unwrap();
+
+        let e_rim1 = topo.add_edge(Edge::new(v1, v1, EdgeCurve::Circle(rim1)));
+        let e_rim2 = topo.add_edge(Edge::new(v2, v2, EdgeCurve::Circle(rim2)));
+        let e_seam = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Circle(seam)));
+
+        let band_wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(e_rim1, true),
+                    OrientedEdge::new(e_seam, true),
+                    OrientedEdge::new(e_rim2, false),
+                    OrientedEdge::new(e_seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let torus = ToroidalSurface::with_axis(
+            Point3::new(0.0, 0.0, 0.0),
+            big_r,
+            rho,
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        let band = topo.add_face(Face::new(band_wire, vec![], FaceSurface::Torus(torus)));
+
+        let cap1_wire =
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e_rim1, false)], true).unwrap());
+        let cap1 = topo.add_face(Face::new(
+            cap1_wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 0.0,
+            },
+        ));
+        let cap2_wire =
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e_rim2, true)], true).unwrap());
+        let cap2 = topo.add_face(Face::new(
+            cap2_wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(-sin_a, cos_a, 0.0),
+                d: 0.0,
+            },
+        ));
+
+        let shell = topo.add_shell(Shell::new(vec![band, cap1, cap2]).unwrap());
+        topo.add_solid(Solid::new(shell, vec![]))
+    }
+
+    /// Regression: interior points of a partial-turn torus band read Outside.
+    /// Two stacked roots: the local Ferrari ray-torus quartic missed real
+    /// roots and emitted off-surface spurious ones, and `face_aabb` collapsed
+    /// each cap disc (single closed-circle wire, one vertex) to a point AABB,
+    /// so the BVH prefilter never offered the caps and their crossings were
+    /// dropped from the parity count.
+    #[test]
+    fn partial_torus_band_interior_points() {
+        let (big_r, rho, angle) = (6.0_f64, 2.0_f64, 2.0 * std::f64::consts::PI / 3.0);
+        let mut topo = Topology::new();
+        let solid = make_partial_torus_band(&mut topo, big_r, rho, angle);
+        let opts = ClassifyOptions::default();
+
+        let mid = angle / 2.0;
+        let inside = [
+            Point3::new(big_r * mid.cos(), big_r * mid.sin(), 0.0),
+            Point3::new(big_r * mid.cos(), big_r * mid.sin(), 1.0),
+            Point3::new(big_r * mid.cos(), big_r * mid.sin(), -1.0),
+            Point3::new(big_r * 0.05f64.cos(), big_r * 0.05f64.sin(), 0.0),
+            Point3::new(
+                big_r * (angle - 0.05).cos(),
+                big_r * (angle - 0.05).sin(),
+                0.0,
+            ),
+            Point3::new((big_r - 1.5) * mid.cos(), (big_r - 1.5) * mid.sin(), 0.0),
+            Point3::new((big_r + 1.5) * mid.cos(), (big_r + 1.5) * mid.sin(), 0.0),
+        ];
+        for p in inside {
+            let result = classify_point(&topo, solid, p, &opts).unwrap();
+            assert_eq!(result, PointClassification::Inside, "probe {p:?}");
+        }
+
+        let outside = [
+            Point3::new(big_r * mid.cos(), big_r * mid.sin(), 2.5),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(-big_r, 0.0, 0.0),
+            Point3::new(
+                big_r * (angle + 0.1).cos(),
+                big_r * (angle + 0.1).sin(),
+                0.0,
+            ),
+            Point3::new(big_r * (-0.1f64).cos(), big_r * (-0.1f64).sin(), 0.0),
+        ];
+        for p in outside {
+            let result = classify_point(&topo, solid, p, &opts).unwrap();
+            assert_eq!(result, PointClassification::Outside, "probe {p:?}");
+        }
+    }
+
+    /// A cap disc bounded by a single closed circle edge must get a full-disc
+    /// AABB, not a point box at its lone seam vertex (the collapsed box
+    /// starved the classifier's BVH prefilter).
+    #[test]
+    fn face_aabb_covers_closed_circle_boundary() {
+        let (big_r, rho, angle) = (6.0_f64, 2.0_f64, 2.0 * std::f64::consts::PI / 3.0);
+        let mut topo = Topology::new();
+        let solid = make_partial_torus_band(&mut topo, big_r, rho, angle);
+        let shell = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+
+        // Face index 1 is the y=0 cap: disc center (6,0,0) radius 2 in the
+        // xz-plane, so the AABB must span x in [4,8] and z in [-2,2].
+        let cap = shell.faces()[1];
+        let aabb = crate::util::face_aabb(&topo, cap).unwrap();
+        assert!(
+            aabb.min.x() < 4.0 + 1e-9 && aabb.max.x() > 8.0 - 1e-9,
+            "cap AABB x-span collapsed: {aabb:?}"
+        );
+        assert!(
+            aabb.min.z() < -2.0 + 1e-9 && aabb.max.z() > 2.0 - 1e-9,
+            "cap AABB z-span collapsed: {aabb:?}"
+        );
+    }
 }
