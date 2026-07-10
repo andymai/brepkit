@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783718061438,
+  "lastUpdate": 1783718435923,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4049,6 +4049,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19112766,
             "range": "± 31609",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "329ba35395845d6dbfe365b238d47d09a4041204",
+          "message": "chore(main): release 2.126.0 (#1067)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.0](https://github.com/andymai/brepkit/compare/v2.125.2...v2.126.0)\n(2026-07-10)\n\n\n### Features\n\n* **operations:** merge analytic revolve segments — apex cone, annulus\ncaps, partial-turn torus\n([#1062](https://github.com/andymai/brepkit/issues/1062))\n([8b783b7](https://github.com/andymai/brepkit/commit/8b783b78e5721a63a894e82c6ea0413b69b674ae))\n\n\n### Bug Fixes\n\n* **algo:** close the dovetail tongue-relief cut family\n([#1063](https://github.com/andymai/brepkit/issues/1063))\n([a633c5f](https://github.com/andymai/brepkit/commit/a633c5fc947315c7a4fe69b03672b22beff84412))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-10T21:18:13Z",
+          "tree_id": "0b29272bed3cf81db5a412ddda19ef2ee6ec0cee",
+          "url": "https://github.com/andymai/brepkit/commit/329ba35395845d6dbfe365b238d47d09a4041204"
+        },
+        "date": 1783718435503,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 755367,
+            "range": "± 1604",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 843844,
+            "range": "± 14038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11952,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 640699,
+            "range": "± 1536",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19441957,
+            "range": "± 23095",
             "unit": "ns/iter"
           }
         ]
