@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.1](https://github.com/andymai/brepkit/compare/v2.126.0...v2.126.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **check,operations:** classify trimmed-torus bands correctly ([#1068](https://github.com/andymai/brepkit/issues/1068)) ([6e21bdf](https://github.com/andymai/brepkit/commit/6e21bdfab809f4d54288a5678aed398b1e2cfeac))
+
 ## [2.126.0](https://github.com/andymai/brepkit/compare/v2.125.2...v2.126.0) (2026-07-10)
 
 
