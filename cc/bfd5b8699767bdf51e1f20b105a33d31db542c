@@ -1,0 +1,53 @@
+crates/wasm/src/kernel.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 57
+crates/io/tests/relief_meshbool_fallback_inmem.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 1-141
+crates/operations/src/mesh_boolean.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 4-7,15,18,29-35,38-43,47-55,67-69,71-72,74-76,79-80,91-126,129-130,135,137,141-145,151,161-166,168,173-174,177,183,190-193,200,202-205,207,216,223,232,240-242,245,263-268,274,284,289-291,294,296-304,306-307,312,314,316,318,322-323,325-331,333-351,353-362,364,366-378,381-385,387-412,415,418,612-651,653,655,661-670,672,675-812,821-842,844,846-848,853-869,880-906,908-918,920-994,996-1012,1016-1045,1048-1070,1077,1218-1231,1233-1247,1256-1272,1274-1278,1283-1364,1411-1416,1420-1421,1429,1431-1433,1449,1451-1453,1568-1572,1576,1579-1586,1636-1650,1687-1693,1695-1805
+crates/operations/src/boolean/mod.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 2131-2140
+.claude/skills/roadmap/SKILL.md
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 131-132,180-186
+  s_7f4494de1ca5a8::t_cc87066b55519a 135
+CHANGELOG.md
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 3-16
+.claude/skills/wasm-bindings/SKILL.md
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 30,48-49
+crates/operations/src/tessellate/mesh_ops.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 12-19,97
+crates/operations/tests/regress_blend_trim_neighbor_split.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 1-176
+crates/wasm/Cargo.toml
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 10
+crates/operations/src/tessellate/mod.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 38
+crates/io/tests/data/relief_tongue.bin
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 1
+crates/blend/src/trimmer.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 16,181-193,220-221,223,266-267,271,273,278,280,325-326,335-394,650-656,660-668,828-1016
+  s_7f4494de1ca5a8::t_b6cca4d79c10a9 1017
+crates/io/tests/data/relief_cutter.bin
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 1
+.release-please-manifest.json
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 2
+crates/wasm/src/lib.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 16
+crates/wasm/src/panics.rs
+  s_7f4494de1ca5a8::t_6e229a1a2f4905 1-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "ccbfd5b8699767bdf51e1f20b105a33d31db542c",
+  "prompts": {},
+  "sessions": {
+    "s_7f4494de1ca5a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a289991e-64c7-4b51-9e83-9571d530005f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
