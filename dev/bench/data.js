@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783717879232,
+  "lastUpdate": 1783718061438,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -3995,6 +3995,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19629583,
             "range": "± 90941",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a633c5fc947315c7a4fe69b03672b22beff84412",
+          "message": "fix(algo): close the dovetail tongue-relief cut family (#1063)\n\n## Root cause\n\nThe doubled-dovetail baseplate interior tile exported STLs with nm=21:\neach relieved nub — `cut(trapezoid tongue prism, tapered socket pocket)`\n— arrived at the connector fuse already broken (bnd=13-15, nm=1-2 per\nnub, through BOTH `boolean()` and `boolean_with_evolution`, from\nwatertight operands). Four stacked roots, fixed bottom-up:\n\n1. **Graze-refinement gap** (`restrict_curves_to_faces`): the 24-sample\nin-both test dropped a real socket-mouth corner circle crossing (~8°\nsubtended on a 2 mm tongue face) as a \"tangency\". Dropping it gapped the\nsection chain at the corner; the whole top face then classified by a\nsingle interior point and the cut collapsed to an open hole shell.\n2. **Unclipped open conic sections**: an open marched-NURBS conic (plane\n× cone) spans the whole cone extent; the generic sample-clip kept it\nwhole and the downstream splitter never trims an open curved section to\na plane face's boundary, so the face never partitioned.\n3. **No analytic cone path in the ray-cast classifier**: the cutter's\ntapered corner patches fell to the flat Newell-polygon fallback, which\nmis-counts crossings for sub-face interior points ~0.2 mm inside the\npocket walls — two in-chunk pieces classified Outside and were kept (10\nfaces, 8 bad-use edges).\n4. **Tessellation NURBS edge orientation**: GFA section edges can store\ntraversal-order vertices over an unreversed NURBS curve; samplers\ntrusting `oe.is_forward()` plus natural domain order folded the boundary\npolyline back on itself (mesh nm=6-11 on a B-Rep-clean 8-face result).\n\n## Fix\n\n- `phase_ff.rs`: graze test now refines with a sample density scaled to\nthe smaller face extent before dropping (a true point tangency stays\nsub-segment at any resolution and is still dropped). New\n`trim_open_curve_to_plane_face_lines` clips open marched-NURBS conics to\nexact crossings with the plane face's straight boundary edges AND the\ncone partner's angular-window rulings, trimming the stored NURBS to each\nkept span via `trim_nurbs_to_span` (consumers normalize over\n`domain_with_endpoints`, which for a NURBS is the full knot domain).\n- `face_splitter`: `find_splits_on_nurbs_section` — T-junction splits on\nmarched-NURBS sections by sampled point-to-curve projection (the\nchord-based line search misses a junction that lies on the curve but off\nits chord).\n- `classifier/ray_cast.rs`: analytic `FaceGeom::Cone` path —\nray/double-cone quadratic filtered to the face's slant range (which also\nrejects mirror-nappe hits) and angular patch, mirroring the partial-arc\ncylinder precedent.\n- `tessellate/edge_sampling.rs` + `planar.rs`: `nurbs_runs_end_to_start`\nendpoint-alignment check so samplers orient NURBS edges by the edge's\nstart/end vertices, not knot-domain order alone. (Normalizing vertex\norder at the minting site instead regressed the calibrated torus-box\nnotch landscape — documented as do-not-retry in the fixture doc and\nroadmap.)\n\n## Verification\n\n- New regression fixtures from the tool's exact serialized operands (two\nnub positions, tip + mirrored flank):\n`crates/io/tests/dovetail_relief_cut_inmem.rs::relief_cut_tip_nub` and\n`::relief_cut_flank_nub` — assert the 8-face analytic nub with one\nsurviving cone face, zero free edges, and a watertight/manifold mesh\n(bnd=0, nm=0) through both boolean entries. Was bnd=13-15, nm=1-2.\n- `cargo fmt --all --check`, `cargo clippy --all-targets -- -D\nwarnings`, `./scripts/check-boundaries.sh` green.\n- Canary: `cargo test -p brepkit-wasm --lib gridfinity` 27/27.\n- Spot-checks: brepkit-algo suite 150/150, operations tessellate lib\ntests 71/71, curved boolean parity corpus green. approx_census\nunchanged.\n- Post-merge follow-up: the doubled-dovetail tool suite needs a fresh\noperand capture on a kernel with this fix (old stage fixtures embed\npre-fix broken nubs), tracked in the roadmap skill.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes broken dovetail tongue‑relief cuts by correctly clipping and\nclassifying cone/plane sections, producing a watertight 8‑face nub.\nEliminates bnd/nm errors for doubled‑dovetail baseplates in both\n`boolean()` and `boolean_with_evolution`.\n\n- **Bug Fixes**\n- Clip open marched‑NURBS conics (plane × cone) to exact plane‑edge and\ncone angular‑window crossings; trim NURBS to kept spans; treat on‑edge\nsamples as hits; defer to generic clip if trim fails.\n- Split NURBS section T‑junctions via sampled point‑to‑curve projection;\nreturn splits in edge order; forward/reversed tests added.\n- Add analytic cone path to the ray‑cast classifier (quadratic with\nslant‑range and angular filtering) to avoid miscounted crossings on\ntapered patches.\n- Orient NURBS edge sampling by endpoint alignment to prevent folded\nboundary polylines in meshes.\n- Refine the graze test with density scaled to the smaller face extent\nto keep real short crossings.\n- Add regression fixtures\n(`crates/io/tests/dovetail_relief_cut_inmem.rs` + operand bins)\nasserting the 8‑face nub, zero free edges, and watertight mesh across\nboth boolean paths.\n\n<sup>Written for commit 6c8a56a32b19caa88f2cce98eb29c93f93b69459.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1063?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-10T21:11:52Z",
+          "tree_id": "1ef2ca27c21608da54b267d8e5b21f3995d5be1a",
+          "url": "https://github.com/andymai/brepkit/commit/a633c5fc947315c7a4fe69b03672b22beff84412"
+        },
+        "date": 1783718060139,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 735841,
+            "range": "± 7505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 823626,
+            "range": "± 958",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12057,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 597485,
+            "range": "± 5141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19112766,
+            "range": "± 31609",
             "unit": "ns/iter"
           }
         ]
