@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783722816943,
+  "lastUpdate": 1783723254167,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4157,6 +4157,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20725906,
             "range": "± 261650",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61e5ca5270adedf22c26c9107a07eb6d1f6abdfc",
+          "message": "chore(main): release 2.126.1 (#1070)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.1](https://github.com/andymai/brepkit/compare/v2.126.0...v2.126.1)\n(2026-07-10)\n\n\n### Bug Fixes\n\n* **check,operations:** classify trimmed-torus bands correctly\n([#1068](https://github.com/andymai/brepkit/issues/1068))\n([6e21bdf](https://github.com/andymai/brepkit/commit/6e21bdfab809f4d54288a5678aed398b1e2cfeac))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.126.1 with a bug fix that correctly classifies\ntrimmed-torus bands in `check` and `operations`, improving geometric\naccuracy for torus trims.\n\n<sup>Written for commit 900d237f1a34fa02169595aeaaafc91f95d90d3f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1070?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-10T22:38:25Z",
+          "tree_id": "ad65ad9d45d9796927076065c26529766cba5400",
+          "url": "https://github.com/andymai/brepkit/commit/61e5ca5270adedf22c26c9107a07eb6d1f6abdfc"
+        },
+        "date": 1783723253623,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 733170,
+            "range": "± 7643",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 797518,
+            "range": "± 24891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11405,
+            "range": "± 132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 595577,
+            "range": "± 9396",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18575795,
+            "range": "± 322161",
             "unit": "ns/iter"
           }
         ]
