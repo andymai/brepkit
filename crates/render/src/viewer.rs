@@ -450,6 +450,7 @@ impl ViewerApp {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width,
             height,
             // Fifo (vsync) is guaranteed supported by the WebGPU spec; prefer it
@@ -550,7 +551,7 @@ impl ViewerApp {
         );
         gpu.queue.submit(Some(encoder.finish()));
         gpu.window.pre_present_notify();
-        frame.present();
+        gpu.queue.present(frame);
     }
 
     /// Render the id buffer for the current camera and read the face id under
