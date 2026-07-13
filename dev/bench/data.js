@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783954179618,
+  "lastUpdate": 1783954893054,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4427,6 +4427,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19543694,
             "range": "± 68759",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "21d018edf7d819d7ebf7cef2ad6acb520b61bcc8",
+          "message": "chore(deps): update wgpu requirement from 29 to 30 (#1073)\n\nUpdates the requirements on [wgpu](https://github.com/gfx-rs/wgpu) to\npermit the latest version.\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/gfx-rs/wgpu/blob/trunk/CHANGELOG.md\">wgpu's\nchangelog</a>.</em></p>\n<blockquote>\n<h2>v30.0.0 (2026-07-01)</h2>\n<h3>Major changes</h3>\n<h4>Optional vertex buffer slots</h4>\n<p>This allows gaps in <code>VertexState</code>'s <code>buffers</code>\nand adds support for unbinding vertex buffers, bringing us in compliance\nwith the WebGPU spec. As a result of this, <code>VertexState</code>'s\n<code>buffers</code> field now has type of\n<code>&amp;[Option&lt;VertexBufferLayout&gt;]</code>. To migrate, wrap\nvertex buffer layouts in <code>Some</code>:</p>\n<pre lang=\"diff\"><code>  let vertex_state = wgpu::VertexState {\n      module: &amp;vs_module,\n      entry_point: Some(&quot;vs_main&quot;),\n      compilation_options: wgpu::PipelineCompilationOptions::default(),\n      buffers: &amp;[\n-         &amp;vertex_buffer_layout\n+         Some(&amp;vertex_buffer_layout)\n      ],\n  };\n</code></pre>\n<p>By <a href=\"https://github.com/teoxoy\"><code>@​teoxoy</code></a> in\n<a\nhref=\"https://redirect.github.com/gfx-rs/wgpu/pull/9351\">#9351</a>.</p>\n<h4>Integer shader I/O no longer defaults to\n<code>@interpolate(flat)</code></h4>\n<p>To align with the shading language specifications, <code>naga</code>\nno longer assumes that integer-typed shader I/O should have\n<code>flat</code> interpolation, i.e., should not be interpolated. Even\nthough flat interpolation is the only choice for integer I/O, it must be\nstill specified explicitly.</p>\n<p>WGSL:</p>\n<pre lang=\"diff\"><code> struct FragmentInput {\n     @location(0) tex_coord: vec2&lt;f32&gt;,\n-    @location(1) index: i32,\n+    @location(1) @interpolate(flat) index: i32,\n }\n</code></pre>\n<p>GLSL:</p>\n<pre lang=\"diff\"><code>-layout(location = 1) in int index;\n+layout(location = 1) flat in int index;\n</code></pre>\n<p>By <a\nhref=\"https://github.com/andyleiserson\"><code>@​andyleiserson</code></a>\nin <a\nhref=\"https://redirect.github.com/gfx-rs/wgpu/pull/9321\">#9321</a>.</p>\n<h4>Empty buffer slices are now permitted</h4>\n<p>Creating a <code>BufferSlice</code> with a length of 0 no longer\ncauses a panic.</p>\n<p>Empty buffer slices can be:</p>\n<!-- raw HTML omitted -->\n</blockquote>\n<p>... (truncated)</p>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/8bf3e5ff4ab45e2c150e0d6c70d01d25f5b126c1\"><code>8bf3e5f</code></a>\nUpdate to v30 (<a\nhref=\"https://redirect.github.com/gfx-rs/wgpu/issues/9790\">#9790</a>)</li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/aa2b7907c020c4f046ca697895f9be1a70b27a45\"><code>aa2b790</code></a>\n[core] filter native-only features and limits if</li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/2ea3a1d41b0085c537bbd016b30ca801c106e024\"><code>2ea3a1d</code></a>\n[vulkan] advertise <code>DownlevelFlags::SURFACE_VIEW_FORMATS</code> if\n`VK_KHR_swapchai...</li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/69e66d8e2a8a4a37f7ad4ad0e0a2702b4bb39843\"><code>69e66d8</code></a>\nadd <code>DENO_WEBGPU_STRICT_COMPLIANCE</code> and set it for the CTS\njob</li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/995ee7b3f1adfc3729d3fda2122f930c1e6b697f\"><code>995ee7b</code></a>\nadd\n<code>Limits::max_buffers_and_acceleration_structures_per_shader_stage</code></li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/0853e7bdc12cf4f0159f2dbdaeb9d957b56f4e43\"><code>0853e7b</code></a>\nfix: gate on static_dxc not static-dxc (<a\nhref=\"https://redirect.github.com/gfx-rs/wgpu/issues/9785\">#9785</a>)</li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/979ab2bca62daea08cd1e33c820ab7f4ece608d8\"><code>979ab2b</code></a>\n[core] IDed encoders needs to be dropped (<a\nhref=\"https://redirect.github.com/gfx-rs/wgpu/issues/9782\">#9782</a>)</li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/0cc48c829e3e40788ae3609ccd98cfa16cd61ab8\"><code>0cc48c8</code></a>\nfix(core): Track initialization status of 3D textures (<a\nhref=\"https://redirect.github.com/gfx-rs/wgpu/issues/9765\">#9765</a>)</li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/a353ba97c98d24d5a66b8822256fdcf9e50ffb9e\"><code>a353ba9</code></a>\nFix signed % wrong for negative operands on NVIDIA (OpSRem poison\nwithout mai...</li>\n<li><a\nhref=\"https://github.com/gfx-rs/wgpu/commit/7877b766c8068b69f535fb7b9b1b3f32346de676\"><code>7877b76</code></a>\n[core] Move <code>begin_*_pass</code> to <code>CommandEncoder</code> and\ndo only ID resolve in glob...</li>\n<li>Additional commits viewable in <a\nhref=\"https://github.com/gfx-rs/wgpu/compare/wgpu-v29.0.1...v30.0.0\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore this major version` will close this PR and stop\nDependabot creating any more for this major version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this minor version` will close this PR and stop\nDependabot creating any more for this minor version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this dependency` will close this PR and stop\nDependabot creating any more for this dependency (unless you reopen the\nPR or upgrade to it yourself)\n\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpgrade `wgpu` from 29 to 30 and migrate render code to the new API,\nincluding optional vertex buffer slots and updated surface/present\nbehavior.\n\n- **Dependencies**\n  - Bumped `wgpu` 29 -> 30 in `crates/render/Cargo.toml`.\n\n- **Migration**\n- Update `VertexState` to use `buffers: &[Option<VertexBufferLayout>]`\nand wrap layouts in `Some(...)`.\n- Adjust API usage: set `RequestAdapterOptions.apply_limit_buckets =\nfalse`, add `SurfaceConfiguration.color_space = Auto`, present via\n`Queue::present(frame)`, and handle `Result` from `get_mapped_range()`.\n\n<sup>Written for commit 7f9ecc97ab809a97798b788e9eecc9230c7a1698.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1073?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-07-13T14:58:53Z",
+          "tree_id": "b3fa5a934bc117e6e9db3a1a8253c24c841cfd91",
+          "url": "https://github.com/andymai/brepkit/commit/21d018edf7d819d7ebf7cef2ad6acb520b61bcc8"
+        },
+        "date": 1783954891496,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 727836,
+            "range": "± 890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 821579,
+            "range": "± 1198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12219,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 595980,
+            "range": "± 3208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18883423,
+            "range": "± 81853",
             "unit": "ns/iter"
           }
         ]
