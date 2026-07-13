@@ -1,0 +1,28 @@
+crates/render/src/compute_mesh.rs
+  s_3390cdbbf29657::t_f632f64dcbd6d0 796,816
+crates/render/src/viewer.rs
+  s_3390cdbbf29657::t_909cb69eb7b02b 453
+  s_3390cdbbf29657::t_dbb5c7ab7c2d21 554
+crates/render/src/pipeline.rs
+  s_3390cdbbf29657::t_3d52a49b0a048a 335,343
+  s_3390cdbbf29657::t_7009507d1a9aa7 718-722
+  s_3390cdbbf29657::t_47ed2453e260dc 70
+  s_3390cdbbf29657::t_ac5e4c4a90c128 80
+  s_3390cdbbf29657::t_d23a379f9b6a43 265,285
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "7f9ecc97ab809a97798b788e9eecc9230c7a1698",
+  "prompts": {},
+  "sessions": {
+    "s_3390cdbbf29657": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a97f016d-826d-4643-831a-ce7a4d20d5fc",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
