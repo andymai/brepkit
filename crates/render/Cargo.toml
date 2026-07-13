@@ -23,7 +23,7 @@ bytemuck = {version = "1", features = ["derive"]}
 image = {version = "0.25", default-features = false, features = ["png"]}
 pollster = "0.4"
 thiserror.workspace = true
-wgpu = "29"
+wgpu = "30"
 
 # Window/interaction (feature = "window"). winit 0.30 and wgpu 29 both use
 # raw-window-handle 0.6, so an `Arc<Window>` satisfies wgpu's surface handle
