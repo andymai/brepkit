@@ -793,7 +793,7 @@ fn build_draw_resources(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            buffers: &[wgpu::VertexBufferLayout {
+            buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: 28, // 7 words: pos(3) + normal(3) + face_id(1)
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
@@ -813,7 +813,7 @@ fn build_draw_resources(
                         shader_location: 2,
                     },
                 ],
-            }],
+            })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         primitive: wgpu::PrimitiveState {

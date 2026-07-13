@@ -67,6 +67,7 @@ fn candidate_adapters(
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: surface,
+            apply_limit_buckets: false,
         }))
     {
         out.push(adapter);
@@ -76,6 +77,7 @@ fn candidate_adapters(
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: true,
             compatible_surface: surface,
+            apply_limit_buckets: false,
         }))
     {
         out.push(adapter);
@@ -260,7 +262,7 @@ impl Pipelines {
             vertex: wgpu::VertexState {
                 module: &mesh_shader,
                 entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[
@@ -280,7 +282,7 @@ impl Pipelines {
                             shader_location: 2,
                         },
                     ],
-                }],
+                })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             primitive: wgpu::PrimitiveState {
@@ -330,7 +332,7 @@ impl Pipelines {
                 vertex: wgpu::VertexState {
                     module: &edge_shader,
                     entry_point: Some("vs_main"),
-                    buffers: &[wgpu::VertexBufferLayout {
+                    buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<EdgeVertex>() as wgpu::BufferAddress,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &[wgpu::VertexAttribute {
@@ -338,7 +340,7 @@ impl Pipelines {
                             offset: 0,
                             shader_location: 0,
                         }],
-                    }],
+                    })],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 primitive: wgpu::PrimitiveState {
@@ -713,7 +715,11 @@ pub fn map_and_read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Vec<
         Ok(Err(e)) => return Err(RenderError::BufferMap(e.to_string())),
         Err(e) => return Err(RenderError::BufferMap(e.to_string())),
     }
-    let data = buffer.slice(..).get_mapped_range().to_vec();
+    let data = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|e| RenderError::BufferMap(e.to_string()))?
+        .to_vec();
     buffer.unmap();
     Ok(data)
 }
