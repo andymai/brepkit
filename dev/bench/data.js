@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783954030523,
+  "lastUpdate": 1783954179618,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4373,6 +4373,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15902739,
             "range": "± 73107",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d644fee87ac4ee7c0ed8a955ab84abf7e11cc14e",
+          "message": "chore(deps-dev): bump the npm group with 2 updates (#1072)\n\nBumps the npm group with 2 updates:\n[@commitlint/cli](https://github.com/conventional-changelog/commitlint/tree/HEAD/@commitlint/cli)\nand [prettier](https://github.com/prettier/prettier).\n\nUpdates `@commitlint/cli` from 21.1.0 to 21.2.0\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/conventional-changelog/commitlint/releases\">@​commitlint/cli's\nreleases</a>.</em></p>\n<blockquote>\n<h2>v21.2.0</h2>\n<h1><a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.1.0...v21.2.0\">21.2.0</a>\n(2026-06-30)</h1>\n<h3>Features</h3>\n<ul>\n<li>feat(resolve-extends): resolve pure-ESM presets\n(conventional-changelog v7/v9/v10) by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/4859\">conventional-changelog/commitlint#4859</a></li>\n</ul>\n<h3>Chore</h3>\n<ul>\n<li>ci: install git in stock-Ubuntu baseline job by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/4847\">conventional-changelog/commitlint#4847</a></li>\n</ul>\n<p><strong>Full Changelog</strong>: <a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.1.0...v21.2.0\">https://github.com/conventional-changelog/commitlint/compare/v21.1.0...v21.2.0</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/conventional-changelog/commitlint/blob/master/@commitlint/cli/CHANGELOG.md\">@​commitlint/cli's\nchangelog</a>.</em></p>\n<blockquote>\n<h1><a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.1.0...v21.2.0\">21.2.0</a>\n(2026-06-30)</h1>\n<h3>Features</h3>\n<ul>\n<li><strong>resolve-extends:</strong> resolve pure-ESM presets\n(conventional-changelog v7/v9/v10) (<a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/issues/4859\">#4859</a>)\n(<a\nhref=\"https://github.com/conventional-changelog/commitlint/commit/fdb566fe59457a786eac80e2a8cbb994638daba0\">fdb566f</a>)</li>\n</ul>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/conventional-changelog/commitlint/commit/1b4e5bc0e095294ad421b3ac83f6b66665429e60\"><code>1b4e5bc</code></a>\nv21.2.0</li>\n<li><a\nhref=\"https://github.com/conventional-changelog/commitlint/commit/fdb566fe59457a786eac80e2a8cbb994638daba0\"><code>fdb566f</code></a>\nfeat(resolve-extends): resolve pure-ESM presets (conventional-changelog\nv7/v9...</li>\n<li>See full diff in <a\nhref=\"https://github.com/conventional-changelog/commitlint/commits/v21.2.0/@commitlint/cli\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\nUpdates `prettier` from 3.9.1 to 3.9.4\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/releases\">prettier's\nreleases</a>.</em></p>\n<blockquote>\n<h2>3.9.4</h2>\n<ul>\n<li>Angular: Format <code>@content(name)</code> -&gt; <code>@content\n(name)</code> to align with other block syntax (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19499\">#19499</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</li>\n</ul>\n<p>🔗 <a\nhref=\"https://github.com/prettier/prettier/blob/3.9.4/CHANGELOG.md#394\">Changelog</a></p>\n<h2>3.9.3</h2>\n<ul>\n<li>Markdown: Fix unexpected removal of characters in liquid syntax (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19489\">prettier/prettier#19489</a>\nby <a href=\"https://github.com/seiyab\"><code>@​seiyab</code></a>)</li>\n<li>TypeScript: Allow decorators to be used with declare on class fields\n(<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19492\">prettier/prettier#19492</a>\nby <a\nhref=\"https://github.com/evoactivity\"><code>@​evoactivity</code></a>)</li>\n</ul>\n<p>🔗 <a\nhref=\"https://github.com/prettier/prettier/blob/3.9.3/CHANGELOG.md#393\">Changelog</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/blob/main/CHANGELOG.md\">prettier's\nchangelog</a>.</em></p>\n<blockquote>\n<h1>3.9.4</h1>\n<p><a\nhref=\"https://github.com/prettier/prettier/compare/3.9.3...3.9.4\">diff</a></p>\n<h4>Angular: Format <code>@content(name)</code> -&gt; <code>@content\n(name)</code> to align with other block syntax (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19499\">#19499</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</h4>\n<!-- raw HTML omitted -->\n<pre lang=\"html\"><code>&lt;!-- Input --&gt;\n&lt;FancyButton [label]=&quot;title&quot;&gt;\n  @content (icon) {\n    &lt;span&gt;Icon!&lt;/span&gt;\n  }\n  @content (description) {\n    &lt;span&gt;Description text&lt;/span&gt;\n  }\n  &lt;span&gt;Other children&lt;/span&gt;\n&lt;/FancyButton&gt;\n<p>&lt;!-- Prettier 3.9.3 --&gt;\n&lt;FancyButton [label]=&quot;title&quot;&gt;\n<a href=\"https://github.com/content\"><code>@​content</code></a>(icon) {\n&lt;span&gt;Icon!&lt;/span&gt;\n}\n<a\nhref=\"https://github.com/content\"><code>@​content</code></a>(description)\n{\n&lt;span&gt;Description text&lt;/span&gt;\n}\n&lt;span&gt;Other children&lt;/span&gt;\n&lt;/FancyButton&gt;</p>\n<p>&lt;!-- Prettier 3.9.4 --&gt;\n&lt;FancyButton [label]=&quot;title&quot;&gt;\n<a href=\"https://github.com/content\"><code>@​content</code></a> (icon) {\n&lt;span&gt;Icon!&lt;/span&gt;\n}\n<a href=\"https://github.com/content\"><code>@​content</code></a>\n(description) {\n&lt;span&gt;Description text&lt;/span&gt;\n}\n&lt;span&gt;Other children&lt;/span&gt;\n&lt;/FancyButton&gt;\n</code></pre></p>\n<h1>3.9.3</h1>\n<p><a\nhref=\"https://github.com/prettier/prettier/compare/3.9.1...3.9.3\">diff</a></p>\n<h4>Markdown: Fix unexpected removal of characters in liquid syntax (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19489\">#19489</a>\nby <a href=\"https://github.com/seiyab\"><code>@​seiyab</code></a>)</h4>\n<!-- raw HTML omitted -->\n<pre lang=\"md\"><code>&lt;/tr&gt;&lt;/table&gt; \n</code></pre>\n</blockquote>\n<p>... (truncated)</p>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/b693cb22b412b759784bc2298fc86880e351cd3a\"><code>b693cb2</code></a>\nRelease 3.9.4</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/2e92ac0ee29fb83b7ce32277cb914c2eee192955\"><code>2e92ac0</code></a>\nAngular: Format <code>@content(name)</code> -&gt; <code>@content\n(name)</code> to align with other blo...</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/abed2c22db3cb61e922b7284c3b6c65424353ac2\"><code>abed2c2</code></a>\nBump Prettier dependency to 3.9.3</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/6cfbc00921de451e918b18bb5ab6b80e80f5cd34\"><code>6cfbc00</code></a>\nClean changelog_unreleased</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/3732e1dee6a36bdb2e77a722d206a79ac7e67aa3\"><code>3732e1d</code></a>\nRelease 3.9.3</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/a74a7b05dee7fbef39a6aeff378c3741e1a8ee15\"><code>a74a7b0</code></a>\nAllow decorators to be used with <code>declare</code> on class fields\n(<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19492\">#19492</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/bd9e11ab41e17a4f61f363a981c1ec24d2a4167a\"><code>bd9e11a</code></a>\nCorrect text identification in liquid syntax (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19489\">#19489</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/269eee3faa1f82b1de07bb7e4d15e1cee70f80d4\"><code>269eee3</code></a>\nBump Prettier dependency to 3.9.1</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/ec7ccd1ea47c965bda3c958239899737e899603d\"><code>ec7ccd1</code></a>\nClean changelog_unreleased</li>\n<li>See full diff in <a\nhref=\"https://github.com/prettier/prettier/compare/3.9.1...3.9.4\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore <dependency name> major version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's major version (unless you unignore this specific\ndependency's major version or upgrade to it yourself)\n- `@dependabot ignore <dependency name> minor version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's minor version (unless you unignore this specific\ndependency's minor version or upgrade to it yourself)\n- `@dependabot ignore <dependency name>` will close this group update PR\nand stop Dependabot creating any more for the specific dependency\n(unless you unignore this specific dependency or upgrade to it yourself)\n- `@dependabot unignore <dependency name>` will remove all of the ignore\nconditions of the specified dependency\n- `@dependabot unignore <dependency name> <ignore condition>` will\nremove the ignore condition of the specified dependency and ignore\nconditions\n\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpgrade `@commitlint/cli` to 21.2.0 and `prettier` to 3.9.4 to support\npure-ESM commitlint presets and pull in recent formatting fixes.\nDev-only update with no runtime impact.\n\n<sup>Written for commit 3f729236308e25dc7c2d07f98dd1a18098a51311.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1072?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-13T07:44:50-07:00",
+          "tree_id": "eeeb0986cf6a03d8107c6b12beef6456e17bbfcb",
+          "url": "https://github.com/andymai/brepkit/commit/d644fee87ac4ee7c0ed8a955ab84abf7e11cc14e"
+        },
+        "date": 1783954178556,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 750824,
+            "range": "± 4638",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 843694,
+            "range": "± 4577",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12125,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639360,
+            "range": "± 4522",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19543694,
+            "range": "± 68759",
             "unit": "ns/iter"
           }
         ]
