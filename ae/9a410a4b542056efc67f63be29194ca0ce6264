@@ -10,6 +10,7 @@ crates/io/tests/data/dovetail_dblcorner_cutter_0.bin
   s_7fddca67d6dc19::t_57de2c9c5ceab8 1
 .claude/skills/roadmap/SKILL.md
   s_7fddca67d6dc19::t_24b6e0df5efddc 222-249,254-260
+  s_7fddca67d6dc19::t_c420d7c0225ed7 250-253
 crates/algo/src/builder/face_splitter/edge_splitting.rs
   s_7fddca67d6dc19::t_77ede4d57e2594 31-33,47-55
   s_7fddca67d6dc19::t_c8d26d09e6c48e 134,144,169-175,179-184
