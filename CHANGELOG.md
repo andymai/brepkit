@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.4](https://github.com/andymai/brepkit/compare/v2.126.3...v2.126.4) (2026-07-16)
+
+
+### Bug Fixes
+
+* **algo:** dovetail tangency caps, compound relief cuts, and the fit-offset groove-mouth sliver family ([#1078](https://github.com/andymai/brepkit/issues/1078)) ([59cad4d](https://github.com/andymai/brepkit/commit/59cad4d661df0439b1c99045fed17e16b29788e4))
+
 ## [2.126.3](https://github.com/andymai/brepkit/compare/v2.126.2...v2.126.3) (2026-07-16)
 
 
