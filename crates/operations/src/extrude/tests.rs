@@ -1317,3 +1317,97 @@ fn extrude_half_ellipse_reversed_edge_volume() {
         "reversed-edge half-ellipse volume {vol:.4} != {expected:.4}"
     );
 }
+
+#[test]
+fn extrude_spline_encoded_profile_recovers_analytic_walls() {
+    // A chamfered-rectangle profile whose edges arrive as B-splines (the 2D
+    // drawing pipeline ships corner-treated profiles this way): four straight
+    // runs and one chamfer segment as degree-1 NURBS, one fillet corner as a
+    // rational-quadratic arc. Every side wall must come out Plane/Cylinder.
+    use brepkit_geometry::convert::{circle_to_nurbs, line_to_nurbs};
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::Wire;
+
+    let mut topo = Topology::new();
+    let tol = Tolerance::new().linear;
+    // Rectangle [0,10]x[0,6] with a 2mm chamfer at (10,6) and an r=2 fillet
+    // arc at (0,6).
+    let pts = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(10.0, 0.0, 0.0),
+        Point3::new(10.0, 4.0, 0.0), // chamfer start
+        Point3::new(8.0, 6.0, 0.0),  // chamfer end
+        Point3::new(2.0, 6.0, 0.0),  // fillet start
+        Point3::new(0.0, 4.0, 0.0),  // fillet end
+    ];
+    let vids: Vec<_> = pts
+        .iter()
+        .map(|&p| topo.add_vertex(Vertex::new(p, tol)))
+        .collect();
+    let nurbs_line = |a: Point3, b: Point3| EdgeCurve::NurbsCurve(line_to_nurbs(a, b).unwrap());
+    let fillet_circle = brepkit_math::curves::Circle3D::new(
+        Point3::new(2.0, 4.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        2.0,
+    )
+    .unwrap();
+    // CCW arc from (2,6) to (0,4) — parameters via projection, because
+    // Circle3D picks its own reference axis.
+    let t0 = fillet_circle.project(pts[4]);
+    let mut t1 = fillet_circle.project(pts[5]);
+    if t1 < t0 {
+        t1 += std::f64::consts::TAU;
+    }
+    let fillet_arc = EdgeCurve::NurbsCurve(circle_to_nurbs(&fillet_circle, t0, t1).unwrap());
+    let curves = [
+        nurbs_line(pts[0], pts[1]),
+        nurbs_line(pts[1], pts[2]),
+        nurbs_line(pts[2], pts[3]), // chamfer
+        nurbs_line(pts[3], pts[4]),
+        fillet_arc,
+        nurbs_line(pts[5], pts[0]),
+    ];
+    let mut oes = Vec::new();
+    for (i, c) in curves.into_iter().enumerate() {
+        let a = vids[i];
+        let b = vids[(i + 1) % vids.len()];
+        let e = topo.add_edge(Edge::new(a, b, c));
+        oes.push(OrientedEdge::new(e, true));
+    }
+    let wid = topo.add_wire(Wire::new(oes, true).unwrap());
+    let face = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+    let mut nurbs_walls = 0usize;
+    let mut cylinders = 0usize;
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        match topo.face(fid).unwrap().surface() {
+            FaceSurface::Nurbs(_) => nurbs_walls += 1,
+            FaceSurface::Cylinder(_) => cylinders += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        nurbs_walls, 0,
+        "spline-encoded straight/arc profile edges must extrude as analytic walls"
+    );
+    assert_eq!(
+        cylinders, 1,
+        "the fillet arc must extrude as a true cylinder"
+    );
+    // Exact area: 10*6 - chamfer triangle (2*2/2) - fillet corner (4 - pi) = 58 - (4 - pi).
+    let expected = (60.0 - 2.0 - (4.0 - std::f64::consts::PI)) * 3.0;
+    let vol = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-4,
+        "analytic prism volume {vol:.9} != exact {expected:.9}"
+    );
+}
