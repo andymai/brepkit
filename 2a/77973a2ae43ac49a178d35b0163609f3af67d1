@@ -1,0 +1,22 @@
+crates/operations/src/extrude.rs
+  s_7fddca67d6dc19::t_fc8d0b784daf01 673-675
+crates/operations/src/extrude/tests.rs
+  s_7fddca67d6dc19::t_3734292ed0a622 1448-1449,1451
+  s_7fddca67d6dc19::t_dd9c4c22f7db49 1414-1447,1450,1452-1494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "2a77973a2ae43ac49a178d35b0163609f3af67d1",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
