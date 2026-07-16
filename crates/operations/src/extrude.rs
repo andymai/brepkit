@@ -670,7 +670,9 @@ fn normalize_profile_wire_curves(
                     };
                     let span = ang(v);
                     let mid_a = ang(m);
-                    if span > 1e-12 && mid_a <= span {
+                    // Small buffer: for a near-full arc the midpoint's angle
+                    // approaches the span itself and must not flip on rounding.
+                    if span > 1e-12 && mid_a <= span + 1e-9 {
                         normal
                     } else {
                         -normal

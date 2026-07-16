@@ -1411,3 +1411,84 @@ fn extrude_spline_encoded_profile_recovers_analytic_walls() {
         "analytic prism volume {vol:.9} != exact {expected:.9}"
     );
 }
+
+#[test]
+fn extrude_reversed_spline_arc_profile_recovers_analytic_walls() {
+    // Same chamfered/filleted profile, but the fillet spline is STORED
+    // end-to-start relative to the edge vertices (the `rev` branch of the
+    // profile normalization): the recovered Circle must still cover the
+    // fillet arc, not its complement.
+    use brepkit_geometry::convert::{circle_to_nurbs, line_to_nurbs};
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::Wire;
+
+    let mut topo = Topology::new();
+    let tol = Tolerance::new().linear;
+    let pts = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(10.0, 0.0, 0.0),
+        Point3::new(10.0, 6.0, 0.0),
+        Point3::new(2.0, 6.0, 0.0),
+        Point3::new(0.0, 4.0, 0.0),
+    ];
+    let vids: Vec<_> = pts
+        .iter()
+        .map(|&p| topo.add_vertex(Vertex::new(p, tol)))
+        .collect();
+    let nurbs_line = |a: Point3, b: Point3| EdgeCurve::NurbsCurve(line_to_nurbs(a, b).unwrap());
+    let fillet_circle = brepkit_math::curves::Circle3D::new(
+        Point3::new(2.0, 4.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        2.0,
+    )
+    .unwrap();
+    // Spline built from (0,4) to (2,6) — REVERSED against the wire traversal
+    // (2,6) -> (0,4). The physical fillet quarter runs CW from (0,4), i.e. a
+    // decreasing parameter span.
+    let t0 = fillet_circle.project(pts[4]);
+    let t1 = t0 - std::f64::consts::FRAC_PI_2;
+    let reversed_arc = EdgeCurve::NurbsCurve(circle_to_nurbs(&fillet_circle, t0, t1).unwrap());
+    let curves = [
+        nurbs_line(pts[0], pts[1]),
+        nurbs_line(pts[1], pts[2]),
+        nurbs_line(pts[2], pts[3]),
+        reversed_arc,
+        nurbs_line(pts[4], pts[0]),
+    ];
+    let mut oes = Vec::new();
+    for (i, c) in curves.into_iter().enumerate() {
+        let a = vids[i];
+        let b = vids[(i + 1) % vids.len()];
+        let e = topo.add_edge(Edge::new(a, b, c));
+        oes.push(OrientedEdge::new(e, true));
+    }
+    let wid = topo.add_wire(Wire::new(oes, true).unwrap());
+    let face = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+    let mut nurbs_walls = 0usize;
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        if matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)) {
+            nurbs_walls += 1;
+        }
+    }
+    assert_eq!(
+        nurbs_walls, 0,
+        "reversed spline arc must still recover analytic walls"
+    );
+    // Exact area: 10*6 - fillet corner (4 - pi).
+    let expected = (60.0 - (4.0 - std::f64::consts::PI)) * 3.0;
+    let vol = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-4,
+        "reversed-arc prism volume {vol:.9} != exact {expected:.9}"
+    );
+}
