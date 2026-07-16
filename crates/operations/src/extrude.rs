@@ -597,6 +597,98 @@ fn ruled_nurbs_surface(
     .map_err(crate::OperationsError::Math)
 }
 
+/// Recognize spline-encoded profile edges back to their analytic form,
+/// in place.
+///
+/// 2D drawing pipelines ship corner-treated profiles as B-splines: a chamfer
+/// segment and the corner-trimmed remainders of straight runs arrive as
+/// degree-N NURBS even though they are exact lines, and fillet arcs can
+/// arrive as rational splines. Extruding those emits ruled-NURBS side walls
+/// for geometry that is exactly planar/cylindrical, and every downstream
+/// boolean against the prism degrades (the snap-clip relief cut fell to a
+/// mesh fallback purely because its clip walls were spline-encoded). The
+/// caps' wires and the wall builder all read the same edges, so rewriting
+/// the curve in place fixes every consumer at once.
+fn normalize_profile_wire_curves(
+    topo: &mut Topology,
+    wire_id: WireId,
+    tol: f64,
+) -> Result<(), crate::OperationsError> {
+    let edge_ids: Vec<brepkit_topology::edge::EdgeId> = topo
+        .wire(wire_id)?
+        .edges()
+        .iter()
+        .map(brepkit_topology::wire::OrientedEdge::edge)
+        .collect();
+    for eid in edge_ids {
+        let edge = topo.edge(eid)?;
+        let EdgeCurve::NurbsCurve(nc) = edge.curve() else {
+            continue;
+        };
+        let s3 = topo.vertex(edge.start())?.point();
+        let e3 = topo.vertex(edge.end())?.point();
+        let (d0, d1) = nc.domain();
+        let a3 = nc.evaluate(d0);
+        let b3 = nc.evaluate(d1);
+        let mid3 = nc.evaluate(f64::midpoint(d0, d1));
+        // Only convert when the spline's own endpoints coincide with the edge
+        // vertices (either order) — anything else is a malformed profile this
+        // pass must not reinterpret.
+        let fwd = (a3 - s3).length() <= tol && (b3 - e3).length() <= tol;
+        let rev = (a3 - e3).length() <= tol && (b3 - s3).length() <= tol;
+        if !fwd && !rev {
+            continue;
+        }
+        let new_curve = match brepkit_geometry::convert::recognize_curve(nc, tol * 100.0) {
+            brepkit_geometry::convert::RecognizedCurve::Line { .. } if (s3 - e3).length() > tol => {
+                Some(EdgeCurve::Line)
+            }
+            brepkit_geometry::convert::RecognizedCurve::Circle {
+                center,
+                normal,
+                radius,
+            } => {
+                // Edges store arcs in the CCW convention: the span from the
+                // START vertex to the END vertex runs counter-clockwise about
+                // the curve normal. Pick the normal sign that puts the spline's
+                // own midpoint on the CCW span from the start VERTEX (using the
+                // curve-ordered endpoints, which lie exactly on the curve), or
+                // an open arc would flip to its complement.
+                let is_closed = (s3 - e3).length() <= tol;
+                let n = if is_closed {
+                    normal
+                } else {
+                    let (from, to) = if fwd { (a3, b3) } else { (b3, a3) };
+                    let u = from - center;
+                    let v = to - center;
+                    let m = mid3 - center;
+                    let ang = |w: Vec3| -> f64 {
+                        u.cross(w)
+                            .dot(normal)
+                            .atan2(u.dot(w))
+                            .rem_euclid(std::f64::consts::TAU)
+                    };
+                    let span = ang(v);
+                    let mid_a = ang(m);
+                    if span > 1e-12 && mid_a <= span {
+                        normal
+                    } else {
+                        -normal
+                    }
+                };
+                brepkit_math::curves::Circle3D::new(center, n, radius)
+                    .ok()
+                    .map(EdgeCurve::Circle)
+            }
+            _ => None,
+        };
+        if let Some(c) = new_curve {
+            topo.edge_mut(eid)?.set_curve(c);
+        }
+    }
+    Ok(())
+}
+
 /// Extrude a planar face along a direction to produce a solid.
 ///
 /// The extrusion creates a prism-like solid from the face. A reversed copy of
@@ -638,6 +730,11 @@ pub fn extrude(
     let mut input_surface = face_data.surface().clone();
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<WireId> = face_data.inner_wires().to_vec();
+
+    normalize_profile_wire_curves(topo, input_wire_id, tol.linear)?;
+    for &iw in &inner_wire_ids {
+        normalize_profile_wire_curves(topo, iw, tol.linear)?;
+    }
 
     let offset = Vec3::new(
         direction.x() * distance,
