@@ -480,6 +480,11 @@ fn edge_curve_is_straight(curve: &EdgeCurve) -> bool {
 /// the caller. Only holes a section actually crosses (or that cross a section)
 /// need weaving; a baseplate top cut at one corner has 15 untouched cell
 /// openings that must stay intact.
+/// `source_edge_idx` base for weave/promotion section pieces: values at or
+/// above this mark an edge as a synthetic hole-weave section rather than an
+/// index into the caller's real section array (which is always far smaller).
+const WEAVE_SECTION_SRC_BASE: usize = 1_000_000;
+
 fn integrate_holes_plane(
     sections: &[SectionEdge],
     inner_wires: &[Vec<OrientedPCurveEdge>],
@@ -2574,7 +2579,7 @@ pub fn split_face_2d(
             frame,
             &surface,
             &wire_pts,
-            1_000_000,
+            WEAVE_SECTION_SRC_BASE,
         ) {
             all_edges.extend(extra);
             let pass: std::collections::HashSet<usize> = passthrough.into_iter().collect();
@@ -2662,7 +2667,7 @@ pub fn split_face_2d(
                             start_3d: s3,
                             end_3d: e3,
                             forward: fwd,
-                            source_edge_idx: Some(1_000_000 + si),
+                            source_edge_idx: Some(WEAVE_SECTION_SRC_BASE + si),
                             pave_block_id: None,
                         })
                     };
@@ -2703,7 +2708,9 @@ pub fn split_face_2d(
             };
             let mut rebuilt: Vec<OrientedPCurveEdge> = Vec::new();
             for e in std::mem::take(&mut all_edges) {
-                let is_weave_section = e.source_edge_idx.is_some_and(|si| si >= 1_000_000)
+                let is_weave_section = e
+                    .source_edge_idx
+                    .is_some_and(|si| si >= WEAVE_SECTION_SRC_BASE)
                     && matches!(e.curve_3d, EdgeCurve::Line);
                 if !is_weave_section {
                     rebuilt.push(e);
