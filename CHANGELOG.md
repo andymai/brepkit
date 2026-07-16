@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.126.5](https://github.com/andymai/brepkit/compare/v2.126.4...v2.126.5) (2026-07-16)
+
+
+### Bug Fixes
+
+* **algo:** keep the completed socket-junction disc when its traced loop samples degenerate ([#1082](https://github.com/andymai/brepkit/issues/1082)) ([c5fc0cd](https://github.com/andymai/brepkit/commit/c5fc0cd2d897fa790f66c9298babe2a9cf437392))
+* **operations:** recognize spline-encoded profile edges before extruding walls ([#1080](https://github.com/andymai/brepkit/issues/1080)) ([d1a1c08](https://github.com/andymai/brepkit/commit/d1a1c08a8583cbac4a229a31f8c05a0d63cebe44))
+
 ## [2.126.4](https://github.com/andymai/brepkit/compare/v2.126.3...v2.126.4) (2026-07-16)
 
 
