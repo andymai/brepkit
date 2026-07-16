@@ -1,0 +1,40 @@
+crates/io/tests/data/fitoffset_nub_pocket_0.bin
+  s_7fddca67d6dc19::t_f58c852f30f5f2 1
+crates/io/tests/data/fitoffset_nub_tongue.bin
+  s_7fddca67d6dc19::t_f58c852f30f5f2 1
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_7fddca67d6dc19::t_aa55d42e861ce5 159-167,169,178-192,202-205,211,213-216
+  s_7fddca67d6dc19::t_9afce60b52d326 45-46,51-52,60-68
+  s_7fddca67d6dc19::t_9fb5c84a536eb1 168
+  s_7fddca67d6dc19::t_9abf4cc68cac00 206-210,212
+  s_7fddca67d6dc19::t_ee40086a7b28b7 217-218
+crates/io/tests/data/fitoffset_nub_pocket_1.bin
+  s_7fddca67d6dc19::t_f58c852f30f5f2 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_7fddca67d6dc19::t_35c40a8c5004e8 1702-1704
+  s_7fddca67d6dc19::t_06bc1b04db1ea7 1528-1535,1537,1542
+  s_7fddca67d6dc19::t_8017473b559eab 1784-1796
+crates/io/tests/fitoffset_nub_chain_inmem.rs
+  s_7fddca67d6dc19::t_4b97369798589b 1-124
+  s_7fddca67d6dc19::t_eee9be3d456d42 125-127
+  s_7fddca67d6dc19::t_31bd9deceddea0 128-140
+crates/io/tests/dovetail_dblcorner_nub_inmem.rs
+  s_7fddca67d6dc19::t_20765bb8435eff 112,114,116
+  s_7fddca67d6dc19::t_ed62f0799b8549 117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6f260ac0a9681d10acc72fd07e67c99daf71039f",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
