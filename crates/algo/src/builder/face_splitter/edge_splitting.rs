@@ -186,6 +186,21 @@ pub(super) fn find_splits_on_circle(
             let turns = ((mid - u_raw) / std::f64::consts::TAU).round();
             let u = std::f64::consts::TAU.mul_add(turns, u_raw);
             (u - edge.start_uv.x()) / u_span
+        } else if matches!(surface, FaceSurface::Plane { .. }) && !edge.forward {
+            // A reversed-traversal plane arc covers ccw(end→start); the
+            // ccw(start→end) span below is its COMPLEMENT, so on-arc points
+            // would normalize outside [0,1] and drop (a bay ring absorbed
+            // into the outer boundary is walked CW — its section crossings
+            // never split it). Normalize in the physical span and map back
+            // to traversal order.
+            let (p0, p1) = edge
+                .curve_3d
+                .domain_with_endpoints(edge.end_3d, edge.start_3d);
+            let pspan = p1 - p0;
+            if pspan.abs() < 1e-14 {
+                continue;
+            }
+            1.0 - normalize_angle_in_span(angle, p0, pspan)
         } else {
             normalize_angle_in_span(angle, t0, span)
         };

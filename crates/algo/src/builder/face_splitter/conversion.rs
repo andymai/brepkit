@@ -114,7 +114,75 @@ pub(super) fn boundary_edges_to_pcurve(
             pave_block_id: None,
         });
     }
+    if frame.is_none() {
+        resolve_seam_endpoint_uv(&mut result, surface);
+    }
     result
+}
+
+/// Resolve the 0-vs-2π ambiguity of boundary endpoints that sit exactly ON
+/// the u-seam of a periodic surface.
+///
+/// `project_point_on_surface` normalizes u into [0, TAU), so a sector face
+/// whose window is [3π/2, 2π] (the fourth-quadrant corner cone of a socket
+/// pocket) gets its seam-side endpoints projected to u=0 — the wrapped rim
+/// arcs' UV chords then cover the COMPLEMENT span [0, 3π/2], the whole UV
+/// window is inconsistent, and sections projected inside the true window
+/// (u≈5.5) dangle unconnected and are dropped as pendants (the face returns
+/// unsplit, leaving the cut's intersection curves unpaired). Each at-seam
+/// endpoint takes the seam image (0 or TAU) closest to its reference — wire
+/// continuity for a start, the edge's own other endpoint for an end (boundary
+/// sector arcs are minor in u, so the closer image is the consistent one;
+/// deriving the span from the circle's own parameterization is unreliable
+/// because a stored normal opposite the surface axis flips the sign).
+/// Endpoints away from the seam are never touched, so consistent faces are
+/// no-ops.
+fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurface) {
+    use std::f64::consts::TAU;
+
+    if !matches!(
+        surface,
+        FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+    ) {
+        return;
+    }
+    let at_seam = |u: f64| -> bool { u.abs() < 1e-9 || (u - TAU).abs() < 1e-9 };
+    // Walk from an edge anchored off the seam so continuity has a reference.
+    let Some(first) = edges.iter().position(|e| !at_seam(e.start_uv.x())) else {
+        return;
+    };
+    let n = edges.len();
+    let mut cur = edges[first].start_uv.x();
+    for k in 0..n {
+        let e = &mut edges[(first + k) % n];
+        let is_closed = (e.start_3d - e.end_3d).length() < 1e-10;
+        if is_closed {
+            cur = e.end_uv.x();
+            continue;
+        }
+        let pick = |u: f64, target: f64| -> f64 {
+            if !at_seam(u) {
+                return u;
+            }
+            if (target - TAU).abs() < (target - 0.0).abs() {
+                TAU
+            } else {
+                0.0
+            }
+        };
+        let su = pick(e.start_uv.x(), cur);
+        let eu = pick(e.end_uv.x(), su);
+        if (su - e.start_uv.x()).abs() > 1e-12 {
+            e.start_uv = Point2::new(su, e.start_uv.y());
+        }
+        if (eu - e.end_uv.x()).abs() > 1e-12 {
+            e.end_uv = Point2::new(eu, e.end_uv.y());
+        }
+        cur = eu;
+    }
 }
 
 /// Check if a 3D point lies on any boundary edge in UV space.
@@ -131,6 +199,40 @@ pub(super) fn is_point_on_boundary_uv(
     let Some((pu, pv)) = surface.project_point(point) else {
         return false;
     };
+
+    // Circle boundary edges are tested against their true 3D arc first. A
+    // boundary arc whose u-span wraps the seam has UV endpoints normalized
+    // into [0, TAU), so its UV chord below covers the COMPLEMENT of the actual
+    // arc — a point on the wrapped span misses the chord by up to the whole
+    // period and the ±TAU candidates cannot recover it. 3D is unambiguous.
+    for edge in boundary {
+        let brepkit_topology::edge::EdgeCurve::Circle(c) = &edge.curve_3d else {
+            continue;
+        };
+        let foot_t = c.project(point);
+        if (c.evaluate(foot_t) - point).length() > c.radius() * tol {
+            continue;
+        }
+        // `domain_with_endpoints` returns the CCW span between its arguments;
+        // a reversed-traversal edge covers the CCW span END→START, so orient
+        // by the flag or the complement arc is tested instead.
+        let (a3, b3) = if edge.forward {
+            (edge.start_3d, edge.end_3d)
+        } else {
+            (edge.end_3d, edge.start_3d)
+        };
+        let (d0, d1) = edge.curve_3d.domain_with_endpoints(a3, b3);
+        let span = (d1 - d0).rem_euclid(std::f64::consts::TAU);
+        let span = if span < 1e-12 {
+            std::f64::consts::TAU
+        } else {
+            span
+        };
+        let off = (foot_t - d0).rem_euclid(std::f64::consts::TAU);
+        if off <= span + tol || off >= std::f64::consts::TAU - tol {
+            return true;
+        }
+    }
 
     // For periodic surfaces, try the original u and u +/- 2pi.
     let u_period = match surface {

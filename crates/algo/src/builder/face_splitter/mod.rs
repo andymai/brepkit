@@ -1641,9 +1641,44 @@ fn arrangement_regions_from_inputs(
         }
         Some(wire)
     };
-    // UV polygon (chord points) of a traced face, for containment tests.
+    // UV polygon of a traced face, for containment/probe tests. Whole-arc
+    // sub-edges are densified by sampling their true 3D curve through the
+    // frame (orientation-unambiguous): on a thin arc-bounded region (the
+    // groove-mouth corner sliver, two lines + one r=4 arc) the chord polygon
+    // misplaces the interior probe across the arc, misclassifying the region.
     let face_poly = |face: &[usize]| -> Vec<Point2> {
-        face.iter().map(|&h| vert_pos[&halfs[h].from]).collect()
+        let mut pts: Vec<Point2> = Vec::with_capacity(face.len() * 2);
+        for &h in face {
+            let he = &halfs[h];
+            let su = vert_pos[&he.from];
+            pts.push(su);
+            let Some(&(input_idx, whole)) = sub_edge_src.get(he.seg_id) else {
+                continue;
+            };
+            let inp = &inputs[input_idx];
+            if !(whole && inp.is_arc) {
+                continue;
+            }
+            let e = &inp.edge;
+            let (a3, b3) = if e.forward {
+                (e.start_3d, e.end_3d)
+            } else {
+                (e.end_3d, e.start_3d)
+            };
+            let (d0, d1) = e.curve_3d.domain_with_endpoints(a3, b3);
+            let fwd_uv = frame.project(a3);
+            let rev_uv = frame.project(b3);
+            let from_matches_fwd = (fwd_uv - su).length() <= (rev_uv - su).length();
+            for k in 1..8 {
+                let f = f64::from(k) / 8.0;
+                let f = if from_matches_fwd { f } else { 1.0 - f };
+                let p3 = e
+                    .curve_3d
+                    .evaluate_with_endpoints(d0 + (d1 - d0) * f, a3, b3);
+                pts.push(frame.project(p3));
+            }
+        }
+        pts
     };
 
     if even_odd_nesting {
@@ -1661,6 +1696,22 @@ fn arrangement_regions_from_inputs(
         let polys: Vec<Vec<Point2>> = interior.iter().map(|f| face_poly(f)).collect();
         let probes: Vec<Point2> = polys.iter().map(|p| sample_interior_point(p)).collect();
         let areas: Vec<f64> = polys.iter().map(|p| signed_area_2d(p).abs()).collect();
+        // A CLEAN tiling — the interior faces' areas sum to the outer face's
+        // area — is a proper subdivision: every region is simply connected and
+        // nesting never applies. Without this cut-off, an arrangement whose
+        // hole rings connect to the outer boundary (a groove mouth crossing
+        // two pocket openings) has every region adjacent to the big material
+        // region judged "contained" through the on-boundary tolerance below,
+        // so ring cycles already present in the material outer wire get
+        // re-attached as holes (double cover) and the mouth sliver is
+        // swallowed instead of being emitted for classification. A trace with
+        // OVERLAPPING faces (disconnected or bridge-connected components — a
+        // holed cap's twin loops, the divider-lip weave) sums to MORE than the
+        // outer area, and keeps the containment-depth nesting that resolves
+        // it.
+        let outer_area = face_area(&faces[outer_idx]).abs();
+        let interior_area_sum: f64 = areas.iter().sum();
+        let clean_tiling = (interior_area_sum - outer_area).abs() <= outer_area.mul_add(1e-6, tol);
         // `outer` contains `inner` when EVERY one of inner's polygon vertices
         // lies inside (or on) outer's polygon AND outer is strictly larger.
         // A probe-only test is symmetric for the concentric disks that
@@ -1668,7 +1719,7 @@ fn arrangement_regions_from_inputs(
         // the centre), so it can't order their nesting; the all-vertices +
         // larger-area test is asymmetric and orders them correctly.
         let contains = |outer: usize, inner: usize| -> bool {
-            if outer == inner || areas[outer] <= areas[inner] {
+            if clean_tiling || outer == inner || areas[outer] <= areas[inner] {
                 return false;
             }
             let op = &polys[outer];
@@ -1908,6 +1959,7 @@ fn arrangement_regions_from_inputs(
 /// - `frame` -- cached `PlaneFrame` for this face (avoids origin mismatch)
 /// - `info` -- cached `SurfaceInfo` for periodicity flags
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 pub fn split_face_2d(
     topo: &Topology,
     face_id: FaceId,
@@ -1916,6 +1968,10 @@ pub fn split_face_2d(
     tol: &brepkit_math::tolerance::Tolerance,
     frame: Option<&PlaneFrame>,
     info: Option<&SurfaceInfo>,
+    edge_images: &std::collections::HashMap<
+        brepkit_topology::edge::EdgeId,
+        Vec<brepkit_topology::edge::EdgeId>,
+    >,
 ) -> Vec<SplitSubFace> {
     let face = match topo.face(face_id) {
         Ok(f) => f,
@@ -1978,6 +2034,83 @@ pub fn split_face_2d(
         })
         .collect();
 
+    // Expand plane-face hole wires through the pave-level edge splits so the
+    // PROMOTION pass below can match hole vertices against the exact pave
+    // vertices the boundary machinery minted. Kept SEPARATE from
+    // `original_inner_wires`: the hole weave (`integrate_holes_plane`) is
+    // calibrated on unsplit hole edges — its whole-edge-duplicate re-trace
+    // discriminant misfires on pave-split pieces (the honeycomb pcut3 cap).
+    let mut expanded_inner_wires: Vec<Option<Vec<OrientedPCurveEdge>>> = if is_plane {
+        let iw_ids = face.inner_wires().to_vec();
+        original_inner_wires
+            .iter()
+            .enumerate()
+            .map(|(hi, _)| {
+                let &iw_id = iw_ids.get(hi)?;
+                let wire = topo.wire(iw_id).ok()?;
+                let needs = wire.edges().iter().any(|oe| {
+                    edge_images
+                        .get(&oe.edge())
+                        .is_some_and(|imgs| imgs.len() > 1)
+                });
+                if !needs {
+                    return None;
+                }
+                let mut out: Vec<OrientedPCurveEdge> = Vec::new();
+                for oe in wire.edges() {
+                    let pieces: Vec<brepkit_topology::edge::EdgeId> =
+                        match edge_images.get(&oe.edge()) {
+                            Some(imgs) if imgs.len() > 1 => {
+                                let mut v = imgs.clone();
+                                if !oe.is_forward() {
+                                    v.reverse();
+                                }
+                                v
+                            }
+                            _ => vec![oe.edge()],
+                        };
+                    for pid in pieces {
+                        let Ok(e) = topo.edge(pid) else { continue };
+                        let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end()))
+                        else {
+                            continue;
+                        };
+                        let (s3, e3) = if oe.is_forward() {
+                            (vs.point(), ve.point())
+                        } else {
+                            (ve.point(), vs.point())
+                        };
+                        if (s3 - e3).length() < tol.linear {
+                            continue;
+                        }
+                        let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                            e.curve(),
+                            s3,
+                            e3,
+                            &surface,
+                            &wire_pts,
+                            Some(frame),
+                        );
+                        out.push(OrientedPCurveEdge {
+                            curve_3d: e.curve().clone(),
+                            pcurve,
+                            start_uv: frame.project(s3),
+                            end_uv: frame.project(e3),
+                            start_3d: s3,
+                            end_3d: e3,
+                            forward: oe.is_forward(),
+                            source_edge_idx: None,
+                            pave_block_id: None,
+                        });
+                    }
+                }
+                (out.len() >= 3).then_some(out)
+            })
+            .collect()
+    } else {
+        vec![None; original_inner_wires.len()]
+    };
+
     // Normalize hole winding: an inner wire must wind OPPOSITE the outer wire
     // in the projected UV frame for every consumer that trusts stored
     // orientation — `integrate_holes_plane` weaves hole pieces as-is, and a
@@ -1990,9 +2123,18 @@ pub fn split_face_2d(
     // wires enter the splitter.
     let original_inner_wires: Vec<Vec<OrientedPCurveEdge>> = if is_plane {
         let outer_sign = signed_area_2d(&sample_wire_loop_uv(&boundary_edges)) >= 0.0;
+        let flip_wire = |hole: &mut Vec<OrientedPCurveEdge>| {
+            hole.reverse();
+            for edge in hole.iter_mut() {
+                std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
+                std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
+                edge.forward = !edge.forward;
+            }
+        };
         original_inner_wires
             .into_iter()
-            .map(|mut hole| {
+            .enumerate()
+            .map(|(hi, mut hole)| {
                 let pts = sample_wire_loop_uv(&hole);
                 if pts.len() < 3 {
                     return hole;
@@ -2006,11 +2148,11 @@ pub fn split_face_2d(
                     perimeter += (*last - *first).length();
                 }
                 if area.abs() > perimeter * tol.linear && (area >= 0.0) == outer_sign {
-                    hole.reverse();
-                    for edge in &mut hole {
-                        std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
-                        std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
-                        edge.forward = !edge.forward;
+                    flip_wire(&mut hole);
+                    // The expanded twin must stay orientation-consistent with
+                    // the wire it stands in for.
+                    if let Some(Some(exp)) = expanded_inner_wires.get_mut(hi) {
+                        flip_wire(exp);
                     }
                 }
                 hole
@@ -2355,6 +2497,35 @@ pub fn split_face_2d(
         }
     }
 
+    // A LINE section can cross a boundary ARC mid-span — the groove-mouth
+    // corner, where a pocket ring absorbed into the outer boundary (a bay)
+    // bulges across the notch wall line. Section ENDPOINTS alone leave that
+    // crossing unsplit, and the arrangement's chord-based crossing detection
+    // misses the real arc by the sagitta (the arc's chord stays clear of the
+    // section), so the notch region gets traced through the pocket bite to a
+    // phantom corner inside air — an unpaired mouth triangle on the kept top
+    // face. Collect the true circle×line crossings here; they are applied to
+    // the boundary ONLY on the combined-arrangement path below (the angular
+    // wire-builder paths are calibrated to the unsplit boundary — splitting
+    // globally regressed the d-series lip fuses).
+    let mut boundary_cross_pts: Vec<Point3> = Vec::new();
+    if is_plane {
+        for edge in &boundary_edges {
+            let EdgeCurve::Circle(c) = &edge.curve_3d else {
+                continue;
+            };
+            for s in sections {
+                if !matches!(s.curve_3d, EdgeCurve::Line) {
+                    continue;
+                }
+                for (p, _) in c.intersect_segment(s.start, s.end, tol.linear) {
+                    boundary_cross_pts.push(p);
+                }
+            }
+        }
+    }
+    let boundary_arc_crossed = !boundary_cross_pts.is_empty();
+
     let boundary_edges = split_boundary_edges_at_3d_points(
         boundary_edges,
         &split_pts_3d,
@@ -2394,7 +2565,7 @@ pub fn split_face_2d(
     // untouched openings — a baseplate top cut at one corner — keeps the other
     // openings' exact arc geometry instead of chord-fragmenting them).
     let mut woven_hole_indices: Vec<usize> = Vec::new();
-    let holes_integrated = if is_plane && !original_inner_wires.is_empty() {
+    let mut holes_integrated = if is_plane && !original_inner_wires.is_empty() {
         if let Some((extra, passthrough)) = integrate_holes_plane(
             sections,
             &original_inner_wires,
@@ -2415,6 +2586,166 @@ pub fn split_face_2d(
     } else {
         false
     };
+    // Promote pave-split passthrough holes into the arrangement: when a hole
+    // wire's (image-expanded) vertex lies exactly ON a section segment, the
+    // section runs THROUGH the opening — attaching the hole whole after the
+    // split leaves the notch piece overlapping the opening covered by the
+    // kept face with nothing below it (the fit-offset groove-mouth sliver).
+    if is_plane && !original_inner_wires.is_empty() {
+        let sec_segs: Vec<(Point3, Point3)> = sections
+            .iter()
+            .filter(|sct| matches!(sct.curve_3d, EdgeCurve::Line))
+            .map(|sct| (sct.start, sct.end))
+            .collect();
+        let on_seg = |p: Point3, a: Point3, b: Point3| -> bool {
+            let d = b - a;
+            let len2 = d.dot(d);
+            if len2 < 1e-18 {
+                return false;
+            }
+            let t = (p - a).dot(d) / len2;
+            if !(1e-6..=1.0 - 1e-6).contains(&t) {
+                return false;
+            }
+            ((a + d * t) - p).length() < tol.linear * 10.0
+        };
+        let woven_set: std::collections::HashSet<usize> =
+            woven_hole_indices.iter().copied().collect();
+        for (i, orig_hole) in original_inner_wires.iter().enumerate() {
+            // The pave-split expansion carries the exact minted vertices the
+            // coincidence test needs; fall back to the stored wire otherwise.
+            let hole = expanded_inner_wires
+                .get(i)
+                .and_then(Option::as_ref)
+                .unwrap_or(orig_hole);
+            if woven_set.contains(&i) {
+                continue;
+            }
+            let mut coincident: Vec<Point3> = Vec::new();
+            for e in hole {
+                for p in [e.start_3d, e.end_3d] {
+                    if sec_segs.iter().any(|&(a, b)| on_seg(p, a, b))
+                        && !coincident.iter().any(|q| (*q - p).length() < tol.linear)
+                    {
+                        coincident.push(p);
+                    }
+                }
+            }
+            if coincident.is_empty() {
+                continue;
+            }
+            if !holes_integrated {
+                holes_integrated = true;
+                for (si, sct) in sections.iter().enumerate() {
+                    if !matches!(sct.curve_3d, EdgeCurve::Line) {
+                        continue;
+                    }
+                    let s0 = frame.project(sct.start);
+                    let s1 = frame.project(sct.end);
+                    let mk = |su: Point2, eu: Point2, s3: Point3, e3: Point3, fwd: bool| {
+                        use brepkit_math::curves2d::{Curve2D, Line2D};
+                        use brepkit_math::vec::Vec2;
+                        let d = Vec2::new(eu.x() - su.x(), eu.y() - su.y());
+                        let len = (d.x() * d.x() + d.y() * d.y()).sqrt();
+                        let dir = if len > 1e-12 {
+                            Vec2::new(d.x() / len, d.y() / len)
+                        } else {
+                            Vec2::new(1.0, 0.0)
+                        };
+                        Line2D::new(su, dir).ok().map(|l| OrientedPCurveEdge {
+                            curve_3d: EdgeCurve::Line,
+                            pcurve: Curve2D::Line(l),
+                            start_uv: su,
+                            end_uv: eu,
+                            start_3d: s3,
+                            end_3d: e3,
+                            forward: fwd,
+                            source_edge_idx: Some(1_000_000 + si),
+                            pave_block_id: None,
+                        })
+                    };
+                    if let Some(e1) = mk(s0, s1, sct.start, sct.end, true) {
+                        all_edges.push(e1);
+                    }
+                    if let Some(e2) = mk(s1, s0, sct.end, sct.start, false) {
+                        all_edges.push(e2);
+                    }
+                }
+            }
+            woven_hole_indices.push(i);
+            all_edges.extend(hole.iter().cloned());
+            let poly: Vec<Point2> = hole.iter().map(|e| frame.project(e.start_3d)).collect();
+            let arcs: Vec<(Point2, f64, Point2, Point2)> = hole
+                .iter()
+                .filter_map(|e| {
+                    let EdgeCurve::Circle(c3) = &e.curve_3d else {
+                        return None;
+                    };
+                    Some((
+                        frame.project(c3.center()),
+                        c3.radius(),
+                        frame.project(e.start_3d),
+                        frame.project(e.end_3d),
+                    ))
+                })
+                .collect();
+            let side = |a: Point2, b: Point2, p: Point2| -> f64 {
+                (b.x() - a.x()).mul_add(p.y() - a.y(), -((b.y() - a.y()) * (p.x() - a.x())))
+            };
+            let in_region = |p: Point2| -> bool {
+                super::classify_2d::point_in_polygon_2d(p, &poly)
+                    || arcs.iter().any(|&(c, r, u0, u1)| {
+                        let d = ((p.x() - c.x()).powi(2) + (p.y() - c.y()).powi(2)).sqrt();
+                        d < r && side(u0, u1, p) * side(u0, u1, c) < 0.0
+                    })
+            };
+            let mut rebuilt: Vec<OrientedPCurveEdge> = Vec::new();
+            for e in std::mem::take(&mut all_edges) {
+                let is_weave_section = e.source_edge_idx.is_some_and(|si| si >= 1_000_000)
+                    && matches!(e.curve_3d, EdgeCurve::Line);
+                if !is_weave_section {
+                    rebuilt.push(e);
+                    continue;
+                }
+                let dir = e.end_3d - e.start_3d;
+                let len2 = dir.dot(dir);
+                let mut ts: Vec<f64> = vec![0.0, 1.0];
+                for p in &coincident {
+                    if len2 > 1e-18 {
+                        let t = (*p - e.start_3d).dot(dir) / len2;
+                        if (1e-6..=1.0 - 1e-6).contains(&t)
+                            && ((e.start_3d + dir * t) - *p).length() < tol.linear * 10.0
+                        {
+                            ts.push(t);
+                        }
+                    }
+                }
+                if ts.len() == 2 {
+                    rebuilt.push(e);
+                    continue;
+                }
+                ts.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+                for w in ts.windows(2) {
+                    let (ta, tb) = (w[0], w[1]);
+                    let pm3 = e.start_3d + dir * (0.5 * (ta + tb));
+                    if in_region(frame.project(pm3)) {
+                        continue;
+                    }
+                    let sa = e.start_3d + dir * ta;
+                    let sb = e.start_3d + dir * tb;
+                    let mut piece = e.clone();
+                    piece.start_3d = sa;
+                    piece.end_3d = sb;
+                    piece.start_uv = frame.project(sa);
+                    piece.end_uv = frame.project(sb);
+                    rebuilt.push(piece);
+                }
+            }
+            all_edges = rebuilt;
+        }
+    }
+
     // The holes the arrangement actually consumed (woven). The passthrough holes
     // are attached whole after the split (see the `!holes_integrated` /
     // passthrough attach pass below).
@@ -2714,13 +3045,45 @@ pub fn split_face_2d(
     // cap (the shelled wall-cutout rim, one cavity opening) is already
     // partitioned cleanly by the wire builder and the arrangement's nesting can
     // pick a worse decomposition, so restrict this path to the multi-hole case.
-    if holes_integrated
-        && is_plane
-        && original_inner_wires.len() >= 2
-        && !woven_inner_wires.is_empty()
+    // Second entry condition: sections cross the OUTER boundary's bay arcs
+    // (pocket rings absorbed into the outer wire by earlier cuts) but touch no
+    // remaining inner ring — the last groove of a fit-offset export, whose two
+    // mouth cells are both bays. Nothing integrates, so the multi-hole gate
+    // above never fires and the angular wire builder mis-traces the bay mouths
+    // (phantom-corner slivers). The pre-split boundary + sections are already a
+    // complete arrangement; the untouched rings all attach whole afterward.
+    // Mirrors the >=2-hole restriction of the integrated branch: a SINGLE-hole
+    // cap (the d-series shelled-cup lip fuse) is partitioned correctly by the
+    // calibrated wire-builder path, and the arrangement picks a worse
+    // decomposition there.
+    let bay_mouth_arrangement =
+        !holes_integrated && boundary_arc_crossed && original_inner_wires.len() >= 2;
+    // The boundary-arc×section crossings are applied HERE, not globally: the
+    // arrangement needs the bay arcs pre-split at the crossings (each arc
+    // piece is then uncrossed and its endpoints register as T-junctions on the
+    // section lines), while the angular wire-builder paths below are
+    // calibrated to the unsplit boundary.
+    let arr_edges: Vec<OrientedPCurveEdge>;
+    let arr_input: &[OrientedPCurveEdge] = if is_plane && boundary_arc_crossed {
+        let (bnd, rest) = all_edges.split_at(n_boundary_edges.min(all_edges.len()));
+        let split_bnd = split_boundary_edges_at_3d_points(
+            bnd.to_vec(),
+            &boundary_cross_pts,
+            Some(frame),
+            &surface,
+            tol.linear,
+        );
+        arr_edges = split_bnd.into_iter().chain(rest.iter().cloned()).collect();
+        &arr_edges
+    } else {
+        &all_edges
+    };
+    if is_plane
+        && ((holes_integrated && original_inner_wires.len() >= 2 && !woven_inner_wires.is_empty())
+            || bay_mouth_arrangement)
         && let Some(mut result) = arrangement_regions_from_combined(
             &surface,
-            &all_edges,
+            arr_input,
             &woven_inner_wires,
             rank,
             reversed,
@@ -2732,7 +3095,9 @@ pub fn split_face_2d(
         // Attach the passthrough holes (openings no section touched) whole to
         // the sub-face that geometrically contains each — they were deliberately
         // kept out of the woven arrangement so their exact arc geometry survives.
-        if !passthrough_inner_wires.is_empty() {
+        if bay_mouth_arrangement {
+            attach_whole_holes(&mut result, &original_inner_wires);
+        } else if !passthrough_inner_wires.is_empty() {
             attach_whole_holes(&mut result, &passthrough_inner_wires);
         }
         return result;

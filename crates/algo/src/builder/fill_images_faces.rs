@@ -234,6 +234,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // Pre-registering the anchor vertices makes the periodic face's band
     // wires and the opposing plane faces' hole wires resolve to the same
     // VertexId, so merge_duplicate_edges can share the circle edge.
+    // Concrete copy for the splitter: hole wires must enter the arrangement
+    // pre-expanded through the pave-level edge splits so the weave sees the
+    // same vertices the boundary machinery minted (see split_face_2d).
+    let edge_images_plain: HashMap<EdgeId, Vec<EdgeId>> =
+        edge_images.iter().map(|(k, v)| (*k, v.clone())).collect();
     let seam_anchors = compute_seam_anchors(topo, arena);
     for &anchor in seam_anchors.values() {
         pb_vertex_registry
@@ -331,6 +336,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             &tol,
             None, // PlaneFrame built internally by face_splitter
             info.as_ref(),
+            &edge_images_plain,
         );
 
         log::debug!(
