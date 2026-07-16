@@ -908,6 +908,27 @@ fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurv
 /// edge's chord in UV between their endpoints, with no shared vertex). No
 /// wire-builder trace produces such a crossing here, so testing arc interiors
 /// would add cost without changing any outcome.
+/// True when any traced loop's sampled UV polygon is area-degenerate — the
+/// classifier's sliver guard would silently drop it, so the loops path
+/// under-represents the face even though the loop COUNT looks fine. The
+/// canonical case: a completed 4-way socket-junction circle traced as a
+/// 2-arc closed loop whose pcurve-sampled polygon folds to ~zero area while
+/// the true disc is πr² (the blind-recess cap the result must keep).
+fn wire_loops_have_degenerate_area(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
+    loops.iter().any(|wl| {
+        let pts = sample_wire_loop_uv(wl);
+        if pts.len() < 3 {
+            return true;
+        }
+        let area = signed_area_2d(&pts);
+        let mut perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+            perimeter += (*last - *first).length();
+        }
+        area.abs() <= perimeter * tol
+    })
+}
+
 fn wire_loops_self_cross(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
     let qscale = 1.0 / tol.max(1e-12);
     let qkey = |p: brepkit_math::vec::Point2| -> (i64, i64) {
@@ -3161,14 +3182,18 @@ pub fn split_face_2d(
         && !holes_integrated
         && original_inner_wires.is_empty()
         && let Some(ref boundary) = boundary_edges_backup
-        && let Some(result) = split_plane_face_by_arrangement(
-            &surface, boundary, sections, rank, reversed, face_id, frame, tol.linear,
-        )
-        && (result.len() > loops.len()
-            || wire_loops_self_cross(&loops, tol.linear)
-            || greedy_outer_loops_nested(&loops, cw_loops))
     {
-        return result;
+        let arr = split_plane_face_by_arrangement(
+            &surface, boundary, sections, rank, reversed, face_id, frame, tol.linear,
+        );
+        if let Some(result) = arr
+            && (result.len() > loops.len()
+                || wire_loops_self_cross(&loops, tol.linear)
+                || greedy_outer_loops_nested(&loops, cw_loops)
+                || wire_loops_have_degenerate_area(&loops, tol.linear))
+        {
+            return result;
+        }
     }
 
     // Classify each loop as outer (positive area) or hole (negative).
