@@ -206,6 +206,19 @@ was silently polygon-approximated — when a kept-piece pattern matches "inside
 the cutter but classified Outside", check `collect_face_geoms` coverage for the
 partner's surface types before touching the splitter.
 
+Fractional-plate seam-edge pocket family — CLOSED (2026-07-16, fixture
+`crates/io/tests/fracplate_seam_pocket_inmem.rs`): a seam-edge pocket flush
+with the tile wall mesh-fell-back and poisoned the whole 5×4.5 fractional
+plate (dovetail `5×4.5 edge-y-1` nm export). Root: `find_point_outside_holes`
+trusted stored `start_uv` for its hole-rejection polygon and one
+foreign-frame vertex corrupted it — classifier seeds landed inside the
+opening and the slab top was dropped. Fixed by deriving every polygon vertex
+from 3D through the plane frame. Tool-verified: the dovetail suite's
+fractional tile passes; with the tangency-nub PR (#1075) the suite reaches
+9/9. DURABLE: stored `start_uv`/pcurves on hole wires can be fitted in a
+FOREIGN frame — any consumer building polygons from them must re-derive via
+frame.project(3D) (same class as the pcurve-convention lesson).
+
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
 106s) and "handle holes" (86s) — the 2026-07-08 swallowed-panic/borrow-poisoning
