@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784242633549,
+  "lastUpdate": 1784246037627,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4805,6 +4805,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17264531,
             "range": "± 168485",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c5fc0cd2d897fa790f66c9298babe2a9cf437392",
+          "message": "fix(algo): keep the completed socket-junction disc when its traced loop samples degenerate (#1082)\n\n## Summary\n\nThe snapClip join-edges plate export accumulated ~1100 open mesh edges\nbecause the **8th pocket cut** — the one completing a 4-way cell-corner\njunction — lost the junction's blind-recess disc: the wire builder\ntraces the completed r=4 junction circle as a standalone two-arc loop\nwhose pcurve-sampled polygon folds to ~zero area, the sliver guard\nsilently drops it, and the planar-arrangement path (which produces the\ndisc correctly) was declined because the raw loop **count** still\nmatched. The resulting unpaired rims forced a mesh fallback whose open\noutput poisoned all 13 remaining pocket cuts.\n\nFix: the arrangement gate also fires when any traced loop's sampled\npolygon is area-degenerate — such a loop is invisible to the count\ncomparison because the sliver guard will drop it downstream, so the\nloops path is guaranteed to under-represent the face.\n\n## Verification\n\n- Captured tool chain (5×4 snapClip plate): all 20 pocket cuts analytic\n+ watertight (F=595 final; was F=6923 with bnd=930).\n- Minimal fixture (slab + the 4 junction pockets, tool-exact operands):\nfails without the fix (F=1342, bnd=130), green with it.\n- Calibrated foils all green: d-series gridfinity (27/27), honeycomb\npcut3, divider-lip fuse, groove-mouth chain, nub chains.\n- Full workspace: 2571 tests, clippy `-D warnings` clean.\n\nThird member of today's snapClip family work (#1080 closed the connector\nkey at the extrude source; this closes the plate-side chain root).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes loss of the completed socket‑junction disc by detecting\narea‑degenerate traced loops and forcing the arrangement path. Prevents\nunpaired rims and mesh fallback, keeping pocket cuts analytic and\nwatertight.\n\n- **Bug Fixes**\n- Added a degeneracy check (`wire_loops_have_degenerate_area`) in the\nface splitter; if any loop’s sampled UV polygon is zero/near‑zero area,\nuse the planar arrangement.\n- Preserves the r=4 cell‑corner junction disc even when the traced\ntwo‑arc loop samples fold to near zero area.\n- Verification: 5×4 snapClip plate now produces 20 analytic, watertight\npocket cuts (F=595; was F=6923, bnd≈930); full workspace 2571 tests\npass. Added regression fixture\n`crates/io/tests/socket_junction_disc_inmem.rs` with pocket/slab data.\n\n<sup>Written for commit f5a2de03378f9552b9b42963f2571ca107be6bdb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1082?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-16T23:51:49Z",
+          "tree_id": "a931b223f03a1d36dc5e4edcc86200d9e9dfb275",
+          "url": "https://github.com/andymai/brepkit/commit/c5fc0cd2d897fa790f66c9298babe2a9cf437392"
+        },
+        "date": 1784246036770,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 785843,
+            "range": "± 7370",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 881481,
+            "range": "± 5078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12994,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 635411,
+            "range": "± 1361",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20593914,
+            "range": "± 274320",
             "unit": "ns/iter"
           }
         ]
