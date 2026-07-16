@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784242100287,
+  "lastUpdate": 1784242633549,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4751,6 +4751,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20488379,
             "range": "± 3843493",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3746b844494d30e6463f52a65c0a174ea6ca6443",
+          "message": "test(operations): cover the reversed-spline-arc profile path; buffer the near-full-arc midpoint check (#1081)\n\nFollow-up to #1080, addressing Greptile's two P2 findings that automerge\noutran:\n\n- New fixture exercising the `rev` branch of\n`normalize_profile_wire_curves` (fillet spline stored end-to-start\nagainst the wire traversal) — recovers analytic walls and the exact\nvolume.\n- Tolerance buffer on the CCW midpoint-containment check so a near-full\narc cannot flip its normal on rounding.",
+          "timestamp": "2026-07-16T22:55:14Z",
+          "tree_id": "e8a7573ca7708e1f5d6b582cb5aaf2017cb981d6",
+          "url": "https://github.com/andymai/brepkit/commit/3746b844494d30e6463f52a65c0a174ea6ca6443"
+        },
+        "date": 1784242632975,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 645387,
+            "range": "± 9948",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 720694,
+            "range": "± 11016",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10818,
+            "range": "± 143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 522858,
+            "range": "± 2592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17264531,
+            "range": "± 168485",
             "unit": "ns/iter"
           }
         ]
