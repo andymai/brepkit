@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.3](https://github.com/andymai/brepkit/compare/v2.126.2...v2.126.3) (2026-07-16)
+
+
+### Bug Fixes
+
+* **algo:** seam-edge flush pocket cut drops the entire slab top ([#1076](https://github.com/andymai/brepkit/issues/1076)) ([4505072](https://github.com/andymai/brepkit/commit/45050725d08925e23e0a35120296d4c548e4bedf))
+
 ## [2.126.2](https://github.com/andymai/brepkit/compare/v2.126.1...v2.126.2) (2026-07-10)
 
 
