@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784239670083,
+  "lastUpdate": 1784242100287,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4697,6 +4697,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19623571,
             "range": "± 91886",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d1a1c08a8583cbac4a229a31f8c05a0d63cebe44",
+          "message": "fix(operations): recognize spline-encoded profile edges before extruding walls (#1080)\n\n## Summary\n\nThe snap-clip connector key (snapClip suite, bnd=326 export failure)\ntraced to the extrude source: 2D drawing pipelines ship corner-treated\nprofiles as B-splines (chamfer segments and corner-trimmed straight runs\narrive as degree-N NURBS; fillet arcs as rational splines), and extrude\nemitted ruled-NURBS side walls for geometry that is exactly\nplanar/cylindrical. Every downstream boolean against the prism degraded\n— the clip's four socket-relief cuts fell to a mesh fallback purely\nbecause the walls were spline-encoded.\n\nFix: normalize the profile wires' curves in place at extrude entry,\nmirroring the loft profile-recognition from the analytic-socket work —\nNURBS→Line and NURBS→Circle (oriented so the CCW start→end span covers\nthe spline's own midpoint; conversion skipped unless the spline's\nendpoints coincide with the edge vertices).\n\n## Verification\n\n- New unit fixture: spline-encoded chamfered/filleted profile extrudes\nwith zero NURBS walls, one true cylinder, and exact volume.\n- Captured tool chain (snap-clip key): clip prism 4 cyl + 18 plane (was\n8 NURBS walls); all four socket-relief cuts analytic and watertight\n(F=98, E=350 vs the fallback's E=3029); the connector-key scenario\npasses tool-side on an overlay build.\n- Full suites: operations 971, io 207, wasm 229 — all green; workspace\nclippy clean.",
+          "timestamp": "2026-07-16T15:46:11-07:00",
+          "tree_id": "d7f37cceba13c9505ea98b95608145fb7188f22b",
+          "url": "https://github.com/andymai/brepkit/commit/d1a1c08a8583cbac4a229a31f8c05a0d63cebe44"
+        },
+        "date": 1784242099877,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 798205,
+            "range": "± 20321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 879322,
+            "range": "± 18543",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13050,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 638867,
+            "range": "± 13791",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20488379,
+            "range": "± 3843493",
             "unit": "ns/iter"
           }
         ]
