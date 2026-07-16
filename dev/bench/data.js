@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783954893054,
+  "lastUpdate": 1784227759794,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4481,6 +4481,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18883423,
             "range": "± 81853",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45050725d08925e23e0a35120296d4c548e4bedf",
+          "message": "fix(algo): seam-edge flush pocket cut drops the entire slab top (#1076)\n\n## Problem\n\nA fractional-width baseplate tile on a split seam extends its seam-edge\npockets to the tile boundary — the pocket wall is exactly coplanar with\nthe slab's outer wall, and the opening must merge into the boundary as a\nnotch. Instead the cut mesh-fell-back (F=122, 44 open boundary edges)\nand poisoned the whole fractional-plate build (the dovetail `5×4.5\nedge-y-1` scenario exports non-manifold STLs; pre-existing on published\nkernels).\n\n## Root cause\n\n`find_point_outside_holes` built its hole-rejection polygon from each\nhole edge's **stored `start_uv`** — and a hole-wire vertex whose UV was\nfitted in a *different* plane frame corrupts the polygon (one\nforeign-frame vertex among consistent ones). The even-odd test then\naccepted classifier seeds **inside** the pocket opening; both top\nsub-faces sampled the cutter's interior, were classified Inside, and the\nentire slab top vanished. The Euler gate correctly rejected the analytic\nresult and the mesh fallback took over.\n\n## Fix\n\nOne hunk: with a plane frame available, derive **every** hole-polygon\nvertex from the edge's 3D endpoint through the frame — the exact\ndoctrine the function already applies to curved-edge sampling (\"the\nstored pcurve is never trusted\").\n\n## Result\n\n- The seam-edge pocket cut stays analytic: 14 faces, all 4 corner cones\nintact, watertight.\n- The full 25-pocket fractional plate chain builds clean end-to-end\n(F=206, zero open/non-manifold mesh edges at export tolerance) —\npreviously mesh-fallback from the second pocket onward.\n\n## Verification\n\n- New regression fixture\n`crates/io/tests/fracplate_seam_pocket_inmem.rs` with the tool's exact\nserialized operands; 10× flake gate clean.\n- Full suites green: algo, io (all calibrated in-mem fixtures incl. the\nhalfsockets family that pins this function), operations, wasm lib incl.\nthe gridfinity canary, pre-push full-workspace gate.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix seam-edge flush pocket cuts that dropped the slab top by rebuilding\nhole polygons from 3D via the face frame. Cuts now stay analytic (14\nfaces, 4 corner cones) and export watertight; closure noted in the\nroadmap.\n\n- **Bug Fixes**\n- In `find_point_outside_holes`, derive hole-polygon vertices with\n`frame.project(e.start_3d)` when a frame exists; stop using stored\n`start_uv` from a different frame.\n- Prevents even-odd misclassification that seeded inside the opening,\nwhich caused Euler rejection and mesh fallback.\n- Added regression test `crates/io/tests/fracplate_seam_pocket_inmem.rs`\nwith fixtures (`fracplate_slab.bin`, `fracplate_seam_pocket.bin`) and\nrecorded the fix in `.claude/skills/roadmap/SKILL.md`.\n\n<sup>Written for commit 995b44b19fb7cd56ee0396566e601d4e08641747.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1076?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-16T11:46:37-07:00",
+          "tree_id": "2b0ef778cdf15fe701485a7e446d26a9ba5e4789",
+          "url": "https://github.com/andymai/brepkit/commit/45050725d08925e23e0a35120296d4c548e4bedf"
+        },
+        "date": 1784227759041,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 672326,
+            "range": "± 17536",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 737462,
+            "range": "± 13558",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10544,
+            "range": "± 244",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 542534,
+            "range": "± 11169",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16680495,
+            "range": "± 165456",
             "unit": "ns/iter"
           }
         ]
