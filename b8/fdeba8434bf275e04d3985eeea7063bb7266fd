@@ -1,0 +1,72 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_7fddca67d6dc19::t_7c02ee46992455 1722
+  s_7fddca67d6dc19::t_b5cf04f8bfca5e 1675-1677,1971-1974,3082
+  s_7fddca67d6dc19::t_c3c23d879920cb 3059-3060,3067
+  s_7fddca67d6dc19::t_0b0997ad54d5da 1699-1714
+  s_7fddca67d6dc19::t_10fb7912590e61 2107,2111
+  s_7fddca67d6dc19::t_f22b836f49a359 2568,2589-2593,2595-2613,2621-2632,2634-2702,2704-2748
+  s_7fddca67d6dc19::t_d0c846091f0af4 3061-3066,3068-3080,3086
+  s_7fddca67d6dc19::t_11964f36ab7338 1659
+  s_7fddca67d6dc19::t_8ddaf8de9c261c 1644-1648,1650-1658,1660-1674,1678-1681
+  s_7fddca67d6dc19::t_634fb825e53a45 2633
+  s_7fddca67d6dc19::t_17ccdd2aaefb2d 2703
+  s_7fddca67d6dc19::t_8fd5f3319506c6 3055-3058
+  s_7fddca67d6dc19::t_5b615c40c2d8aa 2614-2620
+  s_7fddca67d6dc19::t_7cc04d3f7bb551 3048-3054,3081,3083,3098-3100
+  s_7fddca67d6dc19::t_ae4fa397c8389c 1962,2037,2044-2045,2047,2051-2056,2058-2106,2108-2110,2112
+  s_7fddca67d6dc19::t_e2b4950aed6f6e 2038-2043,2046,2048-2050,2057
+  s_7fddca67d6dc19::t_4120320386ed79 2113
+  s_7fddca67d6dc19::t_c9cdc8ca0fbb63 2507-2527
+  s_7fddca67d6dc19::t_61a2cfcb5786c4 2594
+  s_7fddca67d6dc19::t_d30c30f1eae79f 2126-2133,2136-2137,2151-2155
+  s_7fddca67d6dc19::t_4935611a64ffc6 2504-2506
+  s_7fddca67d6dc19::t_d8a0806a3032af 2528
+  s_7fddca67d6dc19::t_6f8b1dfa005268 2500-2503
+crates/algo/src/builder/fill_images_faces.rs
+  s_7fddca67d6dc19::t_52f7bc8402b503 237-239,339
+  s_7fddca67d6dc19::t_b5cf04f8bfca5e 240-241
+crates/io/tests/data/fitoffset_groove_hole5.bin
+  s_7fddca67d6dc19::t_1ca7fb61ad82e0 1
+crates/io/tests/fitoffset_groove_mouth_inmem.rs
+  s_7fddca67d6dc19::t_800981e5290e4e 1-92
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_7fddca67d6dc19::t_4c7781e5349e32 203-215,225,231-236
+  s_7fddca67d6dc19::t_b5cf04f8bfca5e 145-147,170-174,226-230
+  s_7fddca67d6dc19::t_e7f1358d0a0ac4 132-139,177
+  s_7fddca67d6dc19::t_d62e1c89c58b0f 216-224
+  s_7fddca67d6dc19::t_c3c23d879920cb 142
+  s_7fddca67d6dc19::t_2a5ae21bffb903 117-119,123-131,140-141,143-144,148-169,175-176,178-185
+  s_7fddca67d6dc19::t_dcce1aae5d82ad 186-187
+crates/io/tests/data/fitoffset_groove_hole4.bin
+  s_7fddca67d6dc19::t_1ca7fb61ad82e0 1
+crates/io/tests/data/fitoffset_groove_hole0.bin
+  s_7fddca67d6dc19::t_1ca7fb61ad82e0 1
+crates/io/tests/data/fitoffset_groove_hole3.bin
+  s_7fddca67d6dc19::t_1ca7fb61ad82e0 1
+crates/io/tests/data/fitoffset_groove_hole2.bin
+  s_7fddca67d6dc19::t_1ca7fb61ad82e0 1
+crates/io/tests/data/fitoffset_groove_hole1.bin
+  s_7fddca67d6dc19::t_1ca7fb61ad82e0 1
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_7fddca67d6dc19::t_c3c23d879920cb 189
+  s_7fddca67d6dc19::t_362e63e6c9c1f5 190-195,199-203
+  s_7fddca67d6dc19::t_b5cf04f8bfca5e 196-198
+crates/io/tests/data/fitoffset_groove_base.bin
+  s_7fddca67d6dc19::t_1ca7fb61ad82e0 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "b8fdeba8434bf275e04d3985eeea7063bb7266fd",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
