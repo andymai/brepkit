@@ -1525,15 +1525,21 @@ fn trim_open_curve_to_plane_face_lines(
     else {
         return None;
     };
-    // All boundary edges must be straight lines — the extent polygon is then
-    // the exact boundary (curved edges are sampled into it, which would make
-    // the "exact" crossing land on a chord instead of the real edge).
+    // Exact crossings are only computed against STRAIGHT boundary edges, so
+    // the plane face's straight edges must dominate where the conic exits.
+    // Curved boundary edges (a prior cut's rim arcs and conics — the second
+    // relief cut of a compound-relieved tongue) are tolerated as long as the
+    // kept pieces never need a crossing against them: their chords still
+    // enter the sampled polygon for containment, and a piece straying into a
+    // curved edge's chord/arc ambiguity is rejected below by the dense
+    // in-polygon sample check (declining to the generic path as before).
     let face = topo.face(plane_face).ok()?;
+    let mut has_curved_boundary = false;
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         let wire = topo.wire(wid).ok()?;
         for oe in wire.edges() {
             if !matches!(topo.edge(oe.edge()).ok()?.curve(), EdgeCurve::Line) {
-                return None;
+                has_curved_boundary = true;
             }
         }
     }
@@ -1693,8 +1699,9 @@ fn trim_open_curve_to_plane_face_lines(
     // dangles past the rim, the splitter's pendant filter removes the whole
     // section chain, and the cone cap never splits out (the A1-corner
     // doubled-dovetail nub). Bisect v(t) to the exact rim crossing so the
-    // kept piece ends ON the rim (v is axial, non-periodic, for the Cone
-    // partners this path is gated to).
+    // kept piece ends ON the rim. The destructure matches any Analytic
+    // extent, but this function's entry gate already restricted the partner
+    // surface to a Cone, whose `v` is axial and non-periodic.
     if let FaceExtent::Analytic {
         surface: other_surface,
         v0,
@@ -1774,6 +1781,19 @@ fn trim_open_curve_to_plane_face_lines(
         let sub_pts: Vec<Point3> = (0..=8)
             .map(|k| eval_at(t0 + (t1 - t0) * (f64::from(k) / 8.0)))
             .collect();
+        // With curved boundary edges present, a kept piece must stay strictly
+        // inside the sampled polygon along its whole span: exact crossings
+        // were only computed against straight segments, so a piece straying
+        // out mid-span would have needed a crossing against a curved edge —
+        // where the sampled chord is not the real boundary. Decline the whole
+        // call (the pre-relaxation behavior) rather than emit it.
+        if has_curved_boundary
+            && sub_pts[1..8]
+                .iter()
+                .any(|p| !inside_face(frame.project(*p)))
+        {
+            return None;
+        }
         let bbox = Aabb3::try_from_points(sub_pts)?;
         // Trim the stored NURBS geometry to the kept span. Downstream
         // consumers normalize over `domain_with_endpoints`, which for a NURBS
