@@ -1,0 +1,33 @@
+crates/io/tests/data/snapclip_junction_slab.bin
+  s_7fddca67d6dc19::t_6de81940c7c4ed 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_7fddca67d6dc19::t_889fdef033fef5 3186-3191,3194-3196
+  s_7fddca67d6dc19::t_fc0c8e02534a46 911-931,3192
+  s_7fddca67d6dc19::t_6de81940c7c4ed 3193
+crates/io/tests/data/snapclip_junction_pocket0.bin
+  s_7fddca67d6dc19::t_6de81940c7c4ed 1
+crates/io/tests/data/snapclip_junction_pocket2.bin
+  s_7fddca67d6dc19::t_6de81940c7c4ed 1
+crates/io/tests/data/snapclip_junction_pocket3.bin
+  s_7fddca67d6dc19::t_6de81940c7c4ed 1
+crates/io/tests/data/snapclip_junction_pocket1.bin
+  s_7fddca67d6dc19::t_6de81940c7c4ed 1
+crates/io/tests/socket_junction_disc_inmem.rs
+  s_7fddca67d6dc19::t_b1162282d1ad95 1-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "f5a2de03378f9552b9b42963f2571ca107be6bdb",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
