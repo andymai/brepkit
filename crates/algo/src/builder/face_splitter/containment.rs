@@ -80,7 +80,17 @@ pub(super) fn find_point_outside_holes(
         .map(|hole| {
             let mut pts: Vec<Point2> = Vec::with_capacity(hole.len() * 4);
             for e in hole {
-                pts.push(e.start_uv);
+                // With a frame available, derive EVERY vertex from 3D: the
+                // stored start_uv can have been fitted in a DIFFERENT plane
+                // frame (the same trap the curved-edge sampling below avoids
+                // for pcurves), and one foreign-frame vertex corrupts the
+                // whole rejection polygon — the even-odd test then accepts
+                // seeds inside the hole (the seam-edge flush pocket dropped
+                // the entire slab top this way).
+                pts.push(match frame {
+                    Some(f) => f.project(e.start_3d),
+                    None => e.start_uv,
+                });
                 if matches!(e.curve_3d, brepkit_topology::edge::EdgeCurve::Line) {
                     continue;
                 }
