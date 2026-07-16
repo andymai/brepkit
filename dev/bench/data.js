@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784239218122,
+  "lastUpdate": 1784239670083,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4643,6 +4643,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20414406,
             "range": "± 24600",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "311e389f66f7f4e32e74751bc0a199ba07eecbce",
+          "message": "chore(main): release 2.126.4 (#1079)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.4](https://github.com/andymai/brepkit/compare/v2.126.3...v2.126.4)\n(2026-07-16)\n\n\n### Bug Fixes\n\n* **algo:** dovetail tangency caps, compound relief cuts, and the\nfit-offset groove-mouth sliver family\n([#1078](https://github.com/andymai/brepkit/issues/1078))\n([59cad4d](https://github.com/andymai/brepkit/commit/59cad4d661df0439b1c99045fed17e16b29788e4))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release 2.126.4 for `brepkit-wasm` fixes geometry edge cases in\ndovetail tangency caps, compound relief cuts, and fit‑offset\ngroove‑mouth slivers. Updates versions and changelog to 2.126.4.\n\n<sup>Written for commit 99cfd2767404aad3fcb41b936ec74eaf2331736c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1079?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-16T22:05:28Z",
+          "tree_id": "d075f21e708599a6c58383f2e7b539daff98f5a5",
+          "url": "https://github.com/andymai/brepkit/commit/311e389f66f7f4e32e74751bc0a199ba07eecbce"
+        },
+        "date": 1784239669057,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 760312,
+            "range": "± 1865",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 854391,
+            "range": "± 5635",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11987,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639911,
+            "range": "± 1157",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19623571,
+            "range": "± 91886",
             "unit": "ns/iter"
           }
         ]
