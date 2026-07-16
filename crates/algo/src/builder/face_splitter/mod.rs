@@ -893,21 +893,6 @@ fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurv
     }
 }
 
-/// True when any wire loop revisits a UV vertex — the signature of a
-/// self-crossing trace from the angular wire builder, which the arrangement
-/// decomposition can replace with simple (non-self-intersecting) regions even
-/// when it produces FEWER loops. A simple closed loop visits each vertex once;
-/// a figure-eight or out-and-back revisits one.
-///
-/// Detection is vertex-topological: it tests only the edges' endpoints
-/// (`start_uv`). That is exactly the failure mode this gate targets — the
-/// angular builder over-splits by walking out-and-back through a shared UV
-/// vertex (see `remove_pendant_sections`), so the bad trace always reuses a
-/// vertex. It deliberately does NOT detect a self-crossing that occurs only
-/// along an edge's interior (e.g. an arc whose curved path crosses another
-/// edge's chord in UV between their endpoints, with no shared vertex). No
-/// wire-builder trace produces such a crossing here, so testing arc interiors
-/// would add cost without changing any outcome.
 /// True when any traced loop's sampled UV polygon is area-degenerate — the
 /// classifier's sliver guard would silently drop it, so the loops path
 /// under-represents the face even though the loop COUNT looks fine. The
@@ -929,6 +914,21 @@ fn wire_loops_have_degenerate_area(loops: &[Vec<OrientedPCurveEdge>], tol: f64) 
     })
 }
 
+/// True when any wire loop revisits a UV vertex — the signature of a
+/// self-crossing trace from the angular wire builder, which the arrangement
+/// decomposition can replace with simple (non-self-intersecting) regions even
+/// when it produces FEWER loops. A simple closed loop visits each vertex once;
+/// a figure-eight or out-and-back revisits one.
+///
+/// Detection is vertex-topological: it tests only the edges' endpoints
+/// (`start_uv`). That is exactly the failure mode this gate targets — the
+/// angular builder over-splits by walking out-and-back through a shared UV
+/// vertex (see `remove_pendant_sections`), so the bad trace always reuses a
+/// vertex. It deliberately does NOT detect a self-crossing that occurs only
+/// along an edge's interior (e.g. an arc whose curved path crosses another
+/// edge's chord in UV between their endpoints, with no shared vertex). No
+/// wire-builder trace produces such a crossing here, so testing arc interiors
+/// would add cost without changing any outcome.
 fn wire_loops_self_cross(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
     let qscale = 1.0 / tol.max(1e-12);
     let qkey = |p: brepkit_math::vec::Point2| -> (i64, i64) {
