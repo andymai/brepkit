@@ -1,0 +1,37 @@
+crates/io/tests/data/dovetail_dblcorner_tongue_0.bin
+  s_7fddca67d6dc19::t_57de2c9c5ceab8 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_7fddca67d6dc19::t_6fad27e61e4607 1689-1743
+crates/io/tests/dovetail_dblcorner_nub_inmem.rs
+  s_7fddca67d6dc19::t_e4883ad73644ce 1-170
+crates/io/tests/data/dovetail_dblcorner_tongue_1.bin
+  s_7fddca67d6dc19::t_57de2c9c5ceab8 1
+crates/io/tests/data/dovetail_dblcorner_cutter_0.bin
+  s_7fddca67d6dc19::t_57de2c9c5ceab8 1
+.claude/skills/roadmap/SKILL.md
+  s_7fddca67d6dc19::t_24b6e0df5efddc 209-248
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_7fddca67d6dc19::t_77ede4d57e2594 31-33,47-55
+  s_7fddca67d6dc19::t_c8d26d09e6c48e 134,144,169-175,179-184
+  s_7fddca67d6dc19::t_3d96b009c04dbb 149-160,162-166
+  s_7fddca67d6dc19::t_bf3a6854787354 145-148,161,167-168,176-178
+  s_7fddca67d6dc19::t_b9fb052285dd08 193-194,197-198
+crates/io/tests/data/dovetail_dblcorner_cutter_1.bin
+  s_7fddca67d6dc19::t_57de2c9c5ceab8 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "804ec8e3b3e59843878bf4d31e83154200a69c31",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
