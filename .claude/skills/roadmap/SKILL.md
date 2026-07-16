@@ -206,6 +206,46 @@ was silently polygon-approximated — when a kept-piece pattern matches "inside
 the cutter but classified Outside", check `collect_face_geoms` coverage for the
 partner's surface types before touching the splitter.
 
+Fresh baseplate re-probe on PUBLISHED 2.126.2 (2026-07-16, overlay md5-verified):
+dovetailKey 2/2 and fit-offset 2/2 CONFIRMED on the published build; dovetail
+7/9 @188s (was 6/9 @355s) — the 4×4-interior doubled-dovetail (the relief-cut
+family) passes end-to-end tool-side; snapClip 0/4 with ALL signatures moved
+since the mesh-boolean rewrite (join nm 14→4, key nm 12→0 but bnd=326, 0.6mm
+nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
+
+- **2×2 A1-canonical doubled-dovetail nm=2 — ENGINE FIX COMPLETE (2026-07-16,
+  fixture `crates/io/tests/dovetail_dblcorner_nub_inmem.rs`, tool re-probe
+  pending).** The paired tongue sits offset by exactly the socket corner
+  radius, straddling the wall-plane↔corner-cylinder tangency meridian (the
+  recurring tangential-contact class). THREE stacked roots: (1) the FF
+  raw-curve AABB pre-filter's fixed 16-sample scan missed the flank×cone
+  conic's ~2mm in-both sliver on a ~30mm marched curve — the pair vanished
+  before the exact open-conic clip ever ran (mirror nub survived by sampling
+  luck); now refines adaptively like the restrict graze escalation. (2)
+  `trim_open_curve_to_plane_face_lines` clipped conics to the plane face's
+  boundary + the cone's u-window but NOT the patch's axial v-range — the kept
+  piece overshot the rim circle, dangled, and the splitter's pendant filter
+  removed the whole section chain; now bisects v(t) to exact rim crossings.
+  (3) `find_splits_on_circle` normalized against the CCW start→end span, but
+  a rim quarter-arc traversed CW covers the 270° COMPLEMENT (the #1054
+  reverse-twin mechanism on BOUNDARY arcs; `edge.forward` does NOT
+  disambiguate — the cone rim is fwd=true with u decreasing); now picks the
+  true arc via the edge's own UV midpoint and the consumer uses the returned
+  on-circle foot. Result: 10-face analytic nub (1 cone + 1 cyl + 8 planes),
+  watertight, both boolean entries. LATENT: `find_splits_on_ellipse` has the
+  same complement hazard, no repro yet.
+- **Fractional edge tile 5×4.5 nm=28 @153s — OPEN, different root:** stage
+  capture shows mesh fallback already at pocketsCut (F=7928 pre-connector;
+  a 2×2's pocketsCut is F=126, cell-scaling predicts ~700). Milestones in
+  `~/.cache/brepkit-parity-captures/2026-07-16/capture-frac54/`. Also the
+  perf item (153s).
+- **Mesh-boolean fallback emits OPEN meshes that get CONSUMED — OPEN
+  (discovered 2026-07-16):** on the dblcorner nub operands the co-refinement
+  fallback produced bnd=5/6 output (warn-logged, then used anyway, poisoning
+  every downstream boolean into a 1400-face fallback export). The safety net
+  must be watertight or rejected. Repro: the dblcorner fixture operands with
+  the analytic path disabled, or any pre-fix build.
+
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
 106s) and "handle holes" (86s) — the 2026-07-08 swallowed-panic/borrow-poisoning
