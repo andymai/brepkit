@@ -28,7 +28,9 @@ pub(super) fn split_boundary_edges_at_3d_points(
     let mut result = Vec::new();
     for edge in edges {
         let splits = match &edge.curve_3d {
-            EdgeCurve::Circle(circle) => find_splits_on_circle(circle, &edge, split_pts_3d, tol),
+            EdgeCurve::Circle(circle) => {
+                find_splits_on_circle(circle, &edge, split_pts_3d, surface, tol)
+            }
             EdgeCurve::Ellipse(ellipse) => {
                 find_splits_on_ellipse(ellipse, &edge, split_pts_3d, tol)
             }
@@ -42,8 +44,15 @@ pub(super) fn split_boundary_edges_at_3d_points(
 
         let mut prev_uv = edge.start_uv;
         let mut prev_3d = edge.start_3d;
-        for &(t, _) in &splits {
-            let split_3d = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+        for &(t, pt) in &splits {
+            // Circle splits carry the exact on-curve foot; re-evaluating via
+            // `evaluate_edge_at_t` would re-apply the CCW-span convention the
+            // arc disambiguation above may have overridden.
+            let split_3d = if matches!(edge.curve_3d, EdgeCurve::Circle(_)) {
+                pt
+            } else {
+                evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t)
+            };
             let split_uv = if let Some(f) = frame {
                 f.project(split_3d)
             } else {
@@ -122,6 +131,7 @@ pub(super) fn find_splits_on_circle(
     circle: &brepkit_math::curves::Circle3D,
     edge: &OrientedPCurveEdge,
     split_pts_3d: &[Point3],
+    surface: &FaceSurface,
     tol: f64,
 ) -> Vec<(f64, Point3)> {
     let (t0, t1) = edge
@@ -131,6 +141,47 @@ pub(super) fn find_splits_on_circle(
     if span.abs() < 1e-14 {
         return Vec::new();
     }
+    // `domain_with_endpoints` always returns the CCW span between the stored
+    // endpoints, but an OPEN boundary arc traversed clockwise covers the
+    // COMPLEMENT arc — a rim quarter-arc walked CW reads as its 270°
+    // complement, so an on-arc split point normalizes outside [0,1] and the
+    // split is dropped (the section dangles and the pendant filter removes
+    // it). The edge's own UV knows the true arc — but ONLY where the pcurve
+    // is a genuinely straight UV segment: an iso-v rim on a cylinder/cone
+    // (u varies linearly at constant v), where the UV midpoint maps exactly
+    // to the true arc's 3D midpoint. Pick the span whose midpoint matches;
+    // on the complement, split parameters run opposite the CCW walk, so
+    // mirror them back into traversal order.
+    //
+    // Everywhere else the heuristic is INVALID and must stay off: on a plane
+    // face a circle's UV image is an arc, so the chord midpoint of a >π lip
+    // arc lies near the COMPLEMENT and mis-picks it (the d-series lip
+    // annuli), and a closed edge's complement is a degenerate 0-span at the
+    // shared endpoint.
+    let is_closed = (edge.start_3d - edge.end_3d).length() < 1e-10;
+    let is_iso_v_rim = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+        && (edge.start_uv.y() - edge.end_uv.y()).abs() < 1e-9;
+    let (t0, span, mirrored) = if is_closed || !is_iso_v_rim {
+        (t0, span, false)
+    } else {
+        let mu = f64::midpoint(edge.start_uv.x(), edge.end_uv.x());
+        let mv = f64::midpoint(edge.start_uv.y(), edge.end_uv.y());
+        match surface.evaluate(mu, mv) {
+            Some(mid_3d) => {
+                let ccw_mid = circle.evaluate(span.mul_add(0.5, t0));
+                let comp_span = std::f64::consts::TAU - span;
+                let comp_mid = circle.evaluate(comp_span.mul_add(0.5, t1));
+                if comp_span.abs() < 1e-9
+                    || (mid_3d - ccw_mid).length() <= (mid_3d - comp_mid).length()
+                {
+                    (t0, span, false)
+                } else {
+                    (t1, comp_span, true)
+                }
+            }
+            None => (t0, span, false),
+        }
+    };
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
         crate::perf::bump_face_split_probe();
@@ -139,11 +190,12 @@ pub(super) fn find_splits_on_circle(
         if (sp - closest).length() > tol {
             continue;
         }
-        let t_norm = normalize_angle_in_span(angle, t0, span);
-        if t_norm <= tol || t_norm >= 1.0 - tol {
+        let t_raw = normalize_angle_in_span(angle, t0, span);
+        if t_raw <= tol || t_raw >= 1.0 - tol {
             continue;
         }
-        splits.push((t_norm, sp));
+        let t_norm = if mirrored { 1.0 - t_raw } else { t_raw };
+        splits.push((t_norm, closest));
     }
     splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);

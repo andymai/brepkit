@@ -1686,6 +1686,61 @@ fn trim_open_curve_to_plane_face_lines(
         }
     }
 
+    // Crossings of the partner face's axial `v`-range rims. The conic is
+    // clipped to the plane face's boundary above and to the cone's angular
+    // window, but a flank conic can also EXIT through the patch's axial
+    // extent (the rim circle at v0/v1) between those — the overshoot then
+    // dangles past the rim, the splitter's pendant filter removes the whole
+    // section chain, and the cone cap never splits out (the A1-corner
+    // doubled-dovetail nub). Bisect v(t) to the exact rim crossing so the
+    // kept piece ends ON the rim (v is axial, non-periodic, for the Cone
+    // partners this path is gated to).
+    if let FaceExtent::Analytic {
+        surface: other_surface,
+        v0,
+        v1,
+        ..
+    } = ext_other
+    {
+        let v_of =
+            |t: f64| -> Option<f64> { other_surface.project_point(eval_at(t)).map(|(_, v)| v) };
+        let v_eps = 1e-12_f64;
+        for &vb in &[*v0, *v1] {
+            for i in 0..n_samples {
+                let (t_lo, t_hi) = (sample_t(i), sample_t(i + 1));
+                let (Some(w_lo), Some(w_hi)) = (v_of(t_lo), v_of(t_hi)) else {
+                    continue;
+                };
+                let (s_lo, s_hi) = (w_lo - vb, w_hi - vb);
+                let t_star = if s_lo.abs() <= v_eps {
+                    t_lo
+                } else if s_hi.abs() <= v_eps {
+                    t_hi
+                } else if s_lo * s_hi > 0.0 {
+                    continue;
+                } else {
+                    let (mut lo, mut hi, mut sl) = (t_lo, t_hi, s_lo);
+                    for _ in 0..60 {
+                        let mid = f64::midpoint(lo, hi);
+                        let Some(sm) = v_of(mid).map(|w| w - vb) else {
+                            break;
+                        };
+                        if sm * sl < 0.0 {
+                            hi = mid;
+                        } else {
+                            lo = mid;
+                            sl = sm;
+                        }
+                    }
+                    f64::midpoint(lo, hi)
+                };
+                if !crossings.iter().any(|&c| (c - t_star).abs() < 1e-9) {
+                    crossings.push(t_star);
+                }
+            }
+        }
+    }
+
     // Whole curve inside (or outside) the face: no crossings — keep or drop
     // by a single interior test; deferring (None) would hand the generic
     // sample-clip a curve this path has already proven in-plane, so decide
