@@ -201,25 +201,64 @@ pub fn perform(
             // cylinder, or a full cap circle paired with a smaller distant
             // cap). Such curves fragment faces with spurious holes and bogus
             // sub-faces downstream. Keep a curve only if at least one sample
-            // lies inside both faces' inflated AABBs.
+            // lies inside both faces' inflated AABBs. A fixed sample count
+            // misses an in-both span much shorter than the curve (a marched
+            // plane×cone conic spans the unbounded cone, so a small face's
+            // true crossing can be a ~2mm sliver of a ~30mm curve); before
+            // declaring a miss, refine with a density scaled to the smaller
+            // face AABB dimension — the same escalation the in-both
+            // restriction below applies to grazes.
             let bb_a = bbox_a.expanded(tol.linear * 10.0);
             let bb_b = bbox_b.expanded(tol.linear * 10.0);
             let raw_curves: Vec<RawCurve> = raw_curves
                 .into_iter()
                 .filter(|raw| {
-                    let n = 16;
-                    (0..=n).any(|i| {
-                        let f = f64::from(i) / f64::from(n);
+                    const N: usize = 16;
+                    let sample = |i: usize, n: usize| -> Point3 {
+                        #[allow(clippy::cast_precision_loss)]
+                        let f = i as f64 / n as f64;
                         // Line t_range is absolute arc length, not a
                         // normalized [0,1] span — sample by endpoint lerp.
-                        let p = if matches!(raw.curve, EdgeCurve::Line) {
+                        if matches!(raw.curve, EdgeCurve::Line) {
                             raw.p_start + (raw.p_end - raw.p_start) * f
                         } else {
                             let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
                             raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
-                        };
-                        bb_a.contains_point(p) && bb_b.contains_point(p)
-                    })
+                        }
+                    };
+                    let in_both =
+                        |p: Point3| -> bool { bb_a.contains_point(p) && bb_b.contains_point(p) };
+                    if (0..=N).map(|i| sample(i, N)).any(in_both) {
+                        return true;
+                    }
+                    // Straight lines are exactly represented by their
+                    // endpoints; a uniform scan cannot under-sample them at
+                    // this granularity in practice, and refining every far
+                    // pair would be pure cost.
+                    if matches!(raw.curve, EdgeCurve::Line) {
+                        return false;
+                    }
+                    let approx_len: f64 = (0..N)
+                        .map(|i| (sample(i + 1, N) - sample(i, N)).length())
+                        .sum();
+                    // Smallest POSITIVE extent: a planar face's bbox is flat
+                    // along its normal, and that zero span says nothing about
+                    // how finely the in-both region must be sampled.
+                    let min_dim = |bb: &Aabb3| -> f64 {
+                        let e = bb.max - bb.min;
+                        [e.x(), e.y(), e.z()]
+                            .into_iter()
+                            .filter(|&s| s > tol.linear * 1e2)
+                            .fold(f64::INFINITY, f64::min)
+                    };
+                    let dim_of = |a: &Aabb3, b: &Aabb3| -> f64 {
+                        let d = min_dim(a).min(min_dim(b));
+                        if d.is_finite() { d } else { tol.linear * 1e2 }
+                    };
+                    let dim = dim_of(&bb_a, &bb_b);
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let n_fine = ((8.0 * approx_len / dim).ceil() as usize).clamp(N, 1024);
+                    n_fine > N && (0..=n_fine).map(|i| sample(i, n_fine)).any(in_both)
                 })
                 .collect();
 
