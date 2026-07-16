@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784228129532,
+  "lastUpdate": 1784239218122,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4589,6 +4589,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20467115,
             "range": "± 141044",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59cad4d661df0439b1c99045fed17e16b29788e4",
+          "message": "fix(algo): dovetail tangency caps, compound relief cuts, and the fit-offset groove-mouth sliver family (#1078)\n\n## Summary\n\nFour commits closing the dovetail/fit-offset mesh-fallback families\nfound by tool-level parity probing on 2.126.2. Together they take the\ncaptured fit-offset export chain (3×3 loose +0.2 plate, 6 nub fuses + 6\ngroove cuts) from mesh-fallback (thousands of planar faces, phantom void\nwedges in the published result) to **fully analytic and watertight end\nto end (182 → 211 faces)**, and the dovetail suite's A1-corner nub\nfamily to analytic.\n\n1. **FF curve pre-filter re-sampling** — a 16-sample AABB probe missed\nshort in-both spans of long intersection curves; re-sample adaptively\nbefore dropping.\n2. **Socket-wall tangency corner caps** — v-range rim crossings in\nplane-face line clipping + iso-v rim circle splits parameterized in the\nedge's own unwrapped u-range (A1-corner doubled-dovetail nub).\n3. **Compound relief cuts with curved boundaries** — the\nall-straight-edges gate in `trim_open_curve_to_plane_face_lines`\ndeclined faces whose boundaries carry rim arcs/conics from a prior cut.\n4. **Fit-offset groove-mouth sliver family** (the big one — see the\ncommit message for the five coordinated mechanisms):\n- promotion of pave-split passthrough holes into the combined planar\narrangement (expansion kept separate from the weave input, which is\ncalibrated on unsplit hole edges),\n- clean-tiling cutoff for even-odd hole nesting (kills the double-cover\nre-attachment; overlapping traces keep nesting),\n- true circle×section-line boundary-arc splits, applied only on the\narrangement path, with a bay-mouth arrangement entry for multi-hole\ncaps,\n   - arc-true region polygons for interior probes,\n- at-seam UV endpoint resolution on periodic surfaces +\norientation-aware plane-arc split normalization.\n\n## Verification\n\n- Full workspace: 2187 tests green, clippy `-D warnings` clean.\n- Calibrated-path canaries all green simultaneously: d-series gridfinity\n(27/27, incl. d4 full bin), honeycomb pcut3 re-trace weave, divider-lip\nfuse, halfSockets family.\n- New faithful fixtures from tool-captured operands:\n`dovetail_dblcorner_nub_inmem.rs`, `fitoffset_nub_chain_inmem.rs`,\n`fitoffset_groove_mouth_inmem.rs` (full 6-groove chain, watertight at\nexport tolerance after every cut).\n\nSupersedes draft #1075 (same first three commits; that branch's remote\nhistory predates a rebase onto #1076 and will be closed).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes analytic cutting failures in dovetail tangency caps, compound\nreliefs, and fit‑offset groove‑mouth slivers so exports are watertight\nand avoid mesh fallback. The captured fit‑offset chain is now fully\nanalytic end‑to‑end (182 → 211 faces); roadmap docs mark A1‑corner and\ngroove‑mouth families closed and the dovetail suite at 9/9.\n\n- **Bug Fixes**\n- FF curve pre-filter: adaptive sampling to catch short in‑both spans\nbefore dropping.\n- Tangency caps: clip by rim v‑range and split iso‑v rim circles; place\nsplits in the edge’s own UV span.\n- Compound reliefs: allow curved boundary faces in the open‑conic clip\nto keep second cuts analytic.\n- Groove‑mouth slivers: promote passthrough hole rings; skip even‑odd\nnesting on clean tilings; split bay arcs at true circle×section\ncrossings; densify arc polygons for probes; keep weave input unsplit and\nenter arrangement with intact holes when needed.\n- Periodic seams: resolve 0 vs 2π UV endpoints; normalize plane‑arc\nsplit orientation; test on‑boundary sections against the true 3D arc.\n- Added regression fixtures for dovetail corner nubs, compound chains,\nand fit‑offset groove mouths.\n\n- **Refactors**\n  - Clean‑tiling cutoff tolerance scaled by region area.\n- Hasher‑generic edge image storage threaded through\n`fill_images_faces`.\n- Named the weave‑section source‑index sentinel `WEAVE_SECTION_SRC_BASE`\nfor clarity.\n\n<sup>Written for commit 2e90b35c8ee43a2ca0a1a956f46737373f022764.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1078?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-16T21:53:10Z",
+          "tree_id": "3b59ca01140555b9589e78b776c2876c9fb768f7",
+          "url": "https://github.com/andymai/brepkit/commit/59cad4d661df0439b1c99045fed17e16b29788e4"
+        },
+        "date": 1784239217465,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 779071,
+            "range": "± 7598",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 882904,
+            "range": "± 1841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13149,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639809,
+            "range": "± 2469",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20414406,
+            "range": "± 24600",
             "unit": "ns/iter"
           }
         ]
