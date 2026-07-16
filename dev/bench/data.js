@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784227759794,
+  "lastUpdate": 1784228129532,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4535,6 +4535,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16680495,
             "range": "± 165456",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b6d2642d0b515a97dc1a8008957df983196eea9b",
+          "message": "chore(main): release 2.126.3 (#1077)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.3](https://github.com/andymai/brepkit/compare/v2.126.2...v2.126.3)\n(2026-07-16)\n\n\n### Bug Fixes\n\n* **algo:** seam-edge flush pocket cut drops the entire slab top\n([#1076](https://github.com/andymai/brepkit/issues/1076))\n([4505072](https://github.com/andymai/brepkit/commit/45050725d08925e23e0a35120296d4c548e4bedf))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.126.3 for `brepkit-wasm`, fixing a bug where the seam-edge\nflush pocket cut could drop the entire slab top. This prevents\nunintended slab-top removal during those cuts (#1076).\n\n<sup>Written for commit 744d212f8a53d368bf0861728e7a4b1eab0517cb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1077?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-16T18:53:18Z",
+          "tree_id": "506dbd1b47139a11e45c74e79b8ceb516f4a55d6",
+          "url": "https://github.com/andymai/brepkit/commit/b6d2642d0b515a97dc1a8008957df983196eea9b"
+        },
+        "date": 1784228129121,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 805062,
+            "range": "± 4083",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 882246,
+            "range": "± 2631",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13175,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631702,
+            "range": "± 1147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20467115,
+            "range": "± 141044",
             "unit": "ns/iter"
           }
         ]
