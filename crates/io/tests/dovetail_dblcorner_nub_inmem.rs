@@ -109,10 +109,12 @@ fn check_nub(topo: &Topology, result: SolidId, label: &str) {
             .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == tag)
             .count()
     };
+    let unpaired = free_edges(topo, result);
     assert_eq!(
-        free_edges(topo, result),
+        unpaired,
         0,
-        "{label}: relieved corner nub must be watertight and manifold; got {} faces",
+        "{label}: relieved corner nub must be watertight and manifold; got {unpaired} \
+         position-edges not used exactly twice ({} faces)",
         faces.len()
     );
     assert_eq!(
