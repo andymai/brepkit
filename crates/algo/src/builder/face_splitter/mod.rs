@@ -1711,7 +1711,8 @@ fn arrangement_regions_from_inputs(
         // it.
         let outer_area = face_area(&faces[outer_idx]).abs();
         let interior_area_sum: f64 = areas.iter().sum();
-        let clean_tiling = (interior_area_sum - outer_area).abs() <= outer_area.mul_add(1e-6, tol);
+        let clean_tiling =
+            (interior_area_sum - outer_area).abs() <= outer_area.mul_add(1e-6, tol * tol);
         // `outer` contains `inner` when EVERY one of inner's polygon vertices
         // lies inside (or on) outer's polygon AND outer is strictly larger.
         // A probe-only test is symmetric for the concentric disks that
@@ -1971,6 +1972,7 @@ pub fn split_face_2d(
     edge_images: &std::collections::HashMap<
         brepkit_topology::edge::EdgeId,
         Vec<brepkit_topology::edge::EdgeId>,
+        impl std::hash::BuildHasher,
     >,
 ) -> Vec<SplitSubFace> {
     let face = match topo.face(face_id) {
