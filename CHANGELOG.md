@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.7](https://github.com/andymai/brepkit/compare/v2.126.6...v2.126.7) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** re-vote ray-cast classification when all cardinal rays graze degenerate structure ([#1088](https://github.com/andymai/brepkit/issues/1088)) ([c89739e](https://github.com/andymai/brepkit/commit/c89739e14630962951fd9e0b41f60398a1bd13f3))
+
 ## [2.126.6](https://github.com/andymai/brepkit/compare/v2.126.5...v2.126.6) (2026-07-17)
 
 
