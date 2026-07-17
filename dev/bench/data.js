@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784310078797,
+  "lastUpdate": 1784310506800,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6155,6 +6155,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21926980,
             "range": "± 53477",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7a314b91490b39283a3217552142cbd01298c648",
+          "message": "chore(main): release 2.126.15 (#1107)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.15](https://github.com/andymai/brepkit/compare/v2.126.14...v2.126.15)\n(2026-07-17)\n\n\n### Bug Fixes\n\n* **algo:** trim plane-cone circle sections to exact boundary-crossing\narcs ([#1106](https://github.com/andymai/brepkit/issues/1106))\n([5bf9534](https://github.com/andymai/brepkit/commit/5bf95348773bad782e3182b7d503ff1fd492787e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.126.15 for `brepkit-wasm`, fixing plane–cone circle\nintersections to trim to exact boundary-crossing arcs. This improves\nsection precision and prevents arcs extending beyond cone boundaries.\n\n<sup>Written for commit ad4d4dca2244a18e46933cbd316d72839c79e6c8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1107?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-17T17:46:12Z",
+          "tree_id": "ea223efa82eb46c9ea9e277d3a2bff95d5b862dd",
+          "url": "https://github.com/andymai/brepkit/commit/7a314b91490b39283a3217552142cbd01298c648"
+        },
+        "date": 1784310506337,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 883469,
+            "range": "± 2163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 971536,
+            "range": "± 2975",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11949,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 644502,
+            "range": "± 7066",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26830735,
+            "range": "± 72169",
             "unit": "ns/iter"
           }
         ]
