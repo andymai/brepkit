@@ -256,8 +256,15 @@ snapClip family — THREE roots CLOSED 2026-07-16 (#1080, #1082, #1085); deepene
   cache — captured operands are fallback-poisoned, never replay them directly),
   the by-edge-id acceptance gate is BLIND to position-duplicate leaks (poison
   propagates silently — evaluate a position-quantized gate), and the bed-flat
-  clip volume 46.701 vs 46.6±0.05 pin (genuine deviation, the reference kernel
-  passes — per-op dual-kernel volume diff).
+  clip volume 46.701 vs 46.6±0.05 pin — RESOLVED, NOT a brepkit defect: the
+  per-stage dual-kernel diff localized the whole delta to the relief cut, whose
+  cutter (buildSingleCellSocket) brepkit represents as EXACT ANALYTIC (native
+  census F=34 {plane:18,cylinder:8,cone:8}, zero NURBS — the #1045
+  loft-recognition) while the reference keeps a NURBS loft that bulges ~0.062mm³
+  and over-removes 0.146mm³ from the clip corners. brepkit's 46.701 is the MORE
+  accurate value; the pin is calibrated to the reference's loft approximation
+  (the "snapshot pins are kernel-specific" class). Resolution is tool-side pin
+  recalibration, not a brepkit change.
 
 Fit-offset groove-mouth sliver family — CLOSED (2026-07-16, PR #1078, fixture
 `crates/io/tests/fitoffset_groove_mouth_inmem.rs`): each groove cutter's mouth
@@ -570,8 +577,15 @@ snapClip family — THREE roots CLOSED 2026-07-16 (#1080, #1082, #1085); deepene
   cache — captured operands are fallback-poisoned, never replay them directly),
   the by-edge-id acceptance gate is BLIND to position-duplicate leaks (poison
   propagates silently — evaluate a position-quantized gate), and the bed-flat
-  clip volume 46.701 vs 46.6±0.05 pin (genuine deviation, the reference kernel
-  passes — per-op dual-kernel volume diff).
+  clip volume 46.701 vs 46.6±0.05 pin — RESOLVED, NOT a brepkit defect: the
+  per-stage dual-kernel diff localized the whole delta to the relief cut, whose
+  cutter (buildSingleCellSocket) brepkit represents as EXACT ANALYTIC (native
+  census F=34 {plane:18,cylinder:8,cone:8}, zero NURBS — the #1045
+  loft-recognition) while the reference keeps a NURBS loft that bulges ~0.062mm³
+  and over-removes 0.146mm³ from the clip corners. brepkit's 46.701 is the MORE
+  accurate value; the pin is calibrated to the reference's loft approximation
+  (the "snapshot pins are kernel-specific" class). Resolution is tool-side pin
+  recalibration, not a brepkit change.
 
 Fit-offset groove-mouth sliver family — CLOSED (2026-07-16, PR #1078, fixture
 `crates/io/tests/fitoffset_groove_mouth_inmem.rs`): each groove cutter's mouth
