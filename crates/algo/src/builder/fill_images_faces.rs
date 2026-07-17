@@ -367,11 +367,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             None, // PlaneFrame built internally by face_splitter
             info.as_ref(),
             edge_images,
-            if is_plane_face {
-                Some(&mut section_split_registry)
-            } else {
-                None
-            },
+            Some(&mut section_split_registry),
         );
 
         log::debug!(

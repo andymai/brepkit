@@ -55,7 +55,10 @@ pub(super) fn split_boundary_edges_at_3d_points(
         for &(t, pt) in &splits {
             // Circle splits carry the exact on-curve foot; re-evaluating via
             // `evaluate_edge_at_t` would re-apply the CCW-span convention
-            // that iso-v rim splits deliberately bypass.
+            // that iso-v rim splits deliberately bypass. NURBS splits carry
+            // the CANDIDATE point itself (validated within `tol` of the
+            // curve): it is the neighbouring face's anchor, and adopting it
+            // verbatim gives both faces the identical split vertex.
             let split_3d = if matches!(
                 edge.curve_3d,
                 EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_)
