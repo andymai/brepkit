@@ -104,10 +104,15 @@ that does not exist yet; without it, stop.
   STEP-faithful in-memory repros now EXIST (`crates/io/tests/scoop*_inmem.rs`); the old
   "needs serialization tooling first" framing is stale. The real blocker is the
   coordinated split.
-- **Snap-clip deepened-notch case.** A later cut deepening an earlier opening strands
-  the old floor edge. The 2D polygon-union primitive it needs now EXISTS
-  (`crates/math/src/polygon_boolean.rs::polygon_union`). What remains is sound
-  deepened-notch detection that does not false-positive on near-coincident faces.
+- **Snap-clip deepened-notch case — NO LONGER TERMINAL; both faces of it are closed.**
+  The cone-face variant closed via the outer-region section clip (the #1102 dig). The
+  plane-face variant (a later cut's internal section loop OVERLAPPING an existing wall
+  opening — the snapClip join-edges export root) closed via the deepened-opening union
+  in `split_face_with_internal_loops` (`union_internal_loop_with_hole`, all-Line +
+  interaction-gated, bails to prior behavior on any chain failure; fixture
+  `crates/io/tests/deepened_wall_opening_inmem.rs`). Detection is geometric overlap in
+  a locally-built frame — no heuristic. Arc-bounded openings still bail; extend the
+  union to arcs only when a repro demands it.
 - **A universal smarter merge-key for duplicate edges. PROVEN UNBUILDABLE.** The
   gridfinity lip corner (chord + arc, same endpoints) MUST merge; the torus-box in-tube
   lens (line + co-endpoint arc) MUST stay distinct. No merge-key discriminant separates
@@ -239,10 +244,15 @@ snapClip family — THREE roots CLOSED 2026-07-16 (#1080, #1082, #1085); deepene
   chain partners (weld at 100·tol). FOIL SET GREW: cylinder-slot + groove-mouth +
   junction-disc are now mandatory alongside d4/pcut3/divider for ANY section/clip
   change — three wrong gate choices were each caught by a different foil.
-- REMAINING: hole-1+ deepened-notch/coplanar-margin family (0.01 offsets between
-  successive slot cutters → micro-edges + near-coincident conic pairs; the
-  deepened-notch TERMINAL row's missing piece), 0.6mm-nozzle nm, bed-flat clip
-  volume 46.701 vs 46.6±0.05 pin (run the reference kernel side-by-side first).
+- REMAINING after the deepened-opening union (which closed the join-edges chain —
+  the full 44-hole snapClip plate replays analytic F=881 posBad=0, was F=8207
+  bnd=86): the 0.6mm-nozzle chain still mesh-falls-back at op-cut-5 on a FRESH
+  native chain (nozzle-scaled cutter dims — dig recipe: replay driver
+  `replay_snapjoin.rs` in the 2026-07-17 capture cache, CHAIN=1 DUMP_AT=5 on
+  capture-snapnozzle to mint the honest pre-cut plate, then PLATE/HOLE minimal
+  repro; captured operands are fallback-poisoned, do NOT replay them directly),
+  and the bed-flat clip volume 46.701 vs 46.6±0.05 pin (genuine deviation, the
+  reference kernel passes — per-op dual-kernel volume diff).
 
 Fit-offset groove-mouth sliver family — CLOSED (2026-07-16, PR #1078, fixture
 `crates/io/tests/fitoffset_groove_mouth_inmem.rs`): each groove cutter's mouth
@@ -543,10 +553,15 @@ snapClip family — THREE roots CLOSED 2026-07-16 (#1080, #1082, #1085); deepene
   chain partners (weld at 100·tol). FOIL SET GREW: cylinder-slot + groove-mouth +
   junction-disc are now mandatory alongside d4/pcut3/divider for ANY section/clip
   change — three wrong gate choices were each caught by a different foil.
-- REMAINING: hole-1+ deepened-notch/coplanar-margin family (0.01 offsets between
-  successive slot cutters → micro-edges + near-coincident conic pairs; the
-  deepened-notch TERMINAL row's missing piece), 0.6mm-nozzle nm, bed-flat clip
-  volume 46.701 vs 46.6±0.05 pin (run the reference kernel side-by-side first).
+- REMAINING after the deepened-opening union (which closed the join-edges chain —
+  the full 44-hole snapClip plate replays analytic F=881 posBad=0, was F=8207
+  bnd=86): the 0.6mm-nozzle chain still mesh-falls-back at op-cut-5 on a FRESH
+  native chain (nozzle-scaled cutter dims — dig recipe: replay driver
+  `replay_snapjoin.rs` in the 2026-07-17 capture cache, CHAIN=1 DUMP_AT=5 on
+  capture-snapnozzle to mint the honest pre-cut plate, then PLATE/HOLE minimal
+  repro; captured operands are fallback-poisoned, do NOT replay them directly),
+  and the bed-flat clip volume 46.701 vs 46.6±0.05 pin (genuine deviation, the
+  reference kernel passes — per-op dual-kernel volume diff).
 
 Fit-offset groove-mouth sliver family — CLOSED (2026-07-16, PR #1078, fixture
 `crates/io/tests/fitoffset_groove_mouth_inmem.rs`): each groove cutter's mouth

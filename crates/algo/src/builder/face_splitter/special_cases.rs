@@ -1,6 +1,6 @@
 //! Special topology handlers for face splitting edge cases.
 
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point2, Point3};
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
@@ -1353,6 +1353,50 @@ pub(super) fn split_face_with_internal_loops(
         loops.iter().map(Vec::len).collect::<Vec<_>>()
     );
 
+    // Deepened-opening union: a later cut's internal loop can OVERLAP an
+    // existing inner wire (the cutter re-opens an area an earlier cut already
+    // opened, offset slightly — the snapClip slot stack's 0.01 ledge margins).
+    // Emitting loop and hole as independent wires double-covers the overlap
+    // band: both rims stay as unpaired edges and the collinear band pieces
+    // trace twice. Merge each such pair instead: the frame keeps ONE union
+    // outline, and the removable disc is bounded by the loop pieces outside
+    // the hole plus the hole pieces inside the loop.
+    let mut consumed_holes: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut union_hole_by_loop: Vec<Option<Vec<OrientedPCurveEdge>>> = vec![None; loops.len()];
+    if let FaceSurface::Plane { normal, .. } = surface {
+        // Stored UVs on hole wires can be fitted in a foreign frame; build ONE
+        // local frame and project every 3D endpoint through it for all 2D
+        // tests (the pcurve-convention lesson).
+        let frame = PlaneFrame::from_plane_face(*normal, _wire_pts);
+        for (li, loop_edges) in loops.iter_mut().enumerate() {
+            let mut hit: Option<usize> = None;
+            for (hi, hole) in original_inner_wires.iter().enumerate() {
+                if consumed_holes.contains(&hi) {
+                    continue;
+                }
+                if internal_loop_hole_interact(loop_edges, hole, &frame) {
+                    if hit.is_some() {
+                        hit = None; // >1 overlapping hole: bail to current behavior
+                        break;
+                    }
+                    hit = Some(hi);
+                }
+            }
+            if let Some(hi) = hit
+                && let Some((disc, union_hole)) = union_internal_loop_with_hole(
+                    loop_edges,
+                    &original_inner_wires[hi],
+                    &frame,
+                    tol_3d,
+                )
+            {
+                *loop_edges = disc;
+                union_hole_by_loop[li] = Some(union_hole);
+                consumed_holes.insert(hi);
+            }
+        }
+    }
+
     let mut result = Vec::new();
 
     // For each closed loop: create an "inside" sub-face.
@@ -1360,7 +1404,7 @@ pub(super) fn split_face_with_internal_loops(
     // We want the SMALLER region (the Steinmetz lobe), so check signed area
     // in UV and reverse if the loop encloses the larger region.
     let mut all_holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
-    for loop_edges in &mut loops {
+    for (li, loop_edges) in loops.iter_mut().enumerate() {
         // Compute signed area in UV. For single-edge closed curves
         // (circles), sample points along the pcurve since start_uv ~= end_uv
         // gives zero area with just the endpoints.
@@ -1464,22 +1508,43 @@ pub(super) fn split_face_with_internal_loops(
             precomputed_interior: Some(disc_interior),
         });
 
-        // Build reversed loop for the outside sub-face's hole.
-        let hole: Vec<OrientedPCurveEdge> = loop_edges
-            .iter()
-            .rev()
-            .map(|e| OrientedPCurveEdge {
-                curve_3d: e.curve_3d.clone(),
-                pcurve: e.pcurve.clone(),
-                start_uv: e.end_uv,
-                end_uv: e.start_uv,
-                start_3d: e.end_3d,
-                end_3d: e.start_3d,
-                forward: !e.forward,
-                source_edge_idx: None,
-                pave_block_id: None,
-            })
-            .collect();
+        // Build the outside sub-face's hole: the merged union outline when
+        // this loop consumed an overlapping pre-existing hole, otherwise the
+        // reversed loop.
+        let hole: Vec<OrientedPCurveEdge> = if let Some(u) = union_hole_by_loop[li].take() {
+            // Normalize to hole winding (CCW in UV — opposite of the CW
+            // interior-enclosing convention applied to the loop above).
+            let area: f64 = u
+                .iter()
+                .map(|e| (e.end_uv.x() - e.start_uv.x()) * (e.end_uv.y() + e.start_uv.y()))
+                .sum();
+            let mut u = u;
+            if area > 0.0 {
+                u.reverse();
+                for edge in &mut u {
+                    std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
+                    std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
+                    edge.forward = !edge.forward;
+                }
+            }
+            u
+        } else {
+            loop_edges
+                .iter()
+                .rev()
+                .map(|e| OrientedPCurveEdge {
+                    curve_3d: e.curve_3d.clone(),
+                    pcurve: e.pcurve.clone(),
+                    start_uv: e.end_uv,
+                    end_uv: e.start_uv,
+                    start_3d: e.end_3d,
+                    end_3d: e.start_3d,
+                    forward: !e.forward,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                })
+                .collect()
+        };
         // Verify hole is closed.
         if let (Some(first), Some(last)) = (hole.first(), hole.last())
             && (last.end_3d - first.start_3d).length() < tol_3d * 100.0
@@ -1535,8 +1600,15 @@ pub(super) fn split_face_with_internal_loops(
     // The "outside" sub-face: original boundary with all loops as holes.
     // Pre-existing holes (from earlier boolean operations) stay with the
     // outside sub-face — dropping them would leave the faces ringing those
-    // holes with free edges.
-    all_holes.extend(original_inner_wires.iter().cloned());
+    // holes with free edges. Holes consumed by a deepened-opening union are
+    // already represented by their union outline.
+    all_holes.extend(
+        original_inner_wires
+            .iter()
+            .enumerate()
+            .filter(|(hi, _)| !consumed_holes.contains(hi))
+            .map(|(_, h)| h.clone()),
+    );
     let remainder = SplitSubFace {
         surface: surface.clone(),
         outer_wire: boundary_edges.to_vec(),
@@ -1570,6 +1642,275 @@ pub(super) fn split_face_with_internal_loops(
     result.push(remainder);
 
     result
+}
+
+/// True when an internal section loop and a pre-existing inner wire (both
+/// all-Line, in UV) overlap: a proper edge crossing, a vertex of one strictly
+/// inside the other, or a collinear edge-overlap span. Disjoint pairs return
+/// false and keep the independent-wires behavior.
+fn internal_loop_hole_interact(
+    loop_edges: &[OrientedPCurveEdge],
+    hole: &[OrientedPCurveEdge],
+    frame: &PlaneFrame,
+) -> bool {
+    let all_line =
+        |es: &[OrientedPCurveEdge]| es.iter().all(|e| matches!(e.curve_3d, EdgeCurve::Line));
+    if !all_line(loop_edges) || !all_line(hole) {
+        return false;
+    }
+    let segs = |es: &[OrientedPCurveEdge]| -> Vec<(Point2, Point2)> {
+        es.iter()
+            .map(|e| (frame.project(e.start_3d), frame.project(e.end_3d)))
+            .collect()
+    };
+    let (ls, hs) = (segs(loop_edges), segs(hole));
+    let lp: Vec<Point2> = ls.iter().map(|s| s.0).collect();
+    let hp: Vec<Point2> = hs.iter().map(|s| s.0).collect();
+    let eps = 1e-5;
+    for &(a0, a1) in &ls {
+        for &(b0, b1) in &hs {
+            let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
+            let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
+            let denom = rx.mul_add(sy, -(ry * sx));
+            let scale = (rx.hypot(ry) * sx.hypot(sy)).max(f64::MIN_POSITIVE);
+            if denom.abs() > 1e-9 * scale {
+                let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
+                let t = qx.mul_add(sy, -(qy * sx)) / denom;
+                let u = qx.mul_add(ry, -(qy * rx)) / denom;
+                if t > 1e-6 && t < 1.0 - 1e-6 && u > 1e-6 && u < 1.0 - 1e-6 {
+                    return true;
+                }
+            } else {
+                // Parallel: collinear overlap counts as interaction.
+                let la = rx.hypot(ry).max(f64::MIN_POSITIVE);
+                let d0 = ((b0.x() - a0.x()) * ry - (b0.y() - a0.y()) * rx).abs() / la;
+                if d0 < eps {
+                    let proj =
+                        |p: Point2| ((p.x() - a0.x()) * rx + (p.y() - a0.y()) * ry) / (la * la);
+                    let (u0, u1) = (proj(b0), proj(b1));
+                    let (lo, hi) = (u0.min(u1).max(0.0), u0.max(u1).min(1.0));
+                    if hi - lo > eps / la {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    let strictly_inside = |p: Point2, poly: &[Point2], other: &[(Point2, Point2)]| -> bool {
+        let on = other.iter().any(|&(s0, s1)| {
+            let d = point_seg_dist_2d(p, s0, s1);
+            d < eps
+        });
+        !on && super::super::classify_2d::point_in_polygon_2d(p, poly)
+    };
+    lp.iter().any(|&p| strictly_inside(p, &hp, &hs))
+        || hp.iter().any(|&p| strictly_inside(p, &lp, &ls))
+}
+
+fn point_seg_dist_2d(p: Point2, a: Point2, b: Point2) -> f64 {
+    let (dx, dy) = (b.x() - a.x(), b.y() - a.y());
+    let len2 = dx.mul_add(dx, dy * dy);
+    if len2 < 1e-30 {
+        return (p.x() - a.x()).hypot(p.y() - a.y());
+    }
+    let t = ((p.x() - a.x()) * dx + (p.y() - a.y()) * dy) / len2;
+    let t = t.clamp(0.0, 1.0);
+    let (fx, fy) = (a.x() + dx * t, a.y() + dy * t);
+    (p.x() - fx).hypot(p.y() - fy)
+}
+
+/// Merge an internal section loop with the pre-existing inner wire it
+/// overlaps (both all-Line). Returns `(disc_outer, union_hole)`:
+///
+/// - `disc_outer` bounds the removable region `loop \ hole` — the loop pieces
+///   outside the hole plus the hole pieces inside the loop;
+/// - `union_hole` is the merged opening outline `loop ∪ hole` — the pieces of
+///   both outside each other, with collinear overlap spans contributed once
+///   (the hole's copy, so the pieces pair with the pave-split neighbor faces).
+///
+/// Any inconsistency (chain fails to close, either chain empty, leftover
+/// pieces) returns None and the caller keeps the current independent-wires
+/// emission.
+#[allow(clippy::too_many_lines)]
+fn union_internal_loop_with_hole(
+    loop_edges: &[OrientedPCurveEdge],
+    hole: &[OrientedPCurveEdge],
+    frame: &PlaneFrame,
+    tol: f64,
+) -> Option<(Vec<OrientedPCurveEdge>, Vec<OrientedPCurveEdge>)> {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::Vec2;
+    #[derive(PartialEq, Clone, Copy)]
+    enum Verdict {
+        In,
+        On,
+        Out,
+    }
+    let eps = 1e-5;
+    let seg_of = |e: &OrientedPCurveEdge| (frame.project(e.start_3d), frame.project(e.end_3d));
+    let lsegs: Vec<(Point2, Point2)> = loop_edges.iter().map(seg_of).collect();
+    let hsegs: Vec<(Point2, Point2)> = hole.iter().map(seg_of).collect();
+    let lp: Vec<Point2> = lsegs.iter().map(|s| s.0).collect();
+    let hp: Vec<Point2> = hsegs.iter().map(|s| s.0).collect();
+
+    let mk_piece = |e: &OrientedPCurveEdge, t0: f64, t1: f64| -> Option<OrientedPCurveEdge> {
+        let lerp3 = |t: f64| e.start_3d + (e.end_3d - e.start_3d) * t;
+        let (s3, e3) = (lerp3(t0), lerp3(t1));
+        let (s_uv, e_uv) = (frame.project(s3), frame.project(e3));
+        if (e3 - s3).length() < tol {
+            return None;
+        }
+        let d = Vec2::new(e_uv.x() - s_uv.x(), e_uv.y() - s_uv.y());
+        let len = d.x().hypot(d.y());
+        let dir = if len > 1e-12 {
+            Vec2::new(d.x() / len, d.y() / len)
+        } else {
+            Vec2::new(1.0, 0.0)
+        };
+        let pcurve = Curve2D::Line(
+            Line2D::new(s_uv, dir)
+                .or_else(|_| Line2D::new(s_uv, Vec2::new(1.0, 0.0)))
+                .ok()?,
+        );
+        Some(OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve,
+            start_uv: s_uv,
+            end_uv: e_uv,
+            start_3d: s3,
+            end_3d: e3,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        })
+    };
+
+    // Split parameters on `edge` from proper crossings with the other set's
+    // segments plus the other outline's vertices lying on the edge interior
+    // (T-junctions and collinear overlap ends).
+    let split_ts =
+        |a0: Point2, a1: Point2, other: &[(Point2, Point2)], verts: &[Point2]| -> Vec<f64> {
+            let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
+            let la = rx.hypot(ry).max(f64::MIN_POSITIVE);
+            let mut ts = vec![0.0, 1.0];
+            for &(b0, b1) in other {
+                let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
+                let denom = rx.mul_add(sy, -(ry * sx));
+                let scale = (la * sx.hypot(sy)).max(f64::MIN_POSITIVE);
+                if denom.abs() <= 1e-9 * scale {
+                    continue;
+                }
+                let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
+                let t = qx.mul_add(sy, -(qy * sx)) / denom;
+                let u = qx.mul_add(ry, -(qy * rx)) / denom;
+                if t > 1e-9 && t < 1.0 - 1e-9 && u > -1e-6 && u < 1.0 + 1e-6 {
+                    ts.push(t);
+                }
+            }
+            for &v in verts {
+                if point_seg_dist_2d(v, a0, a1) < eps {
+                    let t = ((v.x() - a0.x()) * rx + (v.y() - a0.y()) * ry) / (la * la);
+                    if t > 1e-9 && t < 1.0 - 1e-9 {
+                        ts.push(t);
+                    }
+                }
+            }
+            ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            ts.dedup_by(|a, b| (*a - *b).abs() * la < tol * 10.0);
+            ts
+        };
+
+    let classify = |mid: Point2, poly: &[Point2], segs: &[(Point2, Point2)]| -> Verdict {
+        if segs
+            .iter()
+            .any(|&(s0, s1)| point_seg_dist_2d(mid, s0, s1) < eps)
+        {
+            Verdict::On
+        } else if super::super::classify_2d::point_in_polygon_2d(mid, poly) {
+            Verdict::In
+        } else {
+            Verdict::Out
+        }
+    };
+
+    let mut union_pieces: Vec<OrientedPCurveEdge> = Vec::new();
+    let mut disc_pieces: Vec<OrientedPCurveEdge> = Vec::new();
+    for (e, &(s0, s1)) in loop_edges.iter().zip(&lsegs) {
+        let ts = split_ts(s0, s1, &hsegs, &hp);
+        for w in ts.windows(2) {
+            let Some(piece) = mk_piece(e, w[0], w[1]) else {
+                continue;
+            };
+            let mid = Point2::new(
+                (piece.start_uv.x() + piece.end_uv.x()) * 0.5,
+                (piece.start_uv.y() + piece.end_uv.y()) * 0.5,
+            );
+            if classify(mid, &hp, &hsegs) == Verdict::Out {
+                union_pieces.push(piece.clone());
+                disc_pieces.push(piece);
+            }
+            // In: air inside the old opening. On: the hole's copy is kept.
+        }
+    }
+    for (e, &(s0, s1)) in hole.iter().zip(&hsegs) {
+        let ts = split_ts(s0, s1, &lsegs, &lp);
+        for w in ts.windows(2) {
+            let Some(piece) = mk_piece(e, w[0], w[1]) else {
+                continue;
+            };
+            let mid = Point2::new(
+                (piece.start_uv.x() + piece.end_uv.x()) * 0.5,
+                (piece.start_uv.y() + piece.end_uv.y()) * 0.5,
+            );
+            match classify(mid, &lp, &lsegs) {
+                Verdict::In => disc_pieces.push(piece),
+                Verdict::On | Verdict::Out => union_pieces.push(piece),
+            }
+        }
+    }
+
+    let disc = chain_single_closed_loop(disc_pieces, tol)?;
+    let union_hole = chain_single_closed_loop(union_pieces, tol)?;
+    Some((disc, union_hole))
+}
+
+/// Chain pieces into exactly one closed loop consuming every piece; None on
+/// any leftover, open chain, or fewer than 3 pieces.
+fn chain_single_closed_loop(
+    mut pieces: Vec<OrientedPCurveEdge>,
+    tol: f64,
+) -> Option<Vec<OrientedPCurveEdge>> {
+    let close = tol * 100.0;
+    if pieces.len() < 3 {
+        return None;
+    }
+    let mut chain = vec![pieces.swap_remove(0)];
+    let start = chain[0].start_3d;
+    while !pieces.is_empty() {
+        let last_end = chain.last()?.end_3d;
+        let next = pieces
+            .iter()
+            .position(|e| (e.start_3d - last_end).length() < close);
+        let next_rev = if next.is_none() {
+            pieces
+                .iter()
+                .position(|e| (e.end_3d - last_end).length() < close)
+        } else {
+            None
+        };
+        if let Some(i) = next {
+            chain.push(pieces.swap_remove(i));
+        } else if let Some(i) = next_rev {
+            let mut e = pieces.swap_remove(i);
+            std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+            std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+            e.forward = !e.forward;
+            chain.push(e);
+        } else {
+            return None;
+        }
+    }
+    ((chain.last()?.end_3d - start).length() < close).then_some(chain)
 }
 
 /// Interior point on a cylinder/cone lateral remainder face that carries
