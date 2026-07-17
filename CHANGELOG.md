@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.13](https://github.com/andymai/brepkit/compare/v2.126.12...v2.126.13) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** clip curved-face sections to the outer region (deepened-notch stranded rim) ([#1102](https://github.com/andymai/brepkit/issues/1102)) ([f0f8e0e](https://github.com/andymai/brepkit/commit/f0f8e0e1911924effce9b9f73e060fccfdfc48b6))
+
 ## [2.126.12](https://github.com/andymai/brepkit/compare/v2.126.11...v2.126.12) (2026-07-17)
 
 
