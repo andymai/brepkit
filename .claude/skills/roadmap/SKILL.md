@@ -385,6 +385,310 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   even the dense grid finds nothing). Together: RAWN=1 posBad 10 → 6, both
   mirrored micro-edge chains resolved; 2.126.12 tool-verified (dovetail
   9/9, dovetailKey 2/2, fit-offset 2/2 hold; snapClip nozzle nm 13→12).
+  THIRD LANDING — RAW REPRO FULLY CLOSED (posBad 37 → 0; fixture
+  `crates/io/tests/snapclip_deepened_notch_inmem.rs`): the residual was the
+  terminal stranded-rim case, solved WITHOUT a detection heuristic by making
+  the curved-face splitter geometrically honest. (1)
+  `clip_sections_to_outer_region` (face_splitter/mod.rs): sections
+  overhanging the face through an OUTER-wire concavity (an earlier cut's
+  bite) are clipped in unwrapped UV — fully-off-face and band-hugging
+  sub-span re-trace pieces dropped, mixed sections split at bisected
+  crossings with junctions snapped ONTO the boundary curve so the exact
+  1e-7 boundary-splitter gate accepts them as anchors; gated to
+  partial-band quadric faces carrying marched-NURBS boundary edges (the
+  clip's polygon is garbage on full-revolution primitive laterals — the d4
+  canary caught that regression). (2) Registry-presplit pieces keep their
+  PARENT's pcurve — endpoint UVs evaluate at the parent's ends,
+  disconnecting them from the boundary in UV; fixed by a
+  v-disagreement-gated pcurve refit (v is non-periodic ⇒ unambiguous where
+  u could be a 2π translate). (3) Zero-extent section edges from T-junction
+  self-splits derailed the angular walker (filtered; a UV-extent guard
+  protects closed circle sections). DURABLE polygon-sampler recipe:
+  endpoint order for `domain_with_endpoints` must follow the traversal flag
+  (selects the correct arc vs its complement for reversed circles) AND the
+  samples must then be oriented to wire order empirically (a whole-edge
+  NURBS traces the curve's own direction) — each half alone fails a
+  different edge class. Deliberate residual: the B-side corner crescent is
+  sub-resolution (0.0016 u-width < the 1e-3 fit band) and drops — the
+  corner-lens residual class. Export-level verification = the tool 4-suite
+  re-probe after release.
+- **A universal smarter merge-key for duplicate edges. PROVEN UNBUILDABLE.** The
+  gridfinity lip corner (chord + arc, same endpoints) MUST merge; the torus-box in-tube
+  lens (line + co-endpoint arc) MUST stay distinct. No merge-key discriminant separates
+  them; the distinction is global. Sanctioned pattern: splitter-side midpoint splits,
+  per case, so no two edges share both endpoints, and leave
+  `merge_duplicate_edges` (in `crates/algo/src/builder/builder_solid.rs`) alone. Control
+  the geometry you emit; do not make the shared merge smarter.
+
+## DEFERRED but ready: open items with a repro
+
+Regenerate the inventory (command above) and reconcile before trusting this table.
+Current genuine `#[ignore]` items worth work:
+
+| Item (repro) | Layer | Symptom / first probe |
+|---|---|---|
+| **Compartment manifold roots (six) — CLOSED; the 13/13 tool score was measured on pre-loft geometry (live matrix: fractional-width row below)** | algo/GFA | Two roots CLOSED: the grazing-EF lip-corner vertex (`phase_ef` angle-scaled endpoint window, `crates/io/tests/lipcorner_tangent_inmem.rs`) and the boundary-re-trace section family (`section_on_existing_boundary` in `fill_images_faces.rs` + straightness-aware hole weave + crossing-midpoint hole probes in `face_splitter/mod.rs`; fixtures `crates/io/tests/lipfuse_boundary_retrace_inmem.rs` — that fix un-masked 3 halfSockets-tilt cases that only "passed" via a watertight mesh fallback, then fixed them for real). The retrace guard's discriminant: an exact whole-edge duplicate section is KEPT (threading it routes the face through the split/rebuild that aligns coincident-face partitions — dropping it regressed the plain shelled-cup lip fuses d3/d4/d5 to mesh fallback), while a SUB-SPAN re-trace (45deg-split half-arc, straight run split at a divider crossing) is dropped. A third root CLOSED (chord-sagitta classifier seed, `find_point_outside_holes` in `face_splitter/containment.rs`; fixture `crates/io/tests/halfsockets_clipcut_inmem.rs`): the halfSockets base-clip cut's 1.2mm ring floor got its seed in the corner-arc sagitta gap of the chord-approximated hole polygon → ring classified Inside → open shell → mesh fallback poisoned the whole export chain. Closed `2×2 crossing tilts` outright and took `2×6 halfSockets ±40` 26→1 NM; 10/13 pass. A FOURTH root CLOSED (corner-crescent hole promotion, `loop_containment` in `face_splitter/mod.rs`; fixtures `crates/io/tests/socket_assembly_fuse_inmem.rs`): the bin×socket-assembly fuse at the z=5 base interface leaves a ~0.1mm crescent of bin bottom overhanging each corner socket's chamfered outline; the wire builder hands the crescents back as CW loops, the hole-promotion pass's SINGLE interior probe slipped across the thin boundary into the adjacent socket-square outer, so the crescents stayed "holes", were first-vertex-matched into nothing, and got dumped onto an arbitrary first sub-face that same-domain-dropping then erased — free edges at all four bin corners; the compartments variant went further into a GFA-reject + non-manifold mesh fallback. Fixed by whole-boundary containment (promote only loops with points STRICTLY outside every outer; boundary-coincident re-trace loops must stay holes — promoting or dropping them un-threads the d3/d4/d5 shelled-cup lip fuse). Closed `1×4 2×8-comps` (now analytic, 5× faster) and `1.5×6 no-halfSockets ±40`; 12/13 pass. A FIFTH root CLOSED the family (hole-winding normalization, `split_face_2d` in `face_splitter/mod.rs`; fixture `crates/io/tests/halfsockets_lipfuse_inmem.rs`): the halfSockets body's cavity cut emits its top-ledge hole wire wound the SAME way as the outer wire; `integrate_holes_plane` trusts stored orientation, so where the lip's inner profile crossed the hole's divider diagonal mid-span, the angular wire builder traced a double-cover — a membrane across the bin throat (kept) + the real throat-ledge region wound CW (erased) → free=11 propagating into the final socket fuse's 1 NM edge. Fix: normalize inner-wire winding opposite the outer in UV at the splitter entrance. `2×6 halfSockets ±40` closed; **compartments 13/13 (pre-loft geometry)**. Detection heuristics for the mis-weave (residual-CW-hole triggers, area balance, containment) all FAILED to separate it from the load-bearing re-trace weaves (d4, honeycomb pcut3) — the winding NORMALIZATION at the input was the only clean cut. Probe recipe: instrumented-kernel capture in `all` mode (hooks `boolean_with_evolution` — the tool's export fuses ALL go through the provenance path, invisible to a `boolean()`-only hook) + `VERTEX_WATCH` backtrace trap in `Vertex::new` (probe branch `probe/boolean-capture-2`, rebased onto post-#1045 main). CAVEAT: 13/13 was measured with the PRE-loft faceted sockets; the analytic sockets (#1045) changed every bin's base geometry and un-masked a NEW family (row below) — the 13 closed roots stay closed (their captured chains replay clean), but the tool matrix number from that era is historical — the six closed roots are the durable claim, not the 13/13. |
+| **halfSockets loft faceting — CLOSED (#1045)** (`binGenerator.scenario.halfSockets`; the old "zero-triangle" read was a MISREAD — the scenario runner logs `triangleCount:0` for ANY failure) | operations/loft + algo | TWO stacked roots. (1) Every gridfinity socket loft came out ALL-PLANE (z-histogram: 1.2–2.5% bin-volume deficit entirely in the z0–5 feet); loft fix LANDED (recognize NURBS profile edges back to analytic + reverse downward-stacked CCW sketches instead of bailing; arc reversal must NEGATE the circle normal; unit tests in `crates/operations/src/loft/tests.rs`). (2) The fix un-masked the disconnected-loop arrangement defect (row below, CLOSED in #1043): the hs2×2 socket fuse showed bnd=314 + −13% mesh volume, initially misdiagnosed as a wire-orientation/traversal bug. With both fixed, both hs capture chains replay fully clean (every op bnd=0 nm=0, analytic). Tool-verified post-merge (#1045): halfSockets suite 8/11 — the 3 fails are kernel-pin snapshots (benign); brepkit triangle counts now run ~45% ABOVE the reference pins (7512 vs 5176) because analytic feet replace sparse faceted planes — possible tessellation-density follow-up on small socket cones, not a defect class. Remaining halfSockets-suite work lives in the fractional-width row below. |
+| **Arrangement disconnected-loop twins — CLOSED** (fixture `crates/io/tests/halfsockets_socketfuse_inmem.rs`) | algo/GFA | A closed section loop strictly inside a plane face (touching neither boundary nor other sections — halfSockets interior socket outlines on the bin bottom) is a DISCONNECTED component of the arrangement trace graph, so its cycle is traced once per orientation. Flat emission (`arrangement_regions_from_inputs`, `even_odd_nesting=false`) shipped BOTH traces (duplicate overlapping discs) and left the containing web region hole-less, geometrically covering them. Same-domain then glued web+duplicates+socket-tops into one group (the hole-less web defeats every `inner_wires()`-keyed guard in `planar_faces_overlap`) and dropped ALL of it; the assembler's cap fill patched the openings with interior membranes → same-direction half-edge pairs on every interior cell rim (bnd>0, nm=0, free=0/over=0 — B-Rep edge checks are orientation-blind). Fix: twin-cycle resolution in flat emission — emit each disconnected loop once, attach its reversed twin as an inner wire of the smallest containing region. DIAGNOSTIC LESSON: bnd-on-both-faces with zero nm reads like a winding bug but can be a REGION-SELECTION bug; map the material first (`classify_point_robust` probes around the rim). |
+| **Post-loft fractional-width corner crescent — CLOSED** (fixture `crates/io/tests/fracwidth_corner_crescent_inmem.rs`) | algo/GFA | The bnd=104-per-tilt family root: at each bin corner the analytic socket's r=4 outline circle (tangent to both bin wall lines, new since #1045) and the bin's r=3.75 corner arc bound a ≈0.1–0.25mm sliver on the z=5 bin bottom. The arrangement emitted the sliver region correctly, but `interior_point_3d` built its polygon from the stored pcurves — and a wire can MIX pcurve orientation conventions (section arcs: natural parameterization + traversal flag; boundary arcs: fit in traversal order but carrying the topology flag), so the reversed boundary arcs sampled BACKWARD, folding the sliver into a self-crossing zig-zag whose "interior" point landed in the adjacent socket-imprint region → classified Inside → dropped → 5 unpaired rim edges per corner. Fix: plane-face wire polygons in `interior_point_3d` sample the 3D curves through the `PlaneFrame` (orientation-unambiguous; the #1037 arc-true pattern), never the pcurves; `find_point_outside_holes` hole polygons densified 3→15 interior samples (a single-edge closed bore hole sampled at 4 points is an inscribed square — its sagitta gap accepted annulus seeds well inside the bore, drilled-tube volume regression). ALL six `1.5×6` variants green at tool level. Do NOT widen the fix to the shared `sample_wire_loop_uv`: the split paths consume it and were calibrated against the flag convention (an endpoint-proximity variant changed splits and re-broke the scooplabel over-share pin). The convention mismatch itself (`boundary_edges_to_pcurve` fits traversal-order but copies `oe.is_forward()`) remains — any NEW pcurve-polygon consumer must sample 3D-via-frame instead. |
+| **Integer-width halfSockets wall-tangency family — CLOSED; COMPARTMENT MANIFOLD MATRIX 13/13 ON ANALYTIC SOCKETS** (fixture `crates/io/tests/intwidth_tangency_inmem.rs`) | math + algo/GFA | The nm=76/136/140 + `1×4 2×8-comps` nm=12 family (the "all bnd=0" note was a misread — the nm assert fires before bnd; the export actually had bnd=788 too). NOT an SD/duplicate-face root: a half-socket outline's r=4 corner circles are exactly TANGENT to the bin wall lines, and the outline's straight runs continue along those walls from the tangency points, which exist as exact operand vertices. Two solvers recomputed those tangential intersections ±1e-6 off (positional error ~ sqrt(2r·residual); a 1e-13 residual at r=4 = a full micron): (1) `Circle3D::intersect_segment` solved the near-tangent quadratic into a root pair straddling the foot — hit by both phase EE and FF's `closed_circle_boundary_crossings`; (2) phase EF's grazing edge×surface refinement landed anywhere in the tolerance WELL (surface distance grows only quadratically around a tangency). The micro (~1e-6, above vertex-merge tol) line edges were used by 3 faces (one out-and-back on the bin-bottom web) → analytic fuse failed the non-manifold gate → mesh fallback whose own output was non-manifold (nm=76 exported). Fix: (1) near-tangent root collapse in `intersect_segment` — when the chord implies sub-tolerance penetration (disc ≤ 2r·tol·a), emit the well-conditioned double root (the foot); (2) EF tangential mid-edge junction snap — `find_nearby_pave_vertex_widened` (angle-scaled window, linear scan; the spatial index stencil only covers tol-radius) gated on the vertex lying ON both the surface and the edge curve. Final fuse: 891 analytic faces, watertight, ~40× faster than the fallback it replaces. VERTEX_WATCH recipe: watch the tangency coordinate, get every minting backtrace in one run — found both roots in minutes. |
+| **Mesh-boolean fallback non-manifold output — CLOSED (2026-07-10)** (fixture `crates/io/tests/relief_meshbool_fallback_inmem.rs`) | operations/mesh_boolean | The safety-net co-refinement itself emitted open/non-manifold meshes on coincident-wall contact (relief-cut pair: raw bnd=11, export bnd=15 nm=1; the intwidth nm=76 export came FROM this path): the splitter fan-split each triangle without propagating on-edge points to the neighbor sharing that edge (T-junctions), coplanar contact was collapsed to a single longest segment, and winding-number classification coin-flips at winding=1/2 on shared walls. Rewritten as conforming co-refinement: per-host CDT re-triangulation with cross-triangle edge-point propagation, mutual coplanar edge clipping (`coplanar_corefine_segments`), and explicit `OnSame`/`OnOpp` coincident-surface classes in assembly (A owns the kept copy). The issue-#696 planar-midpoint-drop metadata path (`mesh_boolean_with_metadata`) is deleted — conforming splits subsume it. `MeshBooleanResult` now self-reports position-welded bnd/nm counts and `mesh_boolean_fallback` warn-logs a non-manifold fallback result instead of consuming it silently. |
+| **Honeycomb+handles kernel-poisoning panic — NOT REPRODUCIBLE on 2.124.13 (2026-07-10); panic-capture hardening shipped** (`binGenerator.scenario.combinedFeatures`) | wasm/operations | Full-suite faithful-order overlay run: zero panics, zero "recursive use of an object"; back-skip PASSES structurally (7167 tris, 106s), handle holes 86s; back-skip re-confirmed same day on an independent second overlay run (1/1 structural pass, ~154s wall). AUDIT FINDINGS (durable): wasm32-unknown-unknown is `panic=abort`, so `catch_unwind` is INERT on the real target — the 4 manual wrap sites (fillet ×2 in `bindings/operations.rs`, `compound_cut` in `bindings/booleans.rs`, fillet in `bindings/batch.rs`) + the unwired `#[wasm_binding]` macro (zero usages, references a nonexistent `reset()`) cannot prevent borrow-flag poisoning; a trapping panic locks the object's `WasmRefCell` borrow flag forever and no Rust code can reset it (recovery = new BrepKernel). Shipped: chained panic hook + `lastPanicMessage()`/`clearLastPanicMessage()` free functions (`crates/wasm/src/panics.rs`, installed by `BrepKernel::new`) — the root-cause text survives JS catch-and-continue (mirrored to console.error as `[brepkit] panic:`) and stays readable post-poison. If the family resurfaces, the text now self-reports; dig from there. |
+| **Dovetail corner-clip Intersect — CLOSED (2026-07-08)** (`crates/io/tests/dovetail_cornerclip_intersect_inmem.rs`, both tests un-ignored + green) | algo/GFA | Final two stacked roots: (1) the FF-coplanar phase projected the caps' rounded-corner boundary ARCS as straight CHORD sections while the true arcs already existed as FF sections (barrel×cap circle, split at the operand's 225° seam vertex) — the `has_existing_section_at` midpoint dedup can never catch it because emitted arcs store the FULL-CIRCLE bbox (midpoint = circle center); the chord+arc co-endpoint LENS then broke the weave (chord into the outer wire, true arc orphaned as a zero-area slit). Fix: `matching_arc_section_exists` in `phase_ff_coplanar.rs` — skip a Circle boundary edge when its exact arc (same circle + endpoints) already exists as a section. Line edges are NOT skipped (a co-endpoint line/arc pair can be a genuine lens — torus-box in-tube). (2) `find_splits_on_circle` normalized split params against `domain_with_endpoints`, which is ALWAYS the CCW span — for the REVERSE twin of a section pair that is the LONG complement (315° for a 45° arc), so a point on the circle OUTSIDE the arc mapped to interior t (45/315 = 1/7 — the "phantom arc-break" mechanism of the socket-loft diagnosis, now precisely characterized) and `evaluate_edge_at_t` (shorter-arc) minted a phantom vertex, desyncing the coincident caps' partitions (killed the SD pairing that had only worked pre-fix because BOTH caps adopted the same wrong chord). Fix: `find_splits_on_section_arc` — shorter-arc convention for SECTION splits only (sections are ≤π by construction; boundary arcs may exceed π and keep the CCW path — switching them broke the d1/d3/d4/d5 lip fuses, caught by the canary). CAUTION: the two fixes only work TOGETHER (chord-only → free 1→39; shorter-arc-only → free 41). The chord sections were also load-bearing as the coplanar pair's FF-interference link; with clean co-endpoint arcs the caps SD-pair instead. Tool-side dovetail suites re-probe pending. |
+| **`fuse_shelled_box_with_socket_loft` — CLOSED (2026-07-10, test un-ignored + green)** (`crates/operations/src/boolean/tests.rs`) | algo/GFA (phase_ff plane×plane clip) | Root (superseding the 2026-07-08 two-defect map): the socket wall facets meet the box bottom plane EXACTLY along their top chords, so every plane×plane FF section line is COLLINEAR with a clip-polygon edge — `clip_line_to_polygon`'s ABSOLUTE parallel epsilon (`denom.abs() < 1e-15` on an unnormalized dot with |n|·|d|≈100) misread the collinear edge as a genuine crossing and clipped by the ratio of two roundoff residues → nondeterministic partial emission (18/36 sections, some sliver-length; the old "9 over-shared + phantom 0.36° breaks" were downstream noise of the missing/partial sections). Fixed by scale-relative parallel+outside thresholds (sin(angle)<1e-9, distance band 1e-9) in `clip_line_to_polygon` — the tangential-contact class again, fixed at the primitive. Post-fix raw GFA == ops output: F=55, manifold, watertight (all edges 2-use by id), analytic (4 cylinders), vol=operand sum, hole-aware euler 2 (naive euler 3 is CORRECT: the shelled cup's top rim is a genuine annulus face — the test's old naive `euler==2` assert was wrong for this shape). KNOWN RESIDUAL (below engine coincidence semantics, deliberate): the 19µm chord/arc corner lenses at z=0 (32 of them) collapse to the chord — barrel rims are bounded by the socket chords (≤19µm=r(1−cos5.625°) off-surface), the true crescent ring is not represented. Representing it needs the FULL midpoint-split cascade: midpoint paves on circle pave-blocks co-endpoint with a line edge + arrangement lens tracing (chord-space bigon = zero area) + the wall-facet grazing [circle] sections (32 circle→line merges in `merge_duplicate_edges` are these lenses folding). Only chase if a consumer needs sub-20µm corner fidelity. |
+| **v2 trimmer neighbor-split — CLOSED** (fixtures `crates/blend/src/trimmer.rs::split_propagates_into_neighbor_wire`, `crates/operations/tests/regress_blend_trim_neighbor_split.rs`) | blend | `split_edge_at` now rewrites EVERY wire referencing the split edge onto its two sub-edges (`propagate_split`; `trim_face_general`'s inline splits routed through it), so untouched cap/rim faces no longer keep the stale unsplit edge (box single-edge fillet: free 16→12, bnd 28→22 at export tolerance; stale-edge refs 0). Also fixed en route: `trim_face`'s closing contact-edge orientation was inverted (trimmed wires were silently disconnected head-to-tail). DISCOVERED, still open in the v2 regular trim path (all evidenced by the regress test's residual 12 free edges): (1) keep-side selection is degenerate — `n·(center−p1)` is ∥ n by tangency, so face1 can keep the SLIVER (the top face does, in the box repro); needs a discard-side hint (spine midpoint side test), TrimSide alone is under-determined because trim chains are wire-order-dependent; (2) `create_blend_face` builds its own contact edges instead of sharing `TrimResult::contact_edge` → position-duplicate free-edge pairs; (3) no end-cap notch trim where a stripe terminates (corner.rs only covers stripe-meeting corners) — inherent v1 gap; (4) chamfer_v2 on a box edge solves the EXTERNAL tangent branch (contacts at z=11/y=−1, outside the solid) and never reaches trimming. |
+| **Revolve follow-ups — CLOSED (all three)** | operations/revolve | Pointed-cone apex merge (12→2 faces, degenerate seam wall), annulus/washer-cap merge (16→4, caps keep the smaller rim as a hole wire), partial-turn circle→trimmed `Torus` band + 2 disc caps (exact `π·R·ρ²·Δu` via `partial_torus_sector_volume`). Enablers shipped with it: `tessellate_torus_two_rim_band` (structured band for a doubled-seam torus wall in EITHER rim orientation — CDT/snap cracked both) and hole-winding-agnostic `planar_cap_signed_volume` (a boolean's same-wound inner rim ADDED its disc; holes now subtract by magnitude — made the drilled-tube volume exact). Tests in `revolve.rs` (`revolve_circle_partial_turn_is_trimmed_torus` etc.); census `revolve_matrix` has rows for all cases. |
+| **Trimmed-torus ray-cast misclassification — CLOSED (2026-07-10)** (fixtures `crates/operations/src/classify.rs::partial_turn_torus_band_classification`, `crates/check/src/classify/mod.rs::partial_torus_band_interior_points`, `crates/check/src/classify/ray_surface.rs::ray_torus_oblique_from_inside_tube`) | check + operations classify | The "<3 distinct vertices trips the degenerate full-surface branch" hypothesis was WRONG — both crates' `face_polygon` densify closed edges (66-pt band polygon) and the UV containment itself worked. THREE stacked roots, all instrumentation-verified: (1) BOTH local Ferrari ray-torus quartic solvers missed real roots (zero roots for rays from inside the tube) AND emitted off-surface spurious ones (hits at z=4.6 on a torus spanning z±2) at R=6/ρ=2 with oblique irrational rays — small axis-aligned unit tests never caught it; both now delegate to math's residual-verified Durand–Kerner `intersect_line_torus` (the torus-box campaign primitive), local Ferrari cubic/quartic deleted; (2) check's `face_aabb` collapsed each cap disc (single closed-circle wire = ONE vertex; Plane gets no surface expansion) to a point AABB → the BVH prefilter never offered the caps → cap crossings silently dropped from parity — fixed by exact per-curve extent expansion (`expand_aabb_for_curve`: circle/ellipse closed-form, NURBS control-hull); (3) ops-only: `boolean::face_polygon` samples closed rims from the curve's own parameter origin (not the seam vertex), so a band wire's two rims enter the periodic unwrap at incoherent phases → UV rectangle shears into a parallelogram rejecting real band hits — fixed by a seam-anchored sampler local to `classify.rs` (`boolean::face_polygon` is calibrated for band-fragment sharing, do NOT change its phase). `revolve_circle_partial_turn_is_trimmed_torus` now asserts ray-cast probes directly. DISCOVERED, open: the algo ray-cast classifier (`crates/algo/src/classifier/ray_cast.rs`) has NO Torus arm — torus faces fall to the flat Newell-polygon fallback (same parity class as the #1063 cone gap); left untouched here because calibrated boolean landscapes (torus-box) pin its current behavior — needs its own re-probe before adding the arm. |
+
+Fresh full scenario-matrix baseline (2026-07-07, kernel 2.124.0 + #1029/#1030 overlay,
+`BREPJS_KERNEL=brepkit pnpm exec vitest run --project generators <suite>` in the tool):
+compartment manifold 5/13 (was 0/13; remainder = the lip-corner + tilted-divider rows
+above), honeycombJunction engine-fixed (63k→~3k tris; snapshot pins remain
+kernel-specific), groupedScoop + splitBin manifold PASS, combinedFeatures 3/11
+(handles-panic row above; scoop case near-parity), snapClip 1/4, fit-offset 0/2,
+dovetailKey 1/2 (all three: watertight-STL asserts — re-probe after the lip-corner fix
+lands, they may share it), dovetail suite timeout >25min (cornerclip row above).
+
+Baseplate re-probe on published 2.124.12 (2026-07-08, post-#1054): partial movement,
+no closures — snapClip 0/4 (nm 14 unchanged, key 16→12, 0.6mm-nozzle 11→**1**, clip
+volume 46.78 vs 46.6±0.05), fit-offset 0/2 (loose bnd 184→144, at-floor 144
+unchanged), dovetailKey 1/2 (bnd=108 unchanged). The #1054 fixture was the CORNER
+tile (one rounded corner); the residuals live in the other tile/connector configs —
+next step is a fresh operand capture of one failing case (dovetailKey bnd=108 or the
+nm=1 nozzle case) on ≥2.124.12. The full dovetail suite: **>25-min timeout →
+355s total** (mesh-fallback slab gone in-tool; most tiles now 0.3–1.5s), 2/9 pass;
+the A1-canonical corner tile fell ~597 nm → **nm=3 at 468ms**. Residual family:
+bnd=108 (5×4 middle-column, inverted, AND dovetailKey — one shared root), bnd=144
+(4×4 interior ×2 — interior tiles have NO rounded corners, so this is the
+fully-coincident-walls intersect variant), bnd=5 (5×4.5 fractional edge tile, also
+still slow at 265s), nm=6 (magnet variant, 82s), nm=3 (corner tile).
+
+**bnd=108/144 family CLOSED (PR #1057, 2026-07-08)** (fixture
+`crates/io/tests/dovetail_interior_identity_intersect_inmem.rs`): stage-probe
+capture (`buildBaseplateSolid`'s `probe` callback + `serializeSolid` per milestone —
+NO instrumented kernel needed) localized it to `cornerClipIntersect`; for all-join
+tiles the rounding profile degenerates to a plain box matching the slab bounds, and
+`boolean_with_evolution`'s faithful raw-GFA branch mis-split the fully-coincident
+identity intersect (134 faces → 38, free=32) — accepted as "valid" because
+position-duplicate free edges pass the by-edge-id gate (ids used ≤2×). `boolean()`
+was immune via its identical/containment shortcut. Fix: `detect_trivial_relation`
+extracted and consulted by `boolean_with_evolution` before the faithful path.
+Tool-verified (local overlay): dovetailKey 2/2, fit-offset 2/2, dovetail 6/9 —
+middle-column, interior ×2, inverted, magnet all closed. Remaining dovetail
+residuals: fractional edge tile bnd=4 (+265s perf), A1-corner nm=3. DURABLE: the
+by-edge-id validation gate is BLIND to position-duplicate free edges — any "GFA
+result validated OK" claim about watertightness needs the position-quantized
+check; and the generator's probe hook + serializeSolid is the cheap capture path
+for baseplate ops.
+
+**Doubled-dovetail interior nm=21 (tongue-relief cut) CLOSED at engine level
+(2026-07-10)** (fixture `crates/io/tests/dovetail_relief_cut_inmem.rs`): each
+relieved nub — cut(6-face trapezoid tongue prism, tapered socket pocket) —
+arrived at the connector fuse already broken (bnd=13-15 nm=1-2 per nub through
+BOTH boolean entries); the fuse merely accumulated 12 nubs' damage. FOUR stacked
+roots (the fixture doc comment carries the full map): (1) restrict 24-sample
+graze test dropped a real ~8° socket-mouth corner crossing → refine to the
+smaller face extent; (2) open marched-NURBS conic sections kept whole → exact
+clip to the plane face's straight boundary edges + the cone partner's
+angular-window rulings, TRIMMING the stored NURBS to each kept span
+(`domain_with_endpoints` is the full knot domain), plus sampled-projection
+T-junction splits (`find_splits_on_nurbs_section`); (3) the ray-cast classifier
+had NO analytic cone path — tapered corner patches fell to the flat
+Newell-polygon fallback, which mis-counts crossings for interior points ~0.2 mm
+inside the pocket walls, keeping two in-chunk pieces (`FaceGeom::Cone` added,
+mirroring the partial-arc cylinder path); (4) GFA section edges can store
+traversal-order vertices over an unreversed NURBS curve — a B-Rep-clean result
+whose tessellation folds the boundary polyline (mesh nm on a watertight B-Rep);
+fixed in the SAMPLERS by endpoint alignment (`nurbs_runs_end_to_start` in
+`tessellate/edge_sampling.rs`) — normalizing vertex order at the minting site
+(`instantiate_wire_edge`) instead broke the calibrated torus-box notch
+landscape, do not retry. All six captured nub operand pairs: 8-face
+analytic nub, bnd=0 nm=0, both entries. Tool-side re-probe of the doubled
+dovetail suite pending fresh capture (the old stage fixtures embed pre-fix
+broken nubs). DIAGNOSTIC LESSON: sub-face classification against a coned cutter
+was silently polygon-approximated — when a kept-piece pattern matches "inside
+the cutter but classified Outside", check `collect_face_geoms` coverage for the
+partner's surface types before touching the splitter.
+
+Fractional-plate seam-edge pocket family — CLOSED (2026-07-16, fixture
+`crates/io/tests/fracplate_seam_pocket_inmem.rs`): a seam-edge pocket flush
+with the tile wall mesh-fell-back and poisoned the whole 5×4.5 fractional
+plate (dovetail `5×4.5 edge-y-1` nm export). Root: `find_point_outside_holes`
+trusted stored `start_uv` for its hole-rejection polygon and one
+foreign-frame vertex corrupted it — classifier seeds landed inside the
+opening and the slab top was dropped. Fixed by deriving every polygon vertex
+from 3D through the plane frame. Tool-verified: the dovetail suite's
+fractional tile passes; with the tangency-nub + groove-mouth PR (#1078) the
+suite reaches 9/9. DURABLE: stored `start_uv`/pcurves on hole wires can be
+fitted in a FOREIGN frame — any consumer building polygons from them must
+re-derive via frame.project(3D) (same class as the pcurve-convention lesson).
+
+snapClip family — THREE roots CLOSED 2026-07-16 (#1080, #1082, #1085); deepened-notch remains:
+- Connector key (#1080, fixture `extrude_spline_encoded_profile_recovers_analytic_walls`):
+  2D drawings ship corner-treated profiles as B-splines; extrude emitted ruled-NURBS
+  walls for exact plane/cylinder geometry and every boolean against the prism fell
+  back. Profile-wire curve recognition at extrude entry (the loft pattern).
+- Completed 4-way socket-junction disc (#1082, fixture `socket_junction_disc_inmem`):
+  the junction circle's 2-arc traced loop samples area-degenerate, the sliver guard
+  dropped it silently, and the arrangement was declined on equal loop COUNT; the
+  arrangement gate now also fires on any area-degenerate traced loop. Full 20-pocket
+  snapClip plate chain analytic (F=595 vs F=6923/bnd=930).
+- Snap-slot hole cuts (#1085, fixture `snapclip_slot_cut_inmem`): four stacked
+  section-machinery gaps — outermost-pair clip vs INWARD-bulging bite arcs
+  (midpoint-classified multi-interval clip, HOLE-FREE faces only: holed faces'
+  sections feed the weave, calibrated on whole pieces), multi-window sections kept
+  one window, plane×band Lines never clipped to the band v-window (exact affine-v
+  trim; mixed pairs get ONLY that trim — the plane-polygon clip on banded pairs
+  broke seam-anchored cylinder bands), and marched-fit endpoints ~1e-6 off exact
+  chain partners (weld at 100·tol). FOIL SET GREW: cylinder-slot + groove-mouth +
+  junction-disc are now mandatory alongside d4/pcut3/divider for ANY section/clip
+  change — three wrong gate choices were each caught by a different foil.
+- REMAINING: hole-1+ deepened-notch/coplanar-margin family (0.01 offsets between
+  successive slot cutters → micro-edges + near-coincident conic pairs; the
+  deepened-notch TERMINAL row's missing piece), 0.6mm-nozzle nm, bed-flat clip
+  volume 46.701 vs 46.6±0.05 pin (run the reference kernel side-by-side first).
+
+Fit-offset groove-mouth sliver family — CLOSED (2026-07-16, PR #1078, fixture
+`crates/io/tests/fitoffset_groove_mouth_inmem.rs`): each groove cutter's mouth
+clips the adjacent socket-pocket rim corners, leaving zero-width top-face
+slivers; three variants of the root appear as the chain progresses (each cut
+absorbs its mouth rings into the outer wire as bays). Five coordinated fixes —
+pave-split hole promotion into the combined arrangement (expansion kept OUT of
+the weave input, whose whole-edge re-trace discriminant is calibrated on
+unsplit hole edges — pcut3 foil); a CLEAN-TILING cutoff for even-odd hole
+nesting (a proper subdivision never nests; component and edge-sharing
+discriminants both REFUTED by the divider-lip fuse foil); true circle×section
+splits of boundary bay arcs applied ONLY on the arrangement path (global
+splits broke d4) plus a bay-mouth arrangement entry (≥2 holes); arc-true
+region-polygon probes; at-seam UV endpoint resolution on periodic surfaces
+(a 4th-quadrant corner cone's window read as its complement — span derivation
+from the circle's own parameterization REFUTED, stored normal can oppose the
+surface axis) with orientation-aware plane-arc split normalization. The
+captured export chain runs fully analytic+watertight (182→211 faces; the
+PUBLISHED kernel's "pass" encloses phantom void wedges at every groove-mouth
+corner). DURABLE: the splitter's paths are a web of mutual calibrations — d4,
+honeycomb pcut3, divider-lip, and the nub fixtures are the four foils; run ALL
+of them on any face_splitter change (each caught a wrong discriminant this
+session that fit-offset alone blessed).
+
+Fresh baseplate re-probe on PUBLISHED 2.126.2 (2026-07-16, overlay md5-verified):
+dovetailKey 2/2 and fit-offset 2/2 CONFIRMED on the published build; dovetail
+7/9 @188s (was 6/9 @355s) — the 4×4-interior doubled-dovetail (the relief-cut
+family) passes end-to-end tool-side; snapClip 0/4 with ALL signatures moved
+since the mesh-boolean rewrite (join nm 14→4, key nm 12→0 but bnd=326, 0.6mm
+nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
+
+- **2×2 A1-canonical doubled-dovetail nm=2 — CLOSED (2026-07-16, PR #1078,
+  fixture `crates/io/tests/dovetail_dblcorner_nub_inmem.rs`; tool-verified on
+  the overlay: dovetail 9/9 @37s, dovetailKey 2/2, fit-offset 2/2 — the
+  265s fractional slow case is gone with the groove-mouth fix).** The paired tongue sits offset by exactly the socket corner
+  radius, straddling the wall-plane↔corner-cylinder tangency meridian (the
+  recurring tangential-contact class). THREE stacked roots: (1) the FF
+  raw-curve AABB pre-filter's fixed 16-sample scan missed the flank×cone
+  conic's ~2mm in-both sliver on a ~30mm marched curve — the pair vanished
+  before the exact open-conic clip ever ran (mirror nub survived by sampling
+  luck); now refines adaptively like the restrict graze escalation. (2)
+  `trim_open_curve_to_plane_face_lines` clipped conics to the plane face's
+  boundary + the cone's u-window but NOT the patch's axial v-range — the kept
+  piece overshot the rim circle, dangled, and the splitter's pendant filter
+  removed the whole section chain; now bisects v(t) to exact rim crossings.
+  (3) `find_splits_on_circle` normalized against the CCW start→end span, but
+  a rim quarter-arc traversed CW covers the 270° COMPLEMENT (the #1054
+  reverse-twin mechanism on BOUNDARY arcs; `edge.forward` does NOT
+  disambiguate — the cone rim is fwd=true with u decreasing); now picks the
+  true arc via the edge's own UV midpoint and the consumer uses the returned
+  on-circle foot. Result: 10-face analytic nub (1 cone + 1 cyl + 8 planes),
+  watertight, both boolean entries. LATENT: `find_splits_on_ellipse` has the
+  same complement hazard, no repro yet.
+- **Fractional edge tile 5×4.5 — CLOSED by the seam-edge flush pocket fix
+  (#1076, fixture `fracplate_seam_pocket_inmem.rs`; see the closure entry
+  above).** The old forExport=true capture (F=7928 pocketsCut) was the wrong
+  variant; the true export-variant root was the flush-wall pocket cut.
+- **A1-corner nub FUSE membrane (post-#1082 plate topology) — CLOSED
+  (2026-07-16, fixture `crates/io/tests/dovetail_a1corner_nubfuse_inmem.rs`):**
+  the #1082 junction disc changed the plate's corner topology, and the nub
+  fuse's plate-wall middle strip got its splitter interior point at exactly
+  (42, −4, −1.75) — the intersection of the wall plane, the relief-bore
+  tangency/profile-seam meridian, and the dovetail flare plane. All THREE
+  cardinal classification rays ran along edges/seams/the tangency line, the
+  parity votes were garbage (1/3), and the interior strip classified Outside —
+  a kept membrane, non-manifold analytic result, mesh fallback for the whole
+  plate chain (op-fuse-0 F=1517), dovetail 8/9. Fix in
+  `classifier/ray_cast.rs`: each ray now reports whether any hit grazed a face
+  boundary, band limit, or in-plane face; when ALL THREE cardinal rays are
+  degenerate the vote re-casts with fixed generic (√-prime) directions. Any
+  clean cardinal ray keeps its historical verdict — two blunter variants
+  (all-generic; escalate-on-split-vote) each broke a calibrated foil
+  (honeycomb pcut1 over-shared 0→7, wallcut free 0→48) before the per-ray
+  degeneracy design passed all foils simultaneously. DURABLE: splitter
+  interior points of notched/symmetric pieces land on feature-plane
+  intersections BY CONSTRUCTION; classification must survive on-plane sample
+  points. STALE-CAPTURE TRAP: the capture dir held two interleaved probe runs
+  (02:47 pre-fix + 19:44 fresh); one full iteration was burned replaying the
+  stale pair whose F=18 nub was an OPEN mesh-fallback operand (GIGO, already
+  fixed) — check bin mtimes before replaying mixed capture dirs.
+- **A1-corner recess-hole conic-web split (the scenario's nm=2 STL pin) —
+  CLOSED (2026-07-16, fixture `crates/io/tests/dovetail_a1corner_holecut_inmem.rs`):**
+  after #1088 made the A1 fuse chain analytic, the remaining nm=2 came from
+  the forExport=false hole cuts: each recess box's slanted wall gets a
+  4-section web (3-line U-chain + plane×cone conic T-ing mid-span into the
+  z=0 line). Two 1e-6-fit-error-vs-1e-7-tolerance gaps: (1) the weld had no
+  anchor at the T (now welds endpoints onto other Line sections' INTERIORS —
+  nearest strictly-interior foot in the 100·tol band); (2) the planar
+  arrangement's arc on-plane round-trip demanded 1e-7, bailing on the fitted
+  conic (now 100·tol — genuine straddle arcs are off by orders of magnitude
+  more). Un-rescued, the angular wire builder walked the CW-boundary slit-web
+  as ONE grand circuit under BOTH winding rules (that greedy-trace weakness
+  remains — the arrangement is the sanctioned rescue for plane-face webs).
+  DURABLE: marched/fitted section geometry is good to ~1e-6, every exact-tol
+  (1e-7) gate it meets needs a weld-scale (100·tol) band; this is the FOURTH
+  such gap in this family (weld anchors, T-split, on-plane, junction-disc).
+- **snapClip deepened-notch family — PARTIAL (2026-07-17, 16-iteration dig,
+  full log in memory project_snapclip-plate-bore.md iterations 1-16):** the
+  op-cut-3+ nm chain root-mapped. LANDED: arrangement true line×arc
+  crossings (bisection-refined against the real arc, on-line validated,
+  endpoint-guarded — phantom chord-crossing breaks desynchronized the
+  half-edge graph and the tracer's dangling-edge retreat emitted SLIT
+  regions with doubled edges), exact-UV T-break registration, weld-band
+  on-plane/T-break tolerances, trimmed sub-arc emission, and a section
+  split registry (plane-first ordering + geometric point-on-curve presplit
+  for curved faces). Raw repro posBad 37→22; ALL calibrated foils green.
+  NOT closed: the remaining 22 are cross-face BOUNDARY-edge desyncs whose
+  root is that **marched FF sections on curved faces carry
+  pave_block_id=None — they bypass the pave machinery that gives plane
+  faces pre-split, shared-vertex sets. The canonical fix is pave-block
+  attachment/splitting for marched curves at phase-FF/make_blocks altitude;
+  every face-splitter-level propagation (face-web geometric, per-edge
+  keyed, NURBS boundary arm) broke the groove/a1corner calibrated chains
+  which DEPEND on downstream reconciliation of asymmetric splits.** Repro:
+  cache replay_scplate.rs (RAWN=n) + capture-snapclip-plate-fresh.
+- **NURBS endpoint-trimmed convention — FORWARD SPANS SHIPPED; reversed
+  spans remain OPEN behind a named arrangement defect (2026-07-17, the
+  deepened-notch dig's terminal root):** `EdgeCurve::domain_with_endpoints`
+  for `NurbsCurve` historically returned the FULL knot domain, ignoring the
+  endpoints — every NURBS sub-span consumer silently evaluated the WHOLE
+  curve (piece pcurves carried the parent's UV endpoints; the wire builder
+  conflated near-coincident structures — the snapClip deepened-notch cone's
+  twin rims). SHIPPED (topology/src/edge.rs, unit tests in the same file):
+  whole-edge endpoints (either orientation) and closed edges keep the full
+  span; a validated FORWARD interior sub-span (both projections on-curve
+  within the 1e-5 weld band, span > 1e-6·domain) returns the projected
+  trimmed `[t₀, t₁]`. On the RAWN=1 raw repro this cleaned one of the two
+  mirrored junction signatures (the use=3 triple + micro-edge chain at
+  y=−39.4). SECOND LANDING (same day): REVERSED sub-spans accepted on
+  clearly-open curves (`t₀ > t₁`, start→end interpolation stays truthful;
+  closed curves keep the full-domain fallback — a reversed pair there is
+  usually a seam-crossing forward sub-arc). The "degenerate phantom loop"
+  that blocked reversed acceptance was a MISREAD: the single-edge closed
+  NURBS inner wire on the aborting cone wall (seam gap 5e-9, source_edge_idx
+  Some) is a LEGITIMATE pre-existing notch outline; the real defect was a
+  COVERAGE hole — walls reaching `fill_images_faces` through split paths
+  that never run the dedicated `cylinder_cone_remainder_interior` search
+  aborted unconditionally on the lens flag. Fixed by running that search as
+  a last resort at the consumption point (fill_images_faces; abort only if
+  even the dense grid finds nothing). Together: RAWN=1 posBad 10 → 6, both
+  mirrored micro-edge chains resolved; 2.126.12 tool-verified (dovetail
+  9/9, dovetailKey 2/2, fit-offset 2/2 hold; snapClip nozzle nm 13→12).
   REMAINING 6 (one root, RE-IDENTIFIED — the pave-bypass theory is DEAD:
   the cone face's section gate is OPEN, sc=3, and it receives all three
   notch sections): the same cone×plane intersection curves are delivered
