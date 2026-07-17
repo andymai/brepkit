@@ -337,6 +337,19 @@ mod tests {
         EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap())
     }
 
+    fn assert_full_domain(got: (f64, f64), d0: f64, d1: f64) {
+        assert!(
+            (got.0 - d0).abs() < f64::EPSILON,
+            "t0={} expected {d0}",
+            got.0
+        );
+        assert!(
+            (got.1 - d1).abs() < f64::EPSILON,
+            "t1={} expected {d1}",
+            got.1
+        );
+    }
+
     #[test]
     fn nurbs_domain_whole_edge_keeps_full_span_both_orientations() {
         let curve = open_nurbs();
@@ -346,8 +359,8 @@ mod tests {
         let (d0, d1) = brepkit_math::traits::ParametricCurve::domain(n);
         let p0 = brepkit_math::traits::ParametricCurve::evaluate(n, d0);
         let p1 = brepkit_math::traits::ParametricCurve::evaluate(n, d1);
-        assert_eq!(curve.domain_with_endpoints(p0, p1), (d0, d1));
-        assert_eq!(curve.domain_with_endpoints(p1, p0), (d0, d1));
+        assert_full_domain(curve.domain_with_endpoints(p0, p1), d0, d1);
+        assert_full_domain(curve.domain_with_endpoints(p1, p0), d0, d1);
     }
 
     #[test]
@@ -383,7 +396,7 @@ mod tests {
         let tb = d0 + 0.7 * (d1 - d0);
         let pa = brepkit_math::traits::ParametricCurve::evaluate(n, ta);
         let pb = brepkit_math::traits::ParametricCurve::evaluate(n, tb);
-        assert_eq!(curve.domain_with_endpoints(pb, pa), (d0, d1));
+        assert_full_domain(curve.domain_with_endpoints(pb, pa), d0, d1);
     }
 
     #[test]
@@ -398,6 +411,6 @@ mod tests {
         let off = Vec3::new(0.0, 0.0, 1.0) * 0.5;
         let pa = brepkit_math::traits::ParametricCurve::evaluate(n, ta) + off;
         let pb = brepkit_math::traits::ParametricCurve::evaluate(n, tb) + off;
-        assert_eq!(curve.domain_with_endpoints(pa, pb), (d0, d1));
+        assert_full_domain(curve.domain_with_endpoints(pa, pb), d0, d1);
     }
 }
