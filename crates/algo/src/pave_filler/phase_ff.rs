@@ -1279,12 +1279,41 @@ fn trim_ellipse_to_boundary_crossings(
     ext_a: &FaceExtent,
     ext_b: &FaceExtent,
 ) -> Option<Vec<RawCurve>> {
-    use brepkit_math::curves::Ellipse3D;
+    use brepkit_math::curves::{Circle3D, Ellipse3D};
 
-    let EdgeCurve::Ellipse(ellipse) = &raw.curve else {
-        return None;
+    // The raw plane×analytic section: a tilted plane yields an Ellipse, a
+    // plane perpendicular to the axis yields an exact Circle. Both share the
+    // same parameterization surface (project/evaluate by angle).
+    enum SecCurve<'a> {
+        Ell(&'a Ellipse3D),
+        Circ(&'a Circle3D),
+    }
+    impl SecCurve<'_> {
+        fn project(&self, p: Point3) -> f64 {
+            match self {
+                SecCurve::Ell(e) => e.project(p),
+                SecCurve::Circ(c) => c.project(p),
+            }
+        }
+        fn evaluate(&self, t: f64) -> Point3 {
+            match self {
+                SecCurve::Ell(e) => e.evaluate(t),
+                SecCurve::Circ(c) => c.evaluate(t),
+            }
+        }
+        fn edge_curve(&self) -> EdgeCurve {
+            match self {
+                SecCurve::Ell(e) => EdgeCurve::Ellipse((*e).clone()),
+                SecCurve::Circ(c) => EdgeCurve::Circle((*c).clone()),
+            }
+        }
+    }
+    let sec = match &raw.curve {
+        EdgeCurve::Ellipse(e) => SecCurve::Ell(e),
+        EdgeCurve::Circle(c) => SecCurve::Circ(c),
+        _ => return None,
     };
-    // Must be a closed full ellipse (the raw plane×analytic section).
+    // Must be a closed full section (the raw plane×analytic intersection).
     if (raw.p_start - raw.p_end).length() > 1e-7 {
         return None;
     }
@@ -1314,9 +1343,9 @@ fn trim_ellipse_to_boundary_crossings(
     let face = topo.face(plane_face).ok()?;
     let mut crossings: Vec<Point3> = Vec::new();
     let push_crossing = |p: Point3, crossings: &mut Vec<Point3>| {
-        // Keep only points actually on the section ellipse (rejects a cone's
+        // Keep only points actually on the section curve (rejects a cone's
         // far-nappe root or a seam-line crossing that misses the ellipse).
-        let foot = Ellipse3D::evaluate(ellipse, ellipse.project(p));
+        let foot = sec.evaluate(sec.project(p));
         if (foot - p).length() > 1e-6 {
             return;
         }
@@ -1382,10 +1411,10 @@ fn trim_ellipse_to_boundary_crossings(
         return None;
     }
 
-    // Map each crossing to its ellipse parameter, sort by angle.
+    // Map each crossing to its angular parameter, sort by angle.
     let mut t_pts: Vec<(f64, Point3)> = crossings
         .into_iter()
-        .map(|p| (ellipse.project(p).rem_euclid(std::f64::consts::TAU), p))
+        .map(|p| (sec.project(p).rem_euclid(std::f64::consts::TAU), p))
         .collect();
     t_pts.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Drop near-duplicate parameters (a crossing hit by two adjacent edges).
@@ -1406,7 +1435,7 @@ fn trim_ellipse_to_boundary_crossings(
             t1 += std::f64::consts::TAU;
         }
         let t_mid = 0.5 * (t0 + t1);
-        let mid = Ellipse3D::evaluate(ellipse, t_mid);
+        let mid = sec.evaluate(t_mid);
         if !(ext_a.contains(mid) && ext_b.contains(mid)) {
             continue;
         }
@@ -1415,7 +1444,7 @@ fn trim_ellipse_to_boundary_crossings(
             continue;
         }
         arcs.push(RawCurve {
-            curve: EdgeCurve::Ellipse(ellipse.clone()),
+            curve: sec.edge_curve(),
             bbox: raw.bbox,
             t_range: (t0, t1),
             p_start: p0,

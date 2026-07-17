@@ -244,15 +244,20 @@ snapClip family — THREE roots CLOSED 2026-07-16 (#1080, #1082, #1085); deepene
   chain partners (weld at 100·tol). FOIL SET GREW: cylinder-slot + groove-mouth +
   junction-disc are now mandatory alongside d4/pcut3/divider for ANY section/clip
   change — three wrong gate choices were each caught by a different foil.
-- REMAINING after the deepened-opening union (which closed the join-edges chain —
-  the full 44-hole snapClip plate replays analytic F=881 posBad=0, was F=8207
-  bnd=86): the 0.6mm-nozzle chain still mesh-falls-back at op-cut-5 on a FRESH
-  native chain (nozzle-scaled cutter dims — dig recipe: replay driver
-  `replay_snapjoin.rs` in the 2026-07-17 capture cache, CHAIN=1 DUMP_AT=5 on
-  capture-snapnozzle to mint the honest pre-cut plate, then PLATE/HOLE minimal
-  repro; captured operands are fallback-poisoned, do NOT replay them directly),
-  and the bed-flat clip volume 46.701 vs 46.6±0.05 pin (genuine deviation, the
-  reference kernel passes — per-op dual-kernel volume diff).
+- REMAINING after the deepened-opening union AND the plane×cone exact-circle
+  arc (fixture `snapclip_export_corner_inmem.rs` — the EXPORT chain builds with
+  forExport=FALSE/tapered pockets; `trim_ellipse_to_boundary_crossings` only
+  accepted Ellipse sections, so the horizontal cutter-top's exact Circle arc
+  died in the 16-sample in-both filter and the corner cones never split; both
+  join-edges chains now replay fully analytic posBad=0 — true-variant F=881,
+  export-variant F=418): the 0.6mm-nozzle EXPORT chain still breaks at
+  op-cut-3 (posBad=10 analytic-but-leaky, accepted by the gate; fresh minimal
+  repro via CHAIN=1 DUMP_AT=3 on capture-snapnozzle-noexp in the 2026-07-17
+  cache — captured operands are fallback-poisoned, never replay them directly),
+  the by-edge-id acceptance gate is BLIND to position-duplicate leaks (poison
+  propagates silently — evaluate a position-quantized gate), and the bed-flat
+  clip volume 46.701 vs 46.6±0.05 pin (genuine deviation, the reference kernel
+  passes — per-op dual-kernel volume diff).
 
 Fit-offset groove-mouth sliver family — CLOSED (2026-07-16, PR #1078, fixture
 `crates/io/tests/fitoffset_groove_mouth_inmem.rs`): each groove cutter's mouth
@@ -553,15 +558,20 @@ snapClip family — THREE roots CLOSED 2026-07-16 (#1080, #1082, #1085); deepene
   chain partners (weld at 100·tol). FOIL SET GREW: cylinder-slot + groove-mouth +
   junction-disc are now mandatory alongside d4/pcut3/divider for ANY section/clip
   change — three wrong gate choices were each caught by a different foil.
-- REMAINING after the deepened-opening union (which closed the join-edges chain —
-  the full 44-hole snapClip plate replays analytic F=881 posBad=0, was F=8207
-  bnd=86): the 0.6mm-nozzle chain still mesh-falls-back at op-cut-5 on a FRESH
-  native chain (nozzle-scaled cutter dims — dig recipe: replay driver
-  `replay_snapjoin.rs` in the 2026-07-17 capture cache, CHAIN=1 DUMP_AT=5 on
-  capture-snapnozzle to mint the honest pre-cut plate, then PLATE/HOLE minimal
-  repro; captured operands are fallback-poisoned, do NOT replay them directly),
-  and the bed-flat clip volume 46.701 vs 46.6±0.05 pin (genuine deviation, the
-  reference kernel passes — per-op dual-kernel volume diff).
+- REMAINING after the deepened-opening union AND the plane×cone exact-circle
+  arc (fixture `snapclip_export_corner_inmem.rs` — the EXPORT chain builds with
+  forExport=FALSE/tapered pockets; `trim_ellipse_to_boundary_crossings` only
+  accepted Ellipse sections, so the horizontal cutter-top's exact Circle arc
+  died in the 16-sample in-both filter and the corner cones never split; both
+  join-edges chains now replay fully analytic posBad=0 — true-variant F=881,
+  export-variant F=418): the 0.6mm-nozzle EXPORT chain still breaks at
+  op-cut-3 (posBad=10 analytic-but-leaky, accepted by the gate; fresh minimal
+  repro via CHAIN=1 DUMP_AT=3 on capture-snapnozzle-noexp in the 2026-07-17
+  cache — captured operands are fallback-poisoned, never replay them directly),
+  the by-edge-id acceptance gate is BLIND to position-duplicate leaks (poison
+  propagates silently — evaluate a position-quantized gate), and the bed-flat
+  clip volume 46.701 vs 46.6±0.05 pin (genuine deviation, the reference kernel
+  passes — per-op dual-kernel volume diff).
 
 Fit-offset groove-mouth sliver family — CLOSED (2026-07-16, PR #1078, fixture
 `crates/io/tests/fitoffset_groove_mouth_inmem.rs`): each groove cutter's mouth
