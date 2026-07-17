@@ -92,6 +92,7 @@ fn split_sections_at_t_junctions(
     frame: Option<&PlaneFrame>,
     wire_pts: &[Point3],
     tol: f64,
+    mut split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
 ) {
     // Every distinct section endpoint (3D) is a candidate split point. Dedup
     // with a fine grid (cell = tol), then index the unique points in a COARSE
@@ -309,6 +310,14 @@ fn split_sections_at_t_junctions(
                 pave_block_id: None,
             });
         };
+        if let Some(reg) = split_registry.as_deref_mut()
+            && let Some(pb_id) = edge.pave_block_id
+        {
+            for &(t, _) in &splits {
+                let s3 = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+                reg.entry(pb_id).or_default().push(s3);
+            }
+        }
         for &(t, _) in &splits {
             let s3 = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
             let s_uv = project(s3, prev_uv);
@@ -1069,6 +1078,11 @@ struct ArrInput {
     /// when un-split; if an arc would be split at an interior crossing the
     /// arrangement bails so the existing curved paths handle it.
     is_arc: bool,
+    /// Whether this input came from the SECTION set (vs the face boundary).
+    /// True line×arc crossings and exact-break sub-arc emission apply only to
+    /// section arcs: boundary bay arcs arrive pre-split by the calibrated
+    /// boundary-crossing machinery and must keep the historical chord path.
+    is_section: bool,
 }
 
 /// Decompose a planar face into its minimal interior regions via a 2D
@@ -1104,6 +1118,7 @@ fn split_plane_face_by_arrangement(
     face_id: FaceId,
     frame: &PlaneFrame,
     tol: f64,
+    split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
 ) -> Option<Vec<SplitSubFace>> {
     // Collect input edges (boundary + sections) with their true geometry. Each
     // arc keeps its source curve; the arrangement subdivision uses the chord.
@@ -1115,6 +1130,7 @@ fn split_plane_face_by_arrangement(
             b: e.end_uv,
             edge: e.clone(),
             is_arc,
+            is_section: false,
         });
     }
     for s in sections {
@@ -1146,6 +1162,7 @@ fn split_plane_face_by_arrangement(
                 pave_block_id: s.pave_block_id,
             },
             is_arc,
+            is_section: true,
         });
     }
     // Section-only entry point: keep the historical max-area drop + flat
@@ -1160,6 +1177,7 @@ fn split_plane_face_by_arrangement(
         tol,
         false,
         &[],
+        split_registry,
     )
 }
 
@@ -1200,6 +1218,7 @@ fn arrangement_regions_from_combined(
             b: e.end_uv,
             edge: e.clone(),
             is_arc: !matches!(e.curve_3d, EdgeCurve::Line),
+            is_section: false,
         })
         .collect();
     arrangement_regions_from_inputs(
@@ -1212,6 +1231,7 @@ fn arrangement_regions_from_combined(
         tol,
         true,
         inner_wires,
+        None,
     )
 }
 
@@ -1240,6 +1260,10 @@ fn arrangement_regions_from_inputs(
     // Used by the even-odd path to drop solid regions that fill an opening.
     // Empty for the section-only entry point.
     original_holes: &[Vec<OrientedPCurveEdge>],
+    // When present, section-input interior break points are recorded per pave
+    // block (exact UV → 3D via the frame) so curved faces sharing the same
+    // section curve pre-split at identical points.
+    mut split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
 ) -> Option<Vec<SplitSubFace>> {
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::vec::Vec2;
@@ -1325,7 +1349,7 @@ fn arrangement_regions_from_inputs(
                 (frame.project(p3) - uv).length()
             })
             .fold(f64::MAX, f64::min)
-            <= tol
+            <= tol * 100.0
     };
 
     // Per-input chord bounding box (expanded by `tol`) for broad-phase pruning
@@ -1348,6 +1372,103 @@ fn arrangement_regions_from_inputs(
 
     // Undirected sub-segments keyed by endpoint vertex pair, each tagged with
     // its source input index and whether it spans that whole input.
+    // UV polylines (with native curve parameters) for every arc input,
+    // sampled once. Used for TRUE line×arc crossings: the chord×chord
+    // crossing point can sit several 1e-4 from the real arc (the sagitta),
+    // and registering it splits the LINE at a phantom vertex while the arc's
+    // side rejects the break — a mismatched half-edge graph whose dangling
+    // edges the face tracer walks out-and-back, emitting slit regions.
+    let arc_polys: Vec<Option<Vec<(f64, Point2)>>> = inputs
+        .iter()
+        .map(|inp| {
+            inp.is_arc.then(|| {
+                let e = &inp.edge;
+                let (d0, d1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                (0..=ARR_ARC_SAMPLES)
+                    .map(|k| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let f = k as f64 / ARR_ARC_SAMPLES as f64;
+                        let t = d0 + (d1 - d0) * f;
+                        let p3 = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
+                        (t, frame.project(p3))
+                    })
+                    .collect()
+            })
+        })
+        .collect();
+    // True crossings of the segment (la, lb) with arc input `ai`, refined by
+    // bisection on the arc's native parameter against the segment's line.
+    // Returns the exact crossing UVs.
+    // Max deviation of an arc's sampled polyline from its chord — the bound
+    // within which a chord-derived crossing and the true crossing of the same
+    // transversal can differ.
+    let arc_sagitta = |ai: usize| -> f64 {
+        let Some(poly) = arc_polys[ai].as_ref() else {
+            return 0.0;
+        };
+        let a = inputs[ai].a;
+        let b = inputs[ai].b;
+        let d = b - a;
+        let len = d.length().max(f64::MIN_POSITIVE);
+        poly.iter()
+            .map(|(_, p)| (d.x().mul_add(p.y() - a.y(), -(d.y() * (p.x() - a.x()))) / len).abs())
+            .fold(0.0, f64::max)
+    };
+    let line_arc_crossings = |la: Point2, lb: Point2, ai: usize| -> Vec<Point2> {
+        let Some(poly) = arc_polys[ai].as_ref() else {
+            return Vec::new();
+        };
+        let e = &inputs[ai].edge;
+        // An arc endpoint lying ON the line is an endpoint T-junction, owned
+        // by the endpoint-break pass; fit-error sign flips near it fabricate
+        // a phantom interior crossing that over-splits the arc.
+        let guard = tol * 100.0;
+        let near_end = |p: Point2| -> bool {
+            (p - inputs[ai].a).length() <= guard
+                || (p - inputs[ai].b).length() <= guard
+                || (p - la).length() <= guard
+                || (p - lb).length() <= guard
+        };
+        let ld = lb - la;
+        let side =
+            |p: Point2| -> f64 { ld.x().mul_add(p.y() - la.y(), -(ld.y() * (p.x() - la.x()))) };
+        let mut out = Vec::new();
+        for w in poly.windows(2) {
+            let ((t0, p0), (t1, p1)) = (w[0], w[1]);
+            if seg_cross_param(la, lb, p0, p1).is_none() {
+                continue;
+            }
+            let (mut lo, mut hi) = (t0, t1);
+            let mut s_lo = side(p0);
+            for _ in 0..48 {
+                let mid = 0.5 * (lo + hi);
+                let pm = frame.project(
+                    e.curve_3d
+                        .evaluate_with_endpoints(mid, e.start_3d, e.end_3d),
+                );
+                let s_mid = side(pm);
+                if (s_mid > 0.0) == (s_lo > 0.0) {
+                    lo = mid;
+                    s_lo = s_mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let tm = 0.5 * (lo + hi);
+            let uv = frame.project(e.curve_3d.evaluate_with_endpoints(tm, e.start_3d, e.end_3d));
+            // A genuine crossing converges ONTO the line; a phantom from
+            // fit-error sign noise (an arc endpoint sitting on the line makes
+            // the initial side() pure noise) converges anywhere in the sample
+            // window and lands well off it.
+            let ld_len = ld.length().max(f64::MIN_POSITIVE);
+            let dist_line = side(uv).abs() / ld_len;
+            if dist_line <= guard && !near_end(uv) {
+                out.push(uv);
+            }
+        }
+        out
+    };
+
     let mut sub_edges: Vec<ArrSubEdge> = Vec::new();
     for i in 0..inputs.len() {
         let (a0, a1) = (inputs[i].a, inputs[i].b);
@@ -1358,8 +1479,12 @@ fn arrangement_regions_from_inputs(
         }
         let i_is_arc = inputs[i].is_arc;
         let (ilx, ily, ihx, ihy) = chord_boxes[i];
-        // Break parameters along this chord (t in [0,1]).
-        let mut ts: Vec<f64> = vec![0.0, 1.0];
+        // Break parameters along this chord (t in [0,1]), each optionally
+        // carrying the EXACT break UV (true line×arc crossings; endpoint
+        // T-junctions use the endpoint itself) so both sides of a junction
+        // register the identical vertex.
+        let mut ts: Vec<(f64, Option<Point2>)> = vec![(0.0, None), (1.0, None)];
+        let mut inexact_arc_break = false;
         for (j, other) in inputs.iter().enumerate() {
             if i == j {
                 continue;
@@ -1379,40 +1504,133 @@ fn arrangement_regions_from_inputs(
             // T-junction work below — the cost the bbox prune keeps near-linear.
             crate::perf::bump_face_split_probe();
             let (b0, b1) = (other.a, other.b);
-            // Proper interior crossing. For an arc input, only honour the break
-            // when the crossing point is on the real arc (not just its chord).
-            if let Some(t) = seg_cross_param(a0, a1, b0, b1)
-                && (!i_is_arc || chord_break_on_arc(i, a0 + d * t))
-            {
-                ts.push(t);
+            // Proper interior crossings. Line×arc pairs use the TRUE crossing
+            // (refined against the real arc) registered with the exact UV on
+            // BOTH inputs; the chord-derived point can be a sagitta away and
+            // splitting only one side desynchronizes the half-edge graph.
+            match (i_is_arc, other.is_arc) {
+                (false, false) => {
+                    if let Some(t) = seg_cross_param(a0, a1, b0, b1) {
+                        ts.push((t, None));
+                    }
+                }
+                (false, true) if other.is_section => {
+                    // True crossings replace the chord-derived point when one
+                    // is found within the arc's sagitta of it; a chord
+                    // crossing with NO nearby true
+                    // crossing keeps the historical chord break (the sampled
+                    // arc span can be unreliable for reversed arcs, and
+                    // dropping calibrated breaks under-splits).
+                    let cover = arc_sagitta(j) + tol * 100.0;
+                    let truex = line_arc_crossings(a0, a1, j);
+                    let mut covered_chord = false;
+                    // A chord crossing within the weld band of the ARC's
+                    // endpoints is the endpoint T-junction seen through the
+                    // chord (a fit-error offset endpoint dips across the
+                    // line); the endpoint-break pass owns it.
+                    let chord_t = seg_cross_param(a0, a1, b0, b1).filter(|&t| {
+                        let p = a0 + d * t;
+                        (p - other.a).length() > tol * 100.0 && (p - other.b).length() > tol * 100.0
+                    });
+                    for uv in &truex {
+                        let t = (*uv - a0).dot(d) / (len * len);
+                        if t > 1e-6 && t < 1.0 - 1e-6 {
+                            ts.push((t, Some(*uv)));
+                            if let Some(ct) = chord_t
+                                && (t - ct).abs() * len <= cover
+                            {
+                                covered_chord = true;
+                            }
+                        }
+                    }
+                    if let Some(ct) = chord_t
+                        && !covered_chord
+                    {
+                        ts.push((ct, None));
+                    }
+                }
+                (true, false) if inputs[i].is_section => {
+                    let cover = arc_sagitta(i) + tol * 100.0;
+                    let truex = line_arc_crossings(b0, b1, i);
+                    let mut covered_chord = false;
+                    let chord_t = seg_cross_param(a0, a1, b0, b1)
+                        .filter(|&t| chord_break_on_arc(i, a0 + d * t))
+                        .filter(|&t| t * len > tol * 100.0 && (1.0 - t) * len > tol * 100.0);
+                    for uv in &truex {
+                        let t = (*uv - a0).dot(d) / (len * len);
+                        if t > 1e-6 && t < 1.0 - 1e-6 {
+                            ts.push((t, Some(*uv)));
+                            if let Some(ct) = chord_t
+                                && (t - ct).abs() * len <= cover
+                            {
+                                covered_chord = true;
+                            }
+                        }
+                    }
+                    if let Some(ct) = chord_t
+                        && !covered_chord
+                    {
+                        ts.push((ct, None));
+                        inexact_arc_break = true;
+                    }
+                }
+                _ => {
+                    if let Some(t) = seg_cross_param(a0, a1, b0, b1)
+                        && (!i_is_arc || chord_break_on_arc(i, a0 + d * t))
+                    {
+                        ts.push((t, None));
+                        if i_is_arc {
+                            inexact_arc_break = true;
+                        }
+                    }
+                }
             }
             // Other chord's endpoints landing on this chord's interior
-            // (T-junctions where a section merely touches another).
+            // (T-junctions where a section merely touches another). The break
+            // registers with the ENDPOINT itself as the exact vertex UV —
+            // weld-scale band, not the vertex tolerance: a marched section's
+            // endpoint (curve-fit error ~1e-6) landing on a boundary or
+            // section chord is a REAL T-junction; at 1e-7 it is missed, the
+            // chord dangles as a pendant, and the face tracer walks it twice.
             for bp in [b0, b1] {
                 let w = (bp - a0).dot(d) / (len * len);
                 if w > 1e-6 && w < 1.0 - 1e-6 {
                     let on = a0 + d * w;
-                    if (on - bp).length() < tol && (!i_is_arc || chord_break_on_arc(i, on)) {
-                        ts.push(w);
+                    if (on - bp).length() < tol * 100.0 && (!i_is_arc || chord_break_on_arc(i, bp))
+                    {
+                        ts.push((w, Some(bp)));
                     }
                 }
             }
         }
-        ts.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-        ts.dedup_by(|x, y| (*x - *y).abs() < 1e-6);
-        // An arc whose chord is split at an interior crossing cannot be emitted
-        // as one true arc; bail and let the existing curved paths handle it.
-        if inputs[i].is_arc && ts.len() > 2 {
+        ts.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+        ts.dedup_by(|x, y| (x.0 - y.0).abs() < 1e-6);
+        // An arc split at a chord-derived (inexact) break cannot be emitted
+        // faithfully; bail and let the existing curved paths handle it. Exact
+        // true-crossing and endpoint-T breaks emit trimmed sub-arcs below.
+        if inputs[i].is_arc && ts.len() > 2 && (inexact_arc_break || !inputs[i].is_section) {
             return None;
         }
         let n_breaks = ts.len();
+        if n_breaks > 2
+            && inputs[i].is_section
+            && let Some(reg) = split_registry.as_deref_mut()
+            && let Some(pb_id) = inputs[i].edge.pave_block_id
+        {
+            for brk in &ts[1..n_breaks - 1] {
+                let uv = brk.1.unwrap_or(a0 + d * brk.0);
+                reg.entry(pb_id)
+                    .or_default()
+                    .push(frame.evaluate(uv.x(), uv.y()));
+            }
+        }
         for (wi, w) in ts.windows(2).enumerate() {
-            let (ta, tb) = (w[0], w[1]);
+            let (ta, tb) = (w[0].0, w[1].0);
             if tb - ta < 1e-6 {
                 continue;
             }
-            let pa = a0 + d * ta;
-            let pb = a0 + d * tb;
+            let pa = w[0].1.unwrap_or(a0 + d * ta);
+            let pb = w[1].1.unwrap_or(a0 + d * tb);
             let ka = register(pa, &mut vert_pos);
             let kb = register(pb, &mut vert_pos);
             // Whole = this is the only sub-segment of the input (no interior
@@ -1594,6 +1812,44 @@ fn arrangement_regions_from_inputs(
         // Reconstruct a whole arc input exactly.
         if let Some(&(input_idx, whole)) = sub_edge_src.get(seg_id) {
             let inp = &inputs[input_idx];
+            if !whole && inp.is_arc {
+                // Trimmed sub-arc: the same true curve with narrower endpoints
+                // (the endpoint-trimmed convention every consumer follows via
+                // `evaluate_with_endpoints`/`domain_with_endpoints`). Vertices
+                // came from exact true-crossing/T registration, so the 3D from
+                // the frame matches the neighbouring pieces.
+                let s3 = frame.evaluate(su.x(), su.y());
+                let e3 = frame.evaluate(eu.x(), eu.y());
+                let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                    &inp.edge.curve_3d,
+                    s3,
+                    e3,
+                    surface,
+                    &[],
+                    Some(frame),
+                );
+                let cd = inp.b - inp.a;
+                let cl2 = cd.dot(cd).max(1e-24);
+                let same_dir = (su - inp.a).dot(cd) / cl2 <= (eu - inp.a).dot(cd) / cl2;
+                return Some(OrientedPCurveEdge {
+                    curve_3d: inp.edge.curve_3d.clone(),
+                    pcurve,
+                    start_uv: su,
+                    end_uv: eu,
+                    start_3d: s3,
+                    end_3d: e3,
+                    forward: if same_dir {
+                        inp.edge.forward
+                    } else {
+                        !inp.edge.forward
+                    },
+                    source_edge_idx: None,
+                    // A sub-span of the section must not inherit the parent's
+                    // pave_block_id — vertex resolution would snap both halves
+                    // to the un-split PaveBlock endpoints.
+                    pave_block_id: None,
+                });
+            }
             if whole && inp.is_arc {
                 // Does the requested from->to match the input's a->b chord?
                 let forward = (inp.a - su).length() < (inp.b - su).length();
@@ -2003,6 +2259,7 @@ pub fn split_face_2d(
         Vec<brepkit_topology::edge::EdgeId>,
         impl std::hash::BuildHasher,
     >,
+    mut split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
 ) -> Vec<SplitSubFace> {
     let face = match topo.face(face_id) {
         Ok(f) => f,
@@ -2636,12 +2893,24 @@ pub fn split_face_2d(
         // (marched/fitted) sections' endpoints are candidates — Line section
         // endpoints come from exact clips, so the Line geometry referenced
         // here never moves during this pass.
-        let lines: Vec<(usize, Point3, Point3)> = out
+        let mut lines: Vec<(usize, Point3, Point3)> = out
             .iter()
             .enumerate()
             .filter(|(_, s)| matches!(s.curve_3d, EdgeCurve::Line))
             .map(|(i, s)| (i, s.start, s.end))
             .collect();
+        // BOUNDARY Line edges are projection targets too: a curved section
+        // ending mid-span of the face's own boundary (a cone conic landing on
+        // the box wall's bottom edge) has no anchor there either, and the
+        // arrangement's T-break test needs the endpoint exactly ON the edge.
+        // usize::MAX-based ids keep them distinct from every section index.
+        lines.extend(
+            boundary_edges
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| matches!(e.curve_3d, EdgeCurve::Line))
+                .map(|(i, e)| (usize::MAX - i, e.start_3d, e.end_3d)),
+        );
         for si in 0..out.len() {
             if matches!(out[si].curve_3d, EdgeCurve::Line) {
                 continue;
@@ -3081,6 +3350,7 @@ pub fn split_face_2d(
             if is_plane { Some(frame) } else { None },
             &wire_pts,
             tol.linear,
+            split_registry.as_deref_mut(),
         );
     }
 
@@ -3308,7 +3578,15 @@ pub fn split_face_2d(
         && let Some(ref boundary) = boundary_edges_backup
     {
         let arr = split_plane_face_by_arrangement(
-            &surface, boundary, sections, rank, reversed, face_id, frame, tol.linear,
+            &surface,
+            boundary,
+            sections,
+            rank,
+            reversed,
+            face_id,
+            frame,
+            tol.linear,
+            split_registry,
         );
         if let Some(result) = arr
             && (result.len() > loops.len()
@@ -4047,4 +4325,123 @@ fn plane_internal_line_loops(
         return None;
     }
     Some(deduped)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves2d::Line2D;
+    use brepkit_math::vec::Vec2;
+    use brepkit_topology::test_utils::make_unit_square_face;
+
+    fn dummy_pcurve() -> brepkit_math::curves2d::Curve2D {
+        brepkit_math::curves2d::Curve2D::Line(
+            Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+        )
+    }
+
+    fn line_section(start: Point3, end: Point3) -> SectionEdge {
+        SectionEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve_a: dummy_pcurve(),
+            pcurve_b: dummy_pcurve(),
+            start,
+            end,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        }
+    }
+
+    /// The face-64 slit-web regression: a plane face cut by a straight
+    /// section plus a marched-NURBS section whose endpoint forms a
+    /// T-junction MID-SPAN of the straight one, carrying ~1e-6 of curve-fit
+    /// error. The chord-based subdivision split the line at a phantom point
+    /// the arc side rejected, the half-edge graph desynchronized, and the
+    /// tracer's dangling-edge retreat emitted regions with SLIT (doubled)
+    /// edges. With true line×arc crossings and exact-UV co-registration the
+    /// arrangement yields the three real regions with every edge used once
+    /// per region.
+    #[test]
+    fn arrangement_splits_fit_error_t_junction_web_without_slits() {
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let face = topo.face(face_id).unwrap();
+        let surface = face.surface().clone();
+        let wire_pts = collect_wire_points(&topo, face.outer_wire());
+        let normal = extract_plane_normal(&surface);
+        let frame = PlaneFrame::from_plane_face(normal, &wire_pts);
+        let boundary =
+            boundary_edges_to_pcurve(&topo, face.outer_wire(), &surface, &wire_pts, Some(&frame));
+
+        // Straight section spanning the square at y = 0.5.
+        let s_line = line_section(Point3::new(0.0, 0.5, 0.0), Point3::new(1.0, 0.5, 0.0));
+
+        // Marched section from a T mid-span of the line (with 1e-6 fit error
+        // off it) down to the right boundary edge, bulging like a conic.
+        let pts = [
+            Point3::new(0.5, 0.5 + 1.0e-6, 0.0),
+            Point3::new(0.63, 0.44, 0.0),
+            Point3::new(0.75, 0.385, 0.0),
+            Point3::new(0.87, 0.315, 0.0),
+            Point3::new(1.0, 0.25, 0.0),
+        ];
+        let nurbs = brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap();
+        let s_arc = SectionEdge {
+            curve_3d: EdgeCurve::NurbsCurve(nurbs),
+            pcurve_a: dummy_pcurve(),
+            pcurve_b: dummy_pcurve(),
+            start: pts[0],
+            end: pts[4],
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        };
+
+        let sections = vec![s_line, s_arc];
+        let result = split_plane_face_by_arrangement(
+            &surface,
+            &boundary,
+            &sections,
+            Rank::A,
+            false,
+            face_id,
+            &frame,
+            1.0e-7,
+            None,
+        )
+        .expect("arrangement must trace the T-junction web");
+
+        // Upper half, lower-left region, lower-right region.
+        assert_eq!(result.len(), 3, "expected the three real regions");
+
+        // No region may traverse the same undirected edge twice (a slit).
+        for sub in &result {
+            let mut seen = std::collections::HashMap::new();
+            for e in &sub.outer_wire {
+                let q = |p: Point3| {
+                    (
+                        (p.x() * 1.0e6).round() as i64,
+                        (p.y() * 1.0e6).round() as i64,
+                        (p.z() * 1.0e6).round() as i64,
+                    )
+                };
+                let (a, b) = (q(e.start_3d), q(e.end_3d));
+                let key = if a <= b { (a, b) } else { (b, a) };
+                *seen.entry(key).or_insert(0usize) += 1;
+            }
+            assert!(
+                seen.values().all(|&c| c <= 1),
+                "region wire traverses an edge twice (slit): {:?}",
+                seen.iter().filter(|&(_, &c)| c > 1).collect::<Vec<_>>()
+            );
+        }
+    }
 }
