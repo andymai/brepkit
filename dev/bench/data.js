@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784255593291,
+  "lastUpdate": 1784255836118,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5075,6 +5075,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17841817,
             "range": "± 762629",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a6ee562df3db91cb41085da7acb02c39c9dab39",
+          "message": "docs(algo): align section-clip and internal-loop doc comments with the multi-interval behavior (#1087)\n\nFollow-up to #1085 (automerge outran Copilot's three stale-doc\nfindings): the clip now returns every in-face interval and the\ninternal-loop detector accepts open arcs/NURBS — the doc comments still\ndescribed the old single-interval/all-Line behavior.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAligns code doc comments with current behavior: section clipping returns\nevery in-face interval, and internal-loop detection accepts lines, open\narcs, and open NURBS conics with dedup. Also updates the skills roadmap\nto mark snapClip’s three roots closed (#1080/#1082/#1085) and note the\nremaining deepened‑notch work.\n\n<sup>Written for commit 34ceff783db6e568fcbed779ed319b484a38d832.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1087?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T02:35:07Z",
+          "tree_id": "9297eb1092a0c81770c437495e0f7e1a09fc4916",
+          "url": "https://github.com/andymai/brepkit/commit/6a6ee562df3db91cb41085da7acb02c39c9dab39"
+        },
+        "date": 1784255835296,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 873279,
+            "range": "± 2057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 958617,
+            "range": "± 4625",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12009,
+            "range": "± 57",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 630185,
+            "range": "± 1210",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25455754,
+            "range": "± 83593",
             "unit": "ns/iter"
           }
         ]
