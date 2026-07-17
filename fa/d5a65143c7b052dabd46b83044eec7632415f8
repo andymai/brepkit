@@ -1,0 +1,21 @@
+crates/topology/src/edge.rs
+  s_7fddca67d6dc19::t_d6b59d2dbe10f5 340-344
+  s_7fddca67d6dc19::t_ce86745680994e 345-347
+  s_7fddca67d6dc19::t_267041305216fd 348-352,362-363,399,414
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "fad5a65143c7b052dabd46b83044eec7632415f8",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
