@@ -2899,15 +2899,17 @@ fn instantiate_wire_edge(
     }
 }
 
-/// Pre-split sections at the registry's points for the same pave block.
+/// Pre-split sections at registered split points that lie on their curves.
 ///
 /// A plane face's arrangement can split a section at a true interior crossing;
-/// a curved face sharing the same section curve (same pave block) must split
-/// at the identical 3D point or the two faces' partitions desynchronize and
-/// the shared pieces pair with nothing. Points are matched to a section when
-/// they lie strictly inside its span; pieces drop the parent's pave block id
-/// (vertex resolution would snap both halves to the un-split PaveBlock
-/// endpoints) and clear UV hints so consumers re-derive them.
+/// a curved face sharing the same FF curve must split at the identical 3D
+/// point or the two faces' partitions desynchronize and the shared pieces
+/// pair with nothing. Curved faces' marched sections carry no pave block id,
+/// so registered points are matched GEOMETRICALLY: a point cuts a section
+/// when it lies on the section's curve within the weld band and strictly
+/// inside its span. Pieces drop the parent's pave block id (vertex resolution
+/// would snap both halves to the un-split PaveBlock endpoints) and clear UV
+/// hints so consumers re-derive them.
 fn presplit_sections_at_registry(
     sections: &[crate::builder::split_types::SectionEdge],
     registry: &std::collections::HashMap<usize, Vec<brepkit_math::vec::Point3>>,
