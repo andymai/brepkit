@@ -219,6 +219,31 @@ suite reaches 9/9. DURABLE: stored `start_uv`/pcurves on hole wires can be
 fitted in a FOREIGN frame — any consumer building polygons from them must
 re-derive via frame.project(3D) (same class as the pcurve-convention lesson).
 
+snapClip family — THREE roots CLOSED 2026-07-16 (#1080, #1082, #1085); deepened-notch remains:
+- Connector key (#1080, fixture `extrude_spline_encoded_profile_recovers_analytic_walls`):
+  2D drawings ship corner-treated profiles as B-splines; extrude emitted ruled-NURBS
+  walls for exact plane/cylinder geometry and every boolean against the prism fell
+  back. Profile-wire curve recognition at extrude entry (the loft pattern).
+- Completed 4-way socket-junction disc (#1082, fixture `socket_junction_disc_inmem`):
+  the junction circle's 2-arc traced loop samples area-degenerate, the sliver guard
+  dropped it silently, and the arrangement was declined on equal loop COUNT; the
+  arrangement gate now also fires on any area-degenerate traced loop. Full 20-pocket
+  snapClip plate chain analytic (F=595 vs F=6923/bnd=930).
+- Snap-slot hole cuts (#1085, fixture `snapclip_slot_cut_inmem`): four stacked
+  section-machinery gaps — outermost-pair clip vs INWARD-bulging bite arcs
+  (midpoint-classified multi-interval clip, HOLE-FREE faces only: holed faces'
+  sections feed the weave, calibrated on whole pieces), multi-window sections kept
+  one window, plane×band Lines never clipped to the band v-window (exact affine-v
+  trim; mixed pairs get ONLY that trim — the plane-polygon clip on banded pairs
+  broke seam-anchored cylinder bands), and marched-fit endpoints ~1e-6 off exact
+  chain partners (weld at 100·tol). FOIL SET GREW: cylinder-slot + groove-mouth +
+  junction-disc are now mandatory alongside d4/pcut3/divider for ANY section/clip
+  change — three wrong gate choices were each caught by a different foil.
+- REMAINING: hole-1+ deepened-notch/coplanar-margin family (0.01 offsets between
+  successive slot cutters → micro-edges + near-coincident conic pairs; the
+  deepened-notch TERMINAL row's missing piece), 0.6mm-nozzle nm, bed-flat clip
+  volume 46.701 vs 46.6±0.05 pin (run the reference kernel side-by-side first).
+
 Fit-offset groove-mouth sliver family — CLOSED (2026-07-16, PR #1078, fixture
 `crates/io/tests/fitoffset_groove_mouth_inmem.rs`): each groove cutter's mouth
 clips the adjacent socket-pocket rim corners, leaving zero-width top-face
