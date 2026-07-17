@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784277473388,
+  "lastUpdate": 1784282148970,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5453,6 +5453,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28224975,
             "range": "± 180651",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a991f79ea71e0f60dfcf2d23b4f202dc50448854",
+          "message": "fix(algo): split marched-NURBS boundary edges at neighbor partition anchors (#1094)\n\n## Summary\n\nFollow-up to #1092, next increment on the snapClip deepened-notch chain.\nA marched-NURBS boundary edge (a plane×cone conic minted by an earlier\nboolean) is shared between a plane face and a curved face. The plane\nside splits its copy face-locally where its section web anchors on it,\nbut `split_boundary_edges_at_3d_points` had **no NurbsCurve arm** — the\nchord-based line fallback rejects on-curve points by the sagitta — so\nthe curved side kept the edge whole and the two partitions\ndesynchronized: unpaired result edges, analytic-gate rejection, mesh\nfallback.\n\n## Changes\n\n- The boundary splitter routes NURBS edges through the existing sampled\npoint-on-curve matcher (`find_splits_on_nurbs_section`: nearest-sample\npre-locate + ternary refine, weld band) and uses the refined on-curve\nfoot as the split vertex, mirroring the Circle arm.\n- Curved faces feed the #1092 section split registry into their boundary\nsplit candidates, so anchors registered by plane neighbours reach the\nshared edges. Candidates not on an edge are inert by construction.\n\nAn earlier attempt at this arm (pre-#1092) regressed the groove-mouth\nchain; on top of #1092's refined arrangement (on-line validation,\nendpoint guards, sagitta cover) the groove landscape produces no NURBS\nboundary splits at all and stays green.\n\n## Testing\n\n- snapClip deepened-notch raw repro: unpaired/over-shared edges **22 →\n10**.\n- Full calibrated foil battery green: groove-mouth, both A1-corner\nfixtures, honeycomb pcut, wall-cutout, junction-disc, snap-slot,\ncornerclip, divider-lip, fit-offset nub chain, dblcorner nub, d4 canary\n27/27.\n- io / operations / algo suites green; clippy -D warnings + fmt clean;\npre-push full-test hook passed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes desynced splits on marched NURBS boundary edges shared by plane\nand curved faces. NURBS edges now split at neighbor anchors, keeping\nshared edges in sync and avoiding analytic rejection and mesh fallback.\n\n- **Bug Fixes**\n- Route NURBS boundary edges through the sampled point-on-curve matcher\nand use the neighbor anchor point as the split vertex (adopted\nverbatim).\n- Provide the section split registry to all faces so curved-face\nboundary candidates receive plane-side anchors.\n- Result: snapClip deepened-notch unpaired/over-shared edges reduced\nfrom 22 to 10; full test suites green.\n\n<sup>Written for commit 71fdc9858a5383feafed05f225f33251201aeb23.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1094?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T09:53:25Z",
+          "tree_id": "9cc4371e5ca5a97d4e6432fbc45b54dfad421a0f",
+          "url": "https://github.com/andymai/brepkit/commit/a991f79ea71e0f60dfcf2d23b4f202dc50448854"
+        },
+        "date": 1784282148533,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 840662,
+            "range": "± 2819",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 946720,
+            "range": "± 3055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11604,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 604023,
+            "range": "± 3284",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26434701,
+            "range": "± 165877",
             "unit": "ns/iter"
           }
         ]
