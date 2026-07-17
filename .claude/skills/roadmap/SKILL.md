@@ -323,6 +323,22 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   (02:47 pre-fix + 19:44 fresh); one full iteration was burned replaying the
   stale pair whose F=18 nub was an OPEN mesh-fallback operand (GIGO, already
   fixed) — check bin mtimes before replaying mixed capture dirs.
+- **A1-corner recess-hole conic-web split (the scenario's nm=2 STL pin) —
+  CLOSED (2026-07-16, fixture `crates/io/tests/dovetail_a1corner_holecut_inmem.rs`):**
+  after #1088 made the A1 fuse chain analytic, the remaining nm=2 came from
+  the forExport=false hole cuts: each recess box's slanted wall gets a
+  4-section web (3-line U-chain + plane×cone conic T-ing mid-span into the
+  z=0 line). Two 1e-6-fit-error-vs-1e-7-tolerance gaps: (1) the weld had no
+  anchor at the T (now welds endpoints onto other Line sections' INTERIORS —
+  nearest strictly-interior foot in the 100·tol band); (2) the planar
+  arrangement's arc on-plane round-trip demanded 1e-7, bailing on the fitted
+  conic (now 100·tol — genuine straddle arcs are off by orders of magnitude
+  more). Un-rescued, the angular wire builder walked the CW-boundary slit-web
+  as ONE grand circuit under BOTH winding rules (that greedy-trace weakness
+  remains — the arrangement is the sanctioned rescue for plane-face webs).
+  DURABLE: marched/fitted section geometry is good to ~1e-6, every exact-tol
+  (1e-7) gate it meets needs a weld-scale (100·tol) band; this is the FOURTH
+  such gap in this family (weld anchors, T-split, on-plane, junction-disc).
 - **Mesh-boolean fallback emits OPEN meshes that get CONSUMED — OPEN
   (discovered 2026-07-16):** on the dblcorner nub operands the co-refinement
   fallback produced bnd=5/6 output (warn-logged, then used anyway, poisoning
