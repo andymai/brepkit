@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784290436023,
+  "lastUpdate": 1784296530902,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5885,6 +5885,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26618840,
             "range": "± 93531",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f0f8e0e1911924effce9b9f73e060fccfdfc48b6",
+          "message": "fix(algo): clip curved-face sections to the outer region (deepened-notch stranded rim) (#1102)\n\n## Summary\n\nThird and final landing of the snapClip deepened-notch dig: the raw\nrepro goes **6 → 0 unpaired B-Rep edges** (37 → 0 across the whole\ncampaign). The residual was the roadmap's TERMINAL stranded-rim case — a\ncut deepening an earlier opening — solved without a detection heuristic\nby making the curved-face splitter geometrically honest.\n\n## The three fixes (all gated to partial-band quadric faces carrying\nmarched-NURBS boundary edges)\n\n1. **`clip_sections_to_outer_region`**: sections overhanging the\nreceiving face through an OUTER-wire concavity (the earlier cut's bite)\nare clipped in unwrapped UV. Fully-off-face pieces and band-hugging\nsub-span re-traces drop; whole-edge duplicates are kept; mixed sections\nsplit at bisection-refined crossings whose junctions are **snapped onto\nthe boundary curve** and returned as split anchors — so the boundary\nsplitter's exact 1e-7 on-curve gate accepts them. The polygon sampler\norders endpoints by the traversal flag (correct arc vs complement for\nreversed circle edges) then orients samples to wire order empirically (a\nwhole-edge NURBS traces the curve's own direction) — each half alone\nfails a different edge class.\n2. **Stale parent pcurves**: registry-presplit section pieces keep their\nparent's pcurve, so endpoint UVs evaluate at the parent's ends and\ndisconnect from the boundary in UV. A v-disagreement-gated refit (v is\nnon-periodic, so a mismatch is unambiguous where u could be a legitimate\n2π translate) rebuilds them on the receiving face.\n3. **Zero-extent edges** from T-junction self-splits derailed the\nangular walker into degenerate single-edge sub-faces; filtered before\nthe tracer (a UV-extent guard protects closed circle sections).\n\n## Verification\n\n- Deepened-notch raw repro: posBad 6 → 0; both cone faces split into\nexactly kept-region + bite sub-faces. Committed as\n`crates/io/tests/snapclip_deepened_notch_inmem.rs` with the tool's exact\nserialized operands.\n- **d4 canary 27/27** — it caught a real regression during development\n(the clip's polygon is garbage on full-revolution primitive laterals;\nnow gated out), exactly what the canary exists for.\n- Full workspace green in release (one unrelated GPU-adapter-contention\nflake, passes standalone).\n- Roadmap row updated (the living-doc discipline); deliberate residual\ndocumented (the sub-resolution B-side corner crescent, the corner-lens\nclass).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the snapClip deepened‑notch stranded rim by clipping off‑face\nsections on curved faces and repairing split metadata. Cone/cylinder\nfaces now split cleanly in the repro, removing unpaired B‑Rep edges (6 →\n0).\n\n- **Bug Fixes**\n- `clip_sections_to_outer_region`: in UV, drop off‑face pieces and\nboundary re‑trace sub‑spans; keep whole‑edge duplicates; split mixed\nsections and snap junctions to the boundary; outer polygon now samples\nboundary‑edge endpoints. Gated to partial‑band `Cylinder`/`Cone` faces\nwith marched‑NURBS boundary edges; skips full‑revolution laterals.\nReturns anchors to seed the boundary splitter.\n- Refit pcurves on v‑mismatch for registry‑presplit pieces so endpoints\nevaluate on the receiving face (prevents UV disconnects).\n- Filter zero‑extent section edges before traversal, with a named\nUV‑extent guard to preserve closed circle sections.\n- Added `snapclip_deepened_notch_inmem.rs` with serialized fixtures\n(`snapclip_notch_plate.bin`, `snapclip_notch_cutter.bin`); asserts 0\nunpaired position‑quantized B‑Rep edges.\n\n<sup>Written for commit a2e8c5154acee713e281ff55b12d7b5e87b8b785.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1102?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T06:53:13-07:00",
+          "tree_id": "5e44aaedc948d0cd7d97939b52c880ab80bf92cd",
+          "url": "https://github.com/andymai/brepkit/commit/f0f8e0e1911924effce9b9f73e060fccfdfc48b6"
+        },
+        "date": 1784296530451,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 936815,
+            "range": "± 12677",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1008878,
+            "range": "± 2022",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12980,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 643228,
+            "range": "± 1622",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28209378,
+            "range": "± 55648",
             "unit": "ns/iter"
           }
         ]
