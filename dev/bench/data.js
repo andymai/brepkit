@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784246037627,
+  "lastUpdate": 1784246451876,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4859,6 +4859,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20593914,
             "range": "± 274320",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "af6406f897ec6c6e98afe58bb8264f0bc5bfeeaa",
+          "message": "chore(main): release 2.126.5 (#1083)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.5](https://github.com/andymai/brepkit/compare/v2.126.4...v2.126.5)\n(2026-07-16)\n\n\n### Bug Fixes\n\n* **algo:** keep the completed socket-junction disc when its traced loop\nsamples degenerate\n([#1082](https://github.com/andymai/brepkit/issues/1082))\n([c5fc0cd](https://github.com/andymai/brepkit/commit/c5fc0cd2d897fa790f66c9298babe2a9cf437392))\n* **operations:** recognize spline-encoded profile edges before\nextruding walls\n([#1080](https://github.com/andymai/brepkit/issues/1080))\n([d1a1c08](https://github.com/andymai/brepkit/commit/d1a1c08a8583cbac4a229a31f8c05a0d63cebe44))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.126.5 of `brepkit-wasm` fixing socket-junction disc stability\nand enabling wall extrusion from spline-encoded profile edges.\n\n<sup>Written for commit 351a2fa914cc10be97021dcdc990c1980ea6ff19.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1083?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-16T23:58:35Z",
+          "tree_id": "c69dbfc46679252f1d5ef4ef9c7b95f674ec38fc",
+          "url": "https://github.com/andymai/brepkit/commit/af6406f897ec6c6e98afe58bb8264f0bc5bfeeaa"
+        },
+        "date": 1784246450680,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 758862,
+            "range": "± 2029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 847214,
+            "range": "± 2056",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11817,
+            "range": "± 84",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639611,
+            "range": "± 1666",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19591802,
+            "range": "± 1486497",
             "unit": "ns/iter"
           }
         ]
