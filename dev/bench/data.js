@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784310506800,
+  "lastUpdate": 1784316855998,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6209,6 +6209,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26830735,
             "range": "± 72169",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "503ae757184a0f0ed370d221f25344b6e0b6d782",
+          "message": "docs(skills): roadmap — snapClip bed-flat volume pin resolved (#1108)\n\n## Summary\n\nResolves the long-standing snapClip bed-flat clip volume question\n(46.701 brepkit vs the 46.6±0.05 test pin) — **it is not a brepkit\ndefect; brepkit is the more accurate kernel.**\n\nA per-stage dual-kernel volume diff of `buildSnapClip` localized the\nentire delta to the relief cut:\n\n| stage | brepkit | reference | delta |\n|---|---|---|---|\n| base extrude (chamfered/filleted profile) | 52.5508 | 52.5502 |\n+0.0006 (negligible) |\n| lofted relief foot | 7518.3376 | 7518.4000 | reference +0.062 larger |\n| relief removed | 5.8498 | 5.9960 | reference over-removes 0.146 |\n| final clip | 46.7011 | 46.5543 | — |\n\nThe relief cutter is `buildSingleCellSocket` (a lofted gridfinity socket\nfoot). A native face census of brepkit's foot shows **F=34, {plane:18,\ncylinder:8, cone:8}, zero NURBS** — brepkit represents it as *exact\nanalytic* geometry (the #1045 loft-recognition). The reference kernel\nkeeps it as a NURBS loft that bulges ~0.062mm³ outward; used as a relief\ncutter, that bulging wall removes 0.146mm³ more from the clip's\ntop-bridge corners. The cutters' total volumes are identical to 0.001% —\nthe whole difference is the local loft-surface approximation in the\ncorner-overlap sliver.\n\nSo brepkit's 46.701 is the more accurate value, and the 46.6±0.05 pin is\ncalibrated to the reference's NURBS-loft approximation — the roadmap's\n\"snapshot pins are kernel-specific\" class. The resolution is tool-side\npin recalibration, not a brepkit change.\n\nThis also **corrects a prior roadmap claim** (\"genuine deviation, the\nreference kernel passes\") that saw the reference pass the pin but never\nchecked which kernel is more correct.\n\nDocs-only; no code change.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap docs to resolve the snapClip bed-flat clip volume\npin issue: a per-stage dual-kernel diff shows the delta comes from the\nrelief cut, where `brepkit`’s analytic loft is more accurate than the\nreference’s NURBS; the fix is tool-side pin recalibration, not a\n`brepkit` change. Also corrects the earlier claim that this was a\ngenuine deviation that the reference kernel passed.\n\n<sup>Written for commit 293ee607c67acb60b879a306b8b25eabdcbef214.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1108?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T19:32:05Z",
+          "tree_id": "113b80c522b7c9049fbf85769e5c458cc752fe38",
+          "url": "https://github.com/andymai/brepkit/commit/503ae757184a0f0ed370d221f25344b6e0b6d782"
+        },
+        "date": 1784316855316,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 903269,
+            "range": "± 2103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1003615,
+            "range": "± 2193",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12941,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 638715,
+            "range": "± 1357",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28146160,
+            "range": "± 28118",
             "unit": "ns/iter"
           }
         ]
