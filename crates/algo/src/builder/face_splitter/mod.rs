@@ -2282,7 +2282,7 @@ fn clip_sections_to_outer_region(
         };
         let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
         #[allow(clippy::cast_precision_loss)]
-        let mut pts3: Vec<Point3> = (0..CURVE_SAMPLES)
+        let mut pts3: Vec<Point3> = (0..=CURVE_SAMPLES)
             .map(|k| {
                 let t = (t1 - t0).mul_add(k as f64 / CURVE_SAMPLES as f64, t0);
                 e.curve_3d.evaluate_with_endpoints(t, s3, e3)
@@ -3776,9 +3776,13 @@ pub fn split_face_2d(
             .into_iter()
             .enumerate()
             .filter(|(i, e)| {
+                // Same scale as the boundary-proximity `uv_tol` above
+                // (~0.6 deg in angular coordinates): a closed circle section
+                // has a zero 3D chord but a full-period UV extent.
+                const ZERO_EXTENT_UV: f64 = 0.01;
                 *i < n_b
                     || (e.start_3d - e.end_3d).length() >= tol.linear
-                    || (e.start_uv - e.end_uv).length() >= 0.01
+                    || (e.start_uv - e.end_uv).length() >= ZERO_EXTENT_UV
             })
             .map(|(_, e)| e)
             .collect()
