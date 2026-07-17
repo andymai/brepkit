@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784255219273,
+  "lastUpdate": 1784255593291,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5021,6 +5021,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25420577,
             "range": "± 167489",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f0c3499b9e246539724f62aeeb6f1eec1bd0916a",
+          "message": "chore(main): release 2.126.6 (#1086)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.6](https://github.com/andymai/brepkit/compare/v2.126.5...v2.126.6)\n(2026-07-17)\n\n\n### Bug Fixes\n\n* **algo:** four section-machinery gaps behind the snap-slot hole-cut\nfallback ([#1085](https://github.com/andymai/brepkit/issues/1085))\n([de23c25](https://github.com/andymai/brepkit/commit/de23c2528d71191d3c714f772ccfb52af836c88e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release for `brepkit-wasm` fixing an algorithm bug that created\ngaps when using the snap-slot hole-cut fallback. This improves geometry\ncontinuity and output reliability.\n\n- **Bug Fixes**\n- Resolve four section-machinery gaps behind the snap-slot hole-cut\nfallback (fixes #1085).\n\n<sup>Written for commit 7a84d449bce5534552711ddb5ff9aaa9c6855878.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1086?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-17T02:31:17Z",
+          "tree_id": "c795f6205550e188697acbfb2cdbb4b2812a7ac2",
+          "url": "https://github.com/andymai/brepkit/commit/f0c3499b9e246539724f62aeeb6f1eec1bd0916a"
+        },
+        "date": 1784255592541,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 576142,
+            "range": "± 6957",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 643896,
+            "range": "± 393",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8282,
+            "range": "± 114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 478262,
+            "range": "± 1203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17841817,
+            "range": "± 762629",
             "unit": "ns/iter"
           }
         ]
