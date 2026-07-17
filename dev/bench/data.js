@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784246451876,
+  "lastUpdate": 1784246578119,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4913,6 +4913,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19591802,
             "range": "± 1486497",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c0fbeda3e3ec24d470a5e18c36b73d443c4beb4f",
+          "message": "docs(algo): reattach the self-cross gate doc comment to its function (#1084)\n\nFollow-up to #1082 (automerge outran Copilot's finding): the new\n`wire_loops_have_degenerate_area` was inserted between\n`wire_loops_self_cross`'s doc comment and the function, misattaching the\nrustdoc. Reorders the comments.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReattached the doc comment for the self-cross gate to\n`wire_loops_self_cross`. Fixes a misattached rustdoc caused by inserting\n`wire_loops_have_degenerate_area`, ensuring the correct function is\ndocumented.\n\n<sup>Written for commit 7cb4a956ffd746c8efa9f382616b32eb62d44523.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1084?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-16T23:58:51Z",
+          "tree_id": "88fa07548a515dd78b095073504355a2ca816224",
+          "url": "https://github.com/andymai/brepkit/commit/c0fbeda3e3ec24d470a5e18c36b73d443c4beb4f"
+        },
+        "date": 1784246577721,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 751810,
+            "range": "± 2356",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 840734,
+            "range": "± 3090",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11946,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631094,
+            "range": "± 849",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19371556,
+            "range": "± 62268",
             "unit": "ns/iter"
           }
         ]
