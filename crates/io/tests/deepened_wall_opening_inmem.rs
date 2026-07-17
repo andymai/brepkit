@@ -89,13 +89,14 @@ fn deepened_wall_opening_merges_overlapping_hole() {
         .iter()
         .filter_map(|&fid| {
             let face = topo.face(fid).ok()?;
+            let wall_eps = brepkit_math::tolerance::Tolerance::new().linear * 100.0;
             let on_wall = std::iter::once(face.outer_wire())
                 .chain(face.inner_wires().iter().copied())
                 .flat_map(|wid| topo.wire(wid).unwrap().edges().to_vec())
                 .all(|oe| {
                     let e = topo.edge(oe.edge()).unwrap();
-                    (topo.vertex(e.start()).unwrap().point().x() - 10.0).abs() < 1e-9
-                        && (topo.vertex(e.end()).unwrap().point().x() - 10.0).abs() < 1e-9
+                    (topo.vertex(e.start()).unwrap().point().x() - 10.0).abs() < wall_eps
+                        && (topo.vertex(e.end()).unwrap().point().x() - 10.0).abs() < wall_eps
                 });
             (on_wall && !face.inner_wires().is_empty()).then_some(face.inner_wires().len())
         })

@@ -1248,7 +1248,7 @@ pub(super) fn split_face_with_internal_loops(
     rank: Rank,
     reversed: bool,
     face_id: FaceId,
-    _wire_pts: &[Point3],
+    wire_pts: &[Point3],
 ) -> Vec<SplitSubFace> {
     let tol_3d = brepkit_math::tolerance::Tolerance::new().linear;
 
@@ -1367,14 +1367,14 @@ pub(super) fn split_face_with_internal_loops(
         // Stored UVs on hole wires can be fitted in a foreign frame; build ONE
         // local frame and project every 3D endpoint through it for all 2D
         // tests (the pcurve-convention lesson).
-        let frame = PlaneFrame::from_plane_face(*normal, _wire_pts);
+        let frame = PlaneFrame::from_plane_face(*normal, wire_pts);
         for (li, loop_edges) in loops.iter_mut().enumerate() {
             let mut hit: Option<usize> = None;
             for (hi, hole) in original_inner_wires.iter().enumerate() {
                 if consumed_holes.contains(&hi) {
                     continue;
                 }
-                if internal_loop_hole_interact(loop_edges, hole, &frame) {
+                if internal_loop_hole_interact(loop_edges, hole, &frame, tol_3d) {
                     if hit.is_some() {
                         hit = None; // >1 overlapping hole: bail to current behavior
                         break;
@@ -1652,6 +1652,7 @@ fn internal_loop_hole_interact(
     loop_edges: &[OrientedPCurveEdge],
     hole: &[OrientedPCurveEdge],
     frame: &PlaneFrame,
+    tol: f64,
 ) -> bool {
     let all_line =
         |es: &[OrientedPCurveEdge]| es.iter().all(|e| matches!(e.curve_3d, EdgeCurve::Line));
@@ -1666,7 +1667,9 @@ fn internal_loop_hole_interact(
     let (ls, hs) = (segs(loop_edges), segs(hole));
     let lp: Vec<Point2> = ls.iter().map(|s| s.0).collect();
     let hp: Vec<Point2> = hs.iter().map(|s| s.0).collect();
-    let eps = 1e-5;
+    // Weld-band proximity (100x the exact tolerance): junctions between two
+    // independently minted openings agree only to weld scale, not 1e-7.
+    let eps = tol * 100.0;
     for &(a0, a1) in &ls {
         for &(b0, b1) in &hs {
             let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
@@ -1746,7 +1749,8 @@ fn union_internal_loop_with_hole(
         On,
         Out,
     }
-    let eps = 1e-5;
+    // Weld-band proximity, matching `internal_loop_hole_interact`.
+    let eps = tol * 100.0;
     let seg_of = |e: &OrientedPCurveEdge| (frame.project(e.start_3d), frame.project(e.end_3d));
     let lsegs: Vec<(Point2, Point2)> = loop_edges.iter().map(seg_of).collect();
     let hsegs: Vec<(Point2, Point2)> = hole.iter().map(seg_of).collect();
