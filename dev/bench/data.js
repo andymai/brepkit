@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784288713254,
+  "lastUpdate": 1784289128231,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5777,6 +5777,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22187734,
             "range": "± 45164",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2535be91cd013fa9b0aa64286b8a1ef4f68cae06",
+          "message": "chore(main): release 2.126.12 (#1100)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.12](https://github.com/andymai/brepkit/compare/v2.126.11...v2.126.12)\n(2026-07-17)\n\n\n### Bug Fixes\n\n* **algo:** accept reversed NURBS sub-spans and run lens interior search\nas a last resort\n([#1099](https://github.com/andymai/brepkit/issues/1099))\n([95b899a](https://github.com/andymai/brepkit/commit/95b899ad2077e58e916a25cb627cb2b252887238))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.126.12 with a robustness fix in the geometry\nalgorithm: handles reversed NURBS sub-spans and adds a last-resort lens\ninterior search to reduce missed solutions.\n\n- **Bug Fixes**\n  - Accept reversed NURBS sub-spans during evaluation.\n  - Add lens interior search fallback for edge cases.\n\n<sup>Written for commit 87fb8e6dff2303402c9fd03d0edff21930f9144e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1100?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-17T11:50:04Z",
+          "tree_id": "dfdda13f94a4471413a747283c0df4d8032d94b2",
+          "url": "https://github.com/andymai/brepkit/commit/2535be91cd013fa9b0aa64286b8a1ef4f68cae06"
+        },
+        "date": 1784289127126,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 729024,
+            "range": "± 4338",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 782515,
+            "range": "± 6888",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10235,
+            "range": "± 53",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 505816,
+            "range": "± 3261",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21845777,
+            "range": "± 61561",
             "unit": "ns/iter"
           }
         ]
