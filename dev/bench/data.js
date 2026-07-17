@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784265349489,
+  "lastUpdate": 1784277030030,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5345,6 +5345,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26777985,
             "range": "± 823620",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5902a821c29ac7b72ad277bfa011bf21f4452619",
+          "message": "fix(algo): true line-arc crossings and slit-free region emission in the planar arrangement (#1092)\n\n## Summary\n\nRoot-caused from the snapClip deepened-notch family (16-iteration dig):\na plane face whose section web mixes lines and marched-NURBS conics was\nsubdivided against the conic's **chord** — the line side split at the\nchord crossing while the arc side rejected the break (the true arc is a\nsagitta away, up to several 1e-4). The mismatched half-edge graph left\ndangling edges that the face tracer walks out-and-back (a deliberate\nretreat rule), so regions were emitted with **slit (doubled) edges**,\nthe analytic result failed the manifold gate, and the whole cut fell\nback to the mesh boolean.\n\n## Changes\n\n- **True line×arc crossings**: polyline pre-locate + bisection on the\narc's native parameter against the line's signed side; the refined point\nis validated to lie ON the line (phantom convergences from fit-error\nsign noise land far off it) and guarded away from curve endpoints\n(endpoint T-junctions belong to the endpoint-break pass). The exact UV\nregisters on **both** inputs so the graph stays consistent.\n- **Trimmed sub-arc emission**: an arc input whose breaks are all exact\nemits endpoint-trimmed true curves instead of bailing to the\n(mis-tracing) loops path.\n- **Weld-band tolerances** for the arrangement's on-plane round-trip and\nT-break tests (100·tol): marched geometry is only good to its curve-fit\nerror (~1e-6); the vertex tolerance (1e-7) rejected real junctions.\nGenuine straddle arcs — the on-plane check's target — are off-plane by\norders of magnitude more.\n- **Section split registry** in `fill_images_faces`: plane faces record\nwhere their sections split; curved faces sharing the same FF curve\n(whose marched copies carry no pave block) pre-split at the identical 3D\npoints via geometric point-on-curve matching, and the existing\nendpoint-T machinery cascades knock-on splits. Plane faces process\nfirst.\n\n## Not closed\n\nThe snapClip deepened-notch case improves (raw repro\nunpaired/over-shared edges 37 → 22, all doubled-edge signatures\neliminated) but does not fully close: the remaining desyncs are\ncross-face **boundary**-edge splits whose root is that marched FF\nsections bypass the pave machinery (`pave_block_id = None`). That fix\nbelongs at phase-FF/make_blocks altitude and is documented on the\nroadmap; three splitter-level propagation attempts each broke calibrated\nfoil chains and were rejected.\n\n## Testing\n\n- Full calibrated foil battery green: groove-mouth, junction-disc,\nsnap-slot, honeycomb pcut, wall-cutout, both A1-corner fixtures,\ncornerclip, divider-lip, d4 gridfinity canary (27/27).\n- Full io/operations/algo suites green; clippy -D warnings + fmt clean;\npre-push full-test hook passed.\n- Raw deepened-notch repro (cached operands): posBad 37 → 22 with slit\nsignatures gone.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes planar arrangements to compute true line–arc crossings and exact\nbreakpoints, eliminating slit edges and manifold failures. Plane faces\nnow register section split points; curved faces pre‑split at the same 3D\npoints for consistent partitions.\n\n- **Bug Fixes**\n- True line–arc crossings on sections: polyline pre‑locate + bisection\non the arc parameter, validated on‑line and guarded away from endpoints;\nreplaces chord hits using the arc’s sampled sagitta + weld band;\nregisters exact UVs on both inputs; boundary arcs keep the historical\nchord path.\n- Emit trimmed sub‑arcs when all breaks are exact; fall back only for\ninexact/chord‑only splits; sub‑spans drop `pave_block_id`.\n- Weld‑band tolerances (100× tol) for on‑plane and T‑break checks;\nboundary Lines are projection targets so section endpoints land exactly.\n- Plane faces process first and write a section split registry; curved\nfaces sharing the same FF curve pre‑split via geometric point‑on‑curve\nmatching; `face_splitter` reads/updates the registry.\n- Added a regression test for a fit‑error T‑junction web (line + marched\nNURBS): asserts three real regions with no slit edges; guards\nchord‑crossing fallbacks near endpoint T’s.\n- Result: slit edges removed; deepened‑notch repro unpaired edges 37→22;\nall test suites green. Known gap: remaining boundary‑edge desyncs from\nmarched FF sections with `pave_block_id=None` (tracked for\nphase‑FF/make_blocks). Cleanup: dropped a duplicated\n`restrict_curves_to_faces` call.\n\n<sup>Written for commit 46924c2c2ec791161efef7e00201e7dfe0aeb193.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1092?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T08:28:27Z",
+          "tree_id": "2eaa6667d09bbafd4fcbd107e7a15662e69a3744",
+          "url": "https://github.com/andymai/brepkit/commit/5902a821c29ac7b72ad277bfa011bf21f4452619"
+        },
+        "date": 1784277029594,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 730906,
+            "range": "± 25493",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 821480,
+            "range": "± 31882",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10149,
+            "range": "± 229",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 512949,
+            "range": "± 4048",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22521090,
+            "range": "± 385259",
             "unit": "ns/iter"
           }
         ]
