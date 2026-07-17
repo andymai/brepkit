@@ -1511,140 +1511,145 @@ fn build_section_edges(
                     Err(_) => continue,
                 };
 
-                let (start, end) =
+                let intervals: Vec<(Point3, Point3)> =
                     if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                        let clipped = match clip_line_to_face_boundary(
-                            topo, face_id, raw_start, raw_end, tol,
-                        ) {
-                            Some(pair) => pair,
-                            None => continue,
+                        let Some(clipped_list) =
+                            clip_line_to_face_boundary(topo, face_id, raw_start, raw_end, tol)
+                        else {
+                            continue;
                         };
-                        // Also clip to the OPPOSING FF face so a wide face does
-                        // not extend the section past the narrower face's
-                        // boundary (the intersection of the two clips). Adopt an
-                        // opposing-clip endpoint ONLY where it genuinely tightens
-                        // (moves by > tol); a flush/coincident opposing face
-                        // re-derives the SAME endpoint from its own geometry with
-                        // sub-tolerance float noise (e.g. -38 vs -38 + 1.4e-14),
-                        // and snapping the section to that noisy value shifts it
-                        // off the shared corner vertex this face's clip landed on
-                        // exactly — the wire then fails to close and the assembler
-                        // classifies every shell as a hole (the stacking-lip fuse
-                        // regression). Per-endpoint so a real one-sided tightening
-                        // still applies while the untouched end stays exact.
-                        match opposing_face.and_then(|of| {
-                            clip_line_to_face_boundary(topo, of, clipped.0, clipped.1, tol)
-                        }) {
-                            Some(both) => {
-                                let start = if (both.0 - clipped.0).length() > tol {
-                                    both.0
-                                } else {
-                                    clipped.0
-                                };
-                                let end = if (both.1 - clipped.1).length() > tol {
-                                    both.1
-                                } else {
-                                    clipped.1
-                                };
-                                (start, end)
+                        // Also clip each piece to the OPPOSING FF face so a wide
+                        // face does not extend the section past the narrower
+                        // face's boundary. Adopt an opposing-clip endpoint ONLY
+                        // where it genuinely tightens (moves by > tol): a
+                        // flush/coincident opposing face re-derives the SAME
+                        // endpoint with sub-tolerance float noise, and snapping
+                        // to that noisy value shifts the section off the shared
+                        // corner vertex this face's clip landed on exactly (the
+                        // stacking-lip fuse regression). Interior split points
+                        // from a multi-window opposing clip are genuine and kept
+                        // as-is.
+                        let mut finals = Vec::new();
+                        for (cs, ce) in clipped_list {
+                            match opposing_face
+                                .and_then(|of| clip_line_to_face_boundary(topo, of, cs, ce, tol))
+                            {
+                                Some(subs) => {
+                                    let n = subs.len();
+                                    for (i, (ss, ee)) in subs.into_iter().enumerate() {
+                                        let s = if i == 0 && (ss - cs).length() <= tol {
+                                            cs
+                                        } else {
+                                            ss
+                                        };
+                                        let e = if i + 1 == n && (ee - ce).length() <= tol {
+                                            ce
+                                        } else {
+                                            ee
+                                        };
+                                        finals.push((s, e));
+                                    }
+                                }
+                                None => finals.push((cs, ce)),
                             }
-                            None => clipped,
                         }
+                        finals
                     } else {
-                        (raw_start, raw_end)
+                        vec![(raw_start, raw_end)]
                     };
+                for (start, end) in intervals {
+                    // Skip a degenerate curved section: a Circle/Ellipse PaveBlock
+                    // fragment whose arc has collapsed to a point (3D chord below
+                    // tolerance AND a near-zero parametric span). A coincident-edge
+                    // fuse can split a rounded corner's arc so that one fragment
+                    // carries the whole quarter-arc and its twin is a ~1e-7-long
+                    // remnant; the remnant has no boundary to contribute, but
+                    // threading it into the face wire makes the builder weave an
+                    // out-and-back spur (the over-shared depth-wall edge of the
+                    // 2×1/1×2 stacking-lip fuse). The Line path already rejects
+                    // zero-length sections inside `clip_line_to_face_boundary`; this
+                    // guards the curved path, which uses the raw endpoints unclipped.
+                    // The span test preserves a genuine full circle (coincident
+                    // endpoints but a ~2π span); the chord test uses the
+                    // weld-scale band (100·tol) because the remnant's endpoints are
+                    // the same near-coincident vertices the assembler later welds.
+                    if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                        && (end - start).length() < tol * 100.0
+                    {
+                        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                        if (t1 - t0).abs() < DEGENERATE_ARC_SPAN {
+                            continue;
+                        }
+                    }
 
-                // Skip a degenerate curved section: a Circle/Ellipse PaveBlock
-                // fragment whose arc has collapsed to a point (3D chord below
-                // tolerance AND a near-zero parametric span). A coincident-edge
-                // fuse can split a rounded corner's arc so that one fragment
-                // carries the whole quarter-arc and its twin is a ~1e-7-long
-                // remnant; the remnant has no boundary to contribute, but
-                // threading it into the face wire makes the builder weave an
-                // out-and-back spur (the over-shared depth-wall edge of the
-                // 2×1/1×2 stacking-lip fuse). The Line path already rejects
-                // zero-length sections inside `clip_line_to_face_boundary`; this
-                // guards the curved path, which uses the raw endpoints unclipped.
-                // The span test preserves a genuine full circle (coincident
-                // endpoints but a ~2π span); the chord test uses the
-                // weld-scale band (100·tol) because the remnant's endpoints are
-                // the same near-coincident vertices the assembler later welds.
-                if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
-                    && (end - start).length() < tol * 100.0
-                {
-                    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-                    if (t1 - t0).abs() < DEGENERATE_ARC_SPAN {
+                    // Same boundary-re-trace rejection as the Curve arm above: a
+                    // PaveBlock section whose interior lies entirely on one of this
+                    // face's existing boundary edges contributes no interior split.
+                    // Keeping such sections made the arrangement of the lip bottom
+                    // ring weave a degenerate region wherever the body's inner-wall
+                    // planes intersect the lip plane exactly along its flush inner
+                    // rim, and the whole fuse fell back to the mesh boolean (the
+                    // top-row-merged compartment bin).
+                    let interior_samples: Vec<Point3> = {
+                        const SAMPLES: usize = 9;
+                        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                        (1..SAMPLES)
+                            .map(|k| {
+                                #[allow(clippy::cast_precision_loss)]
+                                let frac = k as f64 / SAMPLES as f64;
+                                edge.curve().evaluate_with_endpoints(
+                                    (t1 - t0).mul_add(frac, t0),
+                                    start,
+                                    end,
+                                )
+                            })
+                            .collect()
+                    };
+                    if section_on_existing_boundary(
+                        topo,
+                        face_id,
+                        &interior_samples,
+                        Some((start, end)),
+                        tol,
+                    ) {
                         continue;
                     }
-                }
 
-                // Same boundary-re-trace rejection as the Curve arm above: a
-                // PaveBlock section whose interior lies entirely on one of this
-                // face's existing boundary edges contributes no interior split.
-                // Keeping such sections made the arrangement of the lip bottom
-                // ring weave a degenerate region wherever the body's inner-wall
-                // planes intersect the lip plane exactly along its flush inner
-                // rim, and the whole fuse fell back to the mesh boolean (the
-                // top-row-merged compartment bin).
-                let interior_samples: Vec<Point3> = {
-                    const SAMPLES: usize = 9;
-                    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-                    (1..SAMPLES)
-                        .map(|k| {
-                            #[allow(clippy::cast_precision_loss)]
-                            let frac = k as f64 / SAMPLES as f64;
-                            edge.curve().evaluate_with_endpoints(
-                                (t1 - t0).mul_add(frac, t0),
-                                start,
-                                end,
-                            )
-                        })
-                        .collect()
-                };
-                if section_on_existing_boundary(
-                    topo,
-                    face_id,
-                    &interior_samples,
-                    Some((start, end)),
-                    tol,
-                ) {
-                    continue;
-                }
-
-                // Project start/end to UV using surface projection (original approach).
-                let start_uv = face.surface().project_point(start);
-                let end_uv = face.surface().project_point(end);
-                let make_pcurve = |s: Option<(f64, f64)>, e: Option<(f64, f64)>| -> Curve2D {
-                    let s2 = s.map_or(Point2::new(0.0, 0.0), |(u, v)| Point2::new(u, v));
-                    let e2 = e.map_or(Point2::new(1.0, 0.0), |(u, v)| Point2::new(u, v));
-                    let dir = e2 - s2;
-                    let len = dir.length();
-                    let direction = if len > 1e-12 {
-                        Vec2::new(dir.x() / len, dir.y() / len)
-                    } else {
-                        Vec2::new(1.0, 0.0)
+                    // Project start/end to UV using surface projection (original approach).
+                    let start_uv = face.surface().project_point(start);
+                    let end_uv = face.surface().project_point(end);
+                    let make_pcurve = |s: Option<(f64, f64)>, e: Option<(f64, f64)>| -> Curve2D {
+                        let s2 = s.map_or(Point2::new(0.0, 0.0), |(u, v)| Point2::new(u, v));
+                        let e2 = e.map_or(Point2::new(1.0, 0.0), |(u, v)| Point2::new(u, v));
+                        let dir = e2 - s2;
+                        let len = dir.length();
+                        let direction = if len > 1e-12 {
+                            Vec2::new(dir.x() / len, dir.y() / len)
+                        } else {
+                            Vec2::new(1.0, 0.0)
+                        };
+                        #[allow(clippy::expect_used)]
+                        let line = Line2D::new(s2, direction)
+                            .or_else(|_| Line2D::new(s2, Vec2::new(1.0, 0.0)))
+                            .expect("unit direction (1,0) is always valid");
+                        Curve2D::Line(line)
                     };
-                    #[allow(clippy::expect_used)]
-                    let line = Line2D::new(s2, direction)
-                        .or_else(|_| Line2D::new(s2, Vec2::new(1.0, 0.0)))
-                        .expect("unit direction (1,0) is always valid");
-                    Curve2D::Line(line)
-                };
-                let pcurve = make_pcurve(start_uv, end_uv);
+                    let pcurve = make_pcurve(start_uv, end_uv);
 
-                sections.push(SectionEdge {
-                    curve_3d: edge.curve().clone(),
-                    pcurve_a: pcurve.clone(),
-                    pcurve_b: pcurve,
-                    start,
-                    end,
-                    start_uv_a: start_uv.map(|(u, v)| Point2::new(u, v)),
-                    end_uv_a: end_uv.map(|(u, v)| Point2::new(u, v)),
-                    start_uv_b: start_uv.map(|(u, v)| Point2::new(u, v)),
-                    end_uv_b: end_uv.map(|(u, v)| Point2::new(u, v)),
-                    target_face: None,
-                    pave_block_id: Some(pb_id.index()),
-                });
+                    sections.push(SectionEdge {
+                        curve_3d: edge.curve().clone(),
+                        pcurve_a: pcurve.clone(),
+                        pcurve_b: pcurve,
+                        start,
+                        end,
+                        start_uv_a: start_uv.map(|(u, v)| Point2::new(u, v)),
+                        end_uv_a: end_uv.map(|(u, v)| Point2::new(u, v)),
+                        start_uv_b: start_uv.map(|(u, v)| Point2::new(u, v)),
+                        end_uv_b: end_uv.map(|(u, v)| Point2::new(u, v)),
+                        target_face: None,
+                        pave_block_id: Some(pb_id.index()),
+                    });
+                }
             }
         }
     }
@@ -2185,7 +2190,7 @@ fn clip_line_to_face_boundary(
     line_start: Point3,
     line_end: Point3,
     tol: f64,
-) -> Option<(Point3, Point3)> {
+) -> Option<Vec<(Point3, Point3)>> {
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
 
@@ -2222,6 +2227,7 @@ fn clip_line_to_face_boundary(
     // Find all intersection parameters (t) of the section line with boundary segments.
     // The section line is: P(t) = line_start + t * line_dir, t in [0, 1].
     let mut crossings: Vec<f64> = Vec::new();
+    let mut crossings_ext: Vec<f64> = Vec::new();
 
     for (seg_idx, (seg_start, seg_end)) in boundary_segments.iter().enumerate() {
         // For a curved boundary edge, also record the crossing with the TRUE
@@ -2234,9 +2240,25 @@ fn clip_line_to_face_boundary(
         // out when the arc genuinely does. Arcs the line misses contribute
         // nothing (the lip-cut sections that graze a corner chord keep working).
         if let Some((curve, asp, aep)) = &boundary_arcs[seg_idx] {
-            for (p, _) in arc_segment_crossings(curve, *asp, *aep, line_start, line_end, tol) {
+            // Intersect the arc with the EXTENDED line, not just the segment: a
+            // section whose FF-clipped endpoint lies in the sliver between a
+            // convex arc and its chord (the slot walls crossing a socket-edge
+            // half-disc) has its true arc crossing slightly OUTSIDE the
+            // segment; rejecting it leaves only the chord crossings, clipping
+            // the section to the chord triangle 0.65 short of the corner. The
+            // outermost-pair clamp to [0, 1] below bounds the result to the
+            // original segment, so extension can never grow the section.
+            let ext_start = line_start - line_dir;
+            let ext_end = line_end + line_dir;
+            let arc_hits = arc_segment_crossings(curve, *asp, *aep, ext_start, ext_end, tol);
+            for (p, _) in arc_hits {
                 let t = (p - line_start).dot(line_dir) / (line_len * line_len);
-                crossings.push(t);
+                crossings_ext.push(t);
+                // The historical outermost path only ever saw crossings ON the
+                // segment; keep its input unchanged.
+                if (-1e-9..=1.0 + 1e-9).contains(&t) {
+                    crossings.push(t);
+                }
             }
         }
         let seg_dir = *seg_end - *seg_start;
@@ -2298,31 +2320,111 @@ fn clip_line_to_face_boundary(
 
     crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Take the outermost pair of crossings as entry/exit
-    let t0 = crossings[0].clamp(0.0, 1.0);
-    let t1 = crossings[crossings.len() - 1].clamp(0.0, 1.0);
+    // Select the in-face interval by MIDPOINT CLASSIFICATION rather than the
+    // outermost crossing pair. Outermost-pair is only right when every arc
+    // bulges OUTWARD (a convex rounded corner extending the face past its
+    // chord). A boundary arc that bulges INWARD — a socket-bite circle carving
+    // the face, as on the plate-edge junction web between two socket corners —
+    // makes the chord crossings OVERSHOOT the true material: the delivered
+    // section then extends into the bite (air on this face), the splitter
+    // weaves a wrong region, and the cut falls to a mesh fallback (the
+    // snap-slot hole cuts). Classify each candidate sub-interval's midpoint
+    // against the arc-true boundary polygon and keep the longest interval that
+    // is actually inside the face.
+    let plane_frame = match face.surface() {
+        FaceSurface::Plane { normal, .. } => {
+            let pts: Vec<Point3> = boundary_segments.iter().map(|&(s, _)| s).collect();
+            Some(crate::builder::plane_frame::PlaneFrame::from_plane_face(
+                *normal, &pts,
+            ))
+        }
+        _ => None,
+    };
+    let poly: Option<Vec<brepkit_math::vec::Point2>> = plane_frame.as_ref().map(|frame| {
+        let mut poly = Vec::new();
+        for (seg_idx, (sp, ep)) in boundary_segments.iter().enumerate() {
+            poly.push(frame.project(*sp));
+            if let Some((curve, asp, aep)) = &boundary_arcs[seg_idx] {
+                // Dense sampling: at 12 samples an r=4 quarter-arc's chord
+                // sagitta is ~0.14 — larger than the ~0.1 mm groove-mouth
+                // slivers this polygon must classify. 96 samples keep the
+                // polygon error well under the features decided by it.
+                for k in 1..96 {
+                    let f = f64::from(k) / 96.0;
+                    let p3 = super::pcurve_compute::evaluate_edge_at_t(curve, *asp, *aep, f);
+                    poly.push(frame.project(p3));
+                }
+            }
+            let _ = ep;
+        }
+        poly
+    });
+
+    // Midpoint classification only steers hole-free faces: a holed face's
+    // sections are the hole weave's input, and that machinery (promotion,
+    // coincidence splitting, re-trace discriminants) is calibrated on WHOLE
+    // sections — pre-splitting them here breaks its bookkeeping (the groove
+    // chain regressed). Hole-free faces have no weave; their concave bites
+    // live on the OUTER wire where the outermost-pair heuristic overshoots.
+    let t_intervals: Vec<(f64, f64)> = if face.inner_wires().is_empty()
+        && let (Some(frame), Some(poly)) = (plane_frame.as_ref(), poly.as_ref())
+    {
+        // Every in-face sub-interval, not just one: a section can cross the
+        // face in MULTIPLE material windows (the slot's z=-1.2 closer runs
+        // across the socket bite, leaving material on both sides), and every
+        // window is a real section piece the splitter chain needs.
+        let mut borders: Vec<f64> = crossings
+            .iter()
+            .chain(crossings_ext.iter())
+            .map(|t| t.clamp(0.0, 1.0))
+            .chain([0.0, 1.0])
+            .collect();
+        borders.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        borders.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        borders
+            .windows(2)
+            .filter_map(|w| {
+                let mid_uv = frame.project(line_start + line_dir * f64::midpoint(w[0], w[1]));
+                // Boundary-coincident midpoints count as in-face: a section
+                // that re-traces a boundary edge (the load-bearing
+                // whole-edge duplicate of the shelled-cup lip fuses) has
+                // every midpoint ON the polygon, where the even-odd test
+                // is unreliable.
+                let inside = crate::builder::classify_2d::point_in_polygon_2d(mid_uv, poly)
+                    || crate::builder::classify_2d::distance_to_polygon_boundary(mid_uv, poly)
+                        <= crate::builder::classify_2d::boundary_eps(poly);
+                inside.then_some((w[0], w[1]))
+            })
+            .collect()
+    } else {
+        // Non-plane fallback: the historical outermost pair.
+        vec![(
+            crossings[0].clamp(0.0, 1.0),
+            crossings[crossings.len() - 1].clamp(0.0, 1.0),
+        )]
+    };
 
     let t_tol = tol / line_len;
-    if (t1 - t0).abs() < t_tol {
-        return None;
-    }
-
-    let clipped_start = line_start + line_dir * t0;
-    let clipped_end = line_start + line_dir * t1;
-
-    // Discard section edges that lie entirely ON a single face boundary edge.
-    // This catches the case where the FF intersection of an adjacent coplanar
-    // face produces a section line that coincides with one boundary edge.
-    // Only discard if BOTH endpoints lie on the SAME boundary segment.
-    for (seg_start, seg_end) in &boundary_segments {
-        let start_dist = point_to_segment_dist_3d(clipped_start, *seg_start, *seg_end);
-        let end_dist = point_to_segment_dist_3d(clipped_end, *seg_start, *seg_end);
-        if start_dist < tol && end_dist < tol {
-            return None;
+    let mut out: Vec<(Point3, Point3)> = Vec::new();
+    'interval: for (t0, t1) in t_intervals {
+        if (t1 - t0).abs() < t_tol {
+            continue;
         }
+        let clipped_start = line_start + line_dir * t0;
+        let clipped_end = line_start + line_dir * t1;
+        // Discard pieces that lie entirely ON a single face boundary edge
+        // (an adjacent coplanar face's FF section coinciding with a boundary
+        // edge contributes no split).
+        for (seg_start, seg_end) in &boundary_segments {
+            let start_dist = point_to_segment_dist_3d(clipped_start, *seg_start, *seg_end);
+            let end_dist = point_to_segment_dist_3d(clipped_end, *seg_start, *seg_end);
+            if start_dist < tol && end_dist < tol {
+                continue 'interval;
+            }
+        }
+        out.push((clipped_start, clipped_end));
     }
-
-    Some((clipped_start, clipped_end))
+    if out.is_empty() { None } else { Some(out) }
 }
 
 /// Distance from a 3D point to a line segment.

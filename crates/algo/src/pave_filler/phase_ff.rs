@@ -120,14 +120,81 @@ pub fn perform(
             // When a face's polygon is built but the line lies outside it the
             // overlap is empty and the curve is dropped; when a polygon can't
             // be built (or is non-convex) the raw curve is kept conservatively.
-            let raw_curves: Vec<RawCurve> = if matches!(surf_a, FaceSurface::Plane { .. })
-                && matches!(surf_b, FaceSurface::Plane { .. })
-            {
+            let raw_curves: Vec<RawCurve> = if matches!(
+                surf_a,
+                FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+            ) && matches!(
+                surf_b,
+                FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+            ) {
                 raw_curves
                     .into_iter()
                     .filter_map(|raw| {
                         if !matches!(raw.curve, EdgeCurve::Line) {
                             return Some(raw);
+                        }
+                        // A banded partner (cylinder/cone) admits an EXACT
+                        // v-window clip: the section line lies ON the surface,
+                        // and `project_point`'s v is affine along a straight
+                        // line there, so the band limits map to exact line
+                        // fractions. Without this, a plane×band Line section
+                        // keeps its full span (the polygon clip below is
+                        // Indeterminate for the band side), crosses the band
+                        // overlong, and the plane-side splitter receives a
+                        // dangling silhouette chain (the snap-slot wall).
+                        let band = |surf: &FaceSurface,
+                                    v_range: Option<(f64, f64)>|
+                         -> Option<(f64, f64)> {
+                            let (mut v0, mut v1) = v_range?;
+                            if v1 < v0 {
+                                std::mem::swap(&mut v0, &mut v1);
+                            }
+                            let (vs, ve) = match surf {
+                                FaceSurface::Cylinder(c) => {
+                                    (c.project_point(raw.p_start).1, c.project_point(raw.p_end).1)
+                                }
+                                FaceSurface::Cone(c) => {
+                                    (c.project_point(raw.p_start).1, c.project_point(raw.p_end).1)
+                                }
+                                _ => return None,
+                            };
+                            let dv = ve - vs;
+                            if dv.abs() < 1e-12 {
+                                return None;
+                            }
+                            let f0 = (v0 - vs) / dv;
+                            let f1 = (v1 - vs) / dv;
+                            Some(if f0 <= f1 { (f0, f1) } else { (f1, f0) })
+                        };
+                        let mut lo = 0.0_f64;
+                        let mut hi = 1.0_f64;
+                        if let Some((b0, b1)) = band(surf_a, v_range_a) {
+                            lo = lo.max(b0);
+                            hi = hi.min(b1);
+                        }
+                        if let Some((b0, b1)) = band(surf_b, v_range_b) {
+                            lo = lo.max(b0);
+                            hi = hi.min(b1);
+                        }
+                        if hi - lo <= 0.0 {
+                            return None;
+                        }
+                        let both_planes = matches!(surf_a, FaceSurface::Plane { .. })
+                            && matches!(surf_b, FaceSurface::Plane { .. });
+                        if !both_planes {
+                            // Mixed pair: the exact band trim is the only clip
+                            // applied — the plane-polygon clip below is
+                            // calibrated for plane×plane sections, and running
+                            // it on a banded pair's line disturbed the
+                            // seam-anchored cylinder band splitting.
+                            if lo > 0.0 || hi < 1.0 {
+                                return trim_raw_line(&raw, lo, hi, tol);
+                            }
+                            return Some(raw);
+                        }
+                        if lo > 0.0 || hi < 1.0 {
+                            let trimmed = trim_raw_line(&raw, lo, hi, tol)?;
+                            return clip_trimmed_line_to_planes(topo, fa, fb, trimmed, tol);
                         }
                         let clip_a = clip_line_to_face(topo, fa, &raw);
                         let clip_b = clip_line_to_face(topo, fb, &raw);
@@ -3459,6 +3526,29 @@ fn nurbs_curve_bbox(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Aabb3 {
 }
 
 // ── FF curve boundary filtering ──────────────────────────────────────
+
+/// Apply the plane-side polygon clips to a band-trimmed Line raw curve.
+/// Mirrors the plane×plane combination arms for a curve that already went
+/// through the exact band-window trim.
+fn clip_trimmed_line_to_planes(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    raw: RawCurve,
+    tol: Tolerance,
+) -> Option<RawCurve> {
+    let clip_a = clip_line_to_face(topo, fa, &raw);
+    let clip_b = clip_line_to_face(topo, fb, &raw);
+    match (clip_a, clip_b) {
+        (FaceClip::Empty, _) | (_, FaceClip::Empty) => None,
+        (FaceClip::Range(a), FaceClip::Range(b)) => {
+            trim_raw_line(&raw, a.0.max(b.0), a.1.min(b.1), tol)
+        }
+        (FaceClip::Range(r), FaceClip::Indeterminate)
+        | (FaceClip::Indeterminate, FaceClip::Range(r)) => trim_raw_line(&raw, r.0, r.1, tol),
+        (FaceClip::Indeterminate, FaceClip::Indeterminate) => Some(raw),
+    }
+}
 
 /// Shrink a `Line` raw curve to the fractional sub-range `[f0, f1]` of its
 /// current extent, recomputing endpoints, parameter range, and bbox.

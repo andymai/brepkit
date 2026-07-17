@@ -2575,6 +2575,59 @@ pub fn split_face_2d(
         boundary_edges
     };
 
+    // Weld plane-face section endpoints to coincident boundary (and earlier
+    // section) endpoints within the weld-scale band (100·tol). A marched-NURBS
+    // section endpoint carries the curve-fit error (~1e-6) while its chain
+    // partner's endpoint is an exact clip value; the difference exceeds the
+    // 1e-7 vertex quantization used by both the wire builder and the planar
+    // arrangement, so the chain junction never forms — the trace walks
+    // out-and-back along the section and the face is left unsplit (the
+    // snap-slot wall's socket-profile silhouette). Exact junctions are
+    // untouched (zero distance ⇒ no-op). Precomputed UVs are cleared for
+    // moved endpoints so consumers re-derive them from the welded 3D.
+    let welded_sections: Vec<SectionEdge>;
+    let sections: &[SectionEdge] = if is_plane && !sections.is_empty() {
+        let weld = tol.linear * 100.0;
+        let mut anchors: Vec<Point3> = boundary_edges
+            .iter()
+            .flat_map(|e| [e.start_3d, e.end_3d])
+            .collect();
+        let mut out = sections.to_vec();
+        for s in &mut out {
+            let mut moved = false;
+            for pick_start in [true, false] {
+                let p = if pick_start { s.start } else { s.end };
+                let snapped = anchors
+                    .iter()
+                    .find(|a| {
+                        let d = (**a - p).length();
+                        d > 1e-12 && d <= weld
+                    })
+                    .copied();
+                if let Some(a) = snapped {
+                    if pick_start {
+                        s.start = a;
+                    } else {
+                        s.end = a;
+                    }
+                    moved = true;
+                } else {
+                    anchors.push(p);
+                }
+            }
+            if moved {
+                s.start_uv_a = None;
+                s.end_uv_a = None;
+                s.start_uv_b = None;
+                s.end_uv_b = None;
+            }
+        }
+        welded_sections = out;
+        &welded_sections
+    } else {
+        sections
+    };
+
     let boundary_edges_backup = if is_plane && sections.len() >= 2 {
         Some(boundary_edges.clone())
     } else {
@@ -3755,8 +3808,15 @@ fn plane_internal_line_loops(
     if sections.len() < 3
         || !sections.iter().all(|s| match s.curve_3d {
             EdgeCurve::Line => true,
-            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => (s.start - s.end).length() > tol_linear,
-            EdgeCurve::NurbsCurve(_) => false,
+            // Open curved sections chain fine: the loop builder connects by
+            // endpoints and `split_face_with_internal_loops` preserves the
+            // stored curve geometry. Open marched-NURBS conics matter here —
+            // a box wall crossing a socket-profile stack receives its
+            // silhouette as hyperbola pieces chained with lines (the
+            // snap-slot wall), which must carve an internal loop.
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                (s.start - s.end).length() > tol_linear
+            }
         })
     {
         return None;
