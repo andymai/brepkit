@@ -9,6 +9,7 @@ mod conversion;
 mod edge_splitting;
 mod sampling;
 mod special_cases;
+pub(in crate::builder) use special_cases::cylinder_cone_remainder_interior;
 
 pub use conversion::collect_wire_points;
 

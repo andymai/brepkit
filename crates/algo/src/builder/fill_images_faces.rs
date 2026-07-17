@@ -461,7 +461,13 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                     resolved_face_id,
                 ) =>
                 {
-                    None
+                    // Not every split path that can leave a closed curved hole
+                    // on a cylinder/cone wall runs the dedicated remainder
+                    // search (e.g. a wall keeping a pre-existing lens hole
+                    // through the generic split). Run it here as a last resort;
+                    // only when even the dense grid finds nothing does the
+                    // classifier abort to mesh.
+                    super::face_splitter::cylinder_cone_remainder_interior(split)
                 }
                 None => Some(super::face_splitter::interior_point_3d(
                     split,
