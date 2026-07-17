@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784246578119,
+  "lastUpdate": 1784255219273,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -4967,6 +4967,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19371556,
             "range": "± 62268",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "de23c2528d71191d3c714f772ccfb52af836c88e",
+          "message": "fix(algo): four section-machinery gaps behind the snap-slot hole-cut fallback (#1085)\n\n## Summary\n\nThe snapClip plate's 44 join-edge slot cuts all mesh-fell-back (first\ncut F=595→7356, open fallback output poisoning the rest). Native replay\nisolated four stacked gaps in the section machinery at the plate's\nedge-junction web, fixed together:\n\n1. **Concave-arc clip overshoot** — the per-face section clip took the\noutermost crossing pair, correct only for convex corner arcs;\ninward-bulging socket-bite circles made chords overshoot into air.\nHole-free plane faces now midpoint-classify each sub-interval against\nthe arc-true boundary polygon; holed faces keep the outermost pair\n(their sections feed the calibrated hole weave).\n2. **Multi-window sections** — a section crossing a face in two material\nwindows kept only one; the clip now returns every in-face interval and\nthe consumer emits one section per interval.\n3. **Plane×band Line clip** — Lines against cylinder/cone partners were\nnever clipped to the band's v-window; the band limits map to exact line\nfractions via `project_point` (affine v along a line on the surface).\nMixed pairs get exactly this trim and nothing else.\n4. **Fit-error junction weld** — marched-NURBS endpoints differ from\nexact chain partners by ~1e-6 (above the 1e-7 graph quantization), so\nsilhouette chains never junctioned; plane-face section endpoints now\nweld within the 100·tol band.\n\nPlus: `plane_internal_line_loops` accepts open NURBS sections.\n\n## Verification\n\n- Captured tool operands: cut(socketed 5×4 plate, slot box) analytic +\nwatertight (F=603 vs F=7356 fallback).\n- Calibration foils all green simultaneously: d-series 27/27, honeycomb\npcut3, divider-lip, groove-mouth chain, junction-disc, nub chains,\ncylinder-slot (the last two caught wrong discriminants during\ndevelopment and shaped the final gates).\n- Full workspace 2194 tests; clippy clean.\n- Fixture: `snapclip_slot_cut_inmem.rs` (tool-exact operands).\n\nFifth PR in today's snapClip/parity series (#1078 groove-mouth, #1080\nextrude splines, #1082 junction disc).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes four section-clipping bugs that caused the snap-slot hole cut to\nfall back to mesh and break the rest of the slot cuts. The face/FF\npipeline now clips and welds sections correctly, producing analytic,\nwatertight results.\n\n- **Bug Fixes**\n- Plane-face line clip now classifies sub-interval midpoints against an\narc-true boundary polygon (handles concave bites); uses extended-line\narc hits; keeps every in-face window.\n- Keeps all material windows when a section crosses a face multiple\ntimes; consumer emits one section per window with endpoint noise guard\npreserved.\n- Plane × band (cylinder/cone) line sections get an exact v-window trim\nvia `project_point`; mixed pairs apply only this trim.\n- Welds plane section endpoints to coincident boundary/section endpoints\nwithin 100·tol to form junctions; `plane_internal_line_loops` accepts\nopen NURBS sections.\n- Adds an in-memory regression test and fixtures for the snap-slot cut;\nresult stays analytic (~603 faces) and watertight.\n\n<sup>Written for commit 6f11b177606246b74a8c318f080b9464fec07795.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1085?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T02:24:48Z",
+          "tree_id": "e166d7fd92945b3257a413d72e502d22239e6a90",
+          "url": "https://github.com/andymai/brepkit/commit/de23c2528d71191d3c714f772ccfb52af836c88e"
+        },
+        "date": 1784255218291,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 878881,
+            "range": "± 1771",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 965871,
+            "range": "± 6315",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12118,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639820,
+            "range": "± 2118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25420577,
+            "range": "± 167489",
             "unit": "ns/iter"
           }
         ]
