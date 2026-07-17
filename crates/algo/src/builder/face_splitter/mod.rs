@@ -1399,6 +1399,21 @@ fn arrangement_regions_from_inputs(
     // True crossings of the segment (la, lb) with arc input `ai`, refined by
     // bisection on the arc's native parameter against the segment's line.
     // Returns the exact crossing UVs.
+    // Max deviation of an arc's sampled polyline from its chord — the bound
+    // within which a chord-derived crossing and the true crossing of the same
+    // transversal can differ.
+    let arc_sagitta = |ai: usize| -> f64 {
+        let Some(poly) = arc_polys[ai].as_ref() else {
+            return 0.0;
+        };
+        let a = inputs[ai].a;
+        let b = inputs[ai].b;
+        let d = b - a;
+        let len = d.length().max(f64::MIN_POSITIVE);
+        poly.iter()
+            .map(|(_, p)| (d.x().mul_add(p.y() - a.y(), -(d.y() * (p.x() - a.x()))) / len).abs())
+            .fold(0.0, f64::max)
+    };
     let line_arc_crossings = |la: Point2, lb: Point2, ai: usize| -> Vec<Point2> {
         let Some(poly) = arc_polys[ai].as_ref() else {
             return Vec::new();
@@ -1425,12 +1440,6 @@ fn arrangement_regions_from_inputs(
             }
             let (mut lo, mut hi) = (t0, t1);
             let mut s_lo = side(p0);
-            if s_lo == 0.0 {
-                if !near_end(p0) {
-                    out.push(p0);
-                }
-                continue;
-            }
             for _ in 0..48 {
                 let mid = 0.5 * (lo + hi);
                 let pm = frame.project(
@@ -1438,9 +1447,6 @@ fn arrangement_regions_from_inputs(
                         .evaluate_with_endpoints(mid, e.start_3d, e.end_3d),
                 );
                 let s_mid = side(pm);
-                if s_mid == 0.0 {
-                    break;
-                }
                 if (s_mid > 0.0) == (s_lo > 0.0) {
                     lo = mid;
                     s_lo = s_mid;
@@ -1510,10 +1516,12 @@ fn arrangement_regions_from_inputs(
                 }
                 (false, true) if other.is_section => {
                     // True crossings replace the chord-derived point when one
-                    // is found near it; a chord crossing with NO nearby true
+                    // is found within the arc's sagitta of it; a chord
+                    // crossing with NO nearby true
                     // crossing keeps the historical chord break (the sampled
                     // arc span can be unreliable for reversed arcs, and
                     // dropping calibrated breaks under-splits).
+                    let cover = arc_sagitta(j) + tol * 100.0;
                     let truex = line_arc_crossings(a0, a1, j);
                     let mut covered_chord = false;
                     let chord_t = seg_cross_param(a0, a1, b0, b1);
@@ -1522,7 +1530,7 @@ fn arrangement_regions_from_inputs(
                         if t > 1e-6 && t < 1.0 - 1e-6 {
                             ts.push((t, Some(*uv)));
                             if let Some(ct) = chord_t
-                                && (t - ct).abs() * len < 0.05
+                                && (t - ct).abs() * len <= cover
                             {
                                 covered_chord = true;
                             }
@@ -1535,6 +1543,7 @@ fn arrangement_regions_from_inputs(
                     }
                 }
                 (true, false) if inputs[i].is_section => {
+                    let cover = arc_sagitta(i) + tol * 100.0;
                     let truex = line_arc_crossings(b0, b1, i);
                     let mut covered_chord = false;
                     let chord_t = seg_cross_param(a0, a1, b0, b1)
@@ -1544,7 +1553,7 @@ fn arrangement_regions_from_inputs(
                         if t > 1e-6 && t < 1.0 - 1e-6 {
                             ts.push((t, Some(*uv)));
                             if let Some(ct) = chord_t
-                                && (t - ct).abs() * len < 0.05
+                                && (t - ct).abs() * len <= cover
                             {
                                 covered_chord = true;
                             }
