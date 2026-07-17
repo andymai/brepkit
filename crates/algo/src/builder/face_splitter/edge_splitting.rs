@@ -34,7 +34,13 @@ pub(super) fn split_boundary_edges_at_3d_points(
             EdgeCurve::Ellipse(ellipse) => {
                 find_splits_on_ellipse(ellipse, &edge, split_pts_3d, tol)
             }
-            _ => find_splits_on_line(&edge, split_pts_3d, tol),
+            // A marched-NURBS boundary edge (a plane×cone conic minted by an
+            // earlier boolean) must split where a neighbouring face's
+            // partition anchors on it — the chord-based line fallback rejects
+            // on-curve points by the sagitta, leaving the shared edge whole on
+            // one face and split on the other (cross-face desync).
+            EdgeCurve::NurbsCurve(_) => find_splits_on_nurbs_section(&edge, split_pts_3d, tol),
+            EdgeCurve::Line => find_splits_on_line(&edge, split_pts_3d, tol),
         };
 
         if splits.is_empty() {
@@ -50,7 +56,10 @@ pub(super) fn split_boundary_edges_at_3d_points(
             // Circle splits carry the exact on-curve foot; re-evaluating via
             // `evaluate_edge_at_t` would re-apply the CCW-span convention
             // that iso-v rim splits deliberately bypass.
-            let split_3d = if matches!(edge.curve_3d, EdgeCurve::Circle(_)) {
+            let split_3d = if matches!(
+                edge.curve_3d,
+                EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_)
+            ) {
                 pt
             } else {
                 evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t)

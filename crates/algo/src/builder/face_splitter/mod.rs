@@ -2722,6 +2722,9 @@ pub fn split_face_2d(
     }
 
     let mut split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
+    if !is_plane && let Some(reg) = split_registry.as_deref_mut() {
+        split_pts_3d.extend(reg.values().flatten().copied());
+    }
 
     // For periodic faces, align closed boundary edge UV with seam edge UV.
     // The same 3D vertex projects to u=0 (from circle unwrapping) and u=seam
