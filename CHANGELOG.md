@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.11](https://github.com/andymai/brepkit/compare/v2.126.10...v2.126.11) (2026-07-17)
+
+
+### Bug Fixes
+
+* **topology:** trim NURBS edge domains to validated forward endpoint sub-spans ([#1097](https://github.com/andymai/brepkit/issues/1097)) ([c3575af](https://github.com/andymai/brepkit/commit/c3575af0d02263d954db772a4095494a7ba25e1e))
+
 ## [2.126.10](https://github.com/andymai/brepkit/compare/v2.126.9...v2.126.10) (2026-07-17)
 
 
