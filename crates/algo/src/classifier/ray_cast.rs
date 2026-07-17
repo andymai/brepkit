@@ -60,8 +60,10 @@ enum FaceGeom {
 
 /// Classify a point by ray casting against the solid's faces.
 ///
-/// Shoots 3 rays (+Z, +X, +Y) and uses majority vote. A point is
-/// inside if 2+ rays report an odd crossing count.
+/// Shoots 3 cardinal rays and uses majority vote; a non-unanimous vote
+/// escalates to 3 fixed generic-direction rays (see `votes_from_geoms`). A
+/// point is inside if 2+ rays of the deciding triple report an odd crossing
+/// count.
 ///
 /// # Errors
 ///
@@ -80,7 +82,7 @@ pub fn classify_ray_cast(
     }
 }
 
-/// Number of cardinal rays (of three) reporting an odd crossing count.
+/// Number of rays (of three) reporting an odd crossing count.
 ///
 /// A point is classified inside when 2+ of the three rays agree; the raw count
 /// distinguishes a confident 3-vote verdict from a grazing 2-vote tie.
@@ -150,8 +152,9 @@ pub fn classify_ray_cast_cached(
     }
 }
 
-/// Count the inside votes (of three cardinal rays) for a point against
-/// pre-collected face geometry.
+/// Count the inside votes (of three rays) for a point against pre-collected
+/// face geometry: cardinal rays first, escalating to fixed generic directions
+/// when the cardinal vote is split.
 fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoError> {
     if face_data.is_empty() {
         return Err(AlgoError::ClassificationFailed(
@@ -160,23 +163,88 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
     }
 
     let tol = Tolerance::new();
-    let ray_dirs = [
+    let cardinal_dirs = [
         Vec3::new(0.0, 0.0, 1.0),
         Vec3::new(1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
     ];
+    // Escalation directions (normalized √-prime component vectors). CAD models
+    // are dominated by axis-aligned feature planes, and a sample point lying ON
+    // such a plane sends a cardinal ray along every edge, seam, and tangency in
+    // that plane — the crossing parity of that ray is meaningless (a
+    // dovetail-nub interior point on the x/y/z planes of a relief-bore tangency
+    // lost 2 of 3 cardinal votes and classified Outside). Each ray reports
+    // whether any of its hits grazed a face boundary, band limit, or in-plane
+    // face (`suspicious`); only when ALL THREE cardinal rays are degenerate is
+    // the cardinal instrument unusable, and the vote is re-cast with these
+    // fixed generic directions that never run parallel to axis-aligned planes.
+    // Any clean cardinal ray keeps the historical verdict, deterministically
+    // (coincident-contact landscapes are calibrated against those results).
+    let generic_dirs = [
+        Vec3::new(
+            0.447_213_595_499_957_9,
+            0.547_722_557_505_166_1,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ),
+        Vec3::new(-0.5, 0.763_762_615_825_973_4, 0.408_248_290_463_863),
+        Vec3::new(
+            0.597_614_304_667_196_8,
+            -0.377_964_473_009_227_2,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ),
+    ];
 
-    let mut inside_votes = 0u8;
-    for ray_dir in &ray_dirs {
-        let mut crossings = 0i32;
-        for geom in face_data {
-            crossings += ray_geom_crossings(point, *ray_dir, geom, tol);
+    let vote = |dirs: &[Vec3; 3]| -> (u8, u8) {
+        let mut inside_votes = 0u8;
+        let mut suspicious_rays = 0u8;
+        for ray_dir in dirs {
+            let mut crossings = 0i32;
+            let mut suspicious = false;
+            for geom in face_data {
+                let (c, s) = ray_geom_crossings(point, *ray_dir, geom, tol);
+                crossings += c;
+                suspicious |= s;
+            }
+            if crossings % 2 != 0 {
+                inside_votes += 1;
+            }
+            if suspicious {
+                suspicious_rays += 1;
+            }
         }
-        if crossings % 2 != 0 {
-            inside_votes += 1;
-        }
+        (inside_votes, suspicious_rays)
+    };
+
+    let (cardinal, suspicious) = vote(&cardinal_dirs);
+    if suspicious < 3 {
+        return Ok(cardinal);
     }
-    Ok(inside_votes)
+    let (generic, _) = vote(&generic_dirs);
+    Ok(generic)
+}
+
+/// Distance from a point to the closed polyline through `verts`.
+fn dist_to_polygon_boundary(p: Point3, verts: &[Point3]) -> f64 {
+    let mut best = f64::INFINITY;
+    let n = verts.len();
+    for i in 0..n {
+        let a = verts[i];
+        let b = verts[(i + 1) % n];
+        let ab = b - a;
+        let len2 = ab.dot(ab);
+        let t = if len2 > 0.0 {
+            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let foot = Point3::new(
+            ab.x().mul_add(t, a.x()),
+            ab.y().mul_add(t, a.y()),
+            ab.z().mul_add(t, a.z()),
+        );
+        best = best.min((p - foot).length());
+    }
+    best
 }
 
 /// Sample a wire into a polygon by geometrically chaining its edges.
@@ -479,8 +547,17 @@ fn cylinder_hole_bands(
 }
 
 /// Count ray crossings against a face geometry.
+///
+/// The second component reports a degenerate encounter: a hit (accepted or
+/// barely rejected) grazing the face's boundary, patch limit, or an in-plane
+/// face — the parity contribution of such a ray is unreliable.
 #[inline]
-fn ray_geom_crossings(origin: Point3, ray_dir: Vec3, geom: &FaceGeom, tol: Tolerance) -> i32 {
+fn ray_geom_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    geom: &FaceGeom,
+    tol: Tolerance,
+) -> (i32, bool) {
     match geom {
         FaceGeom::Planar {
             verts,
@@ -525,28 +602,37 @@ fn ray_face_crossing(
     normal: Vec3,
     d: f64,
     tol: Tolerance,
-) -> i32 {
+) -> (i32, bool) {
+    let near = 10.0 * tol.linear;
     let denom = normal.dot(ray_dir);
     if denom.abs() < tol.angular {
-        return 0;
+        // Ray parallel to the plane. If the origin also LIES in the plane the
+        // ray travels inside the face's plane — edges and seams there make its
+        // parity unreliable.
+        let numer = d - dot_normal_point(normal, origin);
+        return (0, numer.abs() <= near);
     }
     let numer = d - dot_normal_point(normal, origin);
     let t = numer / denom;
     if t <= tol.linear {
-        return 0;
+        return (0, false);
     }
     let hit = Point3::new(
         origin.x() + ray_dir.x() * t,
         origin.y() + ray_dir.y() * t,
         origin.z() + ray_dir.z() * t,
     );
+    let boundary_graze = dist_to_polygon_boundary(hit, verts) <= near
+        || holes
+            .iter()
+            .any(|h| dist_to_polygon_boundary(hit, h) <= near);
     if !point_in_face_3d(hit, verts, &normal) {
-        return 0;
+        return (0, boundary_graze);
     }
     if holes.iter().any(|h| point_in_face_3d(hit, h, &normal)) {
-        return 0;
+        return (0, boundary_graze);
     }
-    1
+    (1, boundary_graze)
 }
 
 /// Count ray crossings with a bounded full-period cylindrical face.
@@ -563,7 +649,8 @@ fn ray_cylinder_crossings(
     hole_bands: &[(f64, f64)],
     u_gap: Option<(f64, f64)>,
     tol: Tolerance,
-) -> i32 {
+) -> (i32, bool) {
+    let near = 10.0 * tol.linear;
     let (v_min, v_max) = v_range;
     let axis = surface.axis();
     let m = origin - surface.origin();
@@ -572,7 +659,7 @@ fn ray_cylinder_crossings(
 
     let a = d_perp.dot(d_perp);
     if a < 1e-14 {
-        return 0;
+        return (0, false);
     }
     let b = 2.0 * m_perp.dot(d_perp);
     let c = surface
@@ -581,10 +668,12 @@ fn ray_cylinder_crossings(
     let disc = b.mul_add(b, -4.0 * a * c);
     // Treat near-tangent rays as misses: counting one graze flips parity.
     if disc < 1e-12 * a * surface.radius() * surface.radius() {
-        return 0;
+        return (0, false);
     }
     let sqrt_disc = disc.sqrt();
     let mut crossings = 0;
+    let mut suspicious = false;
+    let near_angle = near / surface.radius().max(near);
     for t in [(-b - sqrt_disc) / (2.0 * a), (-b + sqrt_disc) / (2.0 * a)] {
         if t <= tol.linear {
             continue;
@@ -595,9 +684,13 @@ fn ray_cylinder_crossings(
             origin.z() + ray_dir.z() * t,
         );
         let v = axis.dot(hit - surface.origin());
+        suspicious |= (v - v_min).abs() <= near || (v - v_max).abs() <= near;
         if v < v_min - tol.linear || v > v_max + tol.linear {
             continue;
         }
+        suspicious |= hole_bands
+            .iter()
+            .any(|&(lo, hi)| (v - lo).abs() <= near || (v - hi).abs() <= near);
         if hole_bands
             .iter()
             .any(|&(lo, hi)| v > lo + tol.linear && v < hi - tol.linear)
@@ -609,13 +702,27 @@ fn ray_cylinder_crossings(
         // covers a 90° arc; the other 3/4 is not a real face).
         if let Some(gap) = u_gap {
             let (u, _) = surface.project_point(hit);
+            suspicious |= near_gap_border(u, gap, near_angle);
             if u_in_gap(u, gap) {
                 continue;
             }
         }
         crossings += 1;
     }
-    crossings
+    (crossings, suspicious)
+}
+
+/// Whether `u` lies within `eps` of either border of the excluded gap.
+fn near_gap_border(u: f64, gap: (f64, f64), eps: f64) -> bool {
+    use std::f64::consts::TAU;
+    let u = u.rem_euclid(TAU);
+    for border in [gap.0.rem_euclid(TAU), gap.1.rem_euclid(TAU)] {
+        let d = (u - border).abs();
+        if d.min(TAU - d) <= eps {
+            return true;
+        }
+    }
+    false
 }
 
 /// Count ray crossings with a bounded conical face.
@@ -633,7 +740,8 @@ fn ray_cone_crossings(
     v_range: (f64, f64),
     u_gap: Option<(f64, f64)>,
     tol: Tolerance,
-) -> i32 {
+) -> (i32, bool) {
+    let near = 10.0 * tol.linear;
     let (v_min, v_max) = v_range;
     let axis = surface.axis();
     let m = origin - surface.apex();
@@ -652,13 +760,13 @@ fn ray_cone_crossings(
     let mut roots = [None, None];
     if a.abs() < 1e-14 {
         if half_b.abs() < 1e-14 {
-            return 0;
+            return (0, false);
         }
         roots[0] = Some(-c / (2.0 * half_b));
     } else {
         let disc = half_b.mul_add(half_b, -(a * c));
         if disc < 1e-12 * a.abs() * r_max * r_max {
-            return 0;
+            return (0, false);
         }
         let sqrt_disc = disc.sqrt();
         roots[0] = Some((-half_b - sqrt_disc) / a);
@@ -666,6 +774,7 @@ fn ray_cone_crossings(
     }
 
     let mut crossings = 0;
+    let mut suspicious = false;
     for t in roots.into_iter().flatten() {
         if t <= tol.linear {
             continue;
@@ -676,17 +785,20 @@ fn ray_cone_crossings(
             origin.z() + ray_dir.z() * t,
         );
         let (u, v) = surface.project_point(hit);
+        suspicious |= (v - v_min).abs() <= near || (v - v_max).abs() <= near;
         if v < v_min - tol.linear || v > v_max + tol.linear {
             continue;
         }
-        if let Some(gap) = u_gap
-            && u_in_gap(u, gap)
-        {
-            continue;
+        if let Some(gap) = u_gap {
+            let near_angle = near / surface.radius_at(v).max(near);
+            suspicious |= near_gap_border(u, gap, near_angle);
+            if u_in_gap(u, gap) {
+                continue;
+            }
         }
         crossings += 1;
     }
-    crossings
+    (crossings, suspicious)
 }
 
 /// Whether circumferential parameter `u` lies in the excluded angular gap

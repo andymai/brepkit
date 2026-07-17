@@ -300,6 +300,29 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   (#1076, fixture `fracplate_seam_pocket_inmem.rs`; see the closure entry
   above).** The old forExport=true capture (F=7928 pocketsCut) was the wrong
   variant; the true export-variant root was the flush-wall pocket cut.
+- **A1-corner nub FUSE membrane (post-#1082 plate topology) — CLOSED
+  (2026-07-16, fixture `crates/io/tests/dovetail_a1corner_nubfuse_inmem.rs`):**
+  the #1082 junction disc changed the plate's corner topology, and the nub
+  fuse's plate-wall middle strip got its splitter interior point at exactly
+  (42, −4, −1.75) — the intersection of the wall plane, the relief-bore
+  tangency/profile-seam meridian, and the dovetail flare plane. All THREE
+  cardinal classification rays ran along edges/seams/the tangency line, the
+  parity votes were garbage (1/3), and the interior strip classified Outside —
+  a kept membrane, non-manifold analytic result, mesh fallback for the whole
+  plate chain (op-fuse-0 F=1517), dovetail 8/9. Fix in
+  `classifier/ray_cast.rs`: each ray now reports whether any hit grazed a face
+  boundary, band limit, or in-plane face; when ALL THREE cardinal rays are
+  degenerate the vote re-casts with fixed generic (√-prime) directions. Any
+  clean cardinal ray keeps its historical verdict — two blunter variants
+  (all-generic; escalate-on-split-vote) each broke a calibrated foil
+  (honeycomb pcut1 over-shared 0→7, wallcut free 0→48) before the per-ray
+  degeneracy design passed all foils simultaneously. DURABLE: splitter
+  interior points of notched/symmetric pieces land on feature-plane
+  intersections BY CONSTRUCTION; classification must survive on-plane sample
+  points. STALE-CAPTURE TRAP: the capture dir held two interleaved probe runs
+  (02:47 pre-fix + 19:44 fresh); one full iteration was burned replaying the
+  stale pair whose F=18 nub was an OPEN mesh-fallback operand (GIGO, already
+  fixed) — check bin mtimes before replaying mixed capture dirs.
 - **Mesh-boolean fallback emits OPEN meshes that get CONSUMED — OPEN
   (discovered 2026-07-16):** on the dblcorner nub operands the co-refinement
   fallback produced bnd=5/6 output (warn-logged, then used anyway, poisoning
