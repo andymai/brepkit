@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784262255598,
+  "lastUpdate": 1784262642811,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5183,6 +5183,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26526366,
             "range": "± 256850",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eea0e97c15c158fdebd94edbd5b520c47ddf248c",
+          "message": "chore(main): release 2.126.7 (#1089)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.7](https://github.com/andymai/brepkit/compare/v2.126.6...v2.126.7)\n(2026-07-17)\n\n\n### Bug Fixes\n\n* **algo:** re-vote ray-cast classification when all cardinal rays graze\ndegenerate structure\n([#1088](https://github.com/andymai/brepkit/issues/1088))\n([c89739e](https://github.com/andymai/brepkit/commit/c89739e14630962951fd9e0b41f60398a1bd13f3))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release 2.126.7 addresses a ray-cast misclassification edge case\nby re-voting classification when all cardinal rays graze a degenerate\nstructure. Updates `brepkit-wasm` version to 2.126.7.\n\n- **Bug Fixes**\n- Re-vote ray-cast classification when all cardinal rays graze\ndegenerate geometry to avoid incorrect inside/outside results (fixes\n#1088).\n\n<sup>Written for commit 8b4091198782aa44358ae633a76ed31c8e370de7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1089?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-17T04:28:39Z",
+          "tree_id": "bff0264fab6326945ef609f717b5cfe00a2ad384",
+          "url": "https://github.com/andymai/brepkit/commit/eea0e97c15c158fdebd94edbd5b520c47ddf248c"
+        },
+        "date": 1784262642355,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 868257,
+            "range": "± 6936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 958262,
+            "range": "± 3340",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12001,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 630453,
+            "range": "± 914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26530741,
+            "range": "± 87030",
             "unit": "ns/iter"
           }
         ]
