@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.9](https://github.com/andymai/brepkit/compare/v2.126.8...v2.126.9) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** true line-arc crossings and slit-free region emission in the planar arrangement ([#1092](https://github.com/andymai/brepkit/issues/1092)) ([5902a82](https://github.com/andymai/brepkit/commit/5902a821c29ac7b72ad277bfa011bf21f4452619))
+
 ## [2.126.8](https://github.com/andymai/brepkit/compare/v2.126.7...v2.126.8) (2026-07-17)
 
 
