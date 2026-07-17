@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784285436917,
+  "lastUpdate": 1784287537398,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5615,6 +5615,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28257667,
             "range": "± 694770",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c3575af0d02263d954db772a4095494a7ba25e1e",
+          "message": "fix(topology): trim NURBS edge domains to validated forward endpoint sub-spans (#1097)\n\n## Summary\n\n`EdgeCurve::domain_with_endpoints` for `NurbsCurve` historically ignored\nits endpoints and returned the full knot span — unlike Circle/Ellipse,\nwhich project endpoints to the true sub-arc. Every consumer of a NURBS\nsub-span edge (piece pcurves, boundary sampling, wire polygons)\ntherefore silently evaluated the WHOLE shared curve. On the snapClip\ndeepened-notch raw repro this conflated twin cone rims 0.01 apart into\none loop, leaving unpaired micro-edges at the junction.\n\n## The convention (validation-gated; every ambiguous case keeps the\nhistorical full domain)\n\n- **Closed edges** (endpoint chord < 1e-9): full knot span, unchanged.\n- **Whole-curve edges** (endpoints match the natural curve ends within\n1e-6, either orientation): full knot span, unchanged — also the cheap\nfast path (two curve evaluations, no projection).\n- **Forward interior sub-span**: both endpoint projections on-curve\nwithin the 1e-5 weld band (split vertices on marched sections sit up to\n~1e-5 off the fitted curve) AND span > 1e-6 of the domain → returns the\nprojected trimmed `[t₀, t₁]`.\n- **Everything else** (reversed pairs, degenerate spans, off-curve\nendpoints, failed projections): full-domain fallback, byte-for-byte the\nold behaviour.\n\nReversed sub-spans are deliberately NOT accepted yet: accepting them\nexposes a downstream arrangement defect (a degenerate single-edge closed\nloop with a 4e-9 endpoint gap minted at the junction, which\npattern-matches the curved-lens hole signature and aborts the analytic\nsplit). That residual is precisely documented in the roadmap row updated\nin this PR, with the repro recipe.\n\n## Verification\n\n- New unit tests in `edge.rs`: whole-edge both orientations, forward\nsub-span trims and evaluates back to its endpoints, reversed sub-span\nfalls back, off-curve endpoints fall back.\n- Deepened-notch raw repro (arena-captured operands): one of the two\nmirrored junction signatures fully resolves (the use=3 triple +\nmicro-edge chain); posBad signature documented in the roadmap.\n- d4 canary green (`cargo test -p brepkit-wasm --lib gridfinity`), full\nworkspace green in release (all crates, 0 failures).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nTrim NURBS edge domains to validated forward endpoint sub-spans so edges\nonly sample their own piece of a shared curve. This prevents whole-curve\nevaluation that merged nearby rims in the deepened‑notch repro.\n\n- **Bug Fixes**\n- `EdgeCurve::domain_with_endpoints` for `NurbsCurve` now projects\nendpoints and, if both lie on-curve within 1e-5 and form a forward span\n>1e-6 of the domain, returns the trimmed `[t0, t1]`.\n- Closed edges and whole-curve matches (endpoints at natural ends within\n1e-6, either orientation) keep the full knot span.\n- Reversed or invalid spans fall back to the full domain to avoid a\ndownstream degenerate-loop defect; forward case resolves one mirrored\njunction in the deepened‑notch repro.\n- Tests cover whole-edge, forward trim, reversed fallback, and off-curve\nfallback; fallback domain comparisons now use approximate assertions to\navoid float flakiness. Roadmap updated to track the reversed-span\nfollow-up.\n\n<sup>Written for commit fad5a65143c7b052dabd46b83044eec7632415f8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1097?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T11:23:15Z",
+          "tree_id": "999be2e6c6d757757470276705b4b923292ca2f1",
+          "url": "https://github.com/andymai/brepkit/commit/c3575af0d02263d954db772a4095494a7ba25e1e"
+        },
+        "date": 1784287536220,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 901060,
+            "range": "± 3325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1006960,
+            "range": "± 8539",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13230,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639820,
+            "range": "± 2279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28538682,
+            "range": "± 148517",
             "unit": "ns/iter"
           }
         ]
