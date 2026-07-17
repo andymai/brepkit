@@ -3782,9 +3782,10 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
 }
 
-/// Detect all-Line section edges forming closed loops strictly inside a
-/// plane face's boundary (nested coplanar footprints), and dedup repeated
-/// segments. Both the coplanar-contact pass and adjacent-face plane-plane
+/// Detect section edges (lines, open arcs, and open NURBS conics) forming
+/// closed loops strictly inside a plane face's boundary (nested coplanar
+/// footprints, or a box wall's socket-profile silhouette), and dedup
+/// repeated segments. Both the coplanar-contact pass and adjacent-face plane-plane
 /// intersections can emit the same footprint segment, so identical
 /// segments (by unordered quantized endpoints) collapse to one.
 ///

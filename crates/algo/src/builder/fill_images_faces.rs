@@ -2182,7 +2182,8 @@ fn arc_segment_crossings(
 ///
 /// Collects the outer wire vertices as line segments, then finds where
 /// the section line enters and exits the polygon. Returns the trimmed
-/// `(start, end)` or `None` if the line doesn't cross the face.
+/// Every in-face `(start, end)` interval of the line (a section can cross a
+/// face in multiple material windows), or `None` when nothing lies inside.
 #[allow(clippy::too_many_lines)]
 fn clip_line_to_face_boundary(
     topo: &Topology,
@@ -2329,8 +2330,9 @@ fn clip_line_to_face_boundary(
     // section then extends into the bite (air on this face), the splitter
     // weaves a wrong region, and the cut falls to a mesh fallback (the
     // snap-slot hole cuts). Classify each candidate sub-interval's midpoint
-    // against the arc-true boundary polygon and keep the longest interval that
-    // is actually inside the face.
+    // against the arc-true boundary polygon and keep EVERY interval that is
+    // actually inside the face (a section can cross the face in multiple
+    // material windows).
     let plane_frame = match face.surface() {
         FaceSurface::Plane { normal, .. } => {
             let pts: Vec<Point3> = boundary_segments.iter().map(|&(s, _)| s).collect();
