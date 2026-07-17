@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784296928178,
+  "lastUpdate": 1784301963662,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5993,6 +5993,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26475415,
             "range": "± 716584",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ac46c583649d85f303d98e7dcfef67780cf1255d",
+          "message": "fix(algo): merge overlapping deepened wall openings in the internal-loops splitter (#1104)\n\n## Summary\n\nThe snapClip join-edges baseplate export\n(`baseplateGenerator.scenario.snapClip`, 5×4 right/front/back join)\nfailed with 5 non-manifold STL edges, and its 44-hole connector chain\nran almost entirely on mesh-fallback booleans. Fresh operand capture on\n2.126.13 localized the break to `op-cut-3`: the plate flips from 615\nanalytic faces to an 8203-face mesh fallback and never recovers.\n\n**Root cause.** The snap-slot cutter stack cuts the same seam wall\ntwice: hole-2 opens a window in the x=105 join wall, and hole-3 (whose\ntop floats 0.01 above hole-2's floor) re-opens an overlapping window in\nthat same wall. Hole-3's sections form a closed internal loop on the\nwall face that OVERLAPS the existing inner wire.\n`plane_internal_line_loops` only tests loops against the OUTER boundary,\nso the face routed to `split_face_with_internal_loops`, which attached\nthe loop as an independent second hole. The two wires double-cover the\n0.01 overlap band: both rims stay as unpaired edges, the collinear band\npieces trace twice (use=3 micro verticals), the analytic gate rejects\nthe cut, and every subsequent cut inherits the fallback. This is the\nplane-face twin of the cone stranded-rim case closed in #1102 — the\nroadmap's deepened-notch terminal row.\n\n**Fix.** A union pre-pass in `split_face_with_internal_loops`, gated to\nplane faces with all-Line loop+hole: detect genuine geometric overlap\n(proper crossing, vertex containment, or collinear overlap span), split\nboth edge sets at mutual crossings and vertex T-points, classify pieces\nby midpoint (In/On/Out), and emit ONE merged opening outline (collinear\nOn-pieces contributed once, from the hole's copy so they pair with the\npave-split neighbor faces) plus the removable disc bounded by\nloop-pieces-outside + hole-pieces-inside. All 2D tests project 3D\nendpoints through one locally built `PlaneFrame` — stored hole-wire UVs\ncan be fitted in a foreign frame (the pcurve-convention lesson). Any\nchaining failure bails to the previous behavior.\n\n**Result.** The full 44-hole join-edges chain now replays analytic and\nwatertight natively: final F=881 (539 plane / 182 cylinder / 160 cone),\nposition-quantized edge pairing clean — versus F=8207 with 86 boundary\nedges before. Synthetic 3-box fixture included.\n\n## Verification\n\n- New fixture `crates/io/tests/deepened_wall_opening_inmem.rs`:\nstranded-rim pairing, single union hole on the wall, exact volume — 10×\nflake gate clean\n- Full io suite 30/30 targets green (groove-mouth, junction-disc,\nsnap-slot, cornerclip, divider-lip, honeycomb, halfSockets, intwidth,\nfracwidth foils all green)\n- d4 canary 27/27 (`cargo test -p brepkit-wasm --lib gridfinity`)\n- `brepkit-algo` 157 + `brepkit-operations` 765 green;\n`check-boundaries.sh` clean\n- Full workspace suite green via pre-push hook\n\nRoadmap updated in the same PR (terminal row retired; nozzle-chain\nresidual re-scoped with its dig recipe).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMerges overlapping deepened wall openings in the internal-loops splitter\nso plane walls keep a single union hole and cuts stay analytic. Fixes\nthe snapClip join-edges export by preventing double-covered rims and\nmesh fallback.\n\n- **Bug Fixes**\n- Added a union pre-pass in `split_face_with_internal_loops` for plane\nfaces with all-Line loop+hole: detect overlap (crossing, containment, or\ncollinear span), split at intersections/T-points, classify pieces, and\nemit one union hole plus the correct removable disc; epsilons derive\nfrom kernel tolerance (`tol*100`), and all 2D tests project 3D endpoints\nthrough one local `PlaneFrame` built from `wire_pts`; bails to the old\npath on any failure.\n- Prevents unpaired rims and double-traced bands; the 44-hole snapClip\nplate now replays analytic and watertight (F=881, posBad=0; was F=8207\nwith 86 boundary edges).\n- Added `crates/io/tests/deepened_wall_opening_inmem.rs` to guard the\nstranded-rim case; updated roadmap notes; all test suites pass.\n\n<sup>Written for commit c131cf1dba68c5df506fa22a6ec2507b151fdb87.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1104?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T15:24:03Z",
+          "tree_id": "b2fc96c7d4302a7a3cdc8eb43ac660162feaaf98",
+          "url": "https://github.com/andymai/brepkit/commit/ac46c583649d85f303d98e7dcfef67780cf1255d"
+        },
+        "date": 1784301963139,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 704659,
+            "range": "± 4318",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 780704,
+            "range": "± 1969",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10243,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 492146,
+            "range": "± 6884",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21937098,
+            "range": "± 225533",
             "unit": "ns/iter"
           }
         ]
