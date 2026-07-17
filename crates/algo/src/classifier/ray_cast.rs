@@ -60,10 +60,10 @@ enum FaceGeom {
 
 /// Classify a point by ray casting against the solid's faces.
 ///
-/// Shoots 3 cardinal rays and uses majority vote; a non-unanimous vote
-/// escalates to 3 fixed generic-direction rays (see `votes_from_geoms`). A
-/// point is inside if 2+ rays of the deciding triple report an odd crossing
-/// count.
+/// Shoots 3 cardinal rays and uses majority vote; when all three cardinal
+/// rays graze degenerate structure the vote is re-cast with 3 fixed
+/// generic-direction rays (see `votes_from_geoms`). A point is inside if 2+
+/// rays of the deciding triple report an odd crossing count.
 ///
 /// # Errors
 ///
@@ -153,8 +153,8 @@ pub fn classify_ray_cast_cached(
 }
 
 /// Count the inside votes (of three rays) for a point against pre-collected
-/// face geometry: cardinal rays first, escalating to fixed generic directions
-/// when the cardinal vote is split.
+/// face geometry: cardinal rays first, re-cast with fixed generic directions
+/// only when every cardinal ray grazed degenerate structure.
 fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoError> {
     if face_data.is_empty() {
         return Err(AlgoError::ClassificationFailed(
@@ -219,6 +219,10 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
     if suspicious < 3 {
         return Ok(cardinal);
     }
+    // The generic rays' own suspicion count is deliberately not consulted:
+    // when both instruments graze degenerate structure there is no cleaner
+    // signal left, and the generic directions are still the less-aligned,
+    // better-conditioned of the two.
     let (generic, _) = vote(&generic_dirs);
     Ok(generic)
 }
