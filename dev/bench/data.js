@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784262642811,
+  "lastUpdate": 1784264962221,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5237,6 +5237,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26530741,
             "range": "± 87030",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5801702d9c2569e10c3163788a9049f0ac0b62c2",
+          "message": "fix(algo): weld section endpoints onto line interiors; widen arrangement on-plane band (#1090)\n\n## Summary\n\nFollow-up to #1088. With the A1-corner fuse chain analytic, the dovetail\nscenario's remaining nm=2 STL pin traced to the connector-recess hole\ncuts: each recess box's slanted side wall receives a 4-section web from\nthe doubled tongue it crosses — a U-chain of three lines plus a\nplane×cone conic whose far end lands **mid-span of the z=0 line section\n(a T-junction)**.\n\nMarched section geometry is only good to its curve-fit error (~1e-6),\nand two exact-tolerance (1e-7) gates rejected it:\n\n1. **The plane-face endpoint weld had no anchor at the T** (anchors are\nboundary and section *endpoints*), so the junction never formed and the\nconic dangled. The weld now runs a second pass projecting unmatched\nendpoints onto other Line sections' interiors, snapping to the nearest\nstrictly-interior foot within the same 100·tol band. The downstream\nT-junction split then fires at its exact tolerance.\n2. **The planar-arrangement rescue bailed** because its arc on-plane\nround-trip demanded the vertex tolerance; a fitted conic lies in the\nplane only to fit error. The band is now the weld scale — genuine\nstraddle arcs (the check's real target) are off-plane by orders of\nmagnitude more.\n\nUn-rescued, the angular wire builder walked the CW-boundary slit-web as\none grand circuit (every section traversed out-and-back) under **both**\nwinding rules; the cut failed the analytic gate and the mesh fallback\nexported a doubled coincident face pair — the scenario's nm=2.\n\n## Testing\n\n- New fixture `crates/io/tests/dovetail_a1corner_holecut_inmem.rs` with\nthe tool's exact serialized operands (forExport=false corner plate +\nboth recess boxes): pre-fix the first cut mesh-falls-back at 1168 faces;\nnow the chain is analytic (65→69 faces), watertight and manifold at\nexport tolerance.\n- Full workspace suite green (2193 tests, 72 binaries, zero failures).\n- Calibrated foils re-run explicitly: d4 canary 27/27, honeycomb pcut1\n4/4, wallcut, groove-mouth, junction-disc, snap-slot, divider-lip,\ncornerclip, a1corner nub fuse.\n- clippy -D warnings + fmt clean; pre-commit and pre-push hooks passed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes planar web splitting by welding section endpoints onto line\ninteriors, widening the on-plane check, and limiting welds to\ncurved-section endpoints. A new in-memory fixture keeps the A1-corner\nrecess-hole cuts analytic, watertight, and manifold.\n\n- **Bug Fixes**\n- Weld now projects unmatched curved-section endpoints onto other Line\nsections’ strictly interior points within a `100*tol` band, constrained\nto the segment span (not extensions or near ends), so T‑junctions form\nand downstream splits fire at exact tolerance.\n- Planar arrangement “on-plane” check uses the weld scale (`100*tol`)\ninstead of vertex tolerance, keeping fitted plane×cone conics in-plane\nwhile still rejecting true off‑plane arcs.\n\n<sup>Written for commit fca8cb7e1c4e1a4cfad8b558d6e966d80b7fb317.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1090?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T05:07:03Z",
+          "tree_id": "6144b743d487dcd412aaa437298881a931ba37af",
+          "url": "https://github.com/andymai/brepkit/commit/5801702d9c2569e10c3163788a9049f0ac0b62c2"
+        },
+        "date": 1784264960957,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 874717,
+            "range": "± 1981",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 961379,
+            "range": "± 3786",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11970,
+            "range": "± 79",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631933,
+            "range": "± 13646",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26414447,
+            "range": "± 50414",
             "unit": "ns/iter"
           }
         ]
