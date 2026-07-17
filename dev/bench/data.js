@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784282535822,
+  "lastUpdate": 1784285436917,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5561,6 +5561,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26429676,
             "range": "± 42662",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3fa26e4c1c276cf4abd92dd802f9249abc9db483",
+          "message": "docs(skills): roadmap — NURBS endpoint-trimmed convention hole (#1096)\n\nRecords the deepened-notch dig's terminal finding:\n`EdgeCurve::domain_with_endpoints` for NurbsCurve ignores its endpoints\n(full knot domain), unlike Circle/Ellipse — every NURBS sub-span\nconsumer silently evaluates the whole curve. Includes the confirmed\nrepro, the first-breaking consumer (curved-lens interior search), and\nthe regression ladder for the dedicated fix.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments the NURBS endpoint-trim gap in the skills roadmap.\n`EdgeCurve::domain_with_endpoints` returns the full knot domain for\n`NurbsCurve` (unlike `Circle`/`Ellipse`), causing sub-span consumers to\nevaluate entire curves and conflate near-coincident geometry; adds a\nrepro, the first-breaking consumer, and a fix plan with a regression\nladder.\n\n<sup>Written for commit e11dac7972a6ca807c68b63f0b138cc12ff17669.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1096?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T10:48:25Z",
+          "tree_id": "cdfdc5893ca3cad282b08bce7d61f8a6ca37ca4f",
+          "url": "https://github.com/andymai/brepkit/commit/3fa26e4c1c276cf4abd92dd802f9249abc9db483"
+        },
+        "date": 1784285436466,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 910602,
+            "range": "± 3423",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1007212,
+            "range": "± 1854",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13156,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 633588,
+            "range": "± 1138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28257667,
+            "range": "± 694770",
             "unit": "ns/iter"
           }
         ]
