@@ -2629,10 +2629,13 @@ pub fn split_face_2d(
         // INTERIOR (a T-junction, not a shared corner — e.g. a plane×cone
         // conic ending on the top-plane section where the cone rim meets it;
         // the marched endpoint carries ~1e-6 of fit error). No anchor exists
-        // mid-span, so project the endpoint onto the other Line sections and
-        // snap it to the nearest strictly-interior foot within the weld band.
-        // With the endpoint exactly ON the line, the downstream T-junction
-        // split (1e-7 on-curve test) fires and the crossed section divides.
+        // mid-span, so project the endpoint onto the Line sections and snap it
+        // to the nearest strictly-interior foot within the weld band. With the
+        // endpoint exactly ON the line, the downstream T-junction split (1e-7
+        // on-curve test) fires and the crossed section divides. Only CURVED
+        // (marched/fitted) sections' endpoints are candidates — Line section
+        // endpoints come from exact clips, so the Line geometry referenced
+        // here never moves during this pass.
         let lines: Vec<(usize, Point3, Point3)> = out
             .iter()
             .enumerate()
@@ -2640,6 +2643,9 @@ pub fn split_face_2d(
             .map(|(i, s)| (i, s.start, s.end))
             .collect();
         for si in 0..out.len() {
+            if matches!(out[si].curve_3d, EdgeCurve::Line) {
+                continue;
+            }
             let mut moved = false;
             for pick_start in [true, false] {
                 let p = if pick_start {
@@ -2657,17 +2663,17 @@ pub fn split_face_2d(
                     if len2 <= 0.0 {
                         continue;
                     }
+                    let len = len2.sqrt();
                     let t = (p - a).dot(ab) / len2;
+                    // Strictly interior along the SEGMENT: a foot near or past
+                    // either end is the anchor pass's job (and a point near
+                    // the line's extension must not snap onto the span).
+                    if t * len <= weld || (1.0 - t) * len <= weld {
+                        continue;
+                    }
                     let foot = a + ab * t;
                     let d = (p - foot).length();
-                    // Strictly interior: near-end feet are the anchor pass's
-                    // job (and snapping there would duplicate an anchor weld).
-                    if d > 1e-12
-                        && d <= weld
-                        && (foot - a).length() > weld
-                        && (foot - b).length() > weld
-                        && best.is_none_or(|(bd, _)| d < bd)
-                    {
+                    if d > 1e-12 && d <= weld && best.is_none_or(|(bd, _)| d < bd) {
                         best = Some((d, foot));
                     }
                 }
