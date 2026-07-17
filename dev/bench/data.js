@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784287999339,
+  "lastUpdate": 1784288713254,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5723,6 +5723,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28715744,
             "range": "± 112478",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "95b899ad2077e58e916a25cb627cb2b252887238",
+          "message": "fix(algo): accept reversed NURBS sub-spans and run lens interior search as a last resort (#1099)\n\n## Summary\n\nSecond landing of the NURBS endpoint-trimmed convention work (#1097),\nfrom the snapClip deepened-notch dig. Two coupled fixes:\n\n### 1. Reversed sub-spans on open curves (topology)\n\n`domain_with_endpoints` now also accepts a REVERSED validated sub-span\non a clearly open NURBS curve, returning `t₀ > t₁` so start→end\ninterpolation stays truthful. Closed curves keep the full-domain\nfallback: a reversed projection pair there is usually a seam-crossing\nforward sub-arc, and interpolating backward would trace the complement\narc. Unit tests updated: reversed-on-open now trims (and evaluates back\nto its endpoints); a new closed-fitted-loop test pins the reversed-pair\nfallback.\n\n### 2. Curved-lens interior search as a last resort (algo)\n\nA cylinder/cone wall can reach classification carrying a closed curved\ninner wire — e.g. a pre-existing notch outline kept through the generic\nsplit path — with no precomputed interior, because only the\ninternal-loops splitter ran the dedicated remainder search. The\ncurved-lens flag then aborted the analytic split unconditionally (\"no\ncontained interior for curved-lens wall\"). `fill_images_faces` now runs\n`cylinder_cone_remainder_interior` as a last resort at the consumption\npoint; the abort remains, but only when even the dense 256×17 grid finds\nno contained point.\n\nThese are coupled: reversed spans re-shape the deepened-notch split so a\nlegitimate pre-existing lens hole lands on a generic-split wall, which\nwithout fix 2 aborts the whole analytic cut.\n\n## Verification\n\n- Deepened-notch raw repro (arena-captured operands, RAWN=1): posBad 10\n→ 6; both mirrored micro-edge junction chains fully resolve. The\nremaining 6 unpaired edges are one already-mapped root (the cone face is\nnot split by the marched cone×plane sections — the pave-machinery-bypass\nrow), documented in the roadmap update in this PR.\n- d4 canary green; full workspace green in release (one unrelated flaky\nGPU-adapter-contention test, `compute_mesh_lod`, passes standalone).\n- New/updated unit tests in `edge.rs`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAccept reversed NURBS sub-spans on open curves and add a last-resort\ninterior search for curved-lens walls to avoid false analytic-split\naborts. This fixes deepened-notch cases and reduces unpaired edges\n(posBad 10 → 6).\n\n- **Bug Fixes**\n- Topology: `EdgeCurve::domain_with_endpoints` accepts validated\nreversed spans on clearly open NURBS curves, returning `t0 > t1`; closed\ncurves still fall back to the full domain.\n- Algo: In `fill_images_faces`, run `cylinder_cone_remainder_interior`\nas a last resort for cylinder/cone walls with curved inner wires but no\nprecomputed interior; abort only if the dense grid finds no interior\npoint.\n\n<sup>Written for commit ad59fffeb987f2c3b8496f4cc3d958d947fcfe4f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1099?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T04:43:13-07:00",
+          "tree_id": "9896bfbe267abd548f1a7647c4a0b2b8e93cb886",
+          "url": "https://github.com/andymai/brepkit/commit/95b899ad2077e58e916a25cb627cb2b252887238"
+        },
+        "date": 1784288712762,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 701392,
+            "range": "± 5346",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 781455,
+            "range": "± 6429",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9480,
+            "range": "± 68",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 505577,
+            "range": "± 2559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22187734,
+            "range": "± 45164",
             "unit": "ns/iter"
           }
         ]
