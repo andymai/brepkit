@@ -1,0 +1,37 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_7fddca67d6dc19::t_59951c6790e247 2345
+  s_7fddca67d6dc19::t_2dc040597a08b4 2250-2265,2267-2269,2272-2275,2278-2283,2297,2300,2302-2303,2308,2313-2325,2327-2329,2353,2359,2377,2383,2423-2427,2459,2525-2526
+  s_7fddca67d6dc19::t_ee7db0425ad079 2363
+  s_7fddca67d6dc19::t_18522d6e4839a5 2436,2440,2449
+  s_7fddca67d6dc19::t_022d4e3e8b8ee7 2284-2296,2301
+  s_7fddca67d6dc19::t_13fb154b22df00 2266,2271,2326,2347-2352,2354-2358,2360-2362,2364-2376,2378-2382,2384-2422,2428-2435,2437-2439,2441-2448,2450-2458,2460-2488,2503-2512,2524,3779
+  s_7fddca67d6dc19::t_40a3fb715a3fa0 2276-2277,2330-2344,2346,2531-2552,2554-2559,2562
+  s_7fddca67d6dc19::t_5d7b9bd2a603b9 2270,2489-2502,3780
+  s_7fddca67d6dc19::t_5fea12772c792f 2298-2299,2304-2307,2309-2312
+  s_7fddca67d6dc19::t_b42c329cc207ee 2513-2523,2527-2528,3781
+  s_7fddca67d6dc19::t_8792cddbe8f85a 2529-2530,2553,2560-2561,2563-2565,2896-2909,3056,3763-3778
+.claude/skills/roadmap/SKILL.md
+  s_7fddca67d6dc19::t_cd73e3f65aed93 111-414
+crates/io/tests/data/snapclip_notch_cutter.bin
+  s_7fddca67d6dc19::t_2f298f54cfa524 1
+crates/io/tests/data/snapclip_notch_plate.bin
+  s_7fddca67d6dc19::t_830be2362b40b0 1
+crates/io/tests/snapclip_deepened_notch_inmem.rs
+  s_7fddca67d6dc19::t_92233280a25159 1-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "3bbe2330891fa56a755f078db5374b6150029e96",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": null
+    }
+  }
+}
