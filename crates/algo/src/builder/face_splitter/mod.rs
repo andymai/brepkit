@@ -1255,10 +1255,13 @@ fn arrangement_regions_from_inputs(
     // plane) projects to a meaningless chord — its true geometry cannot be a
     // sub-edge of this planar arrangement. Bail so the existing curved paths
     // handle those faces. Test via the frame round-trip: an in-plane point maps
-    // project→evaluate back to itself; an off-plane point does not.
+    // project→evaluate back to itself; an off-plane point does not. The band is
+    // the weld scale (100·tol), not the vertex tolerance: a marched plane×cone
+    // conic lies in the plane only to its curve-fit error (~1e-6), while a
+    // genuine straddle arc leaves the plane by orders of magnitude more.
     let on_plane = |p: Point3| -> bool {
         let uv = frame.project(p);
-        (frame.evaluate(uv.x(), uv.y()) - p).length() <= tol
+        (frame.evaluate(uv.x(), uv.y()) - p).length() <= tol * 100.0
     };
     for inp in &inputs {
         if inp.is_arc {
@@ -2620,6 +2623,74 @@ pub fn split_face_2d(
                 s.end_uv_a = None;
                 s.start_uv_b = None;
                 s.end_uv_b = None;
+            }
+        }
+        // Second pass: an endpoint can also land just OFF another section's
+        // INTERIOR (a T-junction, not a shared corner — e.g. a plane×cone
+        // conic ending on the top-plane section where the cone rim meets it;
+        // the marched endpoint carries ~1e-6 of fit error). No anchor exists
+        // mid-span, so project the endpoint onto the Line sections and snap it
+        // to the nearest strictly-interior foot within the weld band. With the
+        // endpoint exactly ON the line, the downstream T-junction split (1e-7
+        // on-curve test) fires and the crossed section divides. Only CURVED
+        // (marched/fitted) sections' endpoints are candidates — Line section
+        // endpoints come from exact clips, so the Line geometry referenced
+        // here never moves during this pass.
+        let lines: Vec<(usize, Point3, Point3)> = out
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s.curve_3d, EdgeCurve::Line))
+            .map(|(i, s)| (i, s.start, s.end))
+            .collect();
+        for si in 0..out.len() {
+            if matches!(out[si].curve_3d, EdgeCurve::Line) {
+                continue;
+            }
+            let mut moved = false;
+            for pick_start in [true, false] {
+                let p = if pick_start {
+                    out[si].start
+                } else {
+                    out[si].end
+                };
+                let mut best: Option<(f64, Point3)> = None;
+                for &(li, a, b) in &lines {
+                    if li == si {
+                        continue;
+                    }
+                    let ab = b - a;
+                    let len2 = ab.dot(ab);
+                    if len2 <= 0.0 {
+                        continue;
+                    }
+                    let len = len2.sqrt();
+                    let t = (p - a).dot(ab) / len2;
+                    // Strictly interior along the SEGMENT: a foot near or past
+                    // either end is the anchor pass's job (and a point near
+                    // the line's extension must not snap onto the span).
+                    if t * len <= weld || (1.0 - t) * len <= weld {
+                        continue;
+                    }
+                    let foot = a + ab * t;
+                    let d = (p - foot).length();
+                    if d > 1e-12 && d <= weld && best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, foot));
+                    }
+                }
+                if let Some((_, foot)) = best {
+                    if pick_start {
+                        out[si].start = foot;
+                    } else {
+                        out[si].end = foot;
+                    }
+                    moved = true;
+                }
+            }
+            if moved {
+                out[si].start_uv_a = None;
+                out[si].end_uv_a = None;
+                out[si].start_uv_b = None;
+                out[si].end_uv_b = None;
             }
         }
         welded_sections = out;
