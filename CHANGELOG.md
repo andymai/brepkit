@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.8](https://github.com/andymai/brepkit/compare/v2.126.7...v2.126.8) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** weld section endpoints onto line interiors; widen arrangement on-plane band ([#1090](https://github.com/andymai/brepkit/issues/1090)) ([5801702](https://github.com/andymai/brepkit/commit/5801702d9c2569e10c3163788a9049f0ac0b62c2))
+
 ## [2.126.7](https://github.com/andymai/brepkit/compare/v2.126.6...v2.126.7) (2026-07-17)
 
 
