@@ -1,0 +1,25 @@
+crates/io/examples/replay_groove.rs
+  s_7fddca67d6dc19::t_deb6b5881d55b7 1-38
+crates/algo/src/builder/face_splitter/mod.rs
+  s_7fddca67d6dc19::t_9dd649657717d1 1447-1453
+  s_7fddca67d6dc19::t_1e4737af177c6c 1590-1596
+  s_7fddca67d6dc19::t_8cd361498747dc 1403-1412,1424-1426,1446,1454-1455
+crates/io/Cargo.toml
+  s_7fddca67d6dc19::t_4cec25fc069408 21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6a5bd94a125d40c0a95181ac1d51d5d9bb4d726e",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
