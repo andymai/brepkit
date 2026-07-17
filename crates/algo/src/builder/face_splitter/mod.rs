@@ -1524,7 +1524,14 @@ fn arrangement_regions_from_inputs(
                     let cover = arc_sagitta(j) + tol * 100.0;
                     let truex = line_arc_crossings(a0, a1, j);
                     let mut covered_chord = false;
-                    let chord_t = seg_cross_param(a0, a1, b0, b1);
+                    // A chord crossing within the weld band of the ARC's
+                    // endpoints is the endpoint T-junction seen through the
+                    // chord (a fit-error offset endpoint dips across the
+                    // line); the endpoint-break pass owns it.
+                    let chord_t = seg_cross_param(a0, a1, b0, b1).filter(|&t| {
+                        let p = a0 + d * t;
+                        (p - other.a).length() > tol * 100.0 && (p - other.b).length() > tol * 100.0
+                    });
                     for uv in &truex {
                         let t = (*uv - a0).dot(d) / (len * len);
                         if t > 1e-6 && t < 1.0 - 1e-6 {
@@ -1547,7 +1554,8 @@ fn arrangement_regions_from_inputs(
                     let truex = line_arc_crossings(b0, b1, i);
                     let mut covered_chord = false;
                     let chord_t = seg_cross_param(a0, a1, b0, b1)
-                        .filter(|&t| chord_break_on_arc(i, a0 + d * t));
+                        .filter(|&t| chord_break_on_arc(i, a0 + d * t))
+                        .filter(|&t| t * len > tol * 100.0 && (1.0 - t) * len > tol * 100.0);
                     for uv in &truex {
                         let t = (*uv - a0).dot(d) / (len * len);
                         if t > 1e-6 && t < 1.0 - 1e-6 {
@@ -4317,4 +4325,123 @@ fn plane_internal_line_loops(
         return None;
     }
     Some(deduped)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves2d::Line2D;
+    use brepkit_math::vec::Vec2;
+    use brepkit_topology::test_utils::make_unit_square_face;
+
+    fn dummy_pcurve() -> brepkit_math::curves2d::Curve2D {
+        brepkit_math::curves2d::Curve2D::Line(
+            Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+        )
+    }
+
+    fn line_section(start: Point3, end: Point3) -> SectionEdge {
+        SectionEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve_a: dummy_pcurve(),
+            pcurve_b: dummy_pcurve(),
+            start,
+            end,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        }
+    }
+
+    /// The face-64 slit-web regression: a plane face cut by a straight
+    /// section plus a marched-NURBS section whose endpoint forms a
+    /// T-junction MID-SPAN of the straight one, carrying ~1e-6 of curve-fit
+    /// error. The chord-based subdivision split the line at a phantom point
+    /// the arc side rejected, the half-edge graph desynchronized, and the
+    /// tracer's dangling-edge retreat emitted regions with SLIT (doubled)
+    /// edges. With true line×arc crossings and exact-UV co-registration the
+    /// arrangement yields the three real regions with every edge used once
+    /// per region.
+    #[test]
+    fn arrangement_splits_fit_error_t_junction_web_without_slits() {
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let face = topo.face(face_id).unwrap();
+        let surface = face.surface().clone();
+        let wire_pts = collect_wire_points(&topo, face.outer_wire());
+        let normal = extract_plane_normal(&surface);
+        let frame = PlaneFrame::from_plane_face(normal, &wire_pts);
+        let boundary =
+            boundary_edges_to_pcurve(&topo, face.outer_wire(), &surface, &wire_pts, Some(&frame));
+
+        // Straight section spanning the square at y = 0.5.
+        let s_line = line_section(Point3::new(0.0, 0.5, 0.0), Point3::new(1.0, 0.5, 0.0));
+
+        // Marched section from a T mid-span of the line (with 1e-6 fit error
+        // off it) down to the right boundary edge, bulging like a conic.
+        let pts = [
+            Point3::new(0.5, 0.5 + 1.0e-6, 0.0),
+            Point3::new(0.63, 0.44, 0.0),
+            Point3::new(0.75, 0.385, 0.0),
+            Point3::new(0.87, 0.315, 0.0),
+            Point3::new(1.0, 0.25, 0.0),
+        ];
+        let nurbs = brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap();
+        let s_arc = SectionEdge {
+            curve_3d: EdgeCurve::NurbsCurve(nurbs),
+            pcurve_a: dummy_pcurve(),
+            pcurve_b: dummy_pcurve(),
+            start: pts[0],
+            end: pts[4],
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        };
+
+        let sections = vec![s_line, s_arc];
+        let result = split_plane_face_by_arrangement(
+            &surface,
+            &boundary,
+            &sections,
+            Rank::A,
+            false,
+            face_id,
+            &frame,
+            1.0e-7,
+            None,
+        )
+        .expect("arrangement must trace the T-junction web");
+
+        // Upper half, lower-left region, lower-right region.
+        assert_eq!(result.len(), 3, "expected the three real regions");
+
+        // No region may traverse the same undirected edge twice (a slit).
+        for sub in &result {
+            let mut seen = std::collections::HashMap::new();
+            for e in &sub.outer_wire {
+                let q = |p: Point3| {
+                    (
+                        (p.x() * 1.0e6).round() as i64,
+                        (p.y() * 1.0e6).round() as i64,
+                        (p.z() * 1.0e6).round() as i64,
+                    )
+                };
+                let (a, b) = (q(e.start_3d), q(e.end_3d));
+                let key = if a <= b { (a, b) } else { (b, a) };
+                *seen.entry(key).or_insert(0usize) += 1;
+            }
+            assert!(
+                seen.values().all(|&c| c <= 1),
+                "region wire traverses an edge twice (slit): {:?}",
+                seen.iter().filter(|&(_, &c)| c > 1).collect::<Vec<_>>()
+            );
+        }
+    }
 }
