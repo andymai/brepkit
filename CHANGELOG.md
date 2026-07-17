@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.14](https://github.com/andymai/brepkit/compare/v2.126.13...v2.126.14) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** merge overlapping deepened wall openings in the internal-loops splitter ([#1104](https://github.com/andymai/brepkit/issues/1104)) ([ac46c58](https://github.com/andymai/brepkit/commit/ac46c583649d85f303d98e7dcfef67780cf1255d))
+
 ## [2.126.13](https://github.com/andymai/brepkit/compare/v2.126.12...v2.126.13) (2026-07-17)
 
 
