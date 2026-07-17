@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.10](https://github.com/andymai/brepkit/compare/v2.126.9...v2.126.10) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** split marched-NURBS boundary edges at neighbor partition anchors ([#1094](https://github.com/andymai/brepkit/issues/1094)) ([a991f79](https://github.com/andymai/brepkit/commit/a991f79ea71e0f60dfcf2d23b4f202dc50448854))
+
 ## [2.126.9](https://github.com/andymai/brepkit/compare/v2.126.8...v2.126.9) (2026-07-17)
 
 
