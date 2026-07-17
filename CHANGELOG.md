@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.15](https://github.com/andymai/brepkit/compare/v2.126.14...v2.126.15) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** trim plane-cone circle sections to exact boundary-crossing arcs ([#1106](https://github.com/andymai/brepkit/issues/1106)) ([5bf9534](https://github.com/andymai/brepkit/commit/5bf95348773bad782e3182b7d503ff1fd492787e))
+
 ## [2.126.14](https://github.com/andymai/brepkit/compare/v2.126.13...v2.126.14) (2026-07-17)
 
 
