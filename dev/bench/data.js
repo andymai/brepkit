@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784264962221,
+  "lastUpdate": 1784265349489,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5291,6 +5291,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26414447,
             "range": "± 50414",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f097338fcce373646bdddc795c8c3848a0e37adc",
+          "message": "chore(main): release 2.126.8 (#1091)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.8](https://github.com/andymai/brepkit/compare/v2.126.7...v2.126.8)\n(2026-07-17)\n\n\n### Bug Fixes\n\n* **algo:** weld section endpoints onto line interiors; widen\narrangement on-plane band\n([#1090](https://github.com/andymai/brepkit/issues/1090))\n([5801702](https://github.com/andymai/brepkit/commit/5801702d9c2569e10c3163788a9049f0ac0b62c2))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.126.8 to improve sectioning stability and\non-plane arrangement robustness.\n\n- **Bug Fixes**\n  - Weld section endpoints onto line interiors to prevent gaps at joins.\n- Widen the on-plane band in arrangement to better handle near-coplanar\ngeometry.\n\n<sup>Written for commit b40c97d0c79511f84fc11ae3baf2c41be75d0926.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1091?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-17T05:13:44Z",
+          "tree_id": "d3f71cb0fc747204da1fce1e79738a92a8e7d369",
+          "url": "https://github.com/andymai/brepkit/commit/f097338fcce373646bdddc795c8c3848a0e37adc"
+        },
+        "date": 1784265349060,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 877099,
+            "range": "± 6240",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 960612,
+            "range": "± 3326",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11819,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631591,
+            "range": "± 11823",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26777985,
+            "range": "± 823620",
             "unit": "ns/iter"
           }
         ]
