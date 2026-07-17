@@ -1,0 +1,39 @@
+.claude/skills/roadmap/SKILL.md
+  s_7fddca67d6dc19::t_cd73e3f65aed93 111-414
+crates/io/tests/data/snapclip_notch_cutter.bin
+  s_7fddca67d6dc19::t_2f298f54cfa524 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_7fddca67d6dc19::t_ee7db0425ad079 2348
+  s_7fddca67d6dc19::t_022d4e3e8b8ee7 2269-2281,2286
+  s_7fddca67d6dc19::t_18522d6e4839a5 2426,2430,2439
+  s_7fddca67d6dc19::t_adb23d26709167 2480,2555
+  s_7fddca67d6dc19::t_b42c329cc207ee 2503-2513,2517-2518,3786
+  s_7fddca67d6dc19::t_5fea12772c792f 2283-2284,2289-2292,2294-2297
+  s_7fddca67d6dc19::t_8792cddbe8f85a 2519-2520,2543,2550-2551,2553-2554,2901-2914,3061,3768-3783
+  s_7fddca67d6dc19::t_2dc040597a08b4 2235-2250,2252-2254,2257-2260,2263-2268,2282,2285,2287-2288,2293,2298-2310,2312-2314,2338,2344,2362,2368,2413-2417,2449,2515-2516
+  s_7fddca67d6dc19::t_a129f5c033d36f 2325-2327,2407-2412
+  s_7fddca67d6dc19::t_40a3fb715a3fa0 2261-2262,2315-2324,2328-2329,2331,2521-2542,2544-2549,2552
+  s_7fddca67d6dc19::t_13fb154b22df00 2251,2256,2311,2332-2337,2339-2343,2345-2347,2349-2361,2363-2367,2369-2406,2418-2425,2427-2429,2431-2438,2440-2448,2450-2478,2493-2502,2514,3784
+  s_7fddca67d6dc19::t_5d7b9bd2a603b9 2255,2479,2481-2492,3785
+  s_7fddca67d6dc19::t_59951c6790e247 2330
+crates/io/tests/data/snapclip_notch_plate.bin
+  s_7fddca67d6dc19::t_830be2362b40b0 1
+crates/io/tests/snapclip_deepened_notch_inmem.rs
+  s_7fddca67d6dc19::t_92233280a25159 1-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "dac51a414ffe2ac2ac712dc9c18214782ec2847e",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": null
+    }
+  }
+}
