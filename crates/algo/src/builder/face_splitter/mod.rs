@@ -2232,6 +2232,327 @@ fn arrangement_regions_from_inputs(
     Some(result)
 }
 
+/// Drop sections that run OFF-FACE through a concavity of the OUTER wire
+/// (a cylinder/cone wall whose boundary carries an earlier cut's bite).
+///
+/// The inner-wire air filter above `split_face_2d`'s arrangement only tests
+/// holes; a deepening cut's sections can overhang the face through the outer
+/// boundary instead (the snapClip deepened notch: the new box cutter's rim
+/// arc lies entirely inside the old notch bite, and the wall-section tails
+/// hug the old boundary edge 1e-4 off it — marched fits of the same exact
+/// intersection disagree at fit-error scale, far above weld). Keeping them
+/// makes the weave emit the WHOLE face plus disconnected bite fragments.
+///
+/// Verdict per section, sampled against the outer polygon in unwrapped UV:
+/// any sample clearly inside → keep; else any sample clearly outside → drop
+/// (fully off-face); else (every sample within the fit band of the boundary)
+/// it re-traces a boundary SUB-SPAN → drop, unless it duplicates a WHOLE
+/// boundary edge (kept, mirroring the plane-path re-trace discipline).
+fn clip_sections_to_outer_region(
+    sections: Vec<SectionEdge>,
+    boundary_edges: &[OrientedPCurveEdge],
+    surface: &FaceSurface,
+    wire_pts: &[Point3],
+) -> (Vec<SectionEdge>, Vec<Point3>) {
+    use std::f64::consts::{PI, TAU};
+    // Marched-fit mutual-disagreement tier: two independent fits of the same
+    // exact intersection land ~1e-4 apart (vertex 1e-7 < weld 1e-5 < fit).
+    const FIT_BAND: f64 = 1e-3;
+    // v-disagreement gate for stale parent pcurves (weld scale in UV).
+    const WELD_UV: f64 = 1e-4;
+    const CURVE_SAMPLES: usize = 12;
+    const SEC_SAMPLES: usize = 32;
+
+    // Outer polygon in a continuous (unwrapped-u) UV window, sampled from the
+    // 3D curves in native orientation (pcurve conventions are ambiguous).
+    let mut poly: Vec<Point2> = Vec::new();
+    let mut prev: Option<Point2> = None;
+    for e in boundary_edges {
+        // Endpoint order follows the traversal flag — for circle/ellipse
+        // edges `domain_with_endpoints` takes the CCW span from its first
+        // argument, so swapped endpoints would select the COMPLEMENTARY arc.
+        // The resulting samples are then oriented to wire order EMPIRICALLY
+        // (first sample nearest start_3d): a whole-edge NURBS returns the
+        // full forward domain for either traversal orientation, so its trace
+        // direction is the curve's own and the flag alone is not reliable.
+        let (s3, e3) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+        #[allow(clippy::cast_precision_loss)]
+        let mut pts3: Vec<Point3> = (0..=CURVE_SAMPLES)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(k as f64 / CURVE_SAMPLES as f64, t0);
+                e.curve_3d.evaluate_with_endpoints(t, s3, e3)
+            })
+            .collect();
+        if let (Some(first), Some(last)) = (pts3.first(), pts3.last())
+            && (*first - e.start_3d).length() > (*last - e.start_3d).length()
+        {
+            pts3.reverse();
+        }
+        let samples: Vec<Point2> = pts3
+            .into_iter()
+            .filter_map(|p| surface.project_point(p).map(|(u, v)| Point2::new(u, v)))
+            .collect();
+        for s in samples {
+            let unwrapped = match prev {
+                Some(pv) => {
+                    let du = ((s.x() - pv.x() + PI).rem_euclid(TAU)) - PI;
+                    Point2::new(pv.x() + du, s.y())
+                }
+                None => s,
+            };
+            prev = Some(unwrapped);
+            poly.push(unwrapped);
+        }
+    }
+    if poly.len() < 3 {
+        return (sections, Vec::new());
+    }
+    // The outer-overhang class requires an EARLIER cut's bite in the outer
+    // wire — a marched NURBS boundary edge — and a partial-band face. A
+    // primitive full-revolution lateral (plain bore cuts) has neither, and
+    // its seam-doubled polygon would produce garbage verdicts.
+    if !boundary_edges
+        .iter()
+        .any(|e| matches!(e.curve_3d, EdgeCurve::NurbsCurve(_)))
+    {
+        return (sections, Vec::new());
+    }
+    let (u_lo, u_hi) = poly.iter().fold((f64::MAX, f64::MIN), |(a, b), p| {
+        (a.min(p.x()), b.max(p.x()))
+    });
+    if u_hi - u_lo > TAU - 0.1 {
+        return (sections, Vec::new());
+    }
+    let band = FIT_BAND.max(super::classify_2d::boundary_eps(&poly));
+    let to_win = |p: Point3| -> Option<Point2> {
+        let (u, v) = surface.project_point(p)?;
+        // Test the 2-pi translates and keep the one nearest the polygon.
+        let best = [-1.0f64, 0.0, 1.0]
+            .iter()
+            .map(|k| Point2::new(k.mul_add(TAU, u), v))
+            .min_by(|a, b| {
+                super::classify_2d::distance_to_polygon_boundary(*a, &poly)
+                    .partial_cmp(&super::classify_2d::distance_to_polygon_boundary(*b, &poly))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })?;
+        Some(best)
+    };
+
+    // Project a 3D point onto the nearest boundary edge's curve (sampled +
+    // ternary-refined). Returns the on-curve foot when within the fit band.
+    let snap_to_boundary = |p: Point3| -> Option<Point3> {
+        let mut best: Option<(f64, Point3)> = None;
+        for e in boundary_edges {
+            let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+            let eval = |t: f64| e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
+            let n = 32usize;
+            let (mut bi, mut bd) = (0usize, f64::MAX);
+            for k in 0..=n {
+                #[allow(clippy::cast_precision_loss)]
+                let t = (t1 - t0).mul_add(k as f64 / n as f64, t0);
+                let d = (eval(t) - p).length();
+                if d < bd {
+                    bd = d;
+                    bi = k;
+                }
+            }
+            if bd > FIT_BAND * 4.0 {
+                continue;
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let (mut lo, mut hi) = (
+                (t1 - t0).mul_add(bi.saturating_sub(1) as f64 / n as f64, t0),
+                (t1 - t0).mul_add(((bi + 1).min(n)) as f64 / n as f64, t0),
+            );
+            for _ in 0..48 {
+                let m1 = lo + (hi - lo) / 3.0;
+                let m2 = hi - (hi - lo) / 3.0;
+                if (eval(m1) - p).length() < (eval(m2) - p).length() {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let t = f64::midpoint(lo, hi);
+            let foot = eval(t);
+            let d = (foot - p).length();
+            if best.is_none_or(|(bd2, _)| d < bd2) {
+                best = Some((d, foot));
+            }
+        }
+        best.and_then(|(d, foot)| (d <= FIT_BAND).then_some(foot))
+    };
+
+    let inside_at = |p: Point3| -> Option<(bool, f64)> {
+        let uv = to_win(p)?;
+        Some((
+            super::classify_2d::point_in_polygon_2d(uv, &poly),
+            super::classify_2d::distance_to_polygon_boundary(uv, &poly),
+        ))
+    };
+
+    let mut kept: Vec<SectionEdge> = Vec::new();
+    let mut anchors: Vec<Point3> = Vec::new();
+    for s in sections {
+        // Sample the in/out profile.
+        let mut states: Vec<Option<(bool, f64)>> = Vec::with_capacity(SEC_SAMPLES + 1);
+        for i in 0..=SEC_SAMPLES {
+            #[allow(clippy::cast_precision_loss)]
+            let t = i as f64 / SEC_SAMPLES as f64;
+            states.push(inside_at(evaluate_edge_at_t(
+                &s.curve_3d,
+                s.start,
+                s.end,
+                t,
+            )));
+        }
+        if states.iter().any(Option::is_none) {
+            kept.push(s);
+            continue;
+        }
+        let clear_in = |st: &Option<(bool, f64)>| st.is_some_and(|(i, d)| i && d > band);
+        let clear_out = |st: &Option<(bool, f64)>| st.is_some_and(|(i, d)| !i && d > band);
+        let any_in = states.iter().any(clear_in);
+        let any_out = states.iter().any(clear_out);
+        if any_in && !any_out {
+            kept.push(s);
+            continue;
+        }
+        if !any_in {
+            // No clearly-interior portion: fully off-face, or a band-hugging
+            // boundary re-trace. Keep only a WHOLE-edge duplicate.
+            let whole_dup = !any_out
+                && boundary_edges.iter().any(|e| {
+                    ((s.start - e.start_3d).length() < FIT_BAND
+                        && (s.end - e.end_3d).length() < FIT_BAND)
+                        || ((s.start - e.end_3d).length() < FIT_BAND
+                            && (s.end - e.start_3d).length() < FIT_BAND)
+                });
+            if whole_dup {
+                kept.push(s);
+            }
+            continue;
+        }
+        // Mixed: split at each clear in↔out transition, bisection-refined,
+        // junction snapped onto the boundary curve so both the boundary
+        // splitter (exact on-curve gate) and the piece share one vertex.
+        let raw_inside = |st: &Option<(bool, f64)>| st.is_some_and(|(i, _)| i);
+        let mut cuts: Vec<(f64, Point3)> = Vec::new();
+        for w in 0..SEC_SAMPLES {
+            let (a, b) = (&states[w], &states[w + 1]);
+            let flip = (clear_in(a) && !raw_inside(b)) || (!raw_inside(a) && clear_in(b));
+            if !flip {
+                continue;
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let (mut lo, mut hi) = (
+                w as f64 / SEC_SAMPLES as f64,
+                (w + 1) as f64 / SEC_SAMPLES as f64,
+            );
+            let lo_in = raw_inside(a);
+            for _ in 0..48 {
+                let m = f64::midpoint(lo, hi);
+                let p = evaluate_edge_at_t(&s.curve_3d, s.start, s.end, m);
+                let m_in = inside_at(p).is_some_and(|(i, _)| i);
+                if m_in == lo_in {
+                    lo = m;
+                } else {
+                    hi = m;
+                }
+            }
+            let tc = f64::midpoint(lo, hi);
+            let pc = evaluate_edge_at_t(&s.curve_3d, s.start, s.end, tc);
+            let j = snap_to_boundary(pc).unwrap_or(pc);
+            cuts.push((tc, j));
+        }
+        if cuts.is_empty() {
+            kept.push(s);
+            continue;
+        }
+        cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut piece_bounds: Vec<(f64, Point3)> = Vec::with_capacity(cuts.len() + 2);
+        piece_bounds.push((0.0, s.start));
+        piece_bounds.extend(cuts.iter().copied());
+        piece_bounds.push((1.0, s.end));
+        for w in piece_bounds.windows(2) {
+            let (t_a, p_a) = &w[0];
+            let (t_b, p_b) = &w[1];
+            if (*p_b - *p_a).length() < FIT_BAND {
+                continue;
+            }
+            let tm = f64::midpoint(*t_a, *t_b);
+            let pm = evaluate_edge_at_t(&s.curve_3d, s.start, s.end, tm);
+            let keep_piece = inside_at(pm).is_some_and(|(i, d)| i && d > band);
+            if !keep_piece {
+                continue;
+            }
+            let mut piece = s.clone();
+            piece.start = *p_a;
+            piece.end = *p_b;
+            // The stored pcurves span the WHOLE original section; a piece
+            // keeping them would evaluate (and UV-anchor) the full span.
+            // Refit on this face over the piece's own endpoints. Both slots
+            // are overwritten — this `sections` vec is face-local.
+            let pc = super::pcurve_compute::compute_pcurve_on_surface(
+                &piece.curve_3d,
+                piece.start,
+                piece.end,
+                surface,
+                wire_pts,
+                None,
+            );
+            piece.pcurve_a = pc.clone();
+            piece.pcurve_b = pc;
+            piece.start_uv_a = None;
+            piece.end_uv_a = None;
+            piece.start_uv_b = None;
+            piece.end_uv_b = None;
+            kept.push(piece);
+        }
+        for (_, j) in &cuts {
+            anchors.push(*j);
+        }
+    }
+    // A registry-presplit piece keeps its PARENT's pcurve, whose endpoint UVs
+    // are the parent's (the deepened-notch sec pieces evaluated their B/A ends
+    // at the parent's B'/A' rim UVs, disconnecting them from the boundary in
+    // UV). Detect by v-disagreement — v is non-periodic, so a real mismatch is
+    // unambiguous where a u shift could be a legitimate 2π translate — and
+    // refit on this face.
+    for s in &mut kept {
+        let v_bad = |p: Point3, uv_stored: Option<Point2>| -> bool {
+            match (surface.project_point(p), uv_stored) {
+                (Some((_, v_true)), Some(uv)) => (uv.y() - v_true).abs() > WELD_UV,
+                _ => false,
+            }
+        };
+        let (su, eu) = uv_endpoints_from_pcurve(&s.pcurve_a, s.start, s.end, surface, wire_pts);
+        if v_bad(s.start, Some(su)) || v_bad(s.end, Some(eu)) {
+            let pc = super::pcurve_compute::compute_pcurve_on_surface(
+                &s.curve_3d,
+                s.start,
+                s.end,
+                surface,
+                wire_pts,
+                None,
+            );
+            s.pcurve_a = pc.clone();
+            s.pcurve_b = pc;
+            s.start_uv_a = None;
+            s.end_uv_a = None;
+            s.start_uv_b = None;
+            s.end_uv_b = None;
+        }
+    }
+
+    (kept, anchors)
+}
+
 /// Split a face by its section edges, producing sub-faces.
 ///
 /// If there are no section edges, returns a single sub-face covering
@@ -2577,6 +2898,20 @@ pub fn split_face_2d(
         &deduped_sections[..]
     };
 
+    let outer_clipped_sections: Vec<SectionEdge>;
+    let mut outer_clip_anchors: Vec<Point3> = Vec::new();
+    let sections = if !is_plane
+        && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+    {
+        let (clipped, anchors) =
+            clip_sections_to_outer_region(sections.to_vec(), &boundary_edges, &surface, &wire_pts);
+        outer_clipped_sections = clipped;
+        outer_clip_anchors = anchors;
+        &outer_clipped_sections[..]
+    } else {
+        sections
+    };
+
     // If no section edges, the face is unsplit -- return as-is with original holes.
     if sections.is_empty() {
         return vec![SplitSubFace {
@@ -2723,6 +3058,7 @@ pub fn split_face_2d(
     }
 
     let mut split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
+    split_pts_3d.append(&mut outer_clip_anchors);
     if !is_plane && let Some(reg) = split_registry.as_deref_mut() {
         split_pts_3d.extend(reg.values().flatten().copied());
     }
@@ -3428,6 +3764,29 @@ pub fn split_face_2d(
     let all_edges = super::wire_builder::remove_pendant_sections(
         &all_edges, tol.linear, u_periodic, v_periodic,
     );
+
+    // Drop zero-extent section edges (a T-junction split at a section's own
+    // endpoint mints them); a self-loop edge derails the angular walker into
+    // degenerate single-edge sub-faces.
+    let all_edges: Vec<OrientedPCurveEdge> = if is_plane {
+        all_edges
+    } else {
+        let n_b = n_boundary_edges;
+        all_edges
+            .into_iter()
+            .enumerate()
+            .filter(|(i, e)| {
+                // Same scale as the boundary-proximity `uv_tol` above
+                // (~0.6 deg in angular coordinates): a closed circle section
+                // has a zero 3D chord but a full-period UV extent.
+                const ZERO_EXTENT_UV: f64 = 0.01;
+                *i < n_b
+                    || (e.start_3d - e.end_3d).length() >= tol.linear
+                    || (e.start_uv - e.end_uv).length() >= ZERO_EXTENT_UV
+            })
+            .map(|(_, e)| e)
+            .collect()
+    };
 
     // Build wire loops via angular-sorting traversal.
     let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
