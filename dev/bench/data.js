@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784255836118,
+  "lastUpdate": 1784262255598,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5129,6 +5129,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25455754,
             "range": "± 83593",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c89739e14630962951fd9e0b41f60398a1bd13f3",
+          "message": "fix(algo): re-vote ray-cast classification when all cardinal rays graze degenerate structure (#1088)\n\n## Summary\n\nThe dovetail A1-corner nub fuse regressed to a whole-plate mesh fallback\n(dovetail suite 8/9) after the junction-disc fix changed the plate's\ncorner topology. Root cause is in the ray-cast classifier, not the\nsplitter: the plate wall strip's splitter-computed interior point lands\nat exactly (42, −4, −1.75) — the intersection of THREE axis-aligned\nfeature planes (the wall plane, the relief-bore tangency / profile-seam\nmeridian, and the dovetail flare plane). All three cardinal\nclassification rays (+Z, +X, +Y) travel along edges, seams, and the\ntangency line from there; their crossing parity is meaningless, the vote\ncame out 1/3, and the interior strip classified **Outside** — a kept\nmembrane, edge over-sharing in the analytic result, and a mesh fallback\nfor the whole plate chain (1517 faces).\n\n## Fix\n\nEach ray now reports whether any of its hits (accepted or barely\nrejected) grazed a face boundary, band limit, hole-band edge, patch\nu-gap border, or an in-plane face. When **all three** cardinal rays are\ndegenerate, the vote is re-cast with fixed generic directions\n(normalized √-prime component vectors) that never run parallel to\naxis-aligned feature planes. Any clean cardinal ray keeps its historical\nverdict.\n\nThe conservative trigger matters: two blunter variants were each\nrejected by a calibration foil —\n- generic directions unconditionally → honeycomb pcut1 over-shared edges\n0→7;\n- escalate on any split vote → wall-cutout fixture free edges 0→48.\n\nThe per-ray degeneracy design passes both foils and the new fixture\nsimultaneously.\n\n## Testing\n\n- New fixture `crates/io/tests/dovetail_a1corner_nubfuse_inmem.rs` with\nthe tool's exact serialized operands: fails on the previous classifier\nwith a 1517-face mesh fallback; now 144 analytic faces, watertight and\nmanifold at export tolerance.\n- Full workspace suite green (2192 tests; the one `compute_mesh_lod`\nSIGSEGV is a pre-existing parallel wgpu device-creation flake — the same\nbinary passes 5/5 with `--test-threads 1` on both HEAD and this branch).\n- Foils re-run explicitly: honeycomb pcut1 4/4, wallcut fixture, d4\ngridfinity canary 27/27, groove-mouth + junction-disc + snap-slot\nfixtures.\n- clippy `-D warnings` + fmt clean; pre-push full-test hook passed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes ray-cast point classification when all three cardinal rays graze\nfeature boundaries by re-voting with generic directions. Resolves the\nA1‑corner dovetail nub fuse misclassification and removes the 1517‑face\nmesh fallback (now 144 analytic faces, watertight).\n\n- **Bug Fixes**\n- Each ray now flags degeneracy (grazed face boundary/band/in‑plane\nhit).\n- If and only if all three cardinal rays are degenerate, re-cast with\nfixed generic directions that aren’t parallel to axis-aligned planes.\n- Preserve any clean cardinal ray’s verdict to avoid regressions on\ncalibrated coincident-contact cases.\n- Added a focused in‑memory fixture with serialized operands to lock the\nA1‑corner behavior.\n\n- **Refactors**\n- Aligned inline comments with the per-ray degeneracy escalation design.\n\n<sup>Written for commit c5267e87bb6ba2881825591faf07179d178f3199.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1088?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T04:22:08Z",
+          "tree_id": "fd54610ac376a30c02c382a944d14c1050bb8e7e",
+          "url": "https://github.com/andymai/brepkit/commit/c89739e14630962951fd9e0b41f60398a1bd13f3"
+        },
+        "date": 1784262255127,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 870735,
+            "range": "± 2479",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 961338,
+            "range": "± 1083",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11863,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 640938,
+            "range": "± 20005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26526366,
+            "range": "± 256850",
             "unit": "ns/iter"
           }
         ]
