@@ -383,12 +383,20 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   aborted unconditionally on the lens flag. Fixed by running that search as
   a last resort at the consumption point (fill_images_faces; abort only if
   even the dense grid finds nothing). Together: RAWN=1 posBad 10 → 6, both
-  mirrored micro-edge chains resolved. REMAINING 6 (one root): the CONE
-  face keeps its un-split rim circle A→B while the notch's wall planes
-  carry the true route A→C→B — the marched cone×plane sections never split
-  the cone face itself (the pave-machinery-bypass row; sections carry
-  pave_block_id=None). Fix at phase-FF/make_blocks altitude or the curved
-  face splitter's section intake. Repro: cached replay_scplate.rs, RAWN=1,
+  mirrored micro-edge chains resolved; 2.126.12 tool-verified (dovetail
+  9/9, dovetailKey 2/2, fit-offset 2/2 hold; snapClip nozzle nm 13→12).
+  REMAINING 6 (one root, RE-IDENTIFIED — the pave-bypass theory is DEAD:
+  the cone face's section gate is OPEN, sc=3, and it receives all three
+  notch sections): the same cone×plane intersection curves are delivered
+  with DIFFERENT terminal rims per side — trimmed to the OLD notch rim
+  (z=−1.19) on the cone face but to the NEW deepened rim (z=−1.2) on the
+  wall planes (twin rims 0.01 apart). This is exactly the TERMINAL
+  deepened-notch case above ("a later cut deepening an earlier opening
+  strands the old floor edge"); the convention work cleared everything
+  else in the family (raw repro 37 → 6). What remains is that case's named
+  missing piece — sound deepened-notch detection (merge the old opening's
+  outline into the new one, `polygon_boolean::polygon_union`) without
+  false-positives on near-coincident faces. Repro: cached replay_scplate.rs, RAWN=1,
   capture capture-snapclip-plate-fresh. Dig provenance: memory
   project_snapclip-plate-bore.md.
 - **Mesh-boolean fallback emits OPEN meshes that get CONSUMED — OPEN
