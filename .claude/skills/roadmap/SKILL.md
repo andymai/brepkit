@@ -358,26 +358,31 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   keyed, NURBS boundary arm) broke the groove/a1corner calibrated chains
   which DEPEND on downstream reconciliation of asymmetric splits.** Repro:
   cache replay_scplate.rs (RAWN=n) + capture-snapclip-plate-fresh.
-- **NURBS endpoint-trimmed convention DOES NOT EXIST — OPEN (discovered
-  2026-07-17, the deepened-notch dig's terminal root):**
-  `EdgeCurve::domain_with_endpoints` for `NurbsCurve` returns the FULL knot
-  domain, ignoring the endpoints (topology/src/edge.rs ~line 95) — while
-  Circle/Ellipse project endpoints to the true sub-span. Every NURBS
-  sub-span consumer silently evaluates the WHOLE curve: piece pcurves carry
-  the parent's UV endpoints, and the wire builder conflates near-coincident
-  structures (the snapClip deepened-notch cone: twin rims 0.01 apart merged
-  into one loop → duplicate regions → the residual unpaired edges after
-  #1094). A narrow fix (endpoint projection in
-  `pcurve_compute::evaluate_edge_at_t`, math nurbs projection) confirmed
-  the diagnosis but immediately broke the curved-lens interior machinery
-  ("no contained interior for curved-lens wall") — consumers are calibrated
-  on the full-domain behavior. The fix needs a DEDICATED pass: implement
-  the convention (globally in `domain_with_endpoints` or path-by-path
-  starting at pcurve_compute + the curved-lens interior search), then the
-  regression ladder: the deepened-notch raw repro (cached
-  replay_scplate.rs, RAWN=1 — expect the cone conflation to resolve),
-  curved-lens fixtures, full foil battery, workspace, tool matrix. Dig
-  provenance: memory project_snapclip-plate-bore.md.
+- **NURBS endpoint-trimmed convention — FORWARD SPANS SHIPPED; reversed
+  spans remain OPEN behind a named arrangement defect (2026-07-17, the
+  deepened-notch dig's terminal root):** `EdgeCurve::domain_with_endpoints`
+  for `NurbsCurve` historically returned the FULL knot domain, ignoring the
+  endpoints — every NURBS sub-span consumer silently evaluated the WHOLE
+  curve (piece pcurves carried the parent's UV endpoints; the wire builder
+  conflated near-coincident structures — the snapClip deepened-notch cone's
+  twin rims). SHIPPED (topology/src/edge.rs, unit tests in the same file):
+  whole-edge endpoints (either orientation) and closed edges keep the full
+  span; a validated FORWARD interior sub-span (both projections on-curve
+  within the 1e-5 weld band, span > 1e-6·domain) returns the projected
+  trimmed `[t₀, t₁]`. On the RAWN=1 raw repro this cleaned one of the two
+  mirrored junction signatures (the use=3 triple + micro-edge chain at
+  y=−39.4). RESIDUAL: the mirrored twin needs REVERSED sub-spans (SCDOM
+  instrumentation showed on-curve reversed pairs at 1e-14), but accepting
+  them (returning `t₀ > t₁`, even gated to open curves) makes the
+  arrangement mint a DEGENERATE single-edge closed loop (endpoint gap ~4e-9
+  — a phantom point-hole at the micro-junction, below vertex-merge reach)
+  as an inner wire on the cone wall, which trips the curved-lens
+  no-contained-interior abort (wall Id(1137) in the repro). Next step is
+  the arrangement/wire-builder side: collapse or reject degenerate
+  (sub-weld-extent) closed loops before they become inner wires, then
+  re-attempt reversed acceptance. Repro: cached replay_scplate.rs, RAWN=1,
+  capture capture-snapclip-plate-fresh. Dig provenance: memory
+  project_snapclip-plate-bore.md.
 - **Mesh-boolean fallback emits OPEN meshes that get CONSUMED — OPEN
   (discovered 2026-07-16):** on the dblcorner nub operands the co-refinement
   fallback produced bnd=5/6 output (warn-logged, then used anyway, poisoning
