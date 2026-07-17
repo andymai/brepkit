@@ -1,0 +1,24 @@
+crates/algo/src/builder/fill_images_faces.rs
+  s_7fddca67d6dc19::t_ce070240691f99 264-269,348-353,2922-2935,2937-2938,2940-2958
+  s_7fddca67d6dc19::t_51e786f1d34795 356
+crates/algo/src/builder/face_splitter/mod.rs
+  s_7fddca67d6dc19::t_ce070240691f99 1274,1297,1418-1419,1436-1439,1582,1594-1595,1648,1756,1770,1786,2212
+crates/algo/src/pave_filler/phase_ff.rs
+  s_7fddca67d6dc19::t_9822022fbb7acb 343-345
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "e8b29e392cf0b01e35fa73e90b034a61d1881277",
+  "prompts": {},
+  "sessions": {
+    "s_7fddca67d6dc19": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "771ee67c-f316-473f-b0ec-0984cb53672f",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
