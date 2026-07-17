@@ -59,17 +59,27 @@ impl EdgeCurve {
 
     /// Parameter domain of this curve.
     ///
-    /// `Line` uses `[0, 1]`. NURBS uses its knot span. Closed Circle and
-    /// Ellipse edges (`start ≈ end`) use the full `[0, 2π]` domain. Open
-    /// arcs project both endpoints onto the curve and return the CCW
-    /// angular range `[a₀, a₁]` with `a₁ > a₀`, so sampling the domain
-    /// traces exactly the trimmed arc rather than the full curve.
+    /// `Line` uses `[0, 1]`. Closed Circle and Ellipse edges (`start ≈ end`)
+    /// use the full `[0, 2π]` domain. Open arcs project both endpoints onto
+    /// the curve and return the CCW angular range `[a₀, a₁]` with `a₁ > a₀`,
+    /// so sampling the domain traces exactly the trimmed arc rather than the
+    /// full curve. NURBS edges whose endpoints sit at the curve's natural
+    /// ends (either orientation), or whose endpoint projections fail to
+    /// validate as a forward interior sub-span, use the full knot span; a
+    /// validated open sub-span returns the projected `[t₀, t₁]` so the edge
+    /// samples only its own piece of a shared curve.
     #[must_use]
     pub fn domain_with_endpoints(&self, start: Point3, end: Point3) -> (f64, f64) {
         const TAU: f64 = std::f64::consts::TAU;
         // Below this chord the endpoints are considered coincident and the
         // edge is treated as a closed (full) curve.
         const CLOSED_EPS: f64 = 1e-9;
+        // NURBS whole-edge match band: split vertices on marched/fit curves sit
+        // up to the fit error (~1e-6) off the exact curve, well above vertex
+        // tolerance.
+        const END_EPS: f64 = 1e-6;
+        // NURBS sub-span on-curve band (the weld scale).
+        const WELD_EPS: f64 = 1e-5;
         match self {
             Self::Line => (0.0, 1.0),
             Self::Circle(c) => {
@@ -92,7 +102,37 @@ impl EdgeCurve {
                     (a0, a0 + delta)
                 }
             }
-            Self::NurbsCurve(n) => ParametricCurve::domain(n),
+            Self::NurbsCurve(n) => {
+                let (d0, d1) = ParametricCurve::domain(n);
+                if (start - end).length() < CLOSED_EPS {
+                    return (d0, d1);
+                }
+                let p0 = ParametricCurve::evaluate(n, d0);
+                let p1 = ParametricCurve::evaluate(n, d1);
+                if ((p0 - start).length() < END_EPS && (p1 - end).length() < END_EPS)
+                    || ((p0 - end).length() < END_EPS && (p1 - start).length() < END_EPS)
+                {
+                    return (d0, d1);
+                }
+                let proj = |p| brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9);
+                if let (Ok(pa), Ok(pb)) = (proj(start), proj(end)) {
+                    // Accept only a forward, non-degenerate, on-curve span.
+                    // Everything else — reversed pairs (on a closed curve these
+                    // are usually seam-crossing forward sub-arcs, where
+                    // interpolating backward would trace the complement arc;
+                    // downstream arrangement consumers also mint degenerate
+                    // sliver loops from reversed spans), degenerate spans,
+                    // off-curve endpoints — keeps the historical full-domain
+                    // behaviour.
+                    if pa.distance < WELD_EPS
+                        && pb.distance < WELD_EPS
+                        && pb.parameter - pa.parameter > 1e-6 * (d1 - d0)
+                    {
+                        return (pa.parameter, pb.parameter);
+                    }
+                }
+                (d0, d1)
+            }
         }
     }
 
@@ -284,5 +324,93 @@ mod tests {
         let (v0, v1) = make_test_vertices();
         let edge = Edge::new(v0, v1, EdgeCurve::Line);
         assert!((edge.effective_tolerance(1e-7) - 1e-7).abs() < f64::EPSILON);
+    }
+
+    fn open_nurbs() -> EdgeCurve {
+        let pts = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(2.0, 1.5, 0.0),
+            Point3::new(3.0, 1.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+        ];
+        EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap())
+    }
+
+    fn assert_full_domain(got: (f64, f64), d0: f64, d1: f64) {
+        assert!(
+            (got.0 - d0).abs() < f64::EPSILON,
+            "t0={} expected {d0}",
+            got.0
+        );
+        assert!(
+            (got.1 - d1).abs() < f64::EPSILON,
+            "t1={} expected {d1}",
+            got.1
+        );
+    }
+
+    #[test]
+    fn nurbs_domain_whole_edge_keeps_full_span_both_orientations() {
+        let curve = open_nurbs();
+        let EdgeCurve::NurbsCurve(n) = &curve else {
+            unreachable!()
+        };
+        let (d0, d1) = brepkit_math::traits::ParametricCurve::domain(n);
+        let p0 = brepkit_math::traits::ParametricCurve::evaluate(n, d0);
+        let p1 = brepkit_math::traits::ParametricCurve::evaluate(n, d1);
+        assert_full_domain(curve.domain_with_endpoints(p0, p1), d0, d1);
+        assert_full_domain(curve.domain_with_endpoints(p1, p0), d0, d1);
+    }
+
+    #[test]
+    fn nurbs_domain_forward_sub_span_is_trimmed() {
+        let curve = open_nurbs();
+        let EdgeCurve::NurbsCurve(n) = &curve else {
+            unreachable!()
+        };
+        let (d0, d1) = brepkit_math::traits::ParametricCurve::domain(n);
+        let ta = d0 + 0.25 * (d1 - d0);
+        let tb = d0 + 0.7 * (d1 - d0);
+        let pa = brepkit_math::traits::ParametricCurve::evaluate(n, ta);
+        let pb = brepkit_math::traits::ParametricCurve::evaluate(n, tb);
+        let (t0, t1) = curve.domain_with_endpoints(pa, pb);
+        assert!((t0 - ta).abs() < 1e-6, "t0={t0} expected {ta}");
+        assert!((t1 - tb).abs() < 1e-6, "t1={t1} expected {tb}");
+        // The trimmed domain evaluates back to the endpoints, so a consumer
+        // sampling it traces only the edge's own piece of the shared curve.
+        let s = curve.evaluate_with_endpoints(t0, pa, pb);
+        let e = curve.evaluate_with_endpoints(t1, pa, pb);
+        assert!((s - pa).length() < 1e-6);
+        assert!((e - pb).length() < 1e-6);
+    }
+
+    #[test]
+    fn nurbs_domain_reversed_sub_span_falls_back_to_full_domain() {
+        let curve = open_nurbs();
+        let EdgeCurve::NurbsCurve(n) = &curve else {
+            unreachable!()
+        };
+        let (d0, d1) = brepkit_math::traits::ParametricCurve::domain(n);
+        let ta = d0 + 0.25 * (d1 - d0);
+        let tb = d0 + 0.7 * (d1 - d0);
+        let pa = brepkit_math::traits::ParametricCurve::evaluate(n, ta);
+        let pb = brepkit_math::traits::ParametricCurve::evaluate(n, tb);
+        assert_full_domain(curve.domain_with_endpoints(pb, pa), d0, d1);
+    }
+
+    #[test]
+    fn nurbs_domain_off_curve_endpoints_fall_back_to_full_domain() {
+        let curve = open_nurbs();
+        let EdgeCurve::NurbsCurve(n) = &curve else {
+            unreachable!()
+        };
+        let (d0, d1) = brepkit_math::traits::ParametricCurve::domain(n);
+        let ta = d0 + 0.25 * (d1 - d0);
+        let tb = d0 + 0.7 * (d1 - d0);
+        let off = Vec3::new(0.0, 0.0, 1.0) * 0.5;
+        let pa = brepkit_math::traits::ParametricCurve::evaluate(n, ta) + off;
+        let pb = brepkit_math::traits::ParametricCurve::evaluate(n, tb) + off;
+        assert_full_domain(curve.domain_with_endpoints(pa, pb), d0, d1);
     }
 }
