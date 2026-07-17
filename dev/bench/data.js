@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784287537398,
+  "lastUpdate": 1784287999339,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5669,6 +5669,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28538682,
             "range": "± 148517",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f94c9208ba2d273d16c58743f7cebcf7292cc97",
+          "message": "chore(main): release 2.126.11 (#1098)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.11](https://github.com/andymai/brepkit/compare/v2.126.10...v2.126.11)\n(2026-07-17)\n\n\n### Bug Fixes\n\n* **topology:** trim NURBS edge domains to validated forward endpoint\nsub-spans ([#1097](https://github.com/andymai/brepkit/issues/1097))\n([c3575af](https://github.com/andymai/brepkit/commit/c3575af0d02263d954db772a4095494a7ba25e1e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.126.11 with a topology fix. NURBS edge domains\nare trimmed to validated forward endpoint sub-spans to prevent invalid\nspans.\n\n<sup>Written for commit d42071ee173cbadc87e77f9ef48cd2629af84e49.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1098?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-17T11:30:59Z",
+          "tree_id": "610b01061d02724988a193f234ce9d4d5a785058",
+          "url": "https://github.com/andymai/brepkit/commit/9f94c9208ba2d273d16c58743f7cebcf7292cc97"
+        },
+        "date": 1784287998253,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 907376,
+            "range": "± 2973",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1005908,
+            "range": "± 15881",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13065,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 634362,
+            "range": "± 592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28715744,
+            "range": "± 112478",
             "unit": "ns/iter"
           }
         ]
