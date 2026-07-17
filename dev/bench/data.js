@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784282148970,
+  "lastUpdate": 1784282535822,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5507,6 +5507,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26434701,
             "range": "± 165877",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "75a5ca5ecdeb109b5d9e3baa6ba39fa6edf32765",
+          "message": "chore(main): release 2.126.10 (#1095)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.10](https://github.com/andymai/brepkit/compare/v2.126.9...v2.126.10)\n(2026-07-17)\n\n\n### Bug Fixes\n\n* **algo:** split marched-NURBS boundary edges at neighbor partition\nanchors ([#1094](https://github.com/andymai/brepkit/issues/1094))\n([a991f79](https://github.com/andymai/brepkit/commit/a991f79ea71e0f60dfcf2d23b4f202dc50448854))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release 2.126.10 for `brepkit-wasm` fixes marched-NURBS boundary\nedge handling by splitting at neighbor partition anchors. This improves\ncontinuity at partition boundaries and prevents misaligned edges during\nmarching.\n\n<sup>Written for commit 1db77c1b6e59137040b0e4487f6a60e767ae005e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1095?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-17T10:00:05Z",
+          "tree_id": "1c68abef3b909769faed5f96d3714bb209d5e373",
+          "url": "https://github.com/andymai/brepkit/commit/75a5ca5ecdeb109b5d9e3baa6ba39fa6edf32765"
+        },
+        "date": 1784282535340,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 870523,
+            "range": "± 757",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 965485,
+            "range": "± 2393",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11912,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 635816,
+            "range": "± 1713",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26429676,
+            "range": "± 42662",
             "unit": "ns/iter"
           }
         ]
