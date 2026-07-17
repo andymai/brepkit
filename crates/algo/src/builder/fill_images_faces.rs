@@ -255,7 +255,25 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // gets shared with later faces. Sorting ensures consistent results.
     let mut sorted_faces: Vec<(FaceId, Rank)> =
         face_ranks.iter().map(|(&fid, &r)| (fid, r)).collect();
-    sorted_faces.sort_by_key(|(fid, _)| fid.index());
+    // Plane faces first: their arrangements register section split points
+    // (keyed by pave block) that curved faces sharing the same section curves
+    // consume, so both sides of a shared curve split at identical 3D points.
+    sorted_faces.sort_by_key(|(fid, _)| {
+        let curved = topo
+            .face(*fid)
+            .map(|f| {
+                !matches!(
+                    f.surface(),
+                    brepkit_topology::face::FaceSurface::Plane { .. }
+                )
+            })
+            .unwrap_or(true);
+        (curved, fid.index())
+    });
+    let mut section_split_registry: std::collections::HashMap<
+        usize,
+        Vec<brepkit_math::vec::Point3>,
+    > = std::collections::HashMap::new();
 
     for (face_id, rank) in sorted_faces {
         let fi = arena.face_info(face_id);
@@ -306,7 +324,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             has_sections,
             sections.len()
         );
-
         if sections.is_empty() {
             let expanded =
                 rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
@@ -323,6 +340,24 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // Build SurfaceInfo for periodicity
         let info = build_surface_info(topo, face_id);
 
+        // Curved faces: pre-split sections at the registry's points for the
+        // same pave block (the plane-side arrangement split the shared curve
+        // there; the endpoint-T machinery cascades the knock-on splits).
+        let is_plane_face = topo
+            .face(face_id)
+            .map(|f| {
+                matches!(
+                    f.surface(),
+                    brepkit_topology::face::FaceSurface::Plane { .. }
+                )
+            })
+            .unwrap_or(false);
+        let sections = if !is_plane_face && !section_split_registry.is_empty() {
+            presplit_sections_at_registry(&sections, &section_split_registry, tol.linear)
+        } else {
+            sections
+        };
+
         let split_results = split_face_2d(
             topo,
             face_id,
@@ -332,6 +367,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             None, // PlaneFrame built internally by face_splitter
             info.as_ref(),
             edge_images,
+            if is_plane_face {
+                Some(&mut section_split_registry)
+            } else {
+                None
+            },
         );
 
         log::debug!(
@@ -2857,4 +2897,108 @@ fn instantiate_wire_edge(
         let edge_id = topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()));
         (edge_id, start_vid != end_vid || pcurve_edge.forward)
     }
+}
+
+/// Pre-split sections at the registry's points for the same pave block.
+///
+/// A plane face's arrangement can split a section at a true interior crossing;
+/// a curved face sharing the same section curve (same pave block) must split
+/// at the identical 3D point or the two faces' partitions desynchronize and
+/// the shared pieces pair with nothing. Points are matched to a section when
+/// they lie strictly inside its span; pieces drop the parent's pave block id
+/// (vertex resolution would snap both halves to the un-split PaveBlock
+/// endpoints) and clear UV hints so consumers re-derive them.
+fn presplit_sections_at_registry(
+    sections: &[crate::builder::split_types::SectionEdge],
+    registry: &std::collections::HashMap<usize, Vec<brepkit_math::vec::Point3>>,
+    tol: f64,
+) -> Vec<crate::builder::split_types::SectionEdge> {
+    // Sections on curved faces arrive without pave-block ids, so match
+    // registered points GEOMETRICALLY: a point splits a section when it lies
+    // on the section's curve within the weld band (the two faces' copies of
+    // one FF curve agree to fit error). Dense sampling pre-locates; a local
+    // ternary refine certifies the distance.
+    let weld = tol * 100.0;
+    let on_curve =
+        |s: &crate::builder::split_types::SectionEdge, p: brepkit_math::vec::Point3| -> bool {
+            const N: usize = 64;
+            let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+            let mut best_k = 0;
+            let mut best = f64::MAX;
+            for k in 0..=N {
+                #[allow(clippy::cast_precision_loss)]
+                let t = d0 + (d1 - d0) * (k as f64 / N as f64);
+                let d = (s.curve_3d.evaluate_with_endpoints(t, s.start, s.end) - p).length();
+                if d < best {
+                    best = d;
+                    best_k = k;
+                }
+            }
+            if best <= weld {
+                return true;
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let mut lo = d0 + (d1 - d0) * ((best_k.saturating_sub(1)) as f64 / N as f64);
+            #[allow(clippy::cast_precision_loss)]
+            let mut hi = d0 + (d1 - d0) * (((best_k + 1).min(N)) as f64 / N as f64);
+            for _ in 0..40 {
+                let m1 = lo + (hi - lo) / 3.0;
+                let m2 = hi - (hi - lo) / 3.0;
+                let f1 = (s.curve_3d.evaluate_with_endpoints(m1, s.start, s.end) - p).length();
+                let f2 = (s.curve_3d.evaluate_with_endpoints(m2, s.start, s.end) - p).length();
+                if f1 < f2 {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let tm = 0.5 * (lo + hi);
+            (s.curve_3d.evaluate_with_endpoints(tm, s.start, s.end) - p).length() <= weld
+        };
+    let all_points: Vec<brepkit_math::vec::Point3> = registry.values().flatten().copied().collect();
+    let mut out = Vec::with_capacity(sections.len());
+    for s in sections {
+        let chord = s.end - s.start;
+        let cl2 = chord.dot(chord);
+        if cl2 <= tol * tol {
+            out.push(s.clone());
+            continue;
+        }
+        let guard = tol * 10.0;
+        let mut cuts: Vec<(f64, brepkit_math::vec::Point3)> = all_points
+            .iter()
+            .filter(|p| ((**p) - s.start).length() > guard && ((**p) - s.end).length() > guard)
+            .filter(|p| on_curve(s, **p))
+            .map(|p| (((*p) - s.start).dot(chord) / cl2, *p))
+            .filter(|(t, _)| *t > 0.0 && *t < 1.0)
+            .collect();
+        if cuts.is_empty() {
+            out.push(s.clone());
+            continue;
+        }
+        cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        cuts.dedup_by(|a, b| (a.1 - b.1).length() < guard);
+        let mut prev = s.start;
+        for (_, p) in &cuts {
+            let mut piece = s.clone();
+            piece.start = prev;
+            piece.end = *p;
+            piece.start_uv_a = None;
+            piece.end_uv_a = None;
+            piece.start_uv_b = None;
+            piece.end_uv_b = None;
+            piece.pave_block_id = None;
+            out.push(piece);
+            prev = *p;
+        }
+        let mut last = s.clone();
+        last.start = prev;
+        last.start_uv_a = None;
+        last.end_uv_a = None;
+        last.start_uv_b = None;
+        last.end_uv_b = None;
+        last.pave_block_id = None;
+        out.push(last);
+    }
+    out
 }

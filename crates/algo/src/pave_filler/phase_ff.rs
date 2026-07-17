@@ -340,7 +340,9 @@ pub fn perform(
             let raw_curves = restrict_curves_to_faces(
                 topo, fa, fb, surf_a, surf_b, v_range_a, v_range_b, raw_curves, tol,
             );
-
+            let raw_curves = restrict_curves_to_faces(
+                topo, fa, fb, surf_a, surf_b, v_range_a, v_range_b, raw_curves, tol,
+            );
             // Emit the EXACT faceted-ramp arcs with registry-aware endpoint
             // resolution: each arc's endpoints are bit-identical to the shared
             // boundary-line crossing of the adjacent tread's arc, so consult

@@ -339,6 +339,25 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   DURABLE: marched/fitted section geometry is good to ~1e-6, every exact-tol
   (1e-7) gate it meets needs a weld-scale (100·tol) band; this is the FOURTH
   such gap in this family (weld anchors, T-split, on-plane, junction-disc).
+- **snapClip deepened-notch family — PARTIAL (2026-07-17, 16-iteration dig,
+  full log in memory project_snapclip-plate-bore.md iterations 1-16):** the
+  op-cut-3+ nm chain root-mapped. LANDED: arrangement true line×arc
+  crossings (bisection-refined against the real arc, on-line validated,
+  endpoint-guarded — phantom chord-crossing breaks desynchronized the
+  half-edge graph and the tracer's dangling-edge retreat emitted SLIT
+  regions with doubled edges), exact-UV T-break registration, weld-band
+  on-plane/T-break tolerances, trimmed sub-arc emission, and a section
+  split registry (plane-first ordering + geometric point-on-curve presplit
+  for curved faces). Raw repro posBad 37→22; ALL calibrated foils green.
+  NOT closed: the remaining 22 are cross-face BOUNDARY-edge desyncs whose
+  root is that **marched FF sections on curved faces carry
+  pave_block_id=None — they bypass the pave machinery that gives plane
+  faces pre-split, shared-vertex sets. The canonical fix is pave-block
+  attachment/splitting for marched curves at phase-FF/make_blocks altitude;
+  every face-splitter-level propagation (face-web geometric, per-edge
+  keyed, NURBS boundary arm) broke the groove/a1corner calibrated chains
+  which DEPEND on downstream reconciliation of asymmetric splits.** Repro:
+  cache replay_scplate.rs (RAWN=n) + capture-snapclip-plate-fresh.
 - **Mesh-boolean fallback emits OPEN meshes that get CONSUMED — OPEN
   (discovered 2026-07-16):** on the dblcorner nub operands the co-refinement
   fallback produced bnd=5/6 output (warn-logged, then used anyway, poisoning
