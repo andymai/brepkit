@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.12](https://github.com/andymai/brepkit/compare/v2.126.11...v2.126.12) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** accept reversed NURBS sub-spans and run lens interior search as a last resort ([#1099](https://github.com/andymai/brepkit/issues/1099)) ([95b899a](https://github.com/andymai/brepkit/commit/95b899ad2077e58e916a25cb627cb2b252887238))
+
 ## [2.126.11](https://github.com/andymai/brepkit/compare/v2.126.10...v2.126.11) (2026-07-17)
 
 
