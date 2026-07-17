@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.6](https://github.com/andymai/brepkit/compare/v2.126.5...v2.126.6) (2026-07-17)
+
+
+### Bug Fixes
+
+* **algo:** four section-machinery gaps behind the snap-slot hole-cut fallback ([#1085](https://github.com/andymai/brepkit/issues/1085)) ([de23c25](https://github.com/andymai/brepkit/commit/de23c2528d71191d3c714f772ccfb52af836c88e))
+
 ## [2.126.5](https://github.com/andymai/brepkit/compare/v2.126.4...v2.126.5) (2026-07-16)
 
 
