@@ -358,6 +358,26 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   keyed, NURBS boundary arm) broke the groove/a1corner calibrated chains
   which DEPEND on downstream reconciliation of asymmetric splits.** Repro:
   cache replay_scplate.rs (RAWN=n) + capture-snapclip-plate-fresh.
+- **NURBS endpoint-trimmed convention DOES NOT EXIST — OPEN (discovered
+  2026-07-17, the deepened-notch dig's terminal root):**
+  `EdgeCurve::domain_with_endpoints` for `NurbsCurve` returns the FULL knot
+  domain, ignoring the endpoints (topology/src/edge.rs ~line 95) — while
+  Circle/Ellipse project endpoints to the true sub-span. Every NURBS
+  sub-span consumer silently evaluates the WHOLE curve: piece pcurves carry
+  the parent's UV endpoints, and the wire builder conflates near-coincident
+  structures (the snapClip deepened-notch cone: twin rims 0.01 apart merged
+  into one loop → duplicate regions → the residual unpaired edges after
+  #1094). A narrow fix (endpoint projection in
+  `pcurve_compute::evaluate_edge_at_t`, math nurbs projection) confirmed
+  the diagnosis but immediately broke the curved-lens interior machinery
+  ("no contained interior for curved-lens wall") — consumers are calibrated
+  on the full-domain behavior. The fix needs a DEDICATED pass: implement
+  the convention (globally in `domain_with_endpoints` or path-by-path
+  starting at pcurve_compute + the curved-lens interior search), then the
+  regression ladder: the deepened-notch raw repro (cached
+  replay_scplate.rs, RAWN=1 — expect the cone conflation to resolve),
+  curved-lens fixtures, full foil battery, workspace, tool matrix. Dig
+  provenance: memory project_snapclip-plate-bore.md.
 - **Mesh-boolean fallback emits OPEN meshes that get CONSUMED — OPEN
   (discovered 2026-07-16):** on the dblcorner nub operands the co-refinement
   fallback produced bnd=5/6 output (warn-logged, then used anyway, poisoning
