@@ -1582,7 +1582,7 @@ pub(super) fn split_face_with_internal_loops(
 /// distance to every hole loop is largest, which is guaranteed to lie on the
 /// kept wall well clear of every lens. Returns `None` if the surface evaluator
 /// or boundary v-range is unusable, so the caller keeps the unset interior.
-fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> {
+pub fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> {
     use std::f64::consts::{PI, TAU};
     // Densely sample every hole loop into 3D points AND project each to a (u, v)
     // polyline so candidate interior points can be tested for face containment

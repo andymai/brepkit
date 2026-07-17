@@ -116,17 +116,20 @@ impl EdgeCurve {
                 }
                 let proj = |p| brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9);
                 if let (Ok(pa), Ok(pb)) = (proj(start), proj(end)) {
-                    // Accept only a forward, non-degenerate, on-curve span.
-                    // Everything else — reversed pairs (on a closed curve these
-                    // are usually seam-crossing forward sub-arcs, where
-                    // interpolating backward would trace the complement arc;
-                    // downstream arrangement consumers also mint degenerate
-                    // sliver loops from reversed spans), degenerate spans,
-                    // off-curve endpoints — keeps the historical full-domain
-                    // behaviour.
+                    // Accept a non-degenerate on-curve span. A reversed pair
+                    // (`t₀ > t₁`, interpolation still traces start→end) is
+                    // trusted only on a clearly OPEN curve: on a (nearly)
+                    // closed curve a reversed projection pair is usually a
+                    // seam-crossing forward sub-arc, and interpolating
+                    // backward would trace the complement arc. Degenerate
+                    // spans and off-curve endpoints keep the historical
+                    // full-domain behaviour.
+                    let dt = pb.parameter - pa.parameter;
+                    let curve_open = (p0 - p1).length() >= WELD_EPS;
                     if pa.distance < WELD_EPS
                         && pb.distance < WELD_EPS
-                        && pb.parameter - pa.parameter > 1e-6 * (d1 - d0)
+                        && dt.abs() > 1e-6 * (d1 - d0)
+                        && (dt > 0.0 || curve_open)
                     {
                         return (pa.parameter, pb.parameter);
                     }
@@ -386,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn nurbs_domain_reversed_sub_span_falls_back_to_full_domain() {
+    fn nurbs_domain_reversed_sub_span_on_open_curve_trims_backward() {
         let curve = open_nurbs();
         let EdgeCurve::NurbsCurve(n) = &curve else {
             unreachable!()
@@ -396,7 +399,33 @@ mod tests {
         let tb = d0 + 0.7 * (d1 - d0);
         let pa = brepkit_math::traits::ParametricCurve::evaluate(n, ta);
         let pb = brepkit_math::traits::ParametricCurve::evaluate(n, tb);
-        assert_full_domain(curve.domain_with_endpoints(pb, pa), d0, d1);
+        // Edge runs pb -> pa (reversed relative to curve parameterization):
+        // the trimmed domain keeps t0 > t1 so t0->t1 interpolation still
+        // traces start -> end.
+        let (t0, t1) = curve.domain_with_endpoints(pb, pa);
+        assert!(t0 > t1, "expected reversed span, got ({t0}, {t1})");
+        assert!((curve.evaluate_with_endpoints(t0, pb, pa) - pb).length() < 1e-6);
+        assert!((curve.evaluate_with_endpoints(t1, pb, pa) - pa).length() < 1e-6);
+    }
+
+    #[test]
+    fn nurbs_domain_reversed_pair_on_closed_curve_falls_back_to_full_domain() {
+        // A closed fitted loop: a reversed projection pair here is ambiguous
+        // (usually a seam-crossing forward sub-arc), so the full domain wins.
+        let pts: Vec<Point3> = (0..=12)
+            .map(|k| {
+                let a = std::f64::consts::TAU * f64::from(k) / 12.0;
+                Point3::new(a.cos(), a.sin(), 0.0)
+            })
+            .collect();
+        let n = brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap();
+        let (d0, d1) = brepkit_math::traits::ParametricCurve::domain(&n);
+        let ta = d0 + 0.6 * (d1 - d0);
+        let tb = d0 + 0.2 * (d1 - d0);
+        let pa = brepkit_math::traits::ParametricCurve::evaluate(&n, ta);
+        let pb = brepkit_math::traits::ParametricCurve::evaluate(&n, tb);
+        let curve = EdgeCurve::NurbsCurve(n);
+        assert_full_domain(curve.domain_with_endpoints(pa, pb), d0, d1);
     }
 
     #[test]

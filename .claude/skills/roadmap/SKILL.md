@@ -371,16 +371,24 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   within the 1e-5 weld band, span > 1e-6·domain) returns the projected
   trimmed `[t₀, t₁]`. On the RAWN=1 raw repro this cleaned one of the two
   mirrored junction signatures (the use=3 triple + micro-edge chain at
-  y=−39.4). RESIDUAL: the mirrored twin needs REVERSED sub-spans (SCDOM
-  instrumentation showed on-curve reversed pairs at 1e-14), but accepting
-  them (returning `t₀ > t₁`, even gated to open curves) makes the
-  arrangement mint a DEGENERATE single-edge closed loop (endpoint gap ~4e-9
-  — a phantom point-hole at the micro-junction, below vertex-merge reach)
-  as an inner wire on the cone wall, which trips the curved-lens
-  no-contained-interior abort (wall Id(1137) in the repro). Next step is
-  the arrangement/wire-builder side: collapse or reject degenerate
-  (sub-weld-extent) closed loops before they become inner wires, then
-  re-attempt reversed acceptance. Repro: cached replay_scplate.rs, RAWN=1,
+  y=−39.4). SECOND LANDING (same day): REVERSED sub-spans accepted on
+  clearly-open curves (`t₀ > t₁`, start→end interpolation stays truthful;
+  closed curves keep the full-domain fallback — a reversed pair there is
+  usually a seam-crossing forward sub-arc). The "degenerate phantom loop"
+  that blocked reversed acceptance was a MISREAD: the single-edge closed
+  NURBS inner wire on the aborting cone wall (seam gap 5e-9, source_edge_idx
+  Some) is a LEGITIMATE pre-existing notch outline; the real defect was a
+  COVERAGE hole — walls reaching `fill_images_faces` through split paths
+  that never run the dedicated `cylinder_cone_remainder_interior` search
+  aborted unconditionally on the lens flag. Fixed by running that search as
+  a last resort at the consumption point (fill_images_faces; abort only if
+  even the dense grid finds nothing). Together: RAWN=1 posBad 10 → 6, both
+  mirrored micro-edge chains resolved. REMAINING 6 (one root): the CONE
+  face keeps its un-split rim circle A→B while the notch's wall planes
+  carry the true route A→C→B — the marched cone×plane sections never split
+  the cone face itself (the pave-machinery-bypass row; sections carry
+  pave_block_id=None). Fix at phase-FF/make_blocks altitude or the curved
+  face splitter's section intake. Repro: cached replay_scplate.rs, RAWN=1,
   capture capture-snapclip-plate-fresh. Dig provenance: memory
   project_snapclip-plate-bore.md.
 - **Mesh-boolean fallback emits OPEN meshes that get CONSUMED — OPEN
