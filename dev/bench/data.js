@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784289128231,
+  "lastUpdate": 1784290436023,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -5831,6 +5831,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21845777,
             "range": "± 61561",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ece2163946b3a69b794ad8b829e01b614ca73cbe",
+          "message": "docs(skills): roadmap — deepened-notch residual re-identified as the terminal stranded-rim case (#1101)\n\nIteration-19 decode: the pave-bypass theory is dead (the cone face's\nsection gate is open and it receives all three notch sections). The\nremaining posBad=6 is the sections arriving with different terminal rims\nper side (old z=−1.19 rim on the cone, new z=−1.2 rim on the wall\nplanes) — i.e. the already-documented TERMINAL deepened-notch\nstranded-old-floor-edge case. Updates the row so future sessions start\nat the detection design (polygon_union) instead of re-deriving this.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate skills roadmap to reclassify the residual as the terminal\ndeepened-notch stranded-rim case and drop the pave-bypass theory.\nDocuments the rim mismatch (cone trimmed to old z=−1.19; walls to new\nz=−1.2), confirms 2.126.12 tool verification, and sets the next step to\ndetect deepened-notches via `polygon_boolean::polygon_union` without\nnear-coincident false positives.\n\n<sup>Written for commit c75f2320ae6b5ae4c536078db3d82ab0b2012f2e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1101?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T12:11:44Z",
+          "tree_id": "f43f9ed5798d7555926a1d4ae3524ffffa5b574b",
+          "url": "https://github.com/andymai/brepkit/commit/ece2163946b3a69b794ad8b829e01b614ca73cbe"
+        },
+        "date": 1784290435314,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 874281,
+            "range": "± 1488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 965836,
+            "range": "± 7694",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11981,
+            "range": "± 298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 637372,
+            "range": "± 4109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26618840,
+            "range": "± 93531",
             "unit": "ns/iter"
           }
         ]
