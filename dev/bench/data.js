@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784302378469,
+  "lastUpdate": 1784310078797,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6101,6 +6101,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22041506,
             "range": "± 24359",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5bf95348773bad782e3182b7d503ff1fd492787e",
+          "message": "fix(algo): trim plane-cone circle sections to exact boundary-crossing arcs (#1106)\n\n## Summary\n\nSecond half of the snapClip join-edges export root (follows #1104). The\nexport baseplate builds with the simplified **tapered** pockets, so each\ndeep relief cutter's back corner lands on a pocket corner **cone**. The\ncutter should contribute three sections to that cone face: two marched\nconics (cone × back wall, cone × side wall) and the cone × cutter-top\narc that closes the chain.\n\n**Root cause.** A horizontal plane cuts a cone in an exact\n`EdgeCurve::Circle`. The exact-arc path that bypasses the sampling\npre-filters (`trim_ellipse_to_boundary_crossings` — built for the\ntilted-tread × cylinder family) only accepted **Ellipse** sections, so\nthe circle fell to the generic 16-sample in-both AABB filter, which\ncannot find a ~0.11-long in-both arc on an ~18-long circle. With the\nclosing arc missing, the cone face received an open two-conic chain, the\ninternal-loops splitter rejected it (open chains are dropped by design),\nand the face stayed unsplit. The resulting analytic-but-leaky solid\n(posBad=8) was accepted by the by-edge-id gate and poisoned the export\nchain into mesh fallback two cuts later (final bnd=111 nm=6 at export\ntolerance).\n\n**Fix.** The trimmer now dispatches over Circle and Ellipse sections\nthrough one angular parameterization (`SecCurve`); emitted arcs keep\ntheir exact curve type so downstream circle-calibrated machinery sees\nreal Circle sections. No other behavior changes — Ellipse handling is\nbyte-identical.\n\n**Result.** The minimal repro (`cut(plate-after-op-cut-2,\ndeep-relief-cutter)`) goes posBad 8→0 on both the raw GFA and ops paths,\nand the full 44-hole export-variant join-edges chain replays analytic\nand watertight: final **F=418, posBad=0** (was F=4842, bnd=111, nm=6).\n\n## Verification\n\n- New fixture `crates/io/tests/snapclip_export_corner_inmem.rs` (tool's\nserialized operands, 2026-07-17 export-variant capture): edge pairing +\nanalytic-cone assertions, 10× flake gate clean\n- Full io suite green (including the tilted-tread/halfSockets ramp\nlandscapes that calibrate the ellipse path)\n- d4 canary 27/27; `brepkit-algo` and `brepkit-operations` suites green\n- Full workspace suite green via pre-push hook\n\nRoadmap updated in the same PR. Known remaining snapClip residuals (out\nof scope, recorded with repro recipes): the 0.6mm-nozzle export chain's\nop-cut-3 (posBad=10, different landscape), the by-edge-id acceptance\ngate's blindness to position-duplicate leaks, and the bed-flat clip\nvolume pin.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes trimming for plane×cone intersections by treating circle sections\nas exact boundary-crossing arcs. Restores the short cutter-top closing\narcs, so cone faces split and the snapClip export chain stays analytic\nand watertight.\n\n- **Bug Fixes**\n- Updated `trim_ellipse_to_boundary_crossings` to handle both\n`EdgeCurve::Circle` and `EdgeCurve::Ellipse` via a shared angular\nparameterization (`SecCurve`); emitted arcs keep their exact type.\n- Avoids dropping ~0.11-length circle arcs in the 16-sample in-both\nfilter that left open two-conic chains on cone faces.\n- Added `crates/io/tests/snapclip_export_corner_inmem.rs` with\nserialized operands to assert analytic cones and B-Rep edge pairing.\n- Result: minimal repro goes posBad 8→0; full 44-hole export variant\nreplays analytic `F=418, posBad=0` (was `F=4842, bnd=111, nm=6`).\n\n<sup>Written for commit ca4ce7547f42bf90934563f52c3bd7f897bfe311.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1106?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T10:39:17-07:00",
+          "tree_id": "a9d7e626835c27f693ae5c772d636d244bcd9da2",
+          "url": "https://github.com/andymai/brepkit/commit/5bf95348773bad782e3182b7d503ff1fd492787e"
+        },
+        "date": 1784310077671,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 705839,
+            "range": "± 1229",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 783968,
+            "range": "± 2022",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10170,
+            "range": "± 255",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 497173,
+            "range": "± 2729",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21926980,
+            "range": "± 53477",
             "unit": "ns/iter"
           }
         ]
