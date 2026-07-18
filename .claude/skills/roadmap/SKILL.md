@@ -768,6 +768,17 @@ existing `split_arc_edges_at_collinear_vertices` propagates the cut to the share
 rim — no two-site coordination; NOT a merge-key change). Synthetic pocket-notch repro
 `crates/io/examples/replay_synthbox.rs` now posBad=0 on ALL cases. Distinct from the
 snapClip deepened-notch pave-bypass root above.
+**SCOPE CORRECTION (2026-07-18 tool re-probe, 2.126.17 overlay):** "CLOSED" = the ENGINE
+sub-class (cylinder-pocket-notch / disc-chord), foil-safe (27/0) and NO tool regression
+(export-integrity: 33 real fails = same known deferred families; published solid-cutouts
+6=6; the other 180 fails are the task-#14 poison cascade). **BUT the TOOL's own
+`combined features › 2×2 honeycomb walls + funnel cutout` scenario is NOT fixed — still a
+533s bisect-hang + fail.** Its root is the SEPARATE honeycomb-cut coincident-wall
+assembler hang ([[honeycomb-wall-cut-coincident]] pcut0) + the funnel-cutout, not this
+cylinder-arrangement bug. The synthetic proxy fixed a real class but was NOT validated
+against the real honeycomb+funnel operands first (the roadmap's own warning). This campaign
+did NOT move tool parity; the headline failing families (scoop #11, screw base #12, solid
+cutouts #13, honeycomb-cut) remain open.
 
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
