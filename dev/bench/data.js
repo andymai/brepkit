@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784348354321,
+  "lastUpdate": 1784348548124,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6371,6 +6371,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21803348,
             "range": "± 119548",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "294af788165285f63316fc28a5d3ff8afcad92d2",
+          "message": "docs(skills): roadmap — funnel/disc arrangement campaign (part 2 via #1109) (#1111)\n\nRecords the funnel/honeycomb cylinder-disc arrangement campaign in the\nliving roadmap (mandatory maintenance per the roadmap doctrine — #1109\nshipped part 2 without it).\n\n**The campaign**: curved/periodic faces have no arrangement rescue (the\nplane path's rescues are all `is_plane`-gated), so a box cut crossing a\ncylindrical pocket at partial overlap figure-eights the greedy wire\nbuilder. Three sub-gaps:\n- **(2)** plane disc (closed-circle boundary) cut by chords — **CLOSED\nin #1109**\n- **(3)** plane wall + single-arc crossing — OPEN\n- **(1)** cylinder-wall arc-DCEL — foil-safe, re-apply LAST (its\ncorrectness exposes the dropped plane faces)\n\nDetail lives in memory `project_cylinder-arrangement-rescue.md`; scratch\nrepros are `crates/io/examples/replay_{synthbox,diskcut}.rs`.\n\nDocs-only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to document the funnel/honeycomb cylinder-disc\narrangement campaign, marking part (2) (plane disc cut by chords) as\nclosed in #1109 and tracking parts (1) and (3) as open. Adds pointers to\n`project_cylinder-arrangement-rescue.md` and\n`crates/io/examples/replay_{synthbox,diskcut}.rs`; clarifies that all\nthree fixes are required for a watertight funnel.\n\n<sup>Written for commit 98af5202a1c6c076e1b17ca1efc7f2212ef044a5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1111?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-18T04:20:09Z",
+          "tree_id": "0da9aaffcce81940a4db4a9fb0b5cf84e6403186",
+          "url": "https://github.com/andymai/brepkit/commit/294af788165285f63316fc28a5d3ff8afcad92d2"
+        },
+        "date": 1784348547032,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 883913,
+            "range": "± 5093",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 971738,
+            "range": "± 5107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12123,
+            "range": "± 117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 653212,
+            "range": "± 14059",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26691561,
+            "range": "± 131089",
             "unit": "ns/iter"
           }
         ]
