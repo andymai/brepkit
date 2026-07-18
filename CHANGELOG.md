@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.17](https://github.com/andymai/brepkit/compare/v2.126.16...v2.126.17) (2026-07-18)
+
+
+### Bug Fixes
+
+* **algo:** cylinder-band arrangement rescue for partial-overlap pocket cuts ([#1112](https://github.com/andymai/brepkit/issues/1112)) ([28569d6](https://github.com/andymai/brepkit/commit/28569d668edb5587a038040b12acf4ae9a99a84d))
+
 ## [2.126.16](https://github.com/andymai/brepkit/compare/v2.126.15...v2.126.16) (2026-07-18)
 
 
