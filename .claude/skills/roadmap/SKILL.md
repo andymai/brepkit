@@ -749,6 +749,21 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   must be watertight or rejected. Repro: the dblcorner fixture operands with
   the analytic path disabled, or any pre-fix build.
 
+Funnel/honeycomb cylinder-disc arrangement campaign — PART (2) CLOSED (#1109);
+(1)+(3) OPEN (2026-07-17, memory `project_cylinder-arrangement-rescue.md`):
+curved/periodic faces have NO arrangement rescue (the plane path's rescues are all
+`is_plane`-gated), so a box cut crossing a cylindrical pocket at PARTIAL overlap
+figure-eights the greedy wire builder. Three sub-gaps, all "closed/arc-bounded face
+cut by sections, greedy drops/mistraces": (2) PLANE disc (closed-circle boundary) cut
+by chords — **CLOSED #1109** (`try_split_disk_by_chords` in
+`face_splitter/special_cases.rs` + single-crossing bail relaxation in
+`fill_images_faces.rs::clip_line_to_face_boundary`; 6 committed unit tests); (3) PLANE
+wall + single-arc crossing — OPEN; (1) CYLINDER-wall arc-DCEL (partial-band figure-eight)
+— implemented + foil-safe but REVERTED, re-apply LAST (its correctness EXPOSES the
+dropped 2+3 plane faces). Scratch repros `crates/io/examples/replay_{synthbox,diskcut}.rs`.
+All three landed = funnel watertight. Distinct from the snapClip deepened-notch
+pave-bypass root above.
+
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
 106s) and "handle holes" (86s) — the 2026-07-08 swallowed-panic/borrow-poisoning
