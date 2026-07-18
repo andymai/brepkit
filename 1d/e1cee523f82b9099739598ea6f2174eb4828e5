@@ -1,0 +1,34 @@
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_38d3958cd84f35::t_39094a7a6e2033 3259-3480
+  s_38d3958cd84f35::t_18d222df190ce8 2574
+  s_38d3958cd84f35::t_4f9b4f6f8d4e27 2947-2951
+  s_38d3958cd84f35::t_35b458cb56576a 2553-2554
+  s_38d3958cd84f35::t_5f67e7dda45eb2 2690
+  s_38d3958cd84f35::t_40112c5e01c551 2445-2471
+  s_38d3958cd84f35::t_1f0c37fdd926ed 2406-2444,2472-2500,2506-2518,2521-2532,2535-2552,2555-2573,2575-2624,2630-2640,2642-2652,2658-2685,2687-2689,2691-2805,2808-2898,2900-2944
+  s_38d3958cd84f35::t_5e36ef6205fa3b 2501-2505,2519-2520,2533-2534,2625-2629,2641,2653-2657,2686,2806-2807,2899
+  s_38d3958cd84f35::t_0480d74726c46f 3
+crates/algo/src/builder/fill_images_faces.rs
+  s_38d3958cd84f35::t_5c2236fec35d1d 3022-3095
+  s_38d3958cd84f35::t_2300253fb33e5f 2360-2373
+crates/algo/src/builder/face_splitter/mod.rs
+  s_38d3958cd84f35::t_c5739b1d3a5d76 3943-3948,3950-3957
+  s_38d3958cd84f35::t_5e36ef6205fa3b 3949
+  s_38d3958cd84f35::t_7c5b9d5be4673b 42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1de1cee523f82b9099739598ea6f2174eb4828e5",
+  "prompts": {},
+  "sessions": {
+    "s_38d3958cd84f35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc5ac8b2-b474-4c23-b601-2b384eec3726",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
