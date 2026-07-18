@@ -749,20 +749,25 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   must be watertight or rejected. Repro: the dblcorner fixture operands with
   the analytic path disabled, or any pre-fix build.
 
-Funnel/honeycomb cylinder-disc arrangement campaign — PART (2) CLOSED (#1109);
-(1)+(3) OPEN (2026-07-17, memory `project_cylinder-arrangement-rescue.md`):
-curved/periodic faces have NO arrangement rescue (the plane path's rescues are all
-`is_plane`-gated), so a box cut crossing a cylindrical pocket at PARTIAL overlap
-figure-eights the greedy wire builder. Three sub-gaps, all "closed/arc-bounded face
-cut by sections, greedy drops/mistraces": (2) PLANE disc (closed-circle boundary) cut
-by chords — **CLOSED #1109** (`try_split_disk_by_chords` in
-`face_splitter/special_cases.rs` + single-crossing bail relaxation in
-`fill_images_faces.rs::clip_line_to_face_boundary`; 6 committed unit tests); (3) PLANE
-wall + single-arc crossing — OPEN; (1) CYLINDER-wall arc-DCEL (partial-band figure-eight)
-— implemented + foil-safe but REVERTED, re-apply LAST (its correctness EXPOSES the
-dropped 2+3 plane faces). Scratch repros `crates/io/examples/replay_{synthbox,diskcut}.rs`.
-All three landed = funnel watertight. Distinct from the snapClip deepened-notch
-pave-bypass root above.
+Funnel/honeycomb cylinder-disc arrangement campaign — CLOSED (2026-07-17, memory
+`project_cylinder-arrangement-rescue.md`): curved/periodic faces had NO arrangement
+rescue (the plane path's rescues are all `is_plane`-gated), so a box cut crossing a
+cylindrical pocket at PARTIAL overlap figure-eighted the greedy wire builder. Fixed as
+three sub-gaps, all "closed/arc-bounded face cut by sections, greedy drops/mistraces":
+(2) PLANE disc (closed-circle boundary) cut by chords — #1109 (`try_split_disk_by_chords`
+in `face_splitter/special_cases.rs` + single-crossing bail relaxation in
+`fill_images_faces.rs::clip_line_to_face_boundary`); (3) PLANE wall + single-arc crossing
+— SUBSUMED by #1109's single-crossing relaxation (tool walls are hole-free planes cut by
+one generator; proven by single-variable isolation, no separate work); (1) CYLINDER-wall
+rectilinear-UV arrangement (`split_cylinder_band_by_arrangement` in `face_splitter/mod.rs`,
+purely additive, gated `u_periodic && !v_periodic && Cylinder && greedy-broken`) — #1112.
+Final residual (floor lens's co-endpoint rim-arc + tool-chord collapsing in
+`merge_duplicate_edges` — the merge-key UNBUILDABLE class) closed by the SANCTIONED
+splitter-side midpoint split of the minor lens arc (`try_split_disk_by_chords`; the
+existing `split_arc_edges_at_collinear_vertices` propagates the cut to the shared cylinder
+rim — no two-site coordination; NOT a merge-key change). Synthetic pocket-notch repro
+`crates/io/examples/replay_synthbox.rs` now posBad=0 on ALL cases. Distinct from the
+snapClip deepened-notch pave-bypass root above.
 
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
