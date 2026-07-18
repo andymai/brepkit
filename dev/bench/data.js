@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784354676266,
+  "lastUpdate": 1784379066327,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6641,6 +6641,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28228352,
             "range": "± 76637",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cf463488bc7e433e0da559dcdee9248c3224c04f",
+          "message": "docs(skills): roadmap — correct funnel campaign scope after tool re-probe (#1116)\n\nThe 2.126.17 tool re-probe shows the cylinder-disc arrangement campaign\n(#1109/#1112/#1114) closed an **engine sub-class**\n(cylinder-pocket-notch / disc-chord) — foil-safe (27/0) and **no tool\nregression** (export-integrity: 33 real fails = same known deferred\nfamilies; published solid-cutouts 6=6; the other 180 fails are the\npre-existing kernel-poison cascade).\n\n**But the tool's own `combined features › 2×2 honeycomb walls + funnel\ncutout` scenario is NOT fixed** — still a 533s bisect-hang + fail. Its\nroot is the separate honeycomb-cut coincident-wall assembler hang + the\nfunnel-cutout, not this cylinder-arrangement bug. The synthetic proxy\nfixed a real class but wasn't validated against the real\nhoneycomb+funnel operands first (the roadmap's own warning).\n\nDocs-only; records the scope correction so the roadmap isn't\noverclaiming tool-parity impact.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap docs to correct scope: the cylinder–disc arrangement\ncampaign closed only the engine sub-class (foil-safe, no regression),\nwhile the tool’s \"2×2 honeycomb walls + funnel cutout\" case still fails\ndue to a separate honeycomb coincident-wall assembler issue. Clarifies\nthat tool parity did not move and key failing families (scoop #11, screw\nbase #12, solid cutouts #13, honeycomb-cut) remain open.\n\n<sup>Written for commit 08368a4bd58628cc13d34c3a710b4210f0e093f8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1116?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-18T12:48:48Z",
+          "tree_id": "8dfe873f115a8fd77c48ea383bed9e28b6264a3b",
+          "url": "https://github.com/andymai/brepkit/commit/cf463488bc7e433e0da559dcdee9248c3224c04f"
+        },
+        "date": 1784379065548,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 884883,
+            "range": "± 4983",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 970832,
+            "range": "± 52991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12115,
+            "range": "± 217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 651245,
+            "range": "± 1018",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26796862,
+            "range": "± 56070",
             "unit": "ns/iter"
           }
         ]
