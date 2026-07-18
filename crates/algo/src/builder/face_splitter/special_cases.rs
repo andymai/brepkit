@@ -2646,6 +2646,28 @@ pub(super) fn try_split_disk_by_chords(
     if nodes.len() < 2 {
         return None;
     }
+
+    // A minor-arc gap whose two endpoints are ALSO joined directly by a chord
+    // (Line sub) forms a co-endpoint lens (a thin crescent: arc + chord sharing
+    // both vertices). `merge_duplicate_edges` keys edges by endpoint pair alone,
+    // so it would collapse the arc and chord into one edge and degenerate the
+    // lens face (and, where the arc is a shared rim, fold in the adjacent face's
+    // copies too). Splitting the arc at its angular midpoint adds an interior
+    // on-circle vertex that breaks the shared-endpoint collision;
+    // `split_arc_edges_at_collinear_vertices` then propagates the identical cut
+    // to the coincident rim arc on the neighbouring (e.g. cylinder-wall) face,
+    // keeping the shared rim consistent on both sides. Restricted to minor arcs
+    // (< π): a crescent lens is always minor, while a semicircle/major-arc
+    // partition (a diameter cut's half-discs, a corner bite's major remnant) is
+    // a calibrated shape that carries its own interior vertices — left untouched.
+    let mut chord_pairs: std::collections::HashSet<((i64, i64), (i64, i64))> =
+        std::collections::HashSet::new();
+    for s in &subs {
+        if matches!(s.kind, Kind::Line) {
+            chord_pairs.insert(if s.a <= s.b { (s.a, s.b) } else { (s.b, s.a) });
+        }
+    }
+
     let node_count = nodes.len();
     for idx in 0..node_count {
         let (k_lo, lo) = nodes[idx];
@@ -2657,6 +2679,29 @@ pub(super) fn try_split_disk_by_chords(
         };
         if hi - lo < 1e-9 {
             continue;
+        }
+        let pair = if k_lo <= k_hi {
+            (k_lo, k_hi)
+        } else {
+            (k_hi, k_lo)
+        };
+        if hi - lo < PI - 1e-6 && chord_pairs.contains(&pair) {
+            let mid = 0.5 * (lo + hi);
+            let mid_pt = Point2::new(cu.x() + r * mid.cos(), cu.y() + r * mid.sin());
+            let km = reg(mid_pt, &mut vpos);
+            if km != k_lo && km != k_hi {
+                subs.push(Sub {
+                    a: k_lo,
+                    b: km,
+                    kind: Kind::Arc { lo, hi: mid },
+                });
+                subs.push(Sub {
+                    a: km,
+                    b: k_hi,
+                    kind: Kind::Arc { lo: mid, hi },
+                });
+                continue;
+            }
         }
         subs.push(Sub {
             a: k_lo,
@@ -3402,6 +3447,94 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn disk_lens_arc_is_split_to_break_coendpoint_collision() {
+        use crate::ds::Rank;
+        // r=8 disc on z=0, bitten by a single chord y=6 spanning the circle at
+        // (-√28, 6) and (√28, 6). The thin crescent above y=6 is a LENS: its
+        // ~83° minor rim arc and the straight chord share BOTH endpoints. Left
+        // whole, `merge_duplicate_edges` (endpoint-pair keyed) would collapse
+        // the arc into the chord and degenerate the lens. The splitter must
+        // therefore emit the crescent's arc split at its midpoint (an interior
+        // on-circle vertex), so the arc no longer shares both endpoints with the
+        // chord — while the complementary major-arc region keeps its single arc.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap();
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let boundary = vec![arc_edge(&circle, 0.0, TAU, true)];
+        let x = 28.0_f64.sqrt();
+        let sections = vec![section_chord(
+            Point3::new(-x, 6.0, 0.0),
+            Point3::new(x, 6.0, 0.0),
+        )];
+
+        let regions = super::try_split_disk_by_chords(
+            &surface,
+            &boundary,
+            &sections,
+            Rank::A,
+            false,
+            dummy_face_id(),
+            &disk_test_frame(),
+            1e-7,
+        )
+        .expect("disc + chord must split into crescent + major remnant");
+        assert_eq!(regions.len(), 2);
+
+        // The crescent (minor-arc lens) must be the arc-split region: two arc
+        // sub-edges + one chord, all endpoints distinct. The major remnant keeps
+        // its single (major) arc + chord.
+        let arc_counts: Vec<usize> = regions
+            .iter()
+            .map(|r| {
+                r.outer_wire
+                    .iter()
+                    .filter(|e| matches!(e.curve_3d, EdgeCurve::Circle(_)))
+                    .count()
+            })
+            .collect();
+        assert!(
+            arc_counts.contains(&2),
+            "the lens crescent's minor arc is split into two, got {arc_counts:?}"
+        );
+        assert!(
+            arc_counts.contains(&1),
+            "the major remnant keeps one arc, got {arc_counts:?}"
+        );
+
+        // In the two-arc lens no arc shares both endpoints with the chord: every
+        // edge in that region has a distinct endpoint pair.
+        let lens = regions
+            .iter()
+            .find(|r| {
+                r.outer_wire
+                    .iter()
+                    .filter(|e| matches!(e.curve_3d, EdgeCurve::Circle(_)))
+                    .count()
+                    == 2
+            })
+            .expect("lens region present");
+        let q = |p: Point3| -> (i64, i64, i64) {
+            (
+                (p.x() * 1e5).round() as i64,
+                (p.y() * 1e5).round() as i64,
+                (p.z() * 1e5).round() as i64,
+            )
+        };
+        let mut pairs = std::collections::HashSet::new();
+        for e in &lens.outer_wire {
+            let (a, b) = (q(e.start_3d), q(e.end_3d));
+            let key = if a <= b { (a, b) } else { (b, a) };
+            assert!(
+                pairs.insert(key),
+                "no two lens edges may share both endpoints"
+            );
         }
     }
 
