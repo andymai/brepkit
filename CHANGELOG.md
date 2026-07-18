@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.19](https://github.com/andymai/brepkit/compare/v2.126.18...v2.126.19) (2026-07-18)
+
+
+### Bug Fixes
+
+* **tessellate:** keep self-intersecting planar caps watertight via fan fallback ([#1117](https://github.com/andymai/brepkit/issues/1117)) ([54aa016](https://github.com/andymai/brepkit/commit/54aa016771e1a64c6a5b492d31c48ebb8ca258e7))
+
 ## [2.126.18](https://github.com/andymai/brepkit/compare/v2.126.17...v2.126.18) (2026-07-18)
 
 
