@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784394195328,
+  "lastUpdate": 1784394627589,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6749,6 +6749,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27008439,
             "range": "± 133604",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d2893af8807b2e7c6c52e90cba2a3ad9cce3bfa7",
+          "message": "chore(main): release 2.126.19 (#1118)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.19](https://github.com/andymai/brepkit/compare/v2.126.18...v2.126.19)\n(2026-07-18)\n\n\n### Bug Fixes\n\n* **tessellate:** keep self-intersecting planar caps watertight via fan\nfallback ([#1117](https://github.com/andymai/brepkit/issues/1117))\n([54aa016](https://github.com/andymai/brepkit/commit/54aa016771e1a64c6a5b492d31c48ebb8ca258e7))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.126.19 for `brepkit-wasm` with a tessellation fix to keep\nself-intersecting planar caps watertight. Prevents gaps and improves\nmesh integrity in these cases.\n\n- **Bug Fixes**\n- Tessellate: add fan fallback to keep planar caps watertight when faces\nself-intersect.\n\n<sup>Written for commit 15b57018a0f57fd89e292e3311fcc5ea18867e7c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1118?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-18T17:08:05Z",
+          "tree_id": "e263d99b99f1219d7b465fb3a07c7ff0b05dad33",
+          "url": "https://github.com/andymai/brepkit/commit/d2893af8807b2e7c6c52e90cba2a3ad9cce3bfa7"
+        },
+        "date": 1784394627077,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 903344,
+            "range": "± 1519",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1008365,
+            "range": "± 5345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13024,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639232,
+            "range": "± 14002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28138337,
+            "range": "± 62534",
             "unit": "ns/iter"
           }
         ]
