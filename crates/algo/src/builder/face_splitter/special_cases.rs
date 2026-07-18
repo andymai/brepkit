@@ -1,6 +1,6 @@
 //! Special topology handlers for face splitting edge cases.
 
-use brepkit_math::vec::{Point2, Point3};
+use brepkit_math::vec::{Point2, Point3, Vec2};
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
@@ -2403,10 +2403,552 @@ pub(super) fn try_split_crossing_plane_face(
     Some(result)
 }
 
+/// Split a planar DISC face (outer boundary is a single closed circle) that is
+/// cut by one or more straight-line chord sections, into its remnant regions.
+///
+/// The generic planar arrangement (`split_plane_face_by_arrangement`) represents
+/// every boundary curve by its CHORD for crossing detection and its half-edge
+/// turn angle. A disc whose boundary is split by chords into a MAJOR arc (> π)
+/// has that arc's chord cut deep across the disc — spuriously crossing the very
+/// section chords it should be disjoint from, and carrying a turn angle far from
+/// the true tangent. The greedy wire builder likewise mis-traces or drops the
+/// face. Both leave the disc's remnant (a cap disc minus a corner bite, or a
+/// pocket-floor disc) unpaired and dropped.
+///
+/// This handles the disc natively: it builds the arrangement of the analytic
+/// circle plus the chords, representing circle arcs by their angular span (no
+/// chord approximation), traces the minimal faces with a tangent-aware turn
+/// rule, drops the unbounded face, and emits each interior region as a
+/// [`SplitSubFace`] with the true `Circle`/`Line` geometry and a classification
+/// seed. Returns `None` (defer to the existing paths) unless the boundary is a
+/// pure circle and every section is a chord — a tight gate that never fires on
+/// mixed line/arc boundaries (rounded-rect walls, sectors).
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(super) fn try_split_disk_by_chords(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    frame: &PlaneFrame,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use std::collections::HashMap;
+    use std::f64::consts::{PI, TAU};
+
+    use crate::builder::classify_2d::{sample_interior_point, signed_area_2d};
+    use crate::builder::pcurve_compute::compute_pcurve_on_surface;
+
+    // A traced sub-edge: straight chord piece, or a circle arc gap (always
+    // stored CCW from `lo` to `hi`; the reverse half-edge traverses it CW).
+    enum Kind {
+        Line,
+        Arc { lo: f64, hi: f64 },
+    }
+    struct Sub {
+        a: (i64, i64),
+        b: (i64, i64),
+        kind: Kind,
+    }
+    // Directed half-edges carry the outgoing tangent angle at `from` and the
+    // incoming tangent angle at `to`; for arcs these differ (the tangent
+    // rotates along the arc).
+    struct He {
+        from: (i64, i64),
+        to: (i64, i64),
+        out_ang: f64,
+        in_ang: f64,
+        kind: HeKind,
+    }
+    enum HeKind {
+        Line,
+        ArcCcw { lo: f64, hi: f64 },
+        ArcCw { lo: f64, hi: f64 },
+    }
+
+    if !matches!(surface, FaceSurface::Plane { .. }) {
+        return None;
+    }
+
+    // Gate 1: the whole outer boundary lies on ONE circle (a disc). Any Line /
+    // ellipse / NURBS boundary edge means a sector or rounded shape — defer.
+    let mut circle: Option<Circle3D> = None;
+    for e in boundary_edges {
+        let EdgeCurve::Circle(c) = &e.curve_3d else {
+            return None;
+        };
+        match &circle {
+            None => circle = Some(c.clone()),
+            Some(c0) => {
+                if (c0.center() - c.center()).length() > tol * 100.0
+                    || (c0.radius() - c.radius()).abs() > tol * 100.0
+                {
+                    return None;
+                }
+            }
+        }
+    }
+    let circle = circle?;
+    let r = circle.radius();
+    if r <= tol {
+        return None;
+    }
+
+    // Gate 2: every section is a straight chord.
+    if sections.is_empty()
+        || sections
+            .iter()
+            .any(|s| !matches!(s.curve_3d, EdgeCurve::Line))
+    {
+        return None;
+    }
+
+    // Frame-space circle: aligned so its parameter angle equals the UV angle
+    // around the projected centre (the frame is an isometry on the plane, so
+    // the circle projects to a circle of the same radius). `aligned_rev` winds
+    // the opposite way, used to reconstruct a CW-traversed arc as a forward
+    // trimmed edge.
+    let center3d = circle.center();
+    let cu = frame.project(center3d);
+    let ux = frame.u_axis();
+    let vy = frame.v_axis();
+    let aligned = Circle3D::with_axes(center3d, ux.cross(vy), r, ux, vy).ok()?;
+    let aligned_rev =
+        Circle3D::with_axes(center3d, (vy * -1.0).cross(ux), r, ux, vy * -1.0).ok()?;
+
+    // Chords in UV; drop degenerate ones.
+    let chords: Vec<(Point2, Point2)> = sections
+        .iter()
+        .map(|s| (frame.project(s.start), frame.project(s.end)))
+        .filter(|(a, b)| (*a - *b).length() > tol)
+        .collect();
+    if chords.is_empty() {
+        return None;
+    }
+
+    let qs = 1.0 / tol.max(1e-12);
+    let qkey =
+        |p: Point2| -> (i64, i64) { ((p.x() * qs).round() as i64, (p.y() * qs).round() as i64) };
+    let mut vpos: HashMap<(i64, i64), Point2> = HashMap::new();
+    let reg = |p: Point2, m: &mut HashMap<(i64, i64), Point2>| -> (i64, i64) {
+        let k = qkey(p);
+        m.entry(k).or_insert(p);
+        k
+    };
+
+    // Proper/T crossing param of segment a->b with segment c->d (endpoints ok).
+    let seg_param = |a: Point2, b: Point2, c: Point2, d: Point2| -> Option<f64> {
+        let rr = b - a;
+        let ss = d - c;
+        let denom = rr.x().mul_add(ss.y(), -(rr.y() * ss.x()));
+        if denom.abs() < 1e-12 {
+            return None;
+        }
+        let ac = c - a;
+        let t = ac.x().mul_add(ss.y(), -(ac.y() * ss.x())) / denom;
+        let u = ac.x().mul_add(rr.y(), -(ac.y() * rr.x())) / denom;
+        let unit = -1e-9..=1.0 + 1e-9;
+        (unit.contains(&t) && unit.contains(&u)).then(|| t.clamp(0.0, 1.0))
+    };
+
+    // UV line×circle crossings (points on the circle within the segment).
+    let line_circle = |a: Point2, b: Point2| -> Vec<Point2> {
+        let d = b - a;
+        let f = a - cu;
+        let aa = d.dot(d);
+        if aa < 1e-18 {
+            return Vec::new();
+        }
+        let bb = 2.0 * f.dot(d);
+        let cc = f.dot(f) - r * r;
+        let disc = bb.mul_add(bb, -(4.0 * aa * cc));
+        if disc < 0.0 {
+            return Vec::new();
+        }
+        let sq = disc.sqrt();
+        let mut out = Vec::new();
+        for s in [(-bb - sq) / (2.0 * aa), (-bb + sq) / (2.0 * aa)] {
+            if (-1e-9..=1.0 + 1e-9).contains(&s) {
+                let sc = s.clamp(0.0, 1.0);
+                out.push(Point2::new(a.x() + d.x() * sc, a.y() + d.y() * sc));
+            }
+        }
+        out
+    };
+
+    let mut subs: Vec<Sub> = Vec::new();
+
+    // Chord sub-segments: split each chord at every crossing (chord×chord and
+    // chord×circle), keep the pieces whose midpoint lies inside the disc.
+    let on_disc = |p: Point2| -> bool { (p - cu).length() <= r + tol * 10.0 };
+    for (i, &(a, b)) in chords.iter().enumerate() {
+        let d = b - a;
+        let len = d.length();
+        if len < tol {
+            continue;
+        }
+        let mut breaks: Vec<f64> = vec![0.0, 1.0];
+        for (j, &(c, e)) in chords.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            if let Some(t) = seg_param(a, b, c, e)
+                && t > 1e-9
+                && t < 1.0 - 1e-9
+            {
+                breaks.push(t);
+            }
+        }
+        for p in line_circle(a, b) {
+            let t = ((p - a).dot(d) / (len * len)).clamp(0.0, 1.0);
+            breaks.push(t);
+        }
+        breaks.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+        breaks.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+        for w in breaks.windows(2) {
+            let (t0, t1) = (w[0], w[1]);
+            if (t1 - t0) * len < tol {
+                continue;
+            }
+            let p0 = Point2::new(a.x() + d.x() * t0, a.y() + d.y() * t0);
+            let p1 = Point2::new(a.x() + d.x() * t1, a.y() + d.y() * t1);
+            let mid = Point2::new((p0.x() + p1.x()) * 0.5, (p0.y() + p1.y()) * 0.5);
+            if !on_disc(mid) {
+                continue;
+            }
+            let ka = reg(p0, &mut vpos);
+            let kb = reg(p1, &mut vpos);
+            if ka != kb {
+                subs.push(Sub {
+                    a: ka,
+                    b: kb,
+                    kind: Kind::Line,
+                });
+            }
+        }
+    }
+
+    // Circle nodes: every registered vertex lying on the circle. Consecutive
+    // nodes (by angle, with wrap) bound one gap arc — no node lies inside a gap.
+    let mut nodes: Vec<((i64, i64), f64)> = vpos
+        .iter()
+        .filter_map(|(k, p)| {
+            let dv = *p - cu;
+            let dist = dv.length();
+            ((dist - r).abs() <= tol * 100.0).then(|| (*k, dv.y().atan2(dv.x()).rem_euclid(TAU)))
+        })
+        .collect();
+    nodes.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    nodes.dedup_by(|a, b| (a.1 - b.1).abs() < 1e-9 || a.0 == b.0);
+    if nodes.len() < 2 {
+        return None;
+    }
+    let node_count = nodes.len();
+    for idx in 0..node_count {
+        let (k_lo, lo) = nodes[idx];
+        let (k_hi, hi_raw) = nodes[(idx + 1) % node_count];
+        let hi = if idx + 1 == node_count {
+            hi_raw + TAU
+        } else {
+            hi_raw
+        };
+        if hi - lo < 1e-9 {
+            continue;
+        }
+        subs.push(Sub {
+            a: k_lo,
+            b: k_hi,
+            kind: Kind::Arc { lo, hi },
+        });
+    }
+
+    if subs.len() < 2 {
+        return None;
+    }
+
+    // Reject a dangling interior chord endpoint (degree < 2 at a non-circle
+    // vertex): a lone chord ending inside the disc does not partition it, and
+    // its pendant would trace an out-and-back slit. The target cases (corner
+    // bite: two chords meeting at an interior vertex; diametral cut) have no
+    // such danglers.
+    let on_circle = |k: (i64, i64)| -> bool {
+        vpos.get(&k)
+            .is_some_and(|p| ((*p - cu).length() - r).abs() <= tol * 100.0)
+    };
+    let mut degree: HashMap<(i64, i64), usize> = HashMap::new();
+    for s in &subs {
+        *degree.entry(s.a).or_insert(0) += 1;
+        *degree.entry(s.b).or_insert(0) += 1;
+    }
+    if degree.iter().any(|(k, &deg)| deg < 2 && !on_circle(*k)) {
+        return None;
+    }
+
+    // Directed half-edges: index 2k forward (a->b), 2k+1 reverse (b->a).
+    let dir_angle = |from: (i64, i64), to: (i64, i64)| -> f64 {
+        let a = vpos[&from];
+        let b = vpos[&to];
+        (b.y() - a.y()).atan2(b.x() - a.x())
+    };
+    let mut halfs: Vec<He> = Vec::with_capacity(subs.len() * 2);
+    for s in &subs {
+        match s.kind {
+            Kind::Line => {
+                let fa = dir_angle(s.a, s.b);
+                halfs.push(He {
+                    from: s.a,
+                    to: s.b,
+                    out_ang: fa,
+                    in_ang: fa,
+                    kind: HeKind::Line,
+                });
+                let ra = dir_angle(s.b, s.a);
+                halfs.push(He {
+                    from: s.b,
+                    to: s.a,
+                    out_ang: ra,
+                    in_ang: ra,
+                    kind: HeKind::Line,
+                });
+            }
+            Kind::Arc { lo, hi } => {
+                // a is the node at `lo`, b at `hi`.
+                halfs.push(He {
+                    from: s.a,
+                    to: s.b,
+                    out_ang: lo + PI * 0.5,
+                    in_ang: hi + PI * 0.5,
+                    kind: HeKind::ArcCcw { lo, hi },
+                });
+                halfs.push(He {
+                    from: s.b,
+                    to: s.a,
+                    out_ang: hi - PI * 0.5,
+                    in_ang: lo - PI * 0.5,
+                    kind: HeKind::ArcCw { lo, hi },
+                });
+            }
+        }
+    }
+
+    let mut out_at: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (hi, h) in halfs.iter().enumerate() {
+        out_at.entry(h.from).or_default().push(hi);
+    }
+
+    // Trace minimal faces: from each unused half-edge, at each arrival pick the
+    // next outgoing half-edge minimizing the CCW turn from the reverse of the
+    // arriving tangent (hug left = minimal CCW-bounded face).
+    let mut used = vec![false; halfs.len()];
+    let mut faces: Vec<Vec<usize>> = Vec::new();
+    for start in 0..halfs.len() {
+        if used[start] {
+            continue;
+        }
+        let mut face: Vec<usize> = Vec::new();
+        let mut cur = start;
+        let mut ok = true;
+        loop {
+            if used[cur] {
+                ok = cur == start && !face.is_empty();
+                break;
+            }
+            used[cur] = true;
+            face.push(cur);
+            let arrive_to = halfs[cur].to;
+            if arrive_to == halfs[start].from && !face.is_empty() {
+                break;
+            }
+            let back_angle = (halfs[cur].in_ang + PI).rem_euclid(TAU);
+            let twin = cur ^ 1;
+            let Some(cands) = out_at.get(&arrive_to) else {
+                ok = false;
+                break;
+            };
+            let mut best: Option<usize> = None;
+            let mut best_off = f64::MAX;
+            for &c in cands {
+                if used[c] || c == twin {
+                    continue;
+                }
+                let off = (halfs[c].out_ang - back_angle).rem_euclid(TAU);
+                if off < best_off {
+                    best_off = off;
+                    best = Some(c);
+                }
+            }
+            let next = best.or_else(|| cands.iter().copied().find(|&c| !used[c] && c == twin));
+            let Some(next) = next else {
+                ok = false;
+                break;
+            };
+            if next == start {
+                break;
+            }
+            cur = next;
+            if face.len() > halfs.len() {
+                ok = false;
+                break;
+            }
+        }
+        if ok && face.len() >= 2 {
+            faces.push(face);
+        }
+    }
+    if faces.len() < 2 {
+        return None;
+    }
+
+    // Sampled UV polygon of a traced face (arcs densified) for area + seed.
+    let arc_pt =
+        |phi: f64| -> Point2 { Point2::new(cu.x() + r * phi.cos(), cu.y() + r * phi.sin()) };
+    let face_poly = |face: &[usize]| -> Vec<Point2> {
+        let mut pts = Vec::with_capacity(face.len() * 4);
+        for &h in face {
+            let he = &halfs[h];
+            pts.push(vpos[&he.from]);
+            match he.kind {
+                HeKind::Line => {}
+                HeKind::ArcCcw { lo, hi } => {
+                    for k in 1..8 {
+                        pts.push(arc_pt(lo + (hi - lo) * f64::from(k) / 8.0));
+                    }
+                }
+                HeKind::ArcCw { lo, hi } => {
+                    for k in 1..8 {
+                        pts.push(arc_pt(hi + (lo - hi) * f64::from(k) / 8.0));
+                    }
+                }
+            }
+        }
+        pts
+    };
+    let face_area = |face: &[usize]| -> f64 { signed_area_2d(&face_poly(face)) };
+
+    let outer_idx = (0..faces.len()).max_by(|&a, &b| {
+        face_area(&faces[a])
+            .abs()
+            .partial_cmp(&face_area(&faces[b]).abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })?;
+    let outer_area = face_area(&faces[outer_idx]).abs();
+    if outer_area < tol * tol {
+        return None;
+    }
+
+    // A clean tiling: the interior faces' areas sum to the unbounded face's
+    // area. A mistrace (double-covered or dropped region) fails this — defer.
+    let interior: Vec<usize> = (0..faces.len())
+        .filter(|&i| i != outer_idx && face_area(&faces[i]).abs() > tol * tol)
+        .collect();
+    if interior.is_empty() {
+        return None;
+    }
+    let interior_sum: f64 = interior.iter().map(|&i| face_area(&faces[i]).abs()).sum();
+    if (interior_sum - outer_area).abs() > outer_area.mul_add(1e-4, tol * tol) {
+        return None;
+    }
+
+    // Reconstruct one directed half-edge as a true Line / trimmed-arc edge.
+    let mk_edge = |h: usize| -> Option<OrientedPCurveEdge> {
+        let he = &halfs[h];
+        let su = vpos[&he.from];
+        let eu = vpos[&he.to];
+        match he.kind {
+            HeKind::Line => {
+                let dir = eu - su;
+                let len = dir.length();
+                let direction = if len > 1e-12 {
+                    Vec2::new(dir.x() / len, dir.y() / len)
+                } else {
+                    Vec2::new(1.0, 0.0)
+                };
+                let pcurve = Curve2D::Line(
+                    Line2D::new(su, direction)
+                        .or_else(|_| Line2D::new(su, Vec2::new(1.0, 0.0)))
+                        .ok()?,
+                );
+                Some(OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Line,
+                    pcurve,
+                    start_uv: su,
+                    end_uv: eu,
+                    start_3d: frame.evaluate(su.x(), su.y()),
+                    end_3d: frame.evaluate(eu.x(), eu.y()),
+                    forward: true,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                })
+            }
+            HeKind::ArcCcw { lo, hi } | HeKind::ArcCw { lo, hi } => {
+                // ArcCcw traverses lo->hi (from=lo node), ArcCw hi->lo (from=hi
+                // node). `aligned` traces CCW; `aligned_rev` traces CW — either
+                // way the trimmed span is the gap, oriented from->to.
+                let ccw = matches!(he.kind, HeKind::ArcCcw { .. });
+                let (from_phi, to_phi) = if ccw { (lo, hi) } else { (hi, lo) };
+                let s3 = aligned.evaluate(from_phi);
+                let e3 = aligned.evaluate(to_phi);
+                let curve = if ccw {
+                    EdgeCurve::Circle(aligned.clone())
+                } else {
+                    EdgeCurve::Circle(aligned_rev.clone())
+                };
+                let pcurve = compute_pcurve_on_surface(&curve, s3, e3, surface, &[], Some(frame));
+                Some(OrientedPCurveEdge {
+                    curve_3d: curve,
+                    pcurve,
+                    start_uv: frame.project(s3),
+                    end_uv: frame.project(e3),
+                    start_3d: s3,
+                    end_3d: e3,
+                    forward: true,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                })
+            }
+        }
+    };
+
+    let mut result = Vec::with_capacity(interior.len());
+    for &fi in &interior {
+        let face = &faces[fi];
+        let poly = face_poly(face);
+        let seed = sample_interior_point(&poly);
+        // Normalize to CCW (positive area). Reverse via twin half-edges so each
+        // arc re-derives its own orientation rather than swapping endpoints
+        // (which would flip an arc to its complement).
+        let ordered: Vec<usize> = if signed_area_2d(&poly) >= 0.0 {
+            face.clone()
+        } else {
+            face.iter().rev().map(|&h| h ^ 1).collect()
+        };
+        let mut wire = Vec::with_capacity(ordered.len());
+        for h in ordered {
+            wire.push(mk_edge(h)?);
+        }
+        result.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(frame.evaluate(seed.x(), seed.y())),
+        });
+    }
+    (!result.is_empty()).then_some(result)
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-    use super::{OrientedPCurveEdge, arc_covers_segment, point_in_hole_loops_uv};
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::{
+        FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, arc_covers_segment,
+        point_in_hole_loops_uv,
+    };
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::surfaces::CylindricalSurface;
@@ -2712,6 +3254,228 @@ mod tests {
             (p - hole_center).length() > 1.9,
             "interior point must be outside the hole, got dist {}",
             (p - hole_center).length()
+        );
+    }
+
+    // ── try_split_disk_by_chords ───────────────────────────────────────────
+
+    fn disk_test_frame() -> PlaneFrame {
+        PlaneFrame::from_normal_and_point(Vec3::new(0.0, 0.0, 1.0), Point3::new(0.0, 0.0, 0.0))
+    }
+
+    fn dummy_face_id() -> FaceId {
+        let mut topo = brepkit_topology::topology::Topology::new();
+        brepkit_topology::test_utils::make_unit_square_face(&mut topo)
+    }
+
+    fn section_chord(start: Point3, end: Point3) -> SectionEdge {
+        SectionEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve_a: dummy_pcurve(),
+            pcurve_b: dummy_pcurve(),
+            start,
+            end,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        }
+    }
+
+    fn arc_span(e: &OrientedPCurveEdge) -> f64 {
+        let (a, b) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+        (b - a).abs()
+    }
+
+    #[test]
+    fn disk_cut_by_corner_chords_yields_two_analytic_regions() {
+        use crate::ds::Rank;
+        // r=8 disc on z=0, bitten at the +x+y corner by two chords meeting at the
+        // interior vertex (5,5) and reaching the rim at (5,√39) and (√39,5). The
+        // remnant (disc minus corner) has a ~347° major arc whose chord cuts
+        // across the disc — the case the generic arrangement mistraces.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap();
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let boundary = vec![arc_edge(&circle, 0.0, TAU, true)];
+        let rim = 39.0_f64.sqrt();
+        let sections = vec![
+            section_chord(Point3::new(5.0, 5.0, 0.0), Point3::new(5.0, rim, 0.0)),
+            section_chord(Point3::new(5.0, 5.0, 0.0), Point3::new(rim, 5.0, 0.0)),
+        ];
+
+        let regions = super::try_split_disk_by_chords(
+            &surface,
+            &boundary,
+            &sections,
+            Rank::A,
+            false,
+            dummy_face_id(),
+            &disk_test_frame(),
+            1e-7,
+        )
+        .expect("disc + 2 corner chords must split into remnant regions");
+
+        // The remnant + the removed corner wedge.
+        assert_eq!(regions.len(), 2, "kept remnant + removed corner");
+
+        let mut spans = Vec::new();
+        for region in &regions {
+            let circles = region
+                .outer_wire
+                .iter()
+                .filter(|e| matches!(e.curve_3d, EdgeCurve::Circle(_)))
+                .count();
+            let lines = region
+                .outer_wire
+                .iter()
+                .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+                .count();
+            assert_eq!(circles, 1, "one true circle arc per region (not chorded)");
+            assert_eq!(lines, 2, "two chord edges per region");
+            assert!(matches!(region.surface, FaceSurface::Plane { .. }));
+            for e in &region.outer_wire {
+                if matches!(e.curve_3d, EdgeCurve::Circle(_)) {
+                    spans.push(arc_span(e));
+                }
+            }
+        }
+        spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // Complementary arcs: a ~12.6° corner minor arc and a ~347° major arc.
+        assert!(spans[0] < 0.5, "minor corner arc, got {}", spans[0]);
+        assert!(spans[1] > 5.0, "major remnant arc, got {}", spans[1]);
+    }
+
+    #[test]
+    fn disk_cut_by_diameter_yields_two_half_discs() {
+        use crate::ds::Rank;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap();
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let boundary = vec![arc_edge(&circle, 0.0, TAU, true)];
+        // A full diametral chord along the y-axis splits the disc into two halves.
+        let sections = vec![section_chord(
+            Point3::new(0.0, -8.0, 0.0),
+            Point3::new(0.0, 8.0, 0.0),
+        )];
+
+        let regions = super::try_split_disk_by_chords(
+            &surface,
+            &boundary,
+            &sections,
+            Rank::A,
+            false,
+            dummy_face_id(),
+            &disk_test_frame(),
+            1e-7,
+        )
+        .expect("disc + diameter must split into two halves");
+
+        assert_eq!(regions.len(), 2);
+        for region in &regions {
+            let circles = region
+                .outer_wire
+                .iter()
+                .filter(|e| matches!(e.curve_3d, EdgeCurve::Circle(_)))
+                .count();
+            let lines = region
+                .outer_wire
+                .iter()
+                .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+                .count();
+            assert_eq!(circles, 1, "one semicircle arc");
+            assert_eq!(lines, 1, "one diameter chord");
+            for e in &region.outer_wire {
+                if matches!(e.curve_3d, EdgeCurve::Circle(_)) {
+                    assert!(
+                        (arc_span(e) - PI).abs() < 1e-6,
+                        "each half is a π semicircle, got {}",
+                        arc_span(e)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_disc_boundary_defers() {
+        use crate::ds::Rank;
+        // A boundary with a straight edge is not a pure disc — the gate returns
+        // None so the calibrated arrangement/greedy paths keep the case.
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let boundary = vec![line_chord(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        )];
+        let sections = vec![
+            section_chord(Point3::new(0.0, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)),
+            section_chord(Point3::new(0.5, 1.0, 0.0), Point3::new(1.0, 0.0, 0.0)),
+        ];
+        assert!(
+            super::try_split_disk_by_chords(
+                &surface,
+                &boundary,
+                &sections,
+                Rank::A,
+                false,
+                dummy_face_id(),
+                &disk_test_frame(),
+                1e-7,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn circle_section_defers() {
+        use crate::ds::Rank;
+        // A closed-circle section (not a chord) is a hole case, not a chord cut —
+        // the gate returns None.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap();
+        let inner =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let boundary = vec![arc_edge(&circle, 0.0, TAU, true)];
+        let sections = vec![SectionEdge {
+            curve_3d: EdgeCurve::Circle(inner.clone()),
+            pcurve_a: dummy_pcurve(),
+            pcurve_b: dummy_pcurve(),
+            start: inner.evaluate(0.0),
+            end: inner.evaluate(TAU),
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        }];
+        assert!(
+            super::try_split_disk_by_chords(
+                &surface,
+                &boundary,
+                &sections,
+                Rank::A,
+                false,
+                dummy_face_id(),
+                &disk_test_frame(),
+                1e-7,
+            )
+            .is_none()
         );
     }
 }
