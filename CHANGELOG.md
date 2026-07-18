@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.18](https://github.com/andymai/brepkit/compare/v2.126.17...v2.126.18) (2026-07-18)
+
+
+### Bug Fixes
+
+* **algo:** split co-endpoint lens arc in disc-chord split (funnel watertight) ([#1114](https://github.com/andymai/brepkit/issues/1114)) ([f8c46fa](https://github.com/andymai/brepkit/commit/f8c46fa47829ad9b8b67035f106be51f0834226d))
+
 ## [2.126.17](https://github.com/andymai/brepkit/compare/v2.126.16...v2.126.17) (2026-07-18)
 
 
