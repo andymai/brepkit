@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.16](https://github.com/andymai/brepkit/compare/v2.126.15...v2.126.16) (2026-07-18)
+
+
+### Bug Fixes
+
+* **algo:** split circle-boundary disc faces cut by chords ([#1109](https://github.com/andymai/brepkit/issues/1109)) ([8574739](https://github.com/andymai/brepkit/commit/85747395e443c089bb74882bba1d60fb529544b6))
+
 ## [2.126.15](https://github.com/andymai/brepkit/compare/v2.126.14...v2.126.15) (2026-07-17)
 
 
