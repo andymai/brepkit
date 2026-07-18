@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784354218377,
+  "lastUpdate": 1784354676266,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6587,6 +6587,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26637131,
             "range": "± 371412",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f9dc76dc51a247b7ee4464efb189d62ca6e471c0",
+          "message": "chore(main): release 2.126.18 (#1115)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.18](https://github.com/andymai/brepkit/compare/v2.126.17...v2.126.18)\n(2026-07-18)\n\n\n### Bug Fixes\n\n* **algo:** split co-endpoint lens arc in disc-chord split (funnel\nwatertight) ([#1114](https://github.com/andymai/brepkit/issues/1114))\n([f8c46fa](https://github.com/andymai/brepkit/commit/f8c46fa47829ad9b8b67035f106be51f0834226d))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.126.18 with a geometry fix to keep funnel\nsplits watertight by correctly handling co-endpoint lens arcs in\ndisc–chord splits.\n\n- **Bug Fixes**\n- Split co-endpoint lens arc during disc–chord splitting to prevent gaps\nand ensure watertight funnels.\n\n<sup>Written for commit 15951047840c2f75113705afd901726ff123beb0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1115?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-18T06:02:26Z",
+          "tree_id": "7263e4a2413efb4ba346f306121c9bb40be76814",
+          "url": "https://github.com/andymai/brepkit/commit/f9dc76dc51a247b7ee4464efb189d62ca6e471c0"
+        },
+        "date": 1784354675722,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 940184,
+            "range": "± 46212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1007986,
+            "range": "± 2308",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12938,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 646149,
+            "range": "± 2333",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28228352,
+            "range": "± 76637",
             "unit": "ns/iter"
           }
         ]
