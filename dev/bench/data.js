@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784348548124,
+  "lastUpdate": 1784351292643,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6425,6 +6425,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26691561,
             "range": "± 131089",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "28569d668edb5587a038040b12acf4ae9a99a84d",
+          "message": "fix(algo): cylinder-band arrangement rescue for partial-overlap pocket cuts (#1112)\n\n## Problem\n\nWhen a box cut notches a **cylindrical pocket wall at partial overlap**,\nthe greedy angular wire builder figure-eights — a self-crossing outer\nwire + slit inner wire — leaving the wall non-manifold. Plane faces\nalready get an arrangement rescue when the greedy trace breaks\n(`split_plane_face_by_arrangement`, and #1109's\n`try_split_disk_by_chords`); **periodic cylinder faces had none**. This\nis the root of the funnel/honeycomb boolean family.\n\n## Fix\n\nAdds a gated `split_cylinder_band_by_arrangement`. Key insight: on a\ncylinder every edge is **axis-aligned in UV** — cross-section rings are\nhorizontal (`v=const`), seam/side generators are vertical (`u=const`) —\nso the wall is a **rectilinear arrangement**. It:\n- seam-anchors the strip and derives all coordinates from\n`cyl.project_point` (the stored pcurve UV wraps the seam inconsistently\n— same seam appears at `u`, `u+2π`, and negative `u`),\n- pairs section generators by kept/removed alternation, traces minimal\nfaces with a rectilinear DCEL,\n- reconstructs each sub-edge with true analytic `Line` (generator) /\n`Circle` (ring) geometry.\n\n**Gated exactly like the plane rescue** — fires only when the greedy\nloops self-cross, overlap, or go degenerate, and defers (`None`) on any\nnon-rectilinear section — so it never changes a face the greedy already\nhandles. **Purely additive** (one new function + one call site + 2\ntests); no existing logic modified.\n\n## Verification\n\nSynthetic pocket-notch repro — strict improvement, no regression:\n\n| case | before | after |\n|---|---|---|\n| base | 0 | 0 |\n| box-past-pocket | 0 | 0 |\n| clear-corner | 6 | **0** |\n| top-inside-pocket | 10 | **1** |\n\n- `cargo test -p brepkit-wasm --lib gridfinity` → **27/0**\n- `cargo test -p brepkit-algo` → **165/0** (163 + 2 new)\n- `cargo test -p brepkit-io` → **214/0**\n- clippy `-D warnings` clean; fmt clean\n\nThe wall is now a correct manifold comb (no figure-eight). Completes the\ncylinder/disc arrangement-rescue campaign (parts 2/3 in #1109).\n\n## Known residual\n\nThe single `top-inside` residual is a **separate** bug:\n`merge_duplicate_edges` (grouped by endpoint pair only) collapses the\nfloor lens's bottom-rim **arc** and the tool-cut **chord** (same two\nendpoints). This is the known co-endpoint arc-vs-chord class the roadmap\nflags — the sanctioned fix is a splitter-side midpoint split (NOT a\nsmarter merge-key, which is proven unbuildable), tracked as a follow-up.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes non-manifold cylinder walls caused by partial-overlap box cuts by\nadding a rectilinear arrangement rescue for cylinder bands. Prevents\nfigure-eight wires and builds correct manifold combs without affecting\ncases the greedy path already handles.\n\n- **Bug Fixes**\n- Added `split_cylinder_band_by_arrangement` to handle cylinder bands as\na rectilinear arrangement (rings horizontal, generators vertical).\n- Seam-anchors the strip, derives UV from surface projection, pairs side\ngenerators, traces minimal faces, and rebuilds edges with analytic\n`Line`/`Circle`.\n- Gated to run only when the greedy trace breaks; defers on any\nnon-rectilinear section.\n  - Purely additive with two new tests; no existing logic changed.\n\n<sup>Written for commit 773b5f935cd191622812836e2570839845a44977.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1112?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T22:06:04-07:00",
+          "tree_id": "80165b984dd9c2e98b137bc54b4d1c733616cee7",
+          "url": "https://github.com/andymai/brepkit/commit/28569d668edb5587a038040b12acf4ae9a99a84d"
+        },
+        "date": 1784351292179,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 878028,
+            "range": "± 1788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 968879,
+            "range": "± 2163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11926,
+            "range": "± 190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 647226,
+            "range": "± 1267",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26570172,
+            "range": "± 169681",
             "unit": "ns/iter"
           }
         ]
