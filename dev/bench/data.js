@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784351757837,
+  "lastUpdate": 1784354218377,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6533,6 +6533,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18803323,
             "range": "± 557244",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f8c46fa47829ad9b8b67035f106be51f0834226d",
+          "message": "fix(algo): split co-endpoint lens arc in disc-chord split (funnel watertight) (#1114)\n\nCloses the cylinder/disc arrangement-rescue campaign (#1109, #1112) —\nthe funnel/honeycomb boolean is now watertight.\n\n## Problem\n\nAfter #1112, the synthetic pocket-notch repro reached posBad=0 on every\ncase **except** `top-inside` (posBad=1). Root: the pocket-floor crescent\nleft by a box-corner cut is a **co-endpoint lens** — a minor rim **arc**\nand the tool-cut **chord** share both endpoints. `merge_duplicate_edges`\nkeys edges by endpoint pair alone, so it collapsed the arc into the\nchord and degenerated the lens face.\n\n(The complementary `x>16` lens is fine only because its arc happens to\npass through the cylinder seam vertex, which an existing reconciliation\nsplits — the `y>16` arc has no interior vertex, so it collapses.)\n\n## Fix — the sanctioned splitter-side split (not a merge-key change)\n\nA smarter `merge_duplicate_edges` key is **proven unbuildable** (the\ngridfinity lip corner chord+arc MUST merge; the torus-box lens line+arc\nMUST stay distinct). So the fix is splitter-side: in\n`try_split_disk_by_chords`, when a **minor** arc (< π) has both\nendpoints also joined by a chord (the co-endpoint lens condition), split\nit at its angular midpoint. The new on-circle vertex breaks the\nshared-endpoint collision, and the **existing**\n`split_arc_edges_at_collinear_vertices` reconciliation propagates the\nidentical cut to the coincident cylinder-wall rim arc (position-based,\nsymmetric) — **no two-site coordination**. Restricted to minor arcs so\ndiameter half-discs and major-arc partitions keep their calibrated\nbehavior.\n\n## Verification\n\n`replay_synthbox` — **posBad=0 on every case** (`top-inside` 1→0;\nbase/clear-corner/past-pocket stay 0):\n\n- `cargo test -p brepkit-wasm --lib gridfinity` → **27/0**\n- `cargo test -p brepkit-algo` → **166/0** (+1 regression test)\n- `cargo test -p brepkit-io` → **214/0**\n- `cargo test -p brepkit-operations` → **972/0**\n- clippy `-D warnings` clean; fmt clean\n\nAlso records the campaign close in the roadmap skill.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSplit minor co-endpoint lens arcs in the disk-by-chords splitter to\nprevent arc+chord collapsing; now guarded to avoid quantization\ncollisions. The funnel/honeycomb boolean is watertight, fixing the\npocket-floor crescent in the top-inside case and completing the\ncylinder/disc arrangement work (#1109, #1112).\n\n- **Bug Fixes**\n- In `try_split_disk_by_chords`, when a minor rim arc (< π) shares\nendpoints with a chord, split the arc at its angular midpoint and insert\nan on-circle vertex — only if the midpoint creates a new vertex (skip on\nquantization alias).\n- Propagate the cut to coincident rim arcs via\n`split_arc_edges_at_collinear_vertices`; no merge-key changes.\n  - Preserve diameter half-discs and major-arc partitions.\n- Add a regression test and update docs; `replay_synthbox` now reports\nposBad=0 for all cases.\n\n<sup>Written for commit c5b40455b5082fe1a684ad3730658db09126a89b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1114?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T22:54:38-07:00",
+          "tree_id": "f86b198d00ee3a8ee7be7be63b70f9a752a717ed",
+          "url": "https://github.com/andymai/brepkit/commit/f8c46fa47829ad9b8b67035f106be51f0834226d"
+        },
+        "date": 1784354217073,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 876719,
+            "range": "± 5007",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 968693,
+            "range": "± 14432",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11935,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 642817,
+            "range": "± 1074",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26637131,
+            "range": "± 371412",
             "unit": "ns/iter"
           }
         ]
