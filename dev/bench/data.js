@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784316855998,
+  "lastUpdate": 1784347958882,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6263,6 +6263,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28146160,
             "range": "± 28118",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "85747395e443c089bb74882bba1d60fb529544b6",
+          "message": "fix(algo): split circle-boundary disc faces cut by chords (#1109)\n\n## Problem\n\nA planar face whose outer boundary is a **single closed circle** — a\ncylinder cap disc, or a pocket-floor disc — that is cut by chord\nsection(s) was **dropped entirely**, leaving its boundary edges unpaired\n(non-manifold / open shell → mesh fallback or open export). The\ncanonical trigger is a box corner biting a cylindrical pocket/cap.\n\n## Root cause — two chained bugs\n\n**Bug A — the chords never reach the splitter.**\n`clip_line_to_face_boundary` bailed on `crossings.len() < 2`. A corner\nchord runs from an interior endpoint (a box-corner vertex *inside* the\ndisc) out to the rim, so it crosses the boundary circle exactly **once**\n→ dropped. The material window is `[crossing, interior endpoint]`, which\nthe midpoint-classification path just below already resolves — but the\nearly bail returned first. Relaxed to admit a single crossing on\n**hole-free plane faces only** (the holed / non-plane fallback still\nrequires a crossing pair).\n\n**Bug B — the disc arrangement can't represent a major arc.** The\ngeneric planar arrangement (`split_plane_face_by_arrangement`)\nrepresents every boundary curve by its **chord** for both crossing\ndetection and half-edge turn angle. A full circle split at 2 chord\ncrossings becomes a **major arc (> π) + minor arc**; the major arc's\nchord cuts deep across the disc, phantom-crossing the section chords and\ncarrying a turn angle far from the true tangent → the remnant is\nmistraced or dropped. Added a gated `try_split_disk_by_chords` that\nbuilds the arrangement **natively** from the analytic circle + chords\n(arcs by angular span, tangent-aware DCEL trace) and emits remnants with\ntrue `Circle`/`Line` geometry. It **defers** unless the boundary is one\ncircle and every section is a chord — so it never fires on mixed\nline/arc boundaries (rounded-rect walls, sectors).\n\n## Verification\n\n- `cargo test -p brepkit-wasm --lib gridfinity` → **27 passed; 0\nfailed**\n- `cargo test -p brepkit-algo` → **163 passed; 0 failed** (157 baseline\n+ 6 new)\n- `cargo test -p brepkit-io` → **214 passed; 0 failed**\n- clippy `-D warnings` clean; fmt clean\n- 6 new committed unit tests pin both fixes.\n\n## Scope\n\nFirst part of the cylinder/disc arrangement-rescue campaign for the\nfunnel/honeycomb boolean family. Foil-safe and independently valuable\n(fixes dropped cap/floor discs broadly); the cylinder-wall arrangement\npart follows separately.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes disc faces with a single circular boundary cut by chord sections.\nThese faces now split into valid regions instead of being dropped,\npreventing open shells and mesh fallbacks.\n\n- **Bug Fixes**\n- In `clip_line_to_face_boundary`, allow a single boundary crossing on\nhole-free plane faces to keep interior→rim chords (e.g., box-corner\nbites).\n- Add gated `try_split_disk_by_chords` that builds an arrangement from\nthe analytic circle + chords, handles major arcs correctly, traces with\ntangent-aware logic, and outputs true `Circle`/`Line` edges; defers on\nnon-disc or mixed boundaries.\n\n<sup>Written for commit 1de1cee523f82b9099739598ea6f2174eb4828e5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1109?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-17T21:10:31-07:00",
+          "tree_id": "9a17127bccf6587ff3b937913c8cda1f40c79c64",
+          "url": "https://github.com/andymai/brepkit/commit/85747395e443c089bb74882bba1d60fb529544b6"
+        },
+        "date": 1784347958257,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 792908,
+            "range": "± 56291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 817441,
+            "range": "± 27728",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9933,
+            "range": "± 361",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 534873,
+            "range": "± 30143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23419823,
+            "range": "± 844635",
             "unit": "ns/iter"
           }
         ]
