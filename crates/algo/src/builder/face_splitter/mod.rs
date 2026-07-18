@@ -39,7 +39,7 @@ use edge_splitting::{
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic};
 use special_cases::{
     split_face_with_internal_loops, split_noseam_face_direct, split_periodic_face_into_bands,
-    split_torus_band_by_arrangement, try_split_crossing_plane_face,
+    split_torus_band_by_arrangement, try_split_crossing_plane_face, try_split_disk_by_chords,
 };
 
 /// Number of probe points (plus one for the closing sample) walked along a
@@ -3940,6 +3940,21 @@ pub fn split_face_2d(
         && original_inner_wires.is_empty()
         && let Some(ref boundary) = boundary_edges_backup
     {
+        // Disc cap (circle boundary) cut by chords: the chord-based arrangement
+        // cannot represent the disc's major arc (its chord cuts across the
+        // face), so the greedy trace drops the remnant. Split it natively from
+        // the analytic circle + chords first; the gate inside returns None for
+        // any non-disc boundary.
+        if let Some(result) = try_split_disk_by_chords(
+            &surface, boundary, sections, rank, reversed, face_id, frame, tol.linear,
+        ) && (result.len() > loops.len()
+            || wire_loops_self_cross(&loops, tol.linear)
+            || greedy_outer_loops_nested(&loops, cw_loops)
+            || wire_loops_have_degenerate_area(&loops, tol.linear))
+        {
+            return result;
+        }
+
         let arr = split_plane_face_by_arrangement(
             &surface,
             boundary,

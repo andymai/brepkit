@@ -2357,7 +2357,20 @@ fn clip_line_to_face_boundary(
         }
     }
 
-    if crossings.len() < 2 {
+    // A single boundary crossing is legitimate when a section ENDPOINT lies
+    // INSIDE the face: the material window runs from that crossing to the
+    // interior endpoint, not between two crossings. A box corner biting a
+    // cylinder cap disc is the canonical case — each of the two chords runs
+    // from the interior corner vertex out to the rim, crossing the boundary
+    // circle exactly once. The midpoint-classification path below admits the
+    // section endpoints (t=0/t=1) as interval borders and keeps only the
+    // truly-inside window, so one crossing suffices there. The non-plane /
+    // holed fallback still selects an outermost crossing PAIR, so it keeps
+    // requiring two.
+    let single_crossing_ok = crossings.len() == 1
+        && face.inner_wires().is_empty()
+        && matches!(face.surface(), FaceSurface::Plane { .. });
+    if crossings.len() < 2 && !single_crossing_ok {
         return None;
     }
 
@@ -3005,4 +3018,78 @@ fn presplit_sections_at_registry(
         out.push(last);
     }
     out
+}
+
+#[cfg(test)]
+mod clip_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::clip_line_to_face_boundary;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceId, FaceSurface};
+    use brepkit_topology::topology::Topology;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    fn disc_face(topo: &mut Topology, r: f64) -> FaceId {
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let seam = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Circle(circle)));
+        let wire = Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    #[test]
+    fn single_crossing_interior_endpoint_chord_is_kept() {
+        // A chord from an interior point out past the rim crosses the disc's
+        // boundary circle exactly once. It must clip to [interior, rim], not be
+        // dropped — the box-corner cap-disc bite, where each chord runs from the
+        // interior corner vertex to the rim. Before the fix the `crossings < 2`
+        // bail discarded it and the whole cap disc fell through unsplit.
+        let mut topo = Topology::new();
+        let face = disc_face(&mut topo, 8.0);
+        let out = clip_line_to_face_boundary(
+            &topo,
+            face,
+            Point3::new(5.0, 5.0, 0.0),
+            Point3::new(12.0, 5.0, 0.0),
+            1e-7,
+        );
+        let segs = out.expect("single-crossing interior→rim chord must be kept");
+        assert_eq!(segs.len(), 1);
+        let (s, e) = segs[0];
+        let rim = 39.0_f64.sqrt();
+        let eq = |p: Point3, q: Point3| (p - q).length() < 1e-6;
+        assert!(
+            (eq(s, Point3::new(5.0, 5.0, 0.0)) && eq(e, Point3::new(rim, 5.0, 0.0)))
+                || (eq(e, Point3::new(5.0, 5.0, 0.0)) && eq(s, Point3::new(rim, 5.0, 0.0))),
+            "clipped to interior→rim, got {s:?}..{e:?}"
+        );
+    }
+
+    #[test]
+    fn chord_entirely_outside_disc_is_dropped() {
+        // The relaxed bail must still reject a segment with no material inside:
+        // the midpoint classification returns no in-face window.
+        let mut topo = Topology::new();
+        let face = disc_face(&mut topo, 8.0);
+        let out = clip_line_to_face_boundary(
+            &topo,
+            face,
+            Point3::new(20.0, 20.0, 0.0),
+            Point3::new(20.0, -20.0, 0.0),
+            1e-7,
+        );
+        assert!(out.is_none());
+    }
 }
