@@ -2436,7 +2436,7 @@ pub(super) fn try_split_disk_by_chords(
 ) -> Option<Vec<SplitSubFace>> {
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::f64::consts::{PI, TAU};
 
     use crate::builder::classify_2d::{sample_interior_point, signed_area_2d};
@@ -2660,8 +2660,7 @@ pub(super) fn try_split_disk_by_chords(
     // (< π): a crescent lens is always minor, while a semicircle/major-arc
     // partition (a diameter cut's half-discs, a corner bite's major remnant) is
     // a calibrated shape that carries its own interior vertices — left untouched.
-    let mut chord_pairs: std::collections::HashSet<((i64, i64), (i64, i64))> =
-        std::collections::HashSet::new();
+    let mut chord_pairs: HashSet<((i64, i64), (i64, i64))> = HashSet::new();
     for s in &subs {
         if matches!(s.kind, Kind::Line) {
             chord_pairs.insert(if s.a <= s.b { (s.a, s.b) } else { (s.b, s.a) });
@@ -2688,8 +2687,16 @@ pub(super) fn try_split_disk_by_chords(
         if hi - lo < PI - 1e-6 && chord_pairs.contains(&pair) {
             let mid = 0.5 * (lo + hi);
             let mid_pt = Point2::new(cu.x() + r * mid.cos(), cu.y() + r * mid.sin());
+            let before = vpos.len();
             let km = reg(mid_pt, &mut vpos);
-            if km != k_lo && km != k_hi {
+            // Split only when the midpoint is a genuinely NEW on-circle vertex.
+            // `reg` returns an EXISTING key on a quantization collision (e.g. a
+            // chord-interior crossing sharing mid_pt's cell); that vertex is not
+            // on this arc, so reusing it would break the `Arc { lo, hi }`
+            // invariant (endpoint `a` at angle `lo`, `b` at `hi`) and miscompute
+            // DCEL tangents. Defer to the whole arc in that rare case — the lens
+            // stays a bigon (safe, never miswound), not degenerate geometry.
+            if vpos.len() > before {
                 subs.push(Sub {
                     a: k_lo,
                     b: km,
