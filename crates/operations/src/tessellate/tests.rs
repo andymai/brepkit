@@ -2057,3 +2057,197 @@ fn grouped_tessellation_triangles_lie_on_their_face() {
         faces.len()
     );
 }
+
+/// Build a closed prism solid whose top/bottom caps are the given planar
+/// polygon (shared boundary edges with the side walls). Used to exercise
+/// watertight meshing of a self-intersecting (pinched) planar cap.
+fn build_prism(
+    topo: &mut Topology,
+    poly2d: &[(f64, f64)],
+    z0: f64,
+    z1: f64,
+) -> brepkit_topology::solid::SolidId {
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    let n = poly2d.len();
+    let tol = 1e-7;
+    let top_v: Vec<_> = poly2d
+        .iter()
+        .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, z1), tol)))
+        .collect();
+    let bot_v: Vec<_> = poly2d
+        .iter()
+        .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, z0), tol)))
+        .collect();
+    let top_e: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(top_v[i], top_v[(i + 1) % n], EdgeCurve::Line)))
+        .collect();
+    let bot_e: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(bot_v[i], bot_v[(i + 1) % n], EdgeCurve::Line)))
+        .collect();
+    let vert_e: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(bot_v[i], top_v[i], EdgeCurve::Line)))
+        .collect();
+
+    let top_wire = topo.add_wire(
+        Wire::new(
+            top_e.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap(),
+    );
+    let bot_wire = topo.add_wire(
+        Wire::new(
+            bot_e.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap(),
+    );
+    let top_face = topo.add_face(Face::new(
+        top_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z1,
+        },
+    ));
+    let bot_face = topo.add_face(Face::new(
+        bot_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: -z0,
+        },
+    ));
+
+    let mut faces = vec![top_face, bot_face];
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (xi, yi) = poly2d[i];
+        let (xj, yj) = poly2d[j];
+        let (dx, dy) = (xj - xi, yj - yi);
+        // Horizontal normal perpendicular to the wall (dir x z-axis).
+        let nrm = Vec3::new(dy, -dx, 0.0);
+        let len = (nrm.x() * nrm.x() + nrm.y() * nrm.y()).sqrt().max(1e-12);
+        let normal = Vec3::new(nrm.x() / len, nrm.y() / len, 0.0);
+        let d = normal.x() * xi + normal.y() * yi;
+        let quad = Wire::new(
+            vec![
+                OrientedEdge::new(bot_e[i], true),
+                OrientedEdge::new(vert_e[j], true),
+                OrientedEdge::new(top_e[i], false),
+                OrientedEdge::new(vert_e[i], false),
+            ],
+            true,
+        )
+        .unwrap();
+        let quad_wire = topo.add_wire(quad);
+        faces.push(topo.add_face(Face::new(
+            quad_wire,
+            vec![],
+            FaceSurface::Plane { normal, d },
+        )));
+    }
+
+    let shell = topo.add_shell(Shell::new(faces).unwrap());
+    topo.add_solid(Solid::new(shell, vec![]))
+}
+
+/// Regression: a boolean occasionally emits a planar face whose outer wire
+/// pinches through zero width — two boundary arcs overlap by a few hundred
+/// microns, so the projected boundary polygon self-intersects. CDT recovers the
+/// crossing constraints with Steiner vertices; dropping their triangles left a
+/// hole in the ledge (nonzero boundary edges). These two polygons are the exact
+/// self-intersecting ledge boundaries captured from the gridfinity "2x2 with
+/// stadium slot" cut at deflection 0.1 (28 pts) and 0.05 (34 pts). The prism
+/// meshing must stay watertight at both.
+#[test]
+#[allow(clippy::unreadable_literal)]
+fn pinched_ledge_prism_is_watertight() {
+    // defl 0.1 capture (28 pts).
+    let poly_28: Vec<(f64, f64)> = vec![
+        (-34.56, -40.55),
+        (-16.54, -40.550000000000004),
+        (-15.738116168931496, -40.49608307905734),
+        (-14.950668099841263, -40.3353029453993),
+        (-14.191831677633331, -40.070554012967634),
+        (-13.475267711451144, -39.7066023743365),
+        (-12.813876008545115, -39.25000000003244),
+        (-15.240000000000073, -39.25000000000008),
+        (-35.8599999999999, -39.25000000000011),
+        (-38.0, -39.25000000000011),
+        (-38.38627124296872, -39.18882064536907),
+        (-38.73473156536566, -39.011271242968796),
+        (-39.01127124296875, -38.73473156536567),
+        (-39.188820645369, -38.386271242968725),
+        (-39.25000000000001, -38.0),
+        (-39.25000000000001, -35.85999999999999),
+        (-39.250000000000014, -33.240000000000016),
+        (-39.250000000000014, -30.813876008504252),
+        (-39.706602374315146, -31.475267711415285),
+        (-40.07055401295537, -32.19183167760453),
+        (-40.335302945393764, -32.950668099821144),
+        (-40.49608307905595, -33.73811616892115),
+        (-40.55, -34.54),
+        (-40.55, -34.56),
+        (-40.256828532607976, -36.411011796305935),
+        (-39.40601179630594, -38.080833661231914),
+        (-38.08083366123192, -39.40601179630594),
+        (-36.411011796305935, -40.256828532607976),
+    ];
+    // defl 0.05 capture (34 pts).
+    let poly_34: Vec<(f64, f64)> = vec![
+        (-34.56, -40.55),
+        (-16.54, -40.550000000000004),
+        (-15.966381445824009, -40.52247111140214),
+        (-15.398035372875258, -40.4401374805693),
+        (-14.8401857997605, -40.30375588658364),
+        (-14.297960265295309, -40.114579896626324),
+        (-13.776342698138523, -39.87434834366997),
+        (-13.280127606436032, -39.58526934379438),
+        (-12.813876008545115, -39.25000000003244),
+        (-15.240000000000073, -39.25000000000008),
+        (-35.8599999999999, -39.25000000000011),
+        (-38.0, -39.25000000000011),
+        (-38.38627124296872, -39.18882064536907),
+        (-38.73473156536566, -39.011271242968796),
+        (-39.01127124296875, -38.73473156536567),
+        (-39.188820645369, -38.386271242968725),
+        (-39.25000000000001, -38.0),
+        (-39.25000000000001, -35.85999999999999),
+        (-39.250000000000014, -33.240000000000016),
+        (-39.250000000000014, -30.813876008504252),
+        (-39.58526934377004, -31.280127606398516),
+        (-39.87434834365278, -31.776342698105463),
+        (-40.11457989661517, -32.29796026526766),
+        (-40.30375588657729, -32.84018579973906),
+        (-40.440137480566456, -33.398035372860626),
+        (-40.52247111140143, -33.96638144581659),
+        (-40.55, -34.54),
+        (-40.55, -34.56),
+        (-40.399818193969125, -35.892900394398325),
+        (-39.9568035187355, -37.15896359731418),
+        (-39.243170579983506, -38.294703913133816),
+        (-38.294703913133816, -39.2431705799835),
+        (-37.15896359731418, -39.9568035187355),
+        (-35.892900394398325, -40.399818193969125),
+    ];
+
+    for (label, poly) in [("28pt/defl0.1", &poly_28), ("34pt/defl0.05", &poly_34)] {
+        let mut topo = Topology::new();
+        let solid = build_prism(&mut topo, poly, 0.0, 4.0);
+        for defl in [0.1, 0.05] {
+            let mesh = tessellate_solid(&topo, solid, defl).unwrap();
+            assert_eq!(
+                boundary_edge_count(&mesh),
+                0,
+                "{label} defl={defl}: pinched ledge left boundary edges (crack)"
+            );
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "{label} defl={defl}: pinched ledge produced non-manifold edges"
+            );
+        }
+    }
+}

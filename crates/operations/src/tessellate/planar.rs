@@ -775,12 +775,14 @@ pub(super) fn cdt_triangulate_simple(positions: &[Point3], normal: Vec3) -> Vec<
     }
 
     let mut indices = Vec::with_capacity(cdt_triangles.len() * 3);
+    let mut mapped = 0usize;
     for &(v0, v1, v2) in &cdt_triangles {
         if let (Some(&i0), Some(&i1), Some(&i2)) = (
             cdt_to_input.get(&v0),
             cdt_to_input.get(&v1),
             cdt_to_input.get(&v2),
         ) {
+            mapped += 1;
             #[allow(clippy::cast_possible_truncation)]
             {
                 indices.push(i0 as u32);
@@ -790,7 +792,17 @@ pub(super) fn cdt_triangulate_simple(positions: &[Point3], normal: Vec3) -> Vec<
         }
     }
 
-    if indices.is_empty() {
+    // A boundary constraint can only cross another constraint when the polygon
+    // self-intersects (booleans occasionally emit a planar face whose outer
+    // wire pinches through zero width — two boundary arcs that overlap by a few
+    // hundred microns). CDT recovers crossing constraints by inserting a Steiner
+    // vertex at the crossing; triangles touching it have no input-vertex mapping
+    // and would be dropped here, leaving a hole. The Steiner vertex also splits
+    // the shared boundary edges, which cracks against the neighbouring faces.
+    // Fall back to a fan, which uses only the original boundary vertices and is
+    // manifold by construction (each boundary edge used once, each diagonal
+    // twice) regardless of the self-overlap.
+    if mapped < cdt_triangles.len() || indices.is_empty() {
         return fan_triangulate(n);
     }
 
