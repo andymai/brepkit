@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784379066327,
+  "lastUpdate": 1784394195328,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6695,6 +6695,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26796862,
             "range": "± 56070",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "54aa016771e1a64c6a5b492d31c48ebb8ca258e7",
+          "message": "fix(tessellate): keep self-intersecting planar caps watertight via fan fallback (#1117)\n\n## Summary\nFixes the gridfinity \"2×2 solid with slot (stadium) cutout\" export\nproducing a non-watertight STL (8 boundary edges) — the first of the\nsolid-cutouts parity failures. Root-caused with a faithful native repro\n(operands captured from the real tool cut site).\n\n## Root cause\n**Tessellation defect, not a boolean bug.** `boolean(Cut, bin, stadium)`\nyields a watertight, fully-analytic B-Rep (F=60, euler=2, nm=0, bd=0).\nBoundary edges appear only when tessellating at fine deflection (0 @\ndefl=0.5 → 8 @ 0.05 — the count-grows-with-refinement signature).\n\nThe offending face is the bin's top ledge plane: a weaving,\nsimply-connected planar annulus. At one corner the inner socket-foot\ncone rim (circle r=1.25) and the bin's outer rounded corner (circle\nr≈5.99) **genuinely intersect** — the inner rim bulges ~0.11mm *past*\nthe outer arc, so the ledge pinches through zero to negative width. The\nprojected boundary polygon is therefore self-intersecting.\n\n`cdt_triangulate_simple` on such a polygon: CDT recovers the crossing\nconstraints with a Steiner vertex, then the input-index mapping\n**silently drops** every triangle touching it → the pinch sliver is left\nuntriangulated → single-use mesh edges → cracks.\n\n## Fix\nDetect that CDT introduced Steiner vertices (`mapped <\ncdt_triangles.len()`) and fall back to `fan_triangulate`, which uses\nonly the original boundary vertices and is manifold by construction\nregardless of the self-overlap. Steiner vertices arise *only* for\nself-intersecting boundaries, so normal planar faces are unaffected.\nMinimal (+13/-1 in planar.rs); no L0–L2 code touched.\n\n## Verification\n- Faithful repro: boundary_edges **8 → 0** at defl 0.1/0.05/0.01; cut\nB-Rep unchanged (nm=0 bd=0).\n- `brepkit-operations --lib tessellate` **72/0** (incl. new\n`pinched_ledge_prism_is_watertight`); `brepkit-operations --lib`\n**766/0**; `brepkit-wasm --lib gridfinity` **27/0** (canary);\n`brepkit-io` green; clippy `-D warnings` clean.\n\n## Follow-up (not in scope)\nThe same Steiner-drop pattern exists in the holed CDT paths\n(`run_planar_cdt`, `tessellate_planar_shared_with_holes`) — no current\nrepro self-intersects an *inner* wire, so untouched. Noted in the\nroadmap.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes tessellation cracks in self-intersecting planar caps by falling\nback to a fan when CDT inserts Steiner vertices, keeping caps\nwatertight. The gridfinity “2×2 solid with stadium slot” now exports a\nwatertight mesh.\n\n- **Bug Fixes**\n- In `cdt_triangulate_simple`, detect Steiner insertion (`mapped <\ncdt_triangles.len()`) and fall back to `fan_triangulate`; also fall back\nif CDT maps no triangles. Only applies to self-intersecting boundaries;\nnormal faces are unchanged.\n- Adds `pinched_ledge_prism_is_watertight` regression with captured\npolygons; asserts 0 boundary and non‑manifold edges at deflections 0.1\nand 0.05.\n\n<sup>Written for commit 77f44b1d8a50c9c430348e48d370fc697bcb6193.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1117?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-18T10:00:53-07:00",
+          "tree_id": "05f356594346da31bce1f210dc9ddbb87d448064",
+          "url": "https://github.com/andymai/brepkit/commit/54aa016771e1a64c6a5b492d31c48ebb8ca258e7"
+        },
+        "date": 1784394194579,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 880014,
+            "range": "± 2187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 974173,
+            "range": "± 4021",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11869,
+            "range": "± 220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 645214,
+            "range": "± 12679",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27008439,
+            "range": "± 133604",
             "unit": "ns/iter"
           }
         ]
