@@ -2232,6 +2232,545 @@ fn arrangement_regions_from_inputs(
     Some(result)
 }
 
+/// Rectilinear-arrangement rescue for a u-periodic cylinder band whose greedy
+/// wire trace self-crosses (a box cut notching the wall at partial overlap).
+///
+/// On a cylinder every edge is axis-aligned in UV: cross-section rings
+/// (`EdgeCurve::Circle`) are horizontal (`v` const, `u` varies) and the seam and
+/// side generators (`EdgeCurve::Line`) are vertical (`u` const, `v` varies). The
+/// periodic `u` is cut open at the face seam (a boundary vertical generator) into
+/// a planar strip `[u_s, u_s + 2π]`, with the seam duplicated to both strip edges
+/// so a region wrapping the seam is bounded. The stored pcurve UV is unreliable
+/// (a rim endpoint at the seam carries `u` wrapped by an extra 2π; the GFA's ring
+/// FRAGMENTS disagree between 2D and 3D and over-cover kept arcs), so all
+/// coordinates come from the exact 3D projection and the removed rectangles are
+/// reconstructed from the reliable side generators: sorted by `u`, they pair
+/// `(0,1),(2,3),...` into removed sectors by kept/removed alternation from the
+/// (kept) seam. The planar subdivision of the full rims + seam + removed
+/// rectangles is traced into minimal faces (leftmost-turn rule), the unbounded
+/// outer face dropped, and each interior region emitted as a [`SplitSubFace`]
+/// partition piece -- downstream classification decides material in/out.
+///
+/// Returns `None` (defer to the greedy path) on any geometry that is not a clean
+/// rectilinear box notch: a non-axis-aligned line or circle, an ellipse/NURBS
+/// section, a closed full-ring section, a missing seam, an odd number of side
+/// generators, a generator pair that does not bound a rectangle, or a trace that
+/// fails to yield a simple partition. The gate above ensures this fires only when
+/// the greedy trace is already broken, so faces the greedy handles are untouched.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn split_cylinder_band_by_arrangement(
+    surface: &FaceSurface,
+    all_edges: &[OrientedPCurveEdge],
+    n_boundary_edges: usize,
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use std::collections::HashMap;
+    use std::f64::consts::TAU;
+
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::Vec2;
+
+    // A vertical generator has |Δu| below this; a horizontal ring |Δv| below.
+    // Generators have Δu exactly 0 and rings Δv exactly 0, so a straight line
+    // that is NOT axis-parallel (helix chord) or a "circle" that is not a
+    // cross-section is rejected -- the function only handles rectilinear cuts.
+    const EPS_U: f64 = 1e-4;
+    const EPS_V: f64 = 1e-4;
+    // Snap band around the seam (u = 0 and u = 2π): the nearest real generator
+    // sits ~0.7 rad away, so points within this band are the seam itself (both
+    // copies must weld to a single 3D meridian).
+    const SEAM_BAND: f64 = 1e-3;
+
+    let FaceSurface::Cylinder(cyl) = surface else {
+        return None;
+    };
+
+    let u_weld = tol.max(1e-9);
+    let v_weld = tol.max(1e-9);
+
+    // Cylinder (u, v): u angular in [0, 2π), v axial. All coordinates come from
+    // the exact 3D projection, not the stored pcurve UV.
+    let proj = |p: Point3| -> (f64, f64) { cyl.project_point(p) };
+
+    // Seam anchor: the u of a boundary vertical generator (the meridian the
+    // periodic face is cut along). All horizontal edges fit in one period
+    // [u_s, u_s + 2π] without crossing it, so anchoring here avoids seam-crossing
+    // rings; the seam generator becomes both strip edges.
+    let mut seam_u: Option<f64> = None;
+    for e in all_edges.iter().take(n_boundary_edges) {
+        if !matches!(e.curve_3d, EdgeCurve::Line) || (e.start_3d - e.end_3d).length() <= tol {
+            continue;
+        }
+        let (u0, _) = proj(e.start_3d);
+        let (u1, _) = proj(e.end_3d);
+        let d = (u1 - u0).rem_euclid(TAU);
+        if d.min(TAU - d) >= EPS_U {
+            continue; // boundary line is not axis-parallel -- not a generator
+        }
+        match seam_u {
+            None => seam_u = Some(u0),
+            Some(prev) => {
+                let dd = (u0 - prev).rem_euclid(TAU);
+                if dd.min(TAU - dd) > EPS_U {
+                    return None; // conflicting boundary generators -- not one seam
+                }
+            }
+        }
+    }
+    let u_s = seam_u?;
+
+    let snap_u = |u: f64| -> f64 {
+        if u.abs() < SEAM_BAND {
+            0.0
+        } else if (u - TAU).abs() < SEAM_BAND {
+            TAU
+        } else {
+            u
+        }
+    };
+
+    // Vertex registry: quantized (u_shift, v) key -> (u_shift, v, exact 3D).
+    // Prefer the exact input endpoint 3D (a shared pave vertex) over a recomputed
+    // point so reconstructed sub-edges match the adjacent faces' edges exactly.
+    let mut verts: HashMap<(i64, i64), (f64, f64, Point3)> = HashMap::new();
+    let register = |u: f64,
+                    v: f64,
+                    p3: Point3,
+                    verts: &mut HashMap<(i64, i64), (f64, f64, Point3)>|
+     -> (i64, i64) {
+        let k = ((u / u_weld).round() as i64, (v / v_weld).round() as i64);
+        verts.entry(k).or_insert((u, v, p3));
+        k
+    };
+
+    // Phase A: register every input endpoint (exact 3D) and collect the reliable
+    // structure -- section generator pieces (u_shift, v_lo, v_hi). The messy ring
+    // FRAGMENTS (which over-cover kept arcs and disagree between 2D and 3D) are
+    // used only to confirm the cut is rectilinear; the removed rectangles are
+    // reconstructed from the generators, whose u/v are exact projections.
+    let mut sec_pieces: Vec<(f64, f64, f64)> = Vec::new(); // (u_shift, v_lo, v_hi)
+    for (i, e) in all_edges.iter().enumerate() {
+        match &e.curve_3d {
+            EdgeCurve::Line => {
+                if (e.start_3d - e.end_3d).length() <= tol {
+                    continue; // degenerate zero-length line
+                }
+                let (u0, v0p) = proj(e.start_3d);
+                let (u1, v1p) = proj(e.end_3d);
+                let du = (u1 - u0).rem_euclid(TAU);
+                if du.min(TAU - du) >= EPS_U {
+                    return None; // non-vertical line (helix chord) -- defer
+                }
+                let u = snap_u((u0 - u_s).rem_euclid(TAU));
+                let (v0, v1, v0_3d, v1_3d) = if v0p <= v1p {
+                    (v0p, v1p, e.start_3d, e.end_3d)
+                } else {
+                    (v1p, v0p, e.end_3d, e.start_3d)
+                };
+                register(u, v0, v0_3d, &mut verts);
+                register(u, v1, v1_3d, &mut verts);
+                if v1 - v0 <= tol {
+                    continue;
+                }
+                // A non-seam generator (a tool side wall). Boundary verticals at
+                // the seam are the meridian, not a cut.
+                if i >= n_boundary_edges && u > SEAM_BAND && (TAU - u) > SEAM_BAND {
+                    sec_pieces.push((u, v0, v1));
+                }
+            }
+            EdgeCurve::Circle(_) => {
+                if (e.start_3d - e.end_3d).length() <= tol * 100.0 {
+                    return None; // closed full-ring section -- defer to greedy
+                }
+                let (u0, v0p) = proj(e.start_3d);
+                let (u1, v1p) = proj(e.end_3d);
+                if (v0p - v1p).abs() >= EPS_V {
+                    return None; // non-horizontal circle (tilted section) -- defer
+                }
+                register(
+                    snap_u((u0 - u_s).rem_euclid(TAU)),
+                    v0p,
+                    e.start_3d,
+                    &mut verts,
+                );
+                register(
+                    snap_u((u1 - u_s).rem_euclid(TAU)),
+                    v1p,
+                    e.end_3d,
+                    &mut verts,
+                );
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return None,
+        }
+    }
+    if sec_pieces.is_empty() {
+        return None;
+    }
+
+    // Band v-extent (bottom rim to top rim) from every registered endpoint.
+    let (mut v_bottom, mut v_top) = (f64::INFINITY, f64::NEG_INFINITY);
+    for &(_, v, _) in verts.values() {
+        v_bottom = v_bottom.min(v);
+        v_top = v_top.max(v);
+    }
+    if v_top - v_bottom <= tol {
+        return None;
+    }
+
+    // Merge generator pieces sharing a u (fwd/rev and pave splits) into one span.
+    let mut gens: Vec<(f64, f64, f64)> = Vec::new();
+    for &(u, v0, v1) in &sec_pieces {
+        if let Some(g) = gens
+            .iter_mut()
+            .find(|(gu, _, _)| (u - *gu).abs() <= u_weld * 4.0)
+        {
+            g.1 = g.1.min(v0);
+            g.2 = g.2.max(v1);
+        } else {
+            gens.push((u, v0, v1));
+        }
+    }
+    gens.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Each removed sector is bounded by a generator pair. Going around from the
+    // seam (kept material -- it is an original boundary edge), the arcs alternate
+    // kept / removed, so consecutive sorted generators pair (0,1),(2,3),... into
+    // removed rectangles. An odd count or a pair with mismatched v-spans is not a
+    // clean box notch -- defer.
+    if !gens.len().is_multiple_of(2) {
+        return None;
+    }
+
+    let mut verticals: Vec<(f64, f64, f64)> = Vec::new(); // (u_shift, v_lo, v_hi)
+    let mut horizontals: Vec<(f64, f64, f64)> = Vec::new(); // (v, u_lo, u_hi)
+
+    // Band frame: full rims and the seam on both strip edges.
+    horizontals.push((v_bottom, 0.0, TAU));
+    horizontals.push((v_top, 0.0, TAU));
+    verticals.push((0.0, v_bottom, v_top));
+    verticals.push((TAU, v_bottom, v_top));
+
+    for pair in gens.chunks_exact(2) {
+        let (ua, va0, va1) = pair[0];
+        let (ub, vb0, vb1) = pair[1];
+        if (va0 - vb0).abs() > tol * 100.0 || (va1 - vb1).abs() > tol * 100.0 {
+            return None; // pair does not bound a single rectangle
+        }
+        let (v_lo, v_hi) = (va0.min(vb0), va1.max(vb1));
+        verticals.push((ua, v_lo, v_hi));
+        verticals.push((ub, v_lo, v_hi));
+        if v_hi < v_top - tol {
+            horizontals.push((v_hi, ua, ub));
+        }
+        if v_lo > v_bottom + tol {
+            horizontals.push((v_lo, ua, ub));
+        }
+    }
+
+    // Rectilinear split: cut each vertical at every horizontal ring's v that its
+    // span brackets (and whose u-range covers the generator), and each horizontal
+    // at every vertical generator's u interior to its span (whose v-range reaches
+    // the ring). Emit undirected sub-segments; dedup collapses duplicates.
+    let cov = 1e-6;
+    let mut sub: Vec<((i64, i64), (i64, i64))> = Vec::new();
+
+    for &(u, v0, v1) in &verticals {
+        let mut breaks: Vec<f64> = vec![v0, v1];
+        for &(hv, hu0, hu1) in &horizontals {
+            if hv > v0 + tol && hv < v1 - tol && u >= hu0 - cov && u <= hu1 + cov {
+                breaks.push(hv);
+            }
+        }
+        breaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        breaks.dedup_by(|a, b| (*a - *b).abs() <= tol);
+        for w in breaks.windows(2) {
+            let (va, vb) = (w[0], w[1]);
+            if vb - va <= tol {
+                continue;
+            }
+            let ka = register(u, va, cyl.evaluate(u_s + u, va), &mut verts);
+            let kb = register(u, vb, cyl.evaluate(u_s + u, vb), &mut verts);
+            if ka != kb {
+                sub.push((ka, kb));
+            }
+        }
+    }
+
+    for &(v, u0, u1) in &horizontals {
+        let mut breaks: Vec<f64> = vec![u0, u1];
+        for &(vu, vv0, vv1) in &verticals {
+            if vu > u0 + cov && vu < u1 - cov && v >= vv0 - tol && v <= vv1 + tol {
+                breaks.push(vu);
+            }
+        }
+        breaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        breaks.dedup_by(|a, b| (*a - *b).abs() <= cov);
+        for w in breaks.windows(2) {
+            let (ua, ub) = (w[0], w[1]);
+            if ub - ua <= cov {
+                continue;
+            }
+            let ka = register(ua, v, cyl.evaluate(u_s + ua, v), &mut verts);
+            let kb = register(ub, v, cyl.evaluate(u_s + ub, v), &mut verts);
+            if ka != kb {
+                sub.push((ka, kb));
+            }
+        }
+    }
+
+    // Dedup undirected sub-edges by their vertex-key pair.
+    sub.sort_by(|l, r| {
+        let lk = if l.0 <= l.1 { (l.0, l.1) } else { (l.1, l.0) };
+        let rk = if r.0 <= r.1 { (r.0, r.1) } else { (r.1, r.0) };
+        lk.cmp(&rk)
+    });
+    sub.dedup_by(|a, b| {
+        let ak = if a.0 <= a.1 { (a.0, a.1) } else { (a.1, a.0) };
+        let bk = if b.0 <= b.1 { (b.0, b.1) } else { (b.1, b.0) };
+        ak == bk
+    });
+    if sub.len() < 3 {
+        return None;
+    }
+
+    // Shifted-uv position per vertex, for angles / areas / interior sampling.
+    let pos: HashMap<(i64, i64), Point2> = verts
+        .iter()
+        .map(|(&k, &(u, v, _))| (k, Point2::new(u, v)))
+        .collect();
+
+    // Directed half-edges: index 2k = forward, 2k+1 = reverse.
+    let mut halfs: Vec<ArrHalfEdge> = Vec::with_capacity(sub.len() * 2);
+    for (seg_id, &(ka, kb)) in sub.iter().enumerate() {
+        let pa = *pos.get(&ka)?;
+        let pb = *pos.get(&kb)?;
+        let fwd = pb - pa;
+        let rev = pa - pb;
+        halfs.push(ArrHalfEdge {
+            from: ka,
+            to: kb,
+            seg_id,
+            angle: fwd.y().atan2(fwd.x()),
+        });
+        halfs.push(ArrHalfEdge {
+            from: kb,
+            to: ka,
+            seg_id,
+            angle: rev.y().atan2(rev.x()),
+        });
+    }
+
+    let mut out_at: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (hi, h) in halfs.iter().enumerate() {
+        out_at.entry(h.from).or_default().push(hi);
+    }
+
+    // Trace minimal faces: at each arrival vertex pick the outgoing half-edge with
+    // the smallest CCW turn from the reverse-of-arrival direction (leftmost turn),
+    // excluding the immediate twin. Same rule as the plane arrangement tracer.
+    let mut used = vec![false; halfs.len()];
+    let mut faces: Vec<Vec<usize>> = Vec::new();
+    for start in 0..halfs.len() {
+        if used[start] {
+            continue;
+        }
+        let mut face: Vec<usize> = Vec::new();
+        let mut cur = start;
+        let mut ok = true;
+        loop {
+            if used[cur] {
+                ok = cur == start && !face.is_empty();
+                break;
+            }
+            used[cur] = true;
+            face.push(cur);
+            let arrive_to = halfs[cur].to;
+            if arrive_to == halfs[start].from && !face.is_empty() {
+                break;
+            }
+            let back_angle = (halfs[cur].angle + std::f64::consts::PI).rem_euclid(TAU);
+            let twin = cur ^ 1;
+            let Some(cands) = out_at.get(&arrive_to) else {
+                ok = false;
+                break;
+            };
+            let mut best: Option<usize> = None;
+            let mut best_off = f64::MAX;
+            for &c in cands {
+                if used[c] || c == twin {
+                    continue;
+                }
+                let off = (halfs[c].angle - back_angle).rem_euclid(TAU);
+                if off < best_off {
+                    best_off = off;
+                    best = Some(c);
+                }
+            }
+            let next = best.or_else(|| cands.iter().copied().find(|&c| !used[c] && c == twin));
+            let Some(next) = next else {
+                ok = false;
+                break;
+            };
+            if next == start {
+                break;
+            }
+            cur = next;
+            if face.len() > halfs.len() {
+                ok = false;
+                break;
+            }
+        }
+        if ok && face.len() >= 3 {
+            faces.push(face);
+        }
+    }
+    if faces.len() < 2 {
+        return None;
+    }
+
+    let face_area = |face: &[usize]| -> f64 {
+        let pts: Vec<Point2> = face
+            .iter()
+            .filter_map(|&h| pos.get(&halfs[h].from).copied())
+            .collect();
+        signed_area_2d(&pts)
+    };
+    // The unbounded outer face re-walks the whole strip perimeter, so its |area|
+    // equals the sum of every interior region and is the single largest. Drop it.
+    let outer_idx = (0..faces.len()).max_by(|&a, &b| {
+        face_area(&faces[a])
+            .abs()
+            .partial_cmp(&face_area(&faces[b]).abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })?;
+    let interior: Vec<&Vec<usize>> = faces
+        .iter()
+        .enumerate()
+        .filter(|(i, f)| *i != outer_idx && face_area(f).abs() > tol * tol)
+        .map(|(_, f)| f)
+        .collect();
+    if interior.is_empty() {
+        return None;
+    }
+
+    // Disconnected interior loop (traced twice as exact half-edge twins) would
+    // need hole nesting this rectilinear path does not do -- defer to the greedy
+    // path rather than emit a double-covered region.
+    let mut face_keys: Vec<Vec<usize>> = interior
+        .iter()
+        .map(|f| {
+            let mut segs: Vec<usize> = f.iter().map(|&h| halfs[h].seg_id).collect();
+            segs.sort_unstable();
+            segs
+        })
+        .collect();
+    face_keys.sort();
+    if face_keys.windows(2).any(|w| w[0] == w[1]) {
+        return None;
+    }
+
+    // Reconstruct a directed sub-edge (from -> to) as an exact cylinder edge:
+    // a vertical generator is a Line, a horizontal ring a cross-section Circle.
+    let mk_edge = |from: (i64, i64), to: (i64, i64)| -> Option<OrientedPCurveEdge> {
+        let &(fu, fv, f3d) = verts.get(&from)?;
+        let &(tu, tv, t3d) = verts.get(&to)?;
+        let s_uv = Point2::new(u_s + fu, fv);
+        let e_uv = Point2::new(u_s + tu, tv);
+        let dir = e_uv - s_uv;
+        let len = dir.length();
+        let direction = if len > 1e-12 {
+            Vec2::new(dir.x() / len, dir.y() / len)
+        } else {
+            Vec2::new(1.0, 0.0)
+        };
+        let pcurve = Curve2D::Line(
+            Line2D::new(s_uv, direction)
+                .or_else(|_| Line2D::new(s_uv, Vec2::new(1.0, 0.0)))
+                .ok()?,
+        );
+        if (fu - tu).abs() < EPS_U {
+            Some(OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve,
+                start_uv: s_uv,
+                end_uv: e_uv,
+                start_3d: f3d,
+                end_3d: t3d,
+                forward: true,
+                source_edge_idx: None,
+                pave_block_id: None,
+            })
+        } else {
+            // Cross-section circle at height v = fv, sharing the cylinder's frame
+            // so its parameterization matches (an open arc spans the CCW range
+            // from start to end; forward flips it when the wire runs decreasing-u).
+            let center = cyl.origin() + cyl.axis() * fv;
+            let circle =
+                Circle3D::with_axes(center, cyl.axis(), cyl.radius(), cyl.x_axis(), cyl.y_axis())
+                    .ok()?;
+            Some(OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Circle(circle),
+                pcurve,
+                start_uv: s_uv,
+                end_uv: e_uv,
+                start_3d: f3d,
+                end_3d: t3d,
+                forward: tu > fu,
+                source_edge_idx: None,
+                pave_block_id: None,
+            })
+        }
+    };
+
+    // Build a CCW-wound outer wire (positive shifted-uv area) from a traced face.
+    let build_ccw_wire = |face: &[usize]| -> Option<Vec<OrientedPCurveEdge>> {
+        let reverse_each = face_area(face) < 0.0;
+        let ordered: Vec<usize> = if reverse_each {
+            face.iter().rev().copied().collect()
+        } else {
+            face.to_vec()
+        };
+        let mut wire = Vec::with_capacity(ordered.len());
+        for &h in &ordered {
+            let (from, to) = if reverse_each {
+                (halfs[h].to, halfs[h].from)
+            } else {
+                (halfs[h].from, halfs[h].to)
+            };
+            wire.push(mk_edge(from, to)?);
+        }
+        Some(wire)
+    };
+
+    let mut result = Vec::new();
+    for face in interior {
+        let poly: Vec<Point2> = face
+            .iter()
+            .filter_map(|&h| pos.get(&halfs[h].from).copied())
+            .collect();
+        if poly.len() < 3 {
+            continue;
+        }
+        let Some(outer_wire) = build_ccw_wire(face) else {
+            continue;
+        };
+        let seed = sample_interior_point(&poly);
+        result.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(cyl.evaluate(u_s + seed.x(), seed.y())),
+        });
+    }
+    (!result.is_empty()).then_some(result)
+}
+
 /// Drop sections that run OFF-FACE through a concavity of the OUTER wire
 /// (a cylinder/cone wall whose boundary carries an earlier cut's bite).
 ///
@@ -3976,6 +4515,33 @@ pub fn split_face_2d(
         }
     }
 
+    // Rectilinear-arrangement rescue for a u-periodic cylinder band whose greedy
+    // wire trace broke (self-crossing, overlapping, or degenerate loops) -- a box
+    // cut notching the wall at partial overlap figure-eights the angular builder.
+    // Gated exactly like the plane arrangement rescue: fires only when the greedy
+    // loops are already broken, so it never changes a face the greedy handles.
+    // (A face is either a plane disc or a cylinder band, so this never overlaps
+    // the disc-chord / plane-arrangement paths above.)
+    if u_periodic
+        && !v_periodic
+        && !sections.is_empty()
+        && matches!(&surface, FaceSurface::Cylinder(_))
+        && (wire_loops_self_cross(&loops, tol.linear)
+            || greedy_outer_loops_nested(&loops, cw_loops)
+            || wire_loops_have_degenerate_area(&loops, tol.linear))
+        && let Some(result) = split_cylinder_band_by_arrangement(
+            &surface,
+            &all_edges,
+            n_boundary_edges,
+            rank,
+            reversed,
+            face_id,
+            tol.linear,
+        )
+    {
+        return result;
+    }
+
     // Classify each loop as outer (positive area) or hole (negative).
     // For loops with curved edges, sample intermediate UV points to get
     // an accurate area -- using only start_uv gives degenerate polygons
@@ -4821,5 +5387,213 @@ mod tests {
                 seen.iter().filter(|&(_, &c)| c > 1).collect::<Vec<_>>()
             );
         }
+    }
+
+    fn cyl_edge(curve_3d: EdgeCurve, start_3d: Point3, end_3d: Point3) -> OrientedPCurveEdge {
+        // The cylinder arrangement derives every coordinate from the 3D endpoints
+        // via `project_point`, so the pcurve / UV / flags are unread placeholders.
+        OrientedPCurveEdge {
+            curve_3d,
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(0.0, 0.0),
+            start_3d,
+            end_3d,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    /// A box notch removing the `u ∈ [π/2, π]`, `v ∈ [0, 1]` corner of a unit
+    /// cylinder band (`z ∈ [0, 2]`). The angular wire builder figure-eights this
+    /// partial-overlap cut; the rectilinear arrangement must instead hand back the
+    /// kept comb region plus the removed rectangle, each a simple (non-revisiting)
+    /// wire in UV.
+    #[test]
+    fn cylinder_band_partial_notch_splits_into_comb_and_rectangle() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let bottom = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+            .map(EdgeCurve::Circle)
+            .unwrap();
+        let top = Circle3D::new(Point3::new(0.0, 0.0, 2.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+            .map(EdgeCurve::Circle)
+            .unwrap();
+        let ring = Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+            .map(EdgeCurve::Circle)
+            .unwrap();
+
+        // Boundary (seam + rims split at the seam so no edge is a closed circle).
+        let boundary = [
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 2.0),
+            ),
+            cyl_edge(
+                bottom.clone(),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(-1.0, 0.0, 0.0),
+            ),
+            cyl_edge(
+                bottom,
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ),
+            cyl_edge(
+                top.clone(),
+                Point3::new(1.0, 0.0, 2.0),
+                Point3::new(-1.0, 0.0, 2.0),
+            ),
+            cyl_edge(top, Point3::new(-1.0, 0.0, 2.0), Point3::new(1.0, 0.0, 2.0)),
+        ];
+        let n_boundary = boundary.len();
+        // Section: two side generators + the notch's top ring.
+        let sections = [
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(0.0, 1.0, 1.0),
+            ),
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(-1.0, 0.0, 1.0),
+            ),
+            cyl_edge(
+                ring,
+                Point3::new(0.0, 1.0, 1.0),
+                Point3::new(-1.0, 0.0, 1.0),
+            ),
+        ];
+        let all_edges: Vec<OrientedPCurveEdge> = boundary.into_iter().chain(sections).collect();
+
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let result = split_cylinder_band_by_arrangement(
+            &surface,
+            &all_edges,
+            n_boundary,
+            Rank::A,
+            false,
+            face_id,
+            1.0e-7,
+        )
+        .expect("cylinder band arrangement must trace the notch");
+
+        assert_eq!(
+            result.len(),
+            2,
+            "expected the kept comb + the removed rectangle"
+        );
+
+        // Neither region may revisit a UV vertex (a figure-eight): the seam sits
+        // at both u = u_s and u = u_s + 2π, which are distinct UV points, so a
+        // correct partition never lands two edges on the same UV vertex.
+        for sub in &result {
+            let mut seen = std::collections::HashSet::new();
+            for e in &sub.outer_wire {
+                let key = (
+                    (e.start_uv.x() * 1.0e6).round() as i64,
+                    (e.start_uv.y() * 1.0e6).round() as i64,
+                );
+                assert!(
+                    seen.insert(key),
+                    "region wire revisits a UV vertex (figure-eight)"
+                );
+            }
+            assert!(sub.outer_wire.len() >= 3, "degenerate region wire");
+        }
+
+        // The removed rectangle spans v ∈ [0, 1]; the kept comb reaches v = 2.
+        let v_extent = |sub: &SplitSubFace| -> f64 {
+            sub.outer_wire
+                .iter()
+                .map(|e| e.start_uv.y())
+                .fold(f64::NEG_INFINITY, f64::max)
+        };
+        let mut extents: Vec<f64> = result.iter().map(v_extent).collect();
+        extents.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(
+            extents[0] <= 1.0 + 1.0e-6,
+            "removed rectangle should stay at v <= 1"
+        );
+        assert!(
+            extents[1] >= 2.0 - 1.0e-6,
+            "kept comb should reach the top rim v = 2"
+        );
+    }
+
+    /// A tilted (non-axis-aligned) section makes the cut non-rectilinear, so the
+    /// function must defer (`None`) and let the greedy path keep the face.
+    #[test]
+    fn cylinder_band_arrangement_defers_on_non_rectilinear_section() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let bottom = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+            .map(EdgeCurve::Circle)
+            .unwrap();
+        let top = Circle3D::new(Point3::new(0.0, 0.0, 2.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+            .map(EdgeCurve::Circle)
+            .unwrap();
+
+        let boundary = [
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 2.0),
+            ),
+            cyl_edge(
+                bottom.clone(),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(-1.0, 0.0, 0.0),
+            ),
+            cyl_edge(
+                bottom,
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ),
+            cyl_edge(
+                top.clone(),
+                Point3::new(1.0, 0.0, 2.0),
+                Point3::new(-1.0, 0.0, 2.0),
+            ),
+            cyl_edge(top, Point3::new(-1.0, 0.0, 2.0), Point3::new(1.0, 0.0, 2.0)),
+        ];
+        let n_boundary = boundary.len();
+        // A "line" whose endpoints project to different u (a helix chord).
+        let sections = [cyl_edge(
+            EdgeCurve::Line,
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(-1.0, 0.0, 1.0),
+        )];
+        let all_edges: Vec<OrientedPCurveEdge> = boundary.into_iter().chain(sections).collect();
+
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        assert!(
+            split_cylinder_band_by_arrangement(
+                &surface,
+                &all_edges,
+                n_boundary,
+                Rank::A,
+                false,
+                face_id,
+                1.0e-7,
+            )
+            .is_none(),
+            "a non-axis-aligned section must defer to the greedy path"
+        );
     }
 }
