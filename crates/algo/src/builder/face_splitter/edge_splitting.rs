@@ -50,6 +50,18 @@ pub(super) fn split_boundary_edges_at_3d_points(
 
         let circle_iso_v_rim = matches!(edge.curve_3d, EdgeCurve::Circle(_))
             && circle_edge_is_iso_v_rim(&edge, surface, tol);
+        // A CLOSED rim on a cylinder/cone spans a whole period in the edge's own
+        // unwrapped u (`start_u` -> `start_u ± 2π`, signed by the traversal). A
+        // raw principal-value projection of each split point would drop the
+        // pieces back into `[0, 2π)`, so the interior joints lose phase
+        // coherence with the neighbouring boundary edges and the ring stops
+        // reading as a monotone walk across the cut-open strip. Interpolate in
+        // the edge's own span instead — the closed-edge counterpart of the
+        // `circle_iso_v_rim` branch, which covers only OPEN rims.
+        let closed_ring_dir = (matches!(edge.curve_3d, EdgeCurve::Circle(_))
+            && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+            && (edge.start_3d - edge.end_3d).length() < tol)
+            .then(|| if edge.forward { 1.0_f64 } else { -1.0_f64 });
         let mut prev_uv = edge.start_uv;
         let mut prev_3d = edge.start_3d;
         for &(t, pt) in &splits {
@@ -69,6 +81,11 @@ pub(super) fn split_boundary_edges_at_3d_points(
             };
             let split_uv = if let Some(f) = frame {
                 f.project(split_3d)
+            } else if let Some(dir) = closed_ring_dir {
+                brepkit_math::vec::Point2::new(
+                    std::f64::consts::TAU.mul_add(dir * t, edge.start_uv.x()),
+                    edge.start_uv.y(),
+                )
             } else if circle_iso_v_rim {
                 // Interpolate within the edge's own UV span: an iso-v rim's
                 // pcurve is u-linear, and a raw principal-value projection
@@ -99,11 +116,21 @@ pub(super) fn split_boundary_edges_at_3d_points(
         }
         let pcurve =
             compute_pcurve_on_surface(&edge.curve_3d, prev_3d, edge.end_3d, surface, &[], frame);
+        // The stored `end_uv` of a closed rim follows the CURVE's direction
+        // (`sample_edge_to_uv` ignores orientation), so a reverse-traversed ring
+        // would close a period on the wrong side of its own start.
+        let tail_end_uv = match closed_ring_dir {
+            Some(dir) => brepkit_math::vec::Point2::new(
+                std::f64::consts::TAU.mul_add(dir, edge.start_uv.x()),
+                edge.start_uv.y(),
+            ),
+            None => edge.end_uv,
+        };
         result.push(OrientedPCurveEdge {
             curve_3d: edge.curve_3d.clone(),
             pcurve,
             start_uv: prev_uv,
-            end_uv: edge.end_uv,
+            end_uv: tail_end_uv,
             start_3d: prev_3d,
             end_3d: edge.end_3d,
             forward: edge.forward,
@@ -178,6 +205,19 @@ pub(super) fn find_splits_on_circle(
     // an arc, not a segment) and closed circles — keep the original CCW
     // convention untouched; the d-series lip fuses are calibrated to it.
     let is_iso_v_rim = circle_edge_is_iso_v_rim(edge, surface, tol);
+    // A CLOSED circle has no span between its endpoints, so
+    // `domain_with_endpoints` hands back the circle's intrinsic full domain,
+    // anchored at the circle's own angular origin instead of at the edge's
+    // start point. The consumer chains the pieces from `start_3d` in ascending
+    // `t`, so whenever those two anchors differ (a cylinder seam away from the
+    // origin) the start point itself reads as an interior split and the pieces
+    // neither tile the ring nor stay disjoint — the wedge between the origin
+    // and the seam comes out covered twice, once inside the leading piece and
+    // again as a trailing forward/reverse pair. Anchor at the edge's start
+    // angle, signed by the traversal direction, so `t` is monotone along the
+    // walk (a periodic rim is traversed CW on the top cap, CCW on the bottom).
+    let closed_anchor =
+        ((edge.start_3d - edge.end_3d).length() < tol).then(|| circle.project(edge.start_3d));
     let u_span = edge.end_uv.x() - edge.start_uv.x();
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
@@ -187,7 +227,14 @@ pub(super) fn find_splits_on_circle(
         if (sp - closest).length() > tol {
             continue;
         }
-        let t_norm = if is_iso_v_rim {
+        let t_norm = if let Some(base) = closed_anchor {
+            let delta = if edge.forward {
+                angle - base
+            } else {
+                base - angle
+            };
+            delta.rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU
+        } else if is_iso_v_rim {
             // Unwrap the surface u of the split point into the edge's own
             // u-range (shift by whole turns toward the range midpoint), then
             // parameterize linearly along the traversal.
@@ -441,6 +488,127 @@ mod tests {
         assert_eq!(splits.len(), 2);
         assert!((splits[0].1 - sp_a).length() < 1e-6);
         assert!((splits[1].1 - sp_b).length() < 1e-6);
+    }
+
+    /// A CLOSED rim on a cylinder, seamed at 3pi/2 (i.e. NOT at the circle's
+    /// own angular origin), with split points bracketing that seam.
+    fn closed_rim_edge(forward: bool) -> (FaceSurface, OrientedPCurveEdge, Vec<Point3>) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use std::f64::consts::TAU;
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 5.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            5.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+
+        let seam_angle = 1.5 * std::f64::consts::PI;
+        let seam = circle.evaluate(seam_angle);
+        let (u_seam, _) = surface.project_point(seam).unwrap();
+        // `sample_edge_to_uv` walks the CURVE, ignoring the traversal flag, so a
+        // closed rim always reports its span as `u_seam -> u_seam + 2pi`.
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(circle.clone()),
+            pcurve: Curve2D::Line(
+                Line2D::new(Point2::new(u_seam, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+            ),
+            start_uv: Point2::new(u_seam, 0.0),
+            end_uv: Point2::new(u_seam + TAU, 0.0),
+            start_3d: seam,
+            end_3d: seam,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        // Two splits straddling the seam, plus the seam-antipodal one the
+        // periodic path always contributes.
+        let splits = vec![
+            circle.evaluate(seam_angle - 0.3),
+            circle.evaluate(seam_angle + 0.3),
+            circle.evaluate(seam_angle + std::f64::consts::PI),
+        ];
+        (surface, edge, splits)
+    }
+
+    /// Total angular sweep of a chain of rim pieces, measured in the traversal
+    /// direction. A correct partition of a full ring sweeps exactly 2pi.
+    fn chain_sweep(pieces: &[OrientedPCurveEdge], surface: &FaceSurface, forward: bool) -> f64 {
+        use std::f64::consts::TAU;
+        pieces
+            .iter()
+            .map(|p| {
+                let (u0, _) = surface.project_point(p.start_3d).unwrap();
+                let (u1, _) = surface.project_point(p.end_3d).unwrap();
+                let d = if forward { u1 - u0 } else { u0 - u1 };
+                d.rem_euclid(TAU)
+            })
+            .sum()
+    }
+
+    #[test]
+    fn closed_rim_splits_tile_the_ring_exactly_once() {
+        use std::f64::consts::TAU;
+        let (surface, edge, splits) = closed_rim_edge(true);
+        let pieces = split_boundary_edges_at_3d_points(vec![edge], &splits, None, &surface, 1e-7);
+
+        assert_eq!(pieces.len(), 4, "3 splits must yield 4 rim pieces");
+        // The pieces must chain end-to-end and cover the ring exactly once.
+        // Anchoring the split parameters at the circle's angular origin instead
+        // of the edge's own start point double-covers the wedge between the two
+        // anchors, which shows up here as a 4pi sweep.
+        for w in pieces.windows(2) {
+            assert!(
+                (w[0].end_3d - w[1].start_3d).length() < 1e-9,
+                "rim pieces must chain end-to-end"
+            );
+        }
+        let sweep = chain_sweep(&pieces, &surface, true);
+        assert!(
+            (sweep - TAU).abs() < 1e-9,
+            "rim pieces must sweep exactly 2pi, got {sweep}"
+        );
+    }
+
+    #[test]
+    fn closed_rim_splits_tile_the_ring_on_a_reversed_traversal() {
+        // The top rim of a cylinder is traversed CW (`forward = false`) while
+        // its stored UV span still runs CCW, so the piece UVs must follow the
+        // TRAVERSAL or the ring stops reading as a monotone walk across the
+        // cut-open strip.
+        use std::f64::consts::TAU;
+        let (surface, edge, splits) = closed_rim_edge(false);
+        let start_u = edge.start_uv.x();
+        let pieces = split_boundary_edges_at_3d_points(vec![edge], &splits, None, &surface, 1e-7);
+
+        assert_eq!(pieces.len(), 4, "3 splits must yield 4 rim pieces");
+        let sweep = chain_sweep(&pieces, &surface, false);
+        assert!(
+            (sweep - TAU).abs() < 1e-9,
+            "rim pieces must sweep exactly 2pi, got {sweep}"
+        );
+        // Stored UV walks one full period in the traversal direction, and each
+        // joint is shared, so the strip is monotone decreasing.
+        assert!((pieces[0].start_uv.x() - start_u).abs() < 1e-9);
+        assert!(
+            (pieces[3].end_uv.x() - (start_u - TAU)).abs() < 1e-9,
+            "reversed rim must close a period BELOW its start, got {}",
+            pieces[3].end_uv.x()
+        );
+        for w in pieces.windows(2) {
+            assert!((w[0].end_uv.x() - w[1].start_uv.x()).abs() < 1e-9);
+            assert!(
+                w[1].start_uv.x() < w[0].start_uv.x(),
+                "reversed rim UV must decrease monotonically"
+            );
+        }
     }
 
     #[test]
