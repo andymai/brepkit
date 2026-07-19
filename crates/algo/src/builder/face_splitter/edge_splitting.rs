@@ -216,8 +216,15 @@ pub(super) fn find_splits_on_circle(
     // again as a trailing forward/reverse pair. Anchor at the edge's start
     // angle, signed by the traversal direction, so `t` is monotone along the
     // walk (a periodic rim is traversed CW on the top cap, CCW on the bottom).
-    let closed_anchor =
-        ((edge.start_3d - edge.end_3d).length() < tol).then(|| circle.project(edge.start_3d));
+    //
+    // Scoped to cylinder/cone rims, matching the UV-span branch in
+    // `split_boundary_edges_at_3d_points` that consumes these `t` values. The
+    // same origin-vs-start mismatch is latent for a closed circle on any other
+    // surface (a bore rim on a plane), but only the periodic-rim case is
+    // exercised and verified here, so the wider change stays out of scope.
+    let closed_anchor = (matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+        && (edge.start_3d - edge.end_3d).length() < tol)
+        .then(|| circle.project(edge.start_3d));
     let u_span = edge.end_uv.x() - edge.start_uv.x();
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
@@ -557,6 +564,7 @@ mod tests {
     fn closed_rim_splits_tile_the_ring_exactly_once() {
         use std::f64::consts::TAU;
         let (surface, edge, splits) = closed_rim_edge(true);
+        let start_u = edge.start_uv.x();
         let pieces = split_boundary_edges_at_3d_points(vec![edge], &splits, None, &surface, 1e-7);
 
         assert_eq!(pieces.len(), 4, "3 splits must yield 4 rim pieces");
@@ -575,6 +583,22 @@ mod tests {
             (sweep - TAU).abs() < 1e-9,
             "rim pieces must sweep exactly 2pi, got {sweep}"
         );
+        // Stored UV must walk one full period in the traversal direction with
+        // shared joints — a raw principal-value projection would drop the
+        // interior joints back into [0, 2pi) and break the monotone strip.
+        assert!((pieces[0].start_uv.x() - start_u).abs() < 1e-9);
+        assert!(
+            (pieces[3].end_uv.x() - (start_u + TAU)).abs() < 1e-9,
+            "forward rim must close a period ABOVE its start, got {}",
+            pieces[3].end_uv.x()
+        );
+        for w in pieces.windows(2) {
+            assert!((w[0].end_uv.x() - w[1].start_uv.x()).abs() < 1e-9);
+            assert!(
+                w[1].start_uv.x() > w[0].start_uv.x(),
+                "forward rim UV must increase monotonically"
+            );
+        }
     }
 
     #[test]
