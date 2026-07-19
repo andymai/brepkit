@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784472200278,
+  "lastUpdate": 1784472617895,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6965,6 +6965,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26807131,
             "range": "± 39133",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b4b2b6daa55569ea8a38fc36e25dcee432c69157",
+          "message": "chore(main): release 2.126.21 (#1122)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.21](https://github.com/andymai/brepkit/compare/v2.126.20...v2.126.21)\n(2026-07-19)\n\n\n### Bug Fixes\n\n* **algo:** drop cap circles emerging inside holes; gate salvage early\n([#1121](https://github.com/andymai/brepkit/issues/1121))\n([2599a0d](https://github.com/andymai/brepkit/commit/2599a0d4e68fa86d2792f208d14a32659d16a171))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.126.21 with a geometry fix that stops cap\ncircles from appearing inside holes and gates salvage earlier to avoid\nbad patches. This improves stability of boolean/repair operations and\nupdates version metadata.\n\n- **Bug Fixes**\n- Algorithm: block cap circles in hole regions; gate salvage early to\nprevent invalid surfaces.\n\n<sup>Written for commit 9f0493c3a3fca43cacbc0875f9951db82d82efd7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1122?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-19T14:48:15Z",
+          "tree_id": "751dcddee0bec049f81a74061ba1ea172fe80087",
+          "url": "https://github.com/andymai/brepkit/commit/b4b2b6daa55569ea8a38fc36e25dcee432c69157"
+        },
+        "date": 1784472617228,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 704943,
+            "range": "± 1312",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 784015,
+            "range": "± 1135",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10177,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 508595,
+            "range": "± 6078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21987131,
+            "range": "± 98448",
             "unit": "ns/iter"
           }
         ]
