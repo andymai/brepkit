@@ -4466,6 +4466,23 @@ fn count_cylinder_faces(topo: &Topology, solid: SolidId) -> usize {
         .count()
 }
 
+/// Count edges not used exactly twice across all face wires of `solid` — zero
+/// for a watertight manifold, and each free (once-used) edge is a rim the
+/// splitter failed to cap.
+fn count_non_manifold_edges(topo: &Topology, solid: SolidId) -> usize {
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
+    let mut edge_use: std::collections::HashMap<EdgeId, usize> = std::collections::HashMap::new();
+    for &fid in &faces {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *edge_use.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    edge_use.values().filter(|&&u| u != 2).count()
+}
+
 #[test]
 fn rounded_rect_arc_prism_volume_baseline() {
     let mut topo = Topology::new();
@@ -5644,13 +5661,12 @@ fn cut_cylinder_by_box_slot_perpendicular_walls_is_watertight() {
 /// The capping plane (the plain top slab's bottom face, coincident with the
 /// drilled slab's top face) receives one closed circle FF section per hole from
 /// the drilled cylinder walls. With two or more such circles they route through
-/// the planar arrangement decomposition, which dropped every zero-UV-chord
-/// (closed circle) input — so the drilled cylinder rims were left as free edges
-/// and the fuse mesh-fell-back to hundreds of planar faces. `split_face_2d` now
-/// peels the genuine interior cap circles off and carves each into the sub-face
-/// that contains it (disc cap + holed remainder). A single-hole interface never
-/// exercised the bug (it hit the impl's single-closed fast path), so use TWO
-/// holes here.
+/// the planar arrangement decomposition, which drops every zero-UV-chord
+/// (closed circle) input — without the cap-circle salvage in `split_face_2d`,
+/// the drilled cylinder rims are left as free edges and the fuse falls back to
+/// a mesh of planar faces. A single hole routes through the impl's
+/// single-closed fast path and never exercises the salvage, so this test
+/// drills TWO.
 #[test]
 fn fuse_capping_slab_preserves_drilled_hole_caps() {
     use brepkit_math::mat::Mat4;
@@ -5672,19 +5688,9 @@ fn fuse_capping_slab_preserves_drilled_hole_caps() {
 
     let fused = boolean(&mut topo, BooleanOp::Fuse, bottom, top).unwrap();
 
-    // Watertight: every edge of every wire is used exactly twice. Without the
-    // cap-circle salvage the two hole rims at z = 5 are free (used once).
-    let faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
-    let mut edge_use: std::collections::HashMap<EdgeId, usize> = std::collections::HashMap::new();
-    for &fid in &faces {
-        let face = topo.face(fid).unwrap();
-        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            for oe in topo.wire(wid).unwrap().edges() {
-                *edge_use.entry(oe.edge()).or_default() += 1;
-            }
-        }
-    }
-    let bad_edges = edge_use.values().filter(|&&u| u != 2).count();
+    // Watertight: without the cap-circle salvage the two hole rims at z = 5
+    // are free (used once).
+    let bad_edges = count_non_manifold_edges(&topo, fused);
     assert_eq!(
         bad_edges, 0,
         "fused result must be a watertight manifold (every edge used twice), got {bad_edges} bad edges"
@@ -5692,23 +5698,21 @@ fn fuse_capping_slab_preserves_drilled_hole_caps() {
 
     // Analytic, not a mesh fallback: a compact face count, and BOTH drilled
     // cylinder walls survive as analytic cylinders.
+    let faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
     assert!(
         faces.len() < 30,
         "expected a compact analytic fuse, got {} faces (mesh fallback?)",
         faces.len()
     );
-    let cyl_faces = faces
-        .iter()
-        .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
-        .count();
     assert_eq!(
-        cyl_faces, 2,
+        count_cylinder_faces(&topo, fused),
+        2,
         "both drilled-hole cylinder walls must survive the fuse"
     );
 
     // The caps exist and are correctly oriented: over each hole, material caps
     // the top (Inside above z = 5) while the through-hole stays open below it
-    // (Outside below z = 5). Verified with the robust ray-cast classifier.
+    // (Outside below z = 5).
     for &(cx, cy) in &holes {
         let above = Point3::new(cx, cy, 7.0);
         let below = Point3::new(cx, cy, 2.5);
@@ -5725,6 +5729,164 @@ fn fuse_capping_slab_preserves_drilled_hole_caps() {
                 crate::classify::PointClassification::Outside
             ),
             "the through-hole must stay open below z=5 at ({cx}, {cy})"
+        );
+    }
+}
+
+/// Cap circles mixed with open sections: the receiving plane is also crossed
+/// by a wall of the opposing solid, so the base split yields multiple
+/// sub-faces and the caps must be carved into the one that contains them.
+///
+/// The top block is embedded 2 deep into a wider bottom slab, so the slab's
+/// top face receives one open Line section (the block's x = 20 wall) plus two
+/// closed circle sections (the block's drilled holes crossing z = 5). This is
+/// the mixed route through `split_face_2d`'s salvage that the coincident-slab
+/// test above (empty base split) never reaches.
+#[test]
+fn fuse_embedded_drilled_block_carves_caps_across_split_sub_faces() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+
+    // Wide plain slab z in [0, 5].
+    let slab = crate::primitives::make_box(&mut topo, 30.0, 20.0, 5.0).unwrap();
+
+    // Narrower block z in [3, 8] with two through-holes (r = 1.5), overlapping
+    // the slab by 2 in z.
+    let holes = [(6.0, 10.0), (14.0, 10.0)];
+    let mut block = crate::primitives::make_box(&mut topo, 20.0, 20.0, 5.0).unwrap();
+    crate::transform::transform_solid(&mut topo, block, &Mat4::translation(0.0, 0.0, 3.0)).unwrap();
+    for &(cx, cy) in &holes {
+        let drill = crate::primitives::make_cylinder(&mut topo, 1.5, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, drill, &Mat4::translation(cx, cy, 0.0))
+            .unwrap();
+        block = boolean(&mut topo, BooleanOp::Cut, block, drill).unwrap();
+    }
+
+    let fused = boolean(&mut topo, BooleanOp::Fuse, slab, block).unwrap();
+
+    let bad_edges = count_non_manifold_edges(&topo, fused);
+    assert_eq!(
+        bad_edges, 0,
+        "fused result must be a watertight manifold (every edge used twice), got {bad_edges} bad edges"
+    );
+    assert_eq!(
+        count_cylinder_faces(&topo, fused),
+        2,
+        "both drilled-hole cylinder walls must survive the fuse"
+    );
+
+    // Slab material floors each hole (the carved cap discs at z = 5); the
+    // holes stay open above the slab.
+    for &(cx, cy) in &holes {
+        let below = Point3::new(cx, cy, 4.0);
+        let inside_hole = Point3::new(cx, cy, 6.5);
+        assert!(
+            matches!(
+                crate::classify::classify_point(&topo, fused, below, 0.01, 1e-7).unwrap(),
+                crate::classify::PointClassification::Inside
+            ),
+            "slab material must floor the hole below z=5 at ({cx}, {cy})"
+        );
+        assert!(
+            matches!(
+                crate::classify::classify_point(&topo, fused, inside_hole, 0.01, 1e-7).unwrap(),
+                crate::classify::PointClassification::Outside
+            ),
+            "the hole must stay open above z=5 at ({cx}, {cy})"
+        );
+    }
+    // The slab's exposed shelf beyond the block is solid.
+    assert!(matches!(
+        crate::classify::classify_point(&topo, fused, Point3::new(25.0, 10.0, 2.5), 0.01, 1e-7)
+            .unwrap(),
+        crate::classify::PointClassification::Inside
+    ));
+}
+
+/// Closed circles landing inside an existing hole of the receiving plane are
+/// air, not caps: the drilled rims emerge inside the top slab's counterbore
+/// opening, where the top slab has no material to carve.
+/// `distribute_cap_circles` must drop them rather than emit free-floating
+/// discs across the opening (the drop itself is pinned down by
+/// `distribute_cap_circles_drops_caps_inside_holes` in `brepkit-algo`).
+///
+/// The GFA path currently fails post-assembly validation on this interface
+/// and the fuse falls back to the mesh boolean, so this test asserts the
+/// solid-level contract that survives the fallback: watertight, correct
+/// volume, correct in/out classification.
+// TODO: assert analytic cylinder faces once the counterbore interface
+// passes GFA validation.
+#[test]
+fn fuse_counterbore_drops_drill_rims_inside_opening() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+
+    // Bottom slab z in [0, 5] with two small through-holes (r = 1.5).
+    let holes = [(6.0, 10.0), (14.0, 10.0)];
+    let mut bottom = crate::primitives::make_box(&mut topo, 20.0, 20.0, 5.0).unwrap();
+    for &(cx, cy) in &holes {
+        let drill = crate::primitives::make_cylinder(&mut topo, 1.5, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, drill, &Mat4::translation(cx, cy, -5.0))
+            .unwrap();
+        bottom = boolean(&mut topo, BooleanOp::Cut, bottom, drill).unwrap();
+    }
+
+    // Top slab z in [5, 10] with one wide through-hole (r = 6) covering both
+    // small drill rims.
+    let mut top = crate::primitives::make_box(&mut topo, 20.0, 20.0, 5.0).unwrap();
+    crate::transform::transform_solid(&mut topo, top, &Mat4::translation(0.0, 0.0, 5.0)).unwrap();
+    let bore = crate::primitives::make_cylinder(&mut topo, 6.0, 20.0).unwrap();
+    crate::transform::transform_solid(&mut topo, bore, &Mat4::translation(10.0, 10.0, 0.0))
+        .unwrap();
+    top = boolean(&mut topo, BooleanOp::Cut, top, bore).unwrap();
+
+    let fused = boolean(&mut topo, BooleanOp::Fuse, bottom, top).unwrap();
+
+    let bad_edges = count_non_manifold_edges(&topo, fused);
+    assert_eq!(
+        bad_edges, 0,
+        "fused result must be a watertight manifold (every edge used twice), got {bad_edges} bad edges"
+    );
+    // Box minus counterbore minus the two small drills (2% slack covers the
+    // mesh fallback's faceted cylinders).
+    let expected = 20.0 * 20.0 * 10.0
+        - std::f64::consts::PI * 6.0 * 6.0 * 5.0
+        - 2.0 * std::f64::consts::PI * 1.5 * 1.5 * 5.0;
+    assert_volume_near(&topo, fused, expected, 0.02);
+
+    // Slab material is solid, the counterbore is open above its floor, and
+    // the small holes are open below it. The material probe sits in the slab
+    // corner: the fallback mesh misclassifies points directly under the bore
+    // as Outside even though the volume above proves the material exists
+    // (same pre-existing artifact as the failed GFA validation).
+    let slab =
+        crate::classify::classify_point(&topo, fused, Point3::new(2.0, 2.0, 2.5), 0.01, 1e-7)
+            .unwrap();
+    assert!(
+        matches!(slab, crate::classify::PointClassification::Inside),
+        "slab material must be Inside, got {slab:?}"
+    );
+    let bore =
+        crate::classify::classify_point(&topo, fused, Point3::new(10.0, 7.3, 7.0), 0.01, 1e-7)
+            .unwrap();
+    assert!(
+        matches!(bore, crate::classify::PointClassification::Outside),
+        "the counterbore must stay open above the floor, got {bore:?}"
+    );
+    for &(cx, cy) in &holes {
+        let hole = crate::classify::classify_point(
+            &topo,
+            fused,
+            Point3::new(cx + 0.4, cy + 0.3, 2.5),
+            0.01,
+            1e-7,
+        )
+        .unwrap();
+        assert!(
+            matches!(hole, crate::classify::PointClassification::Outside),
+            "the small through-hole must stay open below z=5 near ({cx}, {cy}), got {hole:?}"
         );
     }
 }
