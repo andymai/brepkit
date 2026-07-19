@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.21](https://github.com/andymai/brepkit/compare/v2.126.20...v2.126.21) (2026-07-19)
+
+
+### Bug Fixes
+
+* **algo:** drop cap circles emerging inside holes; gate salvage early ([#1121](https://github.com/andymai/brepkit/issues/1121)) ([2599a0d](https://github.com/andymai/brepkit/commit/2599a0d4e68fa86d2792f208d14a32659d16a171))
+
 ## [2.126.20](https://github.com/andymai/brepkit/compare/v2.126.19...v2.126.20) (2026-07-19)
 
 
