@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.20](https://github.com/andymai/brepkit/compare/v2.126.19...v2.126.20) (2026-07-19)
+
+
+### Bug Fixes
+
+* **algo:** salvage closed-circle cap sections in the planar face splitter ([#1119](https://github.com/andymai/brepkit/issues/1119)) ([79a82f0](https://github.com/andymai/brepkit/commit/79a82f05041fa0d5f306cf9875badebd5e6ee791))
+
 ## [2.126.19](https://github.com/andymai/brepkit/compare/v2.126.18...v2.126.19) (2026-07-18)
 
 
