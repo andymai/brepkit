@@ -621,11 +621,13 @@ pub fn boolean(
                 // distinguishes a "cut into N pieces" from a hollow solid
                 // (outer surface + cavity surface — same number of
                 // components, same Euler relation, but AABBs overlap).
-                // N closed manifolds satisfy the Euler-Poincare relation
-                // `V - E + F - inner_wires = 2 * (N - genus)`. The hole term is
-                // NOT optional: a piece carrying a blind pocket (a face with an
-                // inner wire) shifts raw Euler away from 2*N, so comparing raw
-                // Euler here would reject every pocketed piece. This mirrors the
+                // N closed manifolds satisfy `V - E + F - inner_wires =
+                // 2 * (N - genus)`, which this gate pins at the genus-0 case
+                // `... = 2 * N` (as it always has — a handled piece is left to
+                // the mesh fallback). The hole term, however, is NOT optional:
+                // a piece carrying a blind pocket (a face with an inner wire)
+                // shifts raw Euler away from 2*N even at genus 0, so comparing
+                // raw Euler here rejected every pocketed piece. This mirrors the
                 // `euler_balanced(euler_eff, inner_wire_count)` correction the
                 // single-component gate above applies.
                 let components_vec = crate::boolean::assembly::face_components(topo, result);
