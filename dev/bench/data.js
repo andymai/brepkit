@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784422939244,
+  "lastUpdate": 1784472200278,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6911,6 +6911,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28317243,
             "range": "± 92077",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2599a0d4e68fa86d2792f208d14a32659d16a171",
+          "message": "fix(algo): drop cap circles emerging inside holes; gate salvage early (#1121)\n\nFollow-up review pass on the cap-circle salvage (#1119).\n\n## Fixes\n\n- **In-hole cap guard**: a closed-circle rim whose centre lands inside\nan inner wire of the receiving plane is air (a drill emerging inside an\nexisting opening, e.g. a counterbore). The salvage peeled it off before\nthe impl's air filter could drop it, then carved it as a free-floating\ndisc — strictly worse than baseline. `distribute_cap_circles` now skips\ncaps whose centre lies in a sub-face hole, matching the impl's baseline\ndrop.\n- **Early gate**: return to the impl before any frame/polygon\nconstruction when no section is a closed circle — the common path for\nevery boolean face split.\n- **Frame-based containment sampling**: the distribution polygon now\nuses `sample_wire_loop_uv_via_frame`; the stored-pcurve sampler can fold\nloops carrying reversed arc sections into self-crossing polygons.\n- **Doc corrections**: only the single-closed fast path carves circles\n(the all-Line loop path never can); the interiority margin is about the\n*centre* clearing the outline, not the rim; removed the \"lands in\nexactly one sub-face\" over-claim and before/after narration.\n\n## Tests\n\n- `distribute_cap_circles_drops_caps_inside_holes` (algo unit test) —\nfails without the guard.\n- `fuse_embedded_drilled_block_carves_caps_across_split_sub_faces` —\ncaps mixed with open sections; exercises multi-sub-face distribution,\nwhich the original regression test never reached.\n- `fuse_counterbore_drops_drill_rims_inside_opening` — asserts the\nsolid-level contract (watertight, volume, classification). Documents two\npre-existing issues, out of scope here: this interface fails GFA\npost-assembly validation and mesh-falls-back, and the fallback mesh\nmisclassifies points directly under the bore as Outside.\n\nFull `brepkit-algo` + `brepkit-operations` suites green; clippy\n`--all-targets` warning-free.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix cap-circle salvage on plane faces: drop caps whose centers fall\ninside holes and early-exit when no closed circles are present. This\nprevents free-floating discs, keeps results watertight, and maintains\nanalytic outputs.\n\n- **Bug Fixes**\n- Drop in-hole caps in `distribute_cap_circles` (centers inside sub-face\nholes are air).\n- Early gate to the impl when no section is a closed circle to avoid\nextra work.\n- Use frame-based containment sampling via\n`sample_wire_loop_uv_via_frame` to handle reversed arcs reliably.\n- Clarified salvage docs (which paths carve circles and the correct\ninteriority margin).\n\n- **Tests**\n- `distribute_cap_circles_drops_caps_inside_holes` — unit test for the\nin-hole cap guard.\n- `fuse_embedded_drilled_block_carves_caps_across_split_sub_faces` —\nmixed open/closed sections; verifies caps are carved into the correct\nsub-faces and watertightness.\n- `fuse_counterbore_drops_drill_rims_inside_opening` — ensures in-hole\nrims are dropped; asserts watertightness, volume, and classification.\n\n<sup>Written for commit 02ac398d2557ff6d74314eb87187b17b419b36ba.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1121?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-19T07:40:52-07:00",
+          "tree_id": "95f96bb705edbe32ce2d8abe832aded7078f0dd1",
+          "url": "https://github.com/andymai/brepkit/commit/2599a0d4e68fa86d2792f208d14a32659d16a171"
+        },
+        "date": 1784472199487,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 878862,
+            "range": "± 36811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 966943,
+            "range": "± 29441",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12074,
+            "range": "± 139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 649840,
+            "range": "± 486",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26807131,
+            "range": "± 39133",
             "unit": "ns/iter"
           }
         ]
