@@ -1854,8 +1854,11 @@ fn algebraic_cylinder_cylinder(
 /// counterbore/countersink meeting a pad — the gridfinity lightweight base).
 ///
 /// Returns `None` (defer to the caller's other paths) when the axes are not
-/// parallel or when they are coaxial, since a coaxial pair degenerates to a
-/// shared circle that `exact_cone_cylinder` already emits exactly.
+/// parallel, or when they are coaxial — a coaxial pair degenerates to shared
+/// circles, which [`exact_cone_cylinder`] emits exactly and phase FF calls
+/// directly. Note that `intersect_analytic_analytic_bounded` does NOT consult
+/// `exact_cone_cylinder`, so a coaxial pair reaching this path through that
+/// caller falls through to the marcher; only the FF path gets the exact circles.
 // Result-wrapped to match the other `try_algebraic_intersection` arms' shape.
 #[allow(clippy::unnecessary_wraps)]
 fn algebraic_parallel_cone_cylinder(
@@ -1934,6 +1937,18 @@ fn algebraic_parallel_cone_cylinder(
         let v = v_min + (v_max - v_min) * (i as f64) / (n_samples as f64);
         let rho = v * cos_t;
         if rho < 1e-12 {
+            // The apex. `cos_alpha` has rho in its denominator, so it is only
+            // meaningful in the limit: it tends to 0 (alpha -> pi/2) when the
+            // cylinder passes exactly through the apex (d == R), and diverges
+            // otherwise — where the clamp would manufacture a spurious alpha of
+            // 0 or pi. So keep the apex only in the d == R case, where it is a
+            // genuine point of the intersection and the shared endpoint at
+            // which the two branches meet.
+            if (d - r).abs() < 1e-12 {
+                let apex = cone.evaluate(phi0, v);
+                plus.push(apex);
+                minus.push(apex);
+            }
             continue;
         }
         let cos_alpha = ((d * d + rho * rho - r * r) / (2.0 * d * rho)).clamp(-1.0, 1.0);
@@ -1944,6 +1959,8 @@ fn algebraic_parallel_cone_cylinder(
 
     let mut curves = Vec::new();
     for pts in [&plus, &minus] {
+        // Fewer than four samples in range means this branch does not cross the
+        // bounded region at all (the other branch may still).
         if pts.len() < 4 {
             continue;
         }
@@ -1956,11 +1973,16 @@ fn algebraic_parallel_cone_cylinder(
             })
             .collect();
         let degree = 3.min(pts.len() - 1);
-        if let Ok(curve) = interpolate(pts, degree) {
-            curves.push(IntersectionCurve {
+        match interpolate(pts, degree) {
+            Ok(curve) => curves.push(IntersectionCurve {
                 curve,
                 points: ipts,
-            });
+            }),
+            // Emitting only the branch that happened to fit would starve the
+            // section chain of exactly the piece this path exists to supply —
+            // the same silent half-answer the marcher's fragments produced.
+            // Defer the whole pair to the caller's other paths instead.
+            Err(_) => return Ok(None),
         }
     }
 
