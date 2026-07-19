@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.126.22](https://github.com/andymai/brepkit/compare/v2.126.21...v2.126.22) (2026-07-19)
+
+
+### Bug Fixes
+
+* **algo:** anchor closed-rim splits at the edge's own start angle ([#1123](https://github.com/andymai/brepkit/issues/1123)) ([6dc0388](https://github.com/andymai/brepkit/commit/6dc03885deb64240bb0ae2ead1c2146aa8c5228b))
+
 ## [2.126.21](https://github.com/andymai/brepkit/compare/v2.126.20...v2.126.21) (2026-07-19)
 
 
