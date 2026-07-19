@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784394627589,
+  "lastUpdate": 1784422519542,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6803,6 +6803,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28138337,
             "range": "± 62534",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "79a82f05041fa0d5f306cf9875badebd5e6ee791",
+          "message": "fix(algo): salvage closed-circle cap sections in the planar face splitter (#1119)\n\n## Summary\nFixes the gridfinity **screw-base export family** (task #12): 9 of 13\nscenarios go from non-watertight to clean, and the 4×4 stress case drops\nfrom **1792 → 3** boundary edges. Root-caused end-to-end with a faithful\nnative repro captured from the real tool pipeline.\n\n## Root cause\nThe screw/magnet holes are cylinder cuts into the base socket —\nwatertight in isolation. The failure is the final **socket → bin-body\n`Fuse`**: the socket's top face (Plane z=5) carries the drilled-hole\nrims as **closed-circle** sections, coincident with the body's bottom\nplane. `arrangement_regions_from_inputs` retains only inputs with a\nnon-zero UV chord, and a **closed circle has start == end** (zero-length\nchord) → every hole cap is dropped. The impl's single-closed / all-Line\nfast path only fires for a *lone* circle, so two-or-more circles (or\ncircles mixed with the socket's corner-cone arcs) lose their caps → the\ndrilled cylinder rims are left as free edges → GFA opens (raw `bd=4`) →\noperations mesh-falls-back to hundreds of all-planar faces (the 112–1792\nexport boundary edges).\n\nThis was mis-diagnosed twice before landing here (first as a #696\ntessellation crack, then as a same-domain inner-wire drop); both were\nrefuted with literal data. The verified root is the closed-circle drop\nin the planar arrangement splitter.\n\n## Fix\n`split_face_2d` now wraps `split_face_2d_impl`: on a **plane** face it\npeels off **genuine** cap circles (closed `Circle` sections *strictly\ninterior* to the outline — centre inside by more than the radius, which\nrejects the tangent corner-cylinder remnants the pave machinery leaves\nat faceted junctions), splits the face by the remaining open sections\nthrough the unchanged impl, then carves each cap into its containing\nsub-face via the existing `split_face_with_internal_loops` (disc cap +\nholed remainder). A lone cap circle still routes through the impl's fast\npath untouched, and faces with no interior cap circle are byte-identical\nto before. General to the coincident-planar-interface-with-drilled-holes\nclass, not screw-specific.\n\n## Verification\n- Faithful native repro: raw `gfa::boolean(Fuse)` **bd 4 → 0**;\noperations result **672 all-plane mesh-fallback → 71 analytic faces,\nwatertight**.\n- Tool re-probe (overlay): **screw family 9/13 pass** (was 0/13); 4×4\nstress 1792→3; **no regression** (solid-cutouts unchanged 5 fail/23\npass).\n- Foils: `algo` 166/0, `operations` 767/0 (incl. new\n`fuse_capping_slab_preserves_drilled_hole_caps`, verified\nfails-without/passes-with), `wasm gridfinity` **27/0**, `io` green,\nclippy `-D warnings` clean.\n\n## Follow-ups (not in scope)\n4 residual screw scenarios: 4×4 stress (3 bd — a few near-grid-boundary\nholes the conservative interiority guard skips), 2 lightweight variants\n(448 — different base structure), and the scoop+label+lip permutation\n(132 — separate feature roots).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes planar face splitting to preserve closed-circle hole caps in\ncoincident-plane booleans, preventing free edges and mesh fallbacks.\nGridfinity screw-base exports: 9/13 now pass; 4×4 stress drops boundary\nedges from 1792 to 3.\n\n- **Bug Fixes**\n- Salvage interior closed `Circle` sections on plane faces: peel caps,\nsplit by open sections, then carve via `split_face_with_internal_loops`.\n- Prevent zero-UV-chord circles from being dropped by salvaging them\nbefore `arrangement_regions_from_inputs`.\n- Keep the single-circle fast path; non-planar and cap-free faces\nunchanged.\n- Add regression `fuse_capping_slab_preserves_drilled_hole_caps` to\nassert watertight fuse and cylinder preservation.\n\n- **Refactors**\n- Build containment polygon from traversal-ordered wire points for\ncorrect interiority on reversed edges; keep `PlaneFrame` convention\nunchanged.\n- Add `CAP_INTERIORITY_MARGIN` (5%) and single-pass section partitioning\nwith stored cap centers for robustness.\n\n<sup>Written for commit bfe7c188aeae5d1eca7ba9c28762b700a5bea9af.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1119?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-18T17:52:36-07:00",
+          "tree_id": "9b85131e35ea81fc754456e455b5385fd6086a6b",
+          "url": "https://github.com/andymai/brepkit/commit/79a82f05041fa0d5f306cf9875badebd5e6ee791"
+        },
+        "date": 1784422518860,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 890620,
+            "range": "± 2340",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 980000,
+            "range": "± 33082",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12223,
+            "range": "± 355",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 657555,
+            "range": "± 1803",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27161818,
+            "range": "± 109923",
             "unit": "ns/iter"
           }
         ]
