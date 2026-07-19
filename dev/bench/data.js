@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784484013383,
+  "lastUpdate": 1784495839197,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7235,6 +7235,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26372450,
             "range": "± 54323",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3f8d1c2d7fee700181a678010e5de68c9cb067c1",
+          "message": "fix(operations): apply the hole correction in the multi-region boolean gate (#1127)\n\n## The defect\n\nN closed manifolds satisfy the Euler-Poincaré relation\n\n```\nV - E + F - inner_wires = 2 * (N - genus)\n```\n\nThe multi-region acceptance path in `boolean/mod.rs` compared **raw**\nEuler against `2 * components`, omitting the `inner_wires` term that the\nsingle-component gate immediately above it already applies via\n`euler_balanced(euler_eff, inner_wire_count)`.\n\nA face carrying a hole shifts raw Euler away from `2 * N` **even at\ngenus 0**, so the multi-region path only ever accepted **hole-free**\npieces. Any multi-component result whose pieces have pockets or bores\nwas rejected and silently replaced by a mesh boolean.\n\n## Why it went unnoticed\n\nThe fallback masks itself. It is watertight, passes\n`validate_boolean_result`, and has the correct volume — every downstream\ncheck agrees with it. Only the face census distinguishes the two,\nexactly as the `boolean-debugging` skill warns.\n\nSevering a pocketed bar in two — an ordinary CAD operation — is enough\nto trigger it:\n\n| | faces | census | volume |\n|---|---|---|---|\n| before | 114 | `{plane: 114}` | 302.80 |\n| after | 16 | `{cylinder: 2, plane: 14}` | 302.80 |\n\nAnalytic value is 302.80 (`20×6×3` − two `π·1.5²·1.5` pockets − a\n`2×6×3` slab), so both results are *geometrically* right; the old path\njust threw away the analytic one. The arithmetic at the gate:\n\n```\neuler=6  inner_wires=2  components=2\n  euler - inner_wires = 4  vs  2*components = 4   <- correct relation, holds\n  raw euler           = 6  vs  2*components = 4   <- what was compared, fails\n```\n\nIt needed three properties at once to surface — multi-component **and**\ngenus-0 **and** faces-with-holes — which is why it survived: a severed\n*un*-pocketed cylinder has no holes and passes fine.\n\n## The fix\n\nCompare `euler - inner_wire_count` against `2 * components`.\n\nThe disjointness, closed-manifold, cut-safety, and validation guards are\nuntouched, so the gate is no more permissive about malformed output — it\njust stops rejecting a shape class it was never meant to exclude. Worth\nnoting the hollow case cannot slip through the relaxed check: a cavity\ncomponent's AABB lies strictly inside its containing piece's, so\n`components_are_disjoint_pieces` rejects it on AABB overlap.\n\n## Verification\n\n- New regression `severing_cut_keeps_pocketed_pieces_analytic` **fails\nwithout the change** (114 planar faces, 0 cylinders) and passes with it.\nAsserts compact face count, both pocket walls analytic, 0 non-manifold\nedges, and volume against the exact analytic value.\n- Full workspace suite green (77 test binaries).\n- Gridfinity canary 27/0.\n- `brepkit-render --test compute_mesh_render` SIGSEGVs, but it does so\nidentically on clean `main` — pre-existing GPU/driver issue, unrelated.\n\n## Note on scope: extending to Fuse was tested and rejected\n\nThe multi-region path is still gated `op == BooleanOp::Cut`. I built\nwhat looked like a justification for widening it — fusing a lug onto one\npiece of an already-severed pocketed bar, which mesh-falls-back with 120\nplanar faces — then instrumented the gate before changing it. The\nwidening gains nothing:\n\n```\nop=Fuse comps=2 euler=6 iw=3 corrected=3 expected=4 closed_manifold=FALSE\n```\n\nA corrected Euler of **3 is odd**, which no set of closed manifolds can\nproduce, and `closed_manifold` is genuinely false. That GFA output (19\nfaces) is really broken, so the fallback is the *correct* behaviour\nthere; the actual defect is the pavefiller's single-connected-input\nassumption — the same root `cut_multi_region_input` works around for\nCut. So the Fuse extension is deliberately not included: it would have\nwidened a gate on a false premise.\n\nFound while digging the lightweight-base blocker. It does **not** close\nthat case — that one is a Fuse and is separately blocked by\n`closed_manifold=false` — but it is a real independent defect with a\nminimal repro, so it ships on its own.",
+          "timestamp": "2026-07-19T14:14:53-07:00",
+          "tree_id": "8ef2548dd539163f9cd67226eb79ff34780b48c5",
+          "url": "https://github.com/andymai/brepkit/commit/3f8d1c2d7fee700181a678010e5de68c9cb067c1"
+        },
+        "date": 1784495837987,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 880035,
+            "range": "± 853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 968911,
+            "range": "± 2620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12036,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 645637,
+            "range": "± 2555",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26462537,
+            "range": "± 44724",
             "unit": "ns/iter"
           }
         ]
