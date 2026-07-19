@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784472617895,
+  "lastUpdate": 1784475525747,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7019,6 +7019,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21987131,
             "range": "± 98448",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6dc03885deb64240bb0ae2ead1c2146aa8c5228b",
+          "message": "fix(algo): anchor closed-rim splits at the edge's own start angle (#1123)\n\n## Summary\nFixes a **double-cover bug in closed-rim edge splitting**: a closed\ncircle's pieces came back sweeping **4π instead of 2π**. Found while\ndigging the gridfinity lightweight family; the fix is general, not\nlightweight-specific.\n\n## Root cause\nA CLOSED circle has no span between its endpoints, so\n`domain_with_endpoints` returns the circle's **intrinsic** domain `(0,\n2π)` — anchored at the circle's angular origin, not at the edge's start\npoint. `find_splits_on_circle`'s consumer chains pieces from `start_3d`\nin ascending `t`, so whenever those anchors differ (a cylinder seam away\nfrom the origin) **the edge's own start point reads as an interior\nsplit**. Instrumented output for a pad rim seamed at u=4.71239:\n\n```\nt0=0.00000 span=6.28319\n  t=0.250000 u=1.57080 ... t=0.750000 u=4.71239  <-- the edge's OWN start\n```\n\nThe 2π ring came back as **7 arcs sweeping 4π**, with the wedge between\norigin and seam covered twice — once inside the leading arc, again as a\ntrailing forward/reverse pair.\n\n## Fix (all gated to closed circles on a cylinder/cone)\n1. Anchor `t` at the edge's **start angle**, signed by traversal\ndirection, so `t` is monotone along the walk.\n2. Interpolate interior split UVs within the edge's own span (`start_u →\nstart_u ± 2π`) instead of a raw principal-value projection that drops\njoints back into `[0, 2π)` and loses phase coherence with neighbouring\nboundary edges.\n3. Derive the tail piece's `end_uv` from that span — `sample_edge_to_uv`\nignores orientation, so a reverse-traversed ring otherwise closes its\nperiod on the wrong side of its own start.\n\n## Verification\n- Regression: two unit tests pin the invariant directly — a closed rim's\npieces must sweep **exactly 2π**, forward and reversed. Verified failing\nwithout the fix (`got 12.566…` = 4π).\n- Lightweight repro: raw-GFA free edges **15 → 8**, and a pad-wall\nsub-face is recovered (cylinder 48 → 49), analytic preserved.\n- Foils: `algo` **169/0**, `operations` **769/0**, `wasm gridfinity`\n**27/0** (d4 canary), `io` clean, clippy `-D warnings` clean.\n\n## Scope — what this does NOT do\nIt does **not** close the lightweight export family. A separate,\nindependently-verified root remains: a **missing FF section** — a\nfloor-plane arc at z=−3.8 over `u ∈ (3.7518, 4.10219)` that should exist\n(confirmed by material flips in point classification) but is never\ngenerated, so the fuse still falls back. That is tracked as the terminal\nroot for that family; this PR lands the closed-rim invariant fix on its\nown merits.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes double-coverage when splitting closed circular rims on\ncylinders/cones. Pieces now tile the ring once (2π) from the edge’s own\nstart angle, matching traversal.\n\n- Anchor split parameter to the edge start angle (signed by traversal).\n- Interpolate interior split UVs within `start_u → start_u ± 2π`; set\nthe tail piece `end_uv` from that span so reversed rims close on the\ncorrect side.\n- Gate both anchoring and UV-span logic to closed circle edges on\n`Cylinder`/`Cone` surfaces.\n- Tests assert an exact 2π sweep (forward and reversed) and now check\nforward UV continuity (shared joints, monotone u).\n- In the gridfinity lightweight model, reduces raw-GFA free edges and\nrestores a pad-wall sub-face.\n\n<sup>Written for commit 56585280c797fe3f8b212a1078be90e77515e3fa.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1123?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-19T08:36:24-07:00",
+          "tree_id": "e83e12bdd0403675c6d4c017200c25c0a2f53de8",
+          "url": "https://github.com/andymai/brepkit/commit/6dc03885deb64240bb0ae2ead1c2146aa8c5228b"
+        },
+        "date": 1784475525283,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 882803,
+            "range": "± 14827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 971718,
+            "range": "± 2023",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11949,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650727,
+            "range": "± 12166",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26767977,
+            "range": "± 43977",
             "unit": "ns/iter"
           }
         ]
