@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784483575448,
+  "lastUpdate": 1784484013383,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7181,6 +7181,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26499434,
             "range": "± 57638",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bf6129c01f1c0d6de9567485192803f1954ae774",
+          "message": "chore(main): release 2.127.0 (#1126)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.0](https://github.com/andymai/brepkit/compare/v2.126.22...v2.127.0)\n(2026-07-19)\n\n\n### Features\n\n* **math:** solve parallel-axis cone × cylinder in closed form\n([#1125](https://github.com/andymai/brepkit/issues/1125))\n([8dd92c4](https://github.com/andymai/brepkit/commit/8dd92c47453437f700bebd8bad7e852550719d9f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.0 for `brepkit-wasm`. Adds a closed-form solver for the\nparallel-axis cone × cylinder case in the math module.\n\n<sup>Written for commit 3d30c7d8fe093d15c71eadd1cbdbd375383ab122.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1126?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-19T17:57:46Z",
+          "tree_id": "4bdfbc41bf75ff778ac9f662d2d6d9488aa78252",
+          "url": "https://github.com/andymai/brepkit/commit/bf6129c01f1c0d6de9567485192803f1954ae774"
+        },
+        "date": 1784484012272,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 875274,
+            "range": "± 1937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 964628,
+            "range": "± 2245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12166,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 645852,
+            "range": "± 3204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26372450,
+            "range": "± 54323",
             "unit": "ns/iter"
           }
         ]
