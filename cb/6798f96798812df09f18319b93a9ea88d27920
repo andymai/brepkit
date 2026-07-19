@@ -1,0 +1,21 @@
+crates/math/src/analytic_intersection.rs
+  s_38d3958cd84f35::t_586adc4629c150 1962-1963,1976-1977,1980-1985
+  s_38d3958cd84f35::t_0853d6424797f5 1940-1951
+  s_38d3958cd84f35::t_c77f88f67e92a7 1857-1861
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "cb6798f96798812df09f18319b93a9ea88d27920",
+  "prompts": {},
+  "sessions": {
+    "s_38d3958cd84f35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc5ac8b2-b474-4c23-b601-2b384eec3726",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
