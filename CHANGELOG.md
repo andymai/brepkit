@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.0](https://github.com/andymai/brepkit/compare/v2.126.22...v2.127.0) (2026-07-19)
+
+
+### Features
+
+* **math:** solve parallel-axis cone × cylinder in closed form ([#1125](https://github.com/andymai/brepkit/issues/1125)) ([8dd92c4](https://github.com/andymai/brepkit/commit/8dd92c47453437f700bebd8bad7e852550719d9f))
+
 ## [2.126.22](https://github.com/andymai/brepkit/compare/v2.126.21...v2.126.22) (2026-07-19)
 
 
