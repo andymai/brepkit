@@ -1,0 +1,41 @@
+crates/operations/src/boolean/tests.rs
+  s_bd6b96ddebaec6::t_bb24b78b2c4e21 5872,5879-5886,5889
+  s_bd6b96ddebaec6::t_45da58e184e8d2 5664-5669
+  s_bd6b96ddebaec6::t_bccb0718760b30 5810-5812,5814-5819
+  s_bd6b96ddebaec6::t_26823c11666bd0 5715
+  s_bd6b96ddebaec6::t_74022c67bb307a 5852-5857
+  s_bd6b96ddebaec6::t_ab7eab1964b798 5859-5864,5868-5869
+  s_bd6b96ddebaec6::t_7c438b0952cb1b 5866-5867,5870-5871,5873-5877,5888
+  s_bd6b96ddebaec6::t_326f6fa82152c9 4469-4485
+  s_bd6b96ddebaec6::t_76cb4cfc7977aa 5691-5693,5701,5708-5709
+  s_bd6b96ddebaec6::t_aa2f2fa9ff4266 5865
+  s_bd6b96ddebaec6::t_25ffa5bd0aeb9a 5735-5809,5813,5820-5851,5858,5878,5887,5890-5892
+crates/algo/src/builder/face_splitter/mod.rs
+  s_bd6b96ddebaec6::t_58680206b71ad9 3302
+  s_bd6b96ddebaec6::t_d894f83b820c7c 5914-5916
+  s_bd6b96ddebaec6::t_d79bd04374a3da 3243-3246
+  s_bd6b96ddebaec6::t_50f5b9f94c118e 39
+  s_bd6b96ddebaec6::t_ceb96293179cc4 5874-5875,5877-5880,5888-5891
+  s_bd6b96ddebaec6::t_8e61d19515cfa1 3101-3111
+  s_bd6b96ddebaec6::t_fbffe609a87d57 3318-3321,3329-3331
+  s_bd6b96ddebaec6::t_c4a17f05e8404b 3137-3138,3141,3148-3163,3167,3177-3180,3224,3227-3230
+  s_bd6b96ddebaec6::t_643a9261f23bdc 5855-5873,5876,5881-5887,5892-5899,5901-5913,5917-5965
+  s_bd6b96ddebaec6::t_b834d1cfa8839b 3279,3281-3285
+  s_bd6b96ddebaec6::t_dcb73dccdf0175 5900
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "02ac398d2557ff6d74314eb87187b17b419b36ba",
+  "prompts": {},
+  "sessions": {
+    "s_bd6b96ddebaec6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "20de2345-c171-4195-8e1c-757b6cb36732",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
