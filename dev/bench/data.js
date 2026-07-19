@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784475986492,
+  "lastUpdate": 1784483575448,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7127,6 +7127,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28224512,
             "range": "± 72740",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8dd92c47453437f700bebd8bad7e852550719d9f",
+          "message": "feat(math): solve parallel-axis cone × cylinder in closed form (#1125)\n\n## Summary\nCone × cylinder had **no algebraic arm for the parallel-axis case**, so\nit fell through to the grid-seeded marcher — which returned **49\noverlapping partial traces of what is a single curve**. This replaces\nthat with an exact closed-form solution (2 branches).\n\n## Root cause\nThe marcher's seed threshold is half the partner's diagonal, and the\nmarch-result dedup only consumes seeds the resulting polyline passes\nnear. On a near-tangent parallel-axis configuration, many seeds each\nspawn their own fragment and none subsumes the others — hence 49\nfragments for one curve.\n\n## Fix\nWith parallel axes the axis separation `d` is constant, so at cone\nradius `ρ` the intersection satisfies\n\n```\nu = φ₀ ± acos((d² + ρ² − R²) / (2·d·ρ))\n```\n\ngiving two exact branches parameterised by the cone's own `v`. Emitted\ndirectly instead of marching — exact, and cheaper than seeding +\nmarching.\n\n## Verification\n- Regression: three tests asserting exactly the two branches are\nreturned. Verified failing without the fix: `expected exactly the two\nbranches / left: 49 / right: 2`.\n- Foils: `math` **459/0**, `algo` **169/0**, `operations` **769/0**,\n`wasm gridfinity` **27/0** (d4 canary), `io` clean, clippy `-D warnings`\nclean.\n\n## Scope\nFound while digging the gridfinity **lightweight** family, where a\nmagnet pad straddles a tapered socket foot and the 49 fragments starve\nthat fuse of a usable section chain. **This alone does not change that\nresult** — later links in that chain (FF graze-refinement density,\nopen-section trimming to curved faces, boundary-split gating, and an\noperations Euler gate) are still open and are deliberately not in this\nPR. It lands as a standalone correctness/robustness fix for the whole\nparallel-axis cone×cylinder class.",
+          "timestamp": "2026-07-19T10:50:30-07:00",
+          "tree_id": "8a3939387f966783eea8008a81ba533c887c5b9d",
+          "url": "https://github.com/andymai/brepkit/commit/8dd92c47453437f700bebd8bad7e852550719d9f"
+        },
+        "date": 1784483574945,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 872310,
+            "range": "± 2857",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 964890,
+            "range": "± 2991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12081,
+            "range": "± 199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 642658,
+            "range": "± 8158",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26499434,
+            "range": "± 57638",
             "unit": "ns/iter"
           }
         ]
