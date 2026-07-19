@@ -5637,3 +5637,94 @@ fn cut_cylinder_by_box_slot_perpendicular_walls_is_watertight() {
         "the cylinder body must remain Inside the result"
     );
 }
+
+/// Regression: a coincident planar interface where one operand has drilled
+/// holes must keep the hole caps after a Fuse.
+///
+/// The capping plane (the plain top slab's bottom face, coincident with the
+/// drilled slab's top face) receives one closed circle FF section per hole from
+/// the drilled cylinder walls. With two or more such circles they route through
+/// the planar arrangement decomposition, which dropped every zero-UV-chord
+/// (closed circle) input — so the drilled cylinder rims were left as free edges
+/// and the fuse mesh-fell-back to hundreds of planar faces. `split_face_2d` now
+/// peels the genuine interior cap circles off and carves each into the sub-face
+/// that contains it (disc cap + holed remainder). A single-hole interface never
+/// exercised the bug (it hit the impl's single-closed fast path), so use TWO
+/// holes here.
+#[test]
+fn fuse_capping_slab_preserves_drilled_hole_caps() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+
+    // Bottom slab z in [0, 5] with two through-holes (r = 1.5).
+    let holes = [(6.0, 10.0), (14.0, 10.0)];
+    let mut bottom = crate::primitives::make_box(&mut topo, 20.0, 20.0, 5.0).unwrap();
+    for &(cx, cy) in &holes {
+        let drill = crate::primitives::make_cylinder(&mut topo, 1.5, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, drill, &Mat4::translation(cx, cy, -5.0))
+            .unwrap();
+        bottom = boolean(&mut topo, BooleanOp::Cut, bottom, drill).unwrap();
+    }
+    // Plain capping slab z in [5, 10] over the same footprint.
+    let top = crate::primitives::make_box(&mut topo, 20.0, 20.0, 5.0).unwrap();
+    crate::transform::transform_solid(&mut topo, top, &Mat4::translation(0.0, 0.0, 5.0)).unwrap();
+
+    let fused = boolean(&mut topo, BooleanOp::Fuse, bottom, top).unwrap();
+
+    // Watertight: every edge of every wire is used exactly twice. Without the
+    // cap-circle salvage the two hole rims at z = 5 are free (used once).
+    let faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
+    let mut edge_use: std::collections::HashMap<EdgeId, usize> = std::collections::HashMap::new();
+    for &fid in &faces {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *edge_use.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    let bad_edges = edge_use.values().filter(|&&u| u != 2).count();
+    assert_eq!(
+        bad_edges, 0,
+        "fused result must be a watertight manifold (every edge used twice), got {bad_edges} bad edges"
+    );
+
+    // Analytic, not a mesh fallback: a compact face count, and BOTH drilled
+    // cylinder walls survive as analytic cylinders.
+    assert!(
+        faces.len() < 30,
+        "expected a compact analytic fuse, got {} faces (mesh fallback?)",
+        faces.len()
+    );
+    let cyl_faces = faces
+        .iter()
+        .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .count();
+    assert_eq!(
+        cyl_faces, 2,
+        "both drilled-hole cylinder walls must survive the fuse"
+    );
+
+    // The caps exist and are correctly oriented: over each hole, material caps
+    // the top (Inside above z = 5) while the through-hole stays open below it
+    // (Outside below z = 5). Verified with the robust ray-cast classifier.
+    for &(cx, cy) in &holes {
+        let above = Point3::new(cx, cy, 7.0);
+        let below = Point3::new(cx, cy, 2.5);
+        assert!(
+            matches!(
+                crate::classify::classify_point(&topo, fused, above, 0.01, 1e-7).unwrap(),
+                crate::classify::PointClassification::Inside
+            ),
+            "material must cap the hole above z=5 at ({cx}, {cy})"
+        );
+        assert!(
+            matches!(
+                crate::classify::classify_point(&topo, fused, below, 0.01, 1e-7).unwrap(),
+                crate::classify::PointClassification::Outside
+            ),
+            "the through-hole must stay open below z=5 at ({cx}, {cy})"
+        );
+    }
+}
