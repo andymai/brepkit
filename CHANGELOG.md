@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.1](https://github.com/andymai/brepkit/compare/v2.127.0...v2.127.1) (2026-07-19)
+
+
+### Bug Fixes
+
+* **operations:** apply the hole correction in the multi-region boolean gate ([#1127](https://github.com/andymai/brepkit/issues/1127)) ([3f8d1c2](https://github.com/andymai/brepkit/commit/3f8d1c2d7fee700181a678010e5de68c9cb067c1))
+
 ## [2.127.0](https://github.com/andymai/brepkit/compare/v2.126.22...v2.127.0) (2026-07-19)
 
 
