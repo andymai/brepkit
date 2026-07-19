@@ -1199,7 +1199,7 @@ pub fn intersect_analytic_analytic_bounded(
 ) -> Result<Vec<IntersectionCurve>, MathError> {
     // Try algebraic specialization for known surface pairs before falling
     // back to the general marching approach.
-    if let Some(result) = try_algebraic_intersection(&a, &b)? {
+    if let Some(result) = try_algebraic_intersection(&a, &b, v_range_hint_a, v_range_hint_b)? {
         return Ok(result);
     }
 
@@ -1368,8 +1368,16 @@ pub fn intersect_analytic_analytic_bounded(
 fn try_algebraic_intersection(
     a: &AnalyticSurface<'_>,
     b: &AnalyticSurface<'_>,
+    v_range_a: Option<(f64, f64)>,
+    v_range_b: Option<(f64, f64)>,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
     match (a, b) {
+        (AnalyticSurface::Cone(cone), AnalyticSurface::Cylinder(cyl)) => {
+            algebraic_parallel_cone_cylinder(cone, cyl, v_range_a, v_range_b)
+        }
+        (AnalyticSurface::Cylinder(cyl), AnalyticSurface::Cone(cone)) => {
+            algebraic_parallel_cone_cylinder(cone, cyl, v_range_b, v_range_a)
+        }
         (AnalyticSurface::Sphere(s1), AnalyticSurface::Sphere(s2)) => {
             algebraic_sphere_sphere(s1, s2).map(Some)
         }
@@ -1821,6 +1829,160 @@ fn algebraic_cylinder_cylinder(
                 curve,
                 points: ipts,
             });
+        }
+    }
+
+    Ok(Some(curves))
+}
+
+/// Algebraic cone-cylinder intersection for PARALLEL (or antiparallel) axes.
+///
+/// When the axes are parallel, every plane perpendicular to them cuts the cone
+/// in a circle of radius `rho = v * cos(half_angle)` about a FIXED centre and
+/// the cylinder in a circle of radius `R` about a second FIXED centre, so the
+/// axis separation `d` is constant in `v`. Two coplanar circles meet at
+/// `u = phi0 +/- acos((d^2 + rho^2 - R^2) / (2*d*rho))`, giving two branches
+/// parameterised exactly by the cone's own `v`. The branches exist only where
+/// `rho` lies in `[|d - R|, d + R]`, which bounds the curve naturally.
+///
+/// This replaces the general grid-seeded marcher for the configuration, which
+/// mis-handles it badly: seeds are accepted anywhere within half the surface
+/// diagonal of the partner, the march-result dedup only consumes seeds the
+/// traced polyline passes near, and the survivors are dozens of overlapping
+/// partial traces of the same curve. Those fragments carry no usable in-face
+/// span, so a cone corner-round crossed by a boss cylinder never splits (a
+/// counterbore/countersink meeting a pad — the gridfinity lightweight base).
+///
+/// Returns `None` (defer to the caller's other paths) when the axes are not
+/// parallel, or when they are coaxial — a coaxial pair degenerates to shared
+/// circles, which [`exact_cone_cylinder`] emits exactly and phase FF calls
+/// directly. Note that `intersect_analytic_analytic_bounded` does NOT consult
+/// `exact_cone_cylinder`, so a coaxial pair reaching this path through that
+/// caller falls through to the marcher; only the FF path gets the exact circles.
+// Result-wrapped to match the other `try_algebraic_intersection` arms' shape.
+#[allow(clippy::unnecessary_wraps)]
+fn algebraic_parallel_cone_cylinder(
+    cone: &ConicalSurface,
+    cyl: &CylindricalSurface,
+    v_range_cone: Option<(f64, f64)>,
+    v_range_cyl: Option<(f64, f64)>,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let axis = cone.axis();
+    if axis.dot(cyl.axis()).abs() < 1.0 - 1e-10 {
+        return Ok(None); // Skew/oblique — general marcher.
+    }
+
+    let apex = cone.apex();
+    let delta = cyl.origin() - apex;
+    let along = delta.dot(axis);
+    let perp = delta - axis * along;
+    let d = perp.length();
+    if d < 1e-9 {
+        return Ok(None); // Coaxial — `exact_cone_cylinder` owns this.
+    }
+
+    let (e1, e2) = (cone.x_axis(), cone.y_axis());
+    let phi0 = perp.dot(e2).atan2(perp.dot(e1));
+
+    let (sin_t, cos_t) = cone.half_angle().sin_cos();
+    if cos_t < 1e-12 || sin_t < 1e-12 {
+        return Ok(None);
+    }
+    let r = cyl.radius();
+
+    // Branch existence: |d - R| <= rho <= d + R, with rho = v * cos(half_angle).
+    let mut v_min = (d - r).abs() / cos_t;
+    let mut v_max = (d + r) / cos_t;
+    if v_max <= v_min {
+        return Ok(Some(vec![]));
+    }
+
+    // Narrow the sampled span to the faces' own extents so the fixed sample
+    // budget resolves the in-face part of the curve rather than spreading over
+    // a loop that mostly lies off both patches. A face's crossing can be a
+    // fraction of a degree of the cone's sweep (the corner-round case above),
+    // and an unnarrowed sampling puts fewer than one sample across it.
+    let mut lo = v_min;
+    let mut hi = v_max;
+    // Clip EXACTLY to the hints, not to a padded window: an endpoint that lands
+    // exactly on the face's own v-limit lies ON that boundary rim, so the
+    // downstream pave machinery anchors it to the rim edge instead of leaving
+    // the section dangling just past the face.
+    if let Some((a, b)) = v_range_cone {
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        lo = lo.max(a);
+        hi = hi.min(b);
+    }
+    if let Some((a, b)) = v_range_cyl {
+        // The cylinder's v is a signed distance along its axis from its origin;
+        // convert both ends to the cone's v via the shared axial direction.
+        let flip = cyl.axis().dot(axis);
+        let to_cone_v = |cv: f64| (along + cv * flip) / sin_t;
+        let (a, b) = (to_cone_v(a), to_cone_v(b));
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        lo = lo.max(a);
+        hi = hi.min(b);
+    }
+    v_min = lo.max(v_min);
+    v_max = hi.min(v_max);
+    if v_max - v_min <= 1e-12 {
+        return Ok(Some(vec![]));
+    }
+
+    let n_samples = 128;
+    let mut plus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
+    let mut minus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..=n_samples {
+        let v = v_min + (v_max - v_min) * (i as f64) / (n_samples as f64);
+        let rho = v * cos_t;
+        if rho < 1e-12 {
+            // The apex. `cos_alpha` has rho in its denominator, so it is only
+            // meaningful in the limit: it tends to 0 (alpha -> pi/2) when the
+            // cylinder passes exactly through the apex (d == R), and diverges
+            // otherwise — where the clamp would manufacture a spurious alpha of
+            // 0 or pi. So keep the apex only in the d == R case, where it is a
+            // genuine point of the intersection and the shared endpoint at
+            // which the two branches meet.
+            if (d - r).abs() < 1e-12 {
+                let apex = cone.evaluate(phi0, v);
+                plus.push(apex);
+                minus.push(apex);
+            }
+            continue;
+        }
+        let cos_alpha = ((d * d + rho * rho - r * r) / (2.0 * d * rho)).clamp(-1.0, 1.0);
+        let alpha = cos_alpha.acos();
+        plus.push(cone.evaluate(phi0 + alpha, v));
+        minus.push(cone.evaluate(phi0 - alpha, v));
+    }
+
+    let mut curves = Vec::new();
+    for pts in [&plus, &minus] {
+        // Fewer than four samples in range means this branch does not cross the
+        // bounded region at all (the other branch may still).
+        if pts.len() < 4 {
+            continue;
+        }
+        let ipts: Vec<IntersectionPoint> = pts
+            .iter()
+            .map(|&p| IntersectionPoint {
+                point: p,
+                param1: cone.project_point(p),
+                param2: cyl.project_point(p),
+            })
+            .collect();
+        let degree = 3.min(pts.len() - 1);
+        match interpolate(pts, degree) {
+            Ok(curve) => curves.push(IntersectionCurve {
+                curve,
+                points: ipts,
+            }),
+            // Emitting only the branch that happened to fit would starve the
+            // section chain of exactly the piece this path exists to supply —
+            // the same silent half-answer the marcher's fragments produced.
+            // Defer the whole pair to the caller's other paths instead.
+            Err(_) => return Ok(None),
         }
     }
 
@@ -2363,6 +2525,93 @@ mod tests {
     fn torus_implicit(p: Point3, major: f64, minor: f64) -> f64 {
         let rho = p.x().hypot(p.y());
         ((rho - major).hypot(p.z())) - minor
+    }
+
+    /// The gridfinity lightweight base's failing corner, reduced: a cavity
+    /// corner-round cone (apex below the floor, 45 deg, axis +z) crossed by a
+    /// parallel-axis boss cylinder. The general marcher returned ~49 overlapping
+    /// partial traces of one curve here; the algebraic path must return exactly
+    /// the two branches, each ON both surfaces and inside the cone's v-hint.
+    #[test]
+    fn parallel_cone_cylinder_gives_two_exact_branches() {
+        use crate::traits::ParametricCurve;
+        let cone = ConicalSurface::new(
+            Point3::new(-5.45, -36.55, -4.85),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let cyl = CylindricalSurface::new(
+            Point3::new(-8.0, -34.0, -5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            4.45,
+        )
+        .unwrap();
+        // The cone face spans z in [-3.8, -3.0]; v = (z - apex_z) / sin(45 deg).
+        let v_hint = (1.484_924_240_492_058, 2.616_295_090_390_43);
+        let curves = intersect_analytic_analytic_bounded(
+            AnalyticSurface::Cone(&cone),
+            AnalyticSurface::Cylinder(&cyl),
+            32,
+            Some(v_hint),
+            Some((0.0, 2.5)),
+        )
+        .unwrap();
+
+        assert_eq!(curves.len(), 2, "expected exactly the two branches");
+        for c in &curves {
+            let (t0, t1) = c.curve.domain();
+            for k in 0..=32 {
+                let t = (t1 - t0).mul_add(f64::from(k) / 32.0, t0);
+                let p = ParametricCurve::evaluate(&c.curve, t);
+                // On the cylinder: radial distance from its axis is the radius.
+                let radial = ((p.x() + 8.0).powi(2) + (p.y() + 34.0).powi(2)).sqrt();
+                assert!((radial - 4.45).abs() < 1e-6, "off cylinder: {radial}");
+                // On the cone: radial distance from its axis is z - apex_z.
+                let cone_r = ((p.x() + 5.45).powi(2) + (p.y() + 36.55).powi(2)).sqrt();
+                assert!((cone_r - (p.z() + 4.85)).abs() < 1e-6, "off cone at {p:?}");
+                // Inside the cone face's own v-window (the hint is respected).
+                assert!(p.z() >= -3.8 - 1e-9 && p.z() <= -3.0 + 1e-9, "z={}", p.z());
+            }
+        }
+    }
+
+    /// A coaxial pair has no radical line; the algebraic path must defer rather
+    /// than divide by a zero axis separation.
+    #[test]
+    fn coaxial_cone_cylinder_defers_to_other_paths() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        assert!(
+            algebraic_parallel_cone_cylinder(&cone, &cyl, None, None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn oblique_cone_cylinder_defers_to_other_paths() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(3.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0), 1.0)
+                .unwrap();
+        assert!(
+            algebraic_parallel_cone_cylinder(&cone, &cyl, None, None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
