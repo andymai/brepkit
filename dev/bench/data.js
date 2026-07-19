@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784422519542,
+  "lastUpdate": 1784422939244,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -6857,6 +6857,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27161818,
             "range": "± 109923",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cdba97395689ad7ad80f334d71f8c4272f1c05a1",
+          "message": "chore(main): release 2.126.20 (#1120)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.126.20](https://github.com/andymai/brepkit/compare/v2.126.19...v2.126.20)\n(2026-07-19)\n\n\n### Bug Fixes\n\n* **algo:** salvage closed-circle cap sections in the planar face\nsplitter ([#1119](https://github.com/andymai/brepkit/issues/1119))\n([79a82f0](https://github.com/andymai/brepkit/commit/79a82f05041fa0d5f306cf9875badebd5e6ee791))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.126.20 for `brepkit-wasm` with a fix to the planar face\nsplitter to salvage closed-circle cap sections. This prevents lost cap\ngeometry and improves robustness on circular faces.\n\n<sup>Written for commit 7788cd87310efa78eb0db630ccc882e993974ac2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1120?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-19T00:59:50Z",
+          "tree_id": "fb0422cb302620c0c4d0ce54e84b1b690054be47",
+          "url": "https://github.com/andymai/brepkit/commit/cdba97395689ad7ad80f334d71f8c4272f1c05a1"
+        },
+        "date": 1784422938130,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 910915,
+            "range": "± 2067",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1011225,
+            "range": "± 2095",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13173,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650630,
+            "range": "± 1909",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28317243,
+            "range": "± 92077",
             "unit": "ns/iter"
           }
         ]
