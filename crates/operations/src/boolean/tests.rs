@@ -5890,3 +5890,61 @@ fn fuse_counterbore_drops_drill_rims_inside_opening() {
         );
     }
 }
+
+#[test]
+fn severing_cut_keeps_pocketed_pieces_analytic() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+
+    // Bar 20 x 6 x 3 with two blind pockets (r = 1.5, depth 1.5). Blind pockets
+    // keep each piece genus-0 while giving its top face an inner wire — the
+    // combination that made the multi-region gate's raw-Euler comparison fail
+    // (raw euler 6 != 2*components 4, while the hole-corrected 6 - 2 == 4).
+    let pockets = [4.0_f64, 16.0];
+    let mut bar = crate::primitives::make_box(&mut topo, 20.0, 6.0, 3.0).unwrap();
+    for &cx in &pockets {
+        let drill = crate::primitives::make_cylinder(&mut topo, 1.5, 2.0).unwrap();
+        crate::transform::transform_solid(&mut topo, drill, &Mat4::translation(cx, 3.0, 1.5))
+            .unwrap();
+        bar = boolean(&mut topo, BooleanOp::Cut, bar, drill).unwrap();
+    }
+
+    // Sever the bar between the pockets into two spatially disjoint pieces.
+    let slab = crate::primitives::make_box(&mut topo, 2.0, 8.0, 5.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(9.0, -1.0, -1.0))
+        .unwrap();
+    let severed = boolean(&mut topo, BooleanOp::Cut, bar, slab).unwrap();
+
+    // Analytic, not a mesh fallback. The fallback for this shape is ~114
+    // all-planar faces and is itself watertight, valid, and correct-volume —
+    // the face census is the only signal that separates the two.
+    let faces = brepkit_topology::explorer::solid_faces(&topo, severed).unwrap();
+    assert!(
+        faces.len() < 30,
+        "expected a compact analytic result, got {} faces (mesh fallback?)",
+        faces.len()
+    );
+    assert_eq!(
+        count_cylinder_faces(&topo, severed),
+        2,
+        "both pocket walls must survive the severing cut as analytic cylinders"
+    );
+
+    let bad_edges = count_non_manifold_edges(&topo, severed);
+    assert_eq!(
+        bad_edges, 0,
+        "severed result must be a watertight manifold, got {bad_edges} bad edges"
+    );
+
+    // Exact analytic volume: bar 360, less two pockets (pi * 1.5^2 * 1.5 each),
+    // less the 2 x 6 x 3 severed slab. Pins that both pockets are still void,
+    // the gap is really cut, and the two pieces were not merged or skinned over.
+    let expected =
+        20.0 * 6.0 * 3.0 - 2.0 * std::f64::consts::PI * 1.5 * 1.5 * 1.5 - 2.0 * 6.0 * 3.0;
+    let volume = crate::measure::solid_volume(&topo, severed, 0.01).unwrap();
+    assert!(
+        (volume - expected).abs() < 0.05,
+        "severed volume {volume:.3} should match analytic {expected:.3}"
+    );
+}
