@@ -621,10 +621,18 @@ pub fn boolean(
                 // distinguishes a "cut into N pieces" from a hollow solid
                 // (outer surface + cavity surface — same number of
                 // components, same Euler relation, but AABBs overlap).
+                // N closed manifolds satisfy the Euler-Poincare relation
+                // `V - E + F - inner_wires = 2 * (N - genus)`. The hole term is
+                // NOT optional: a piece carrying a blind pocket (a face with an
+                // inner wire) shifts raw Euler away from 2*N, so comparing raw
+                // Euler here would reject every pocketed piece. This mirrors the
+                // `euler_balanced(euler_eff, inner_wire_count)` correction the
+                // single-component gate above applies.
                 let components_vec = crate::boolean::assembly::face_components(topo, result);
                 let components = components_vec.len();
                 #[allow(clippy::cast_possible_wrap)]
                 let expected_euler = (components as i64) * 2;
+                let euler_corrected = euler - inner_wire_count;
                 // For Cut, also verify no component is a "B-interior piece" —
                 // GFA can produce N closed manifolds where one of them is the
                 // tool's interior (sphere - cylinder example: 3 pieces =
@@ -641,7 +649,7 @@ pub fn boolean(
                         });
                 if op == BooleanOp::Cut
                     && components >= 2
-                    && euler == expected_euler
+                    && euler_corrected == expected_euler
                     && components_are_disjoint_pieces(topo, &components_vec)
                     && cut_safe
                     // Reuse the `closed_manifold` computed above: nothing between
