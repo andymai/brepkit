@@ -5991,3 +5991,40 @@ fn compound_cut_unify_keeps_bore_opening() {
         "both cylindrical walls must survive"
     );
 }
+
+#[test]
+fn compound_cut_unify_still_merges_normally() {
+    use brepkit_math::mat::Mat4;
+
+    // The unify pass reverts itself when a merge would orphan edges. That guard
+    // must not fire on healthy geometry: a plain slotted bar's coplanar
+    // fragments still have to merge back, or every boolean result keeps its
+    // split faces forever.
+    let mut topo = Topology::new();
+    let bar = crate::primitives::make_box(&mut topo, 30.0, 10.0, 6.0).unwrap();
+    let mut tools = Vec::new();
+    for x in [6.0_f64, 14.0, 22.0] {
+        let t = crate::primitives::make_box(&mut topo, 3.0, 12.0, 3.0).unwrap();
+        crate::transform::transform_solid(&mut topo, t, &Mat4::translation(x, -1.0, 4.0)).unwrap();
+        tools.push(t);
+    }
+    let opts = BooleanOptions {
+        unify_faces: true,
+        ..BooleanOptions::default()
+    };
+    let unified = compound_cut(&mut topo, bar, &tools, opts).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, unified).unwrap();
+    // Three slots in a bar: 18 faces when the coplanar fragments merge back,
+    // materially more if the guard suppressed a legitimate merge.
+    assert!(
+        faces.len() <= 20,
+        "unify must still merge coplanar fragments on healthy geometry, got {} faces",
+        faces.len()
+    );
+    assert_eq!(
+        count_non_manifold_edges(&topo, unified),
+        0,
+        "slotted bar must stay watertight"
+    );
+}

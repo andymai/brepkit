@@ -234,12 +234,29 @@ pub fn unify_same_domain(
         new_faces_to_add.extend(new_face_ids);
     }
 
+    // Merging is an OPTIMISATION — it must never leave the shell worse connected
+    // than it found it. Snapshot the pairing first, apply the merge and the
+    // collinear-edge pass, then put the original faces back if either degraded
+    // it. Both phases can orphan edges: a group whose reassembly loses a
+    // boundary edge, and `merge_collinear_edges`, which rewrites only the NEW
+    // faces' wires — a neighbour still referencing the pre-merge edges is left
+    // unpaired. That is invisible on analytic solids (few collinear runs) and
+    // catastrophic on mesh-fallback ones (thousands of coplanar facets: 1630
+    // edge merges orphaned 4574 edges on a drilled 15648-face solid).
+    //
+    // Reverting is complete: removed faces are only dropped from the shell's
+    // list, never deleted from the arena, and the collinear pass only mutates
+    // the new faces' wires, which the revert discards.
+    let mut original_faces: Option<Vec<FaceId>> = None;
+    let mut bad_before = 0;
     if total_merged > 0 {
         let shell = topo.shell(shell_id)?;
         let current_faces: Vec<FaceId> = shell.faces().to_vec();
+        bad_before = unpaired_edge_count(topo, &current_faces)?;
 
         let mut final_faces: Vec<FaceId> = current_faces
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|f| !faces_to_remove.contains(f))
             .collect();
         final_faces.extend(&new_faces_to_add);
@@ -247,6 +264,7 @@ pub fn unify_same_domain(
         let new_shell = Shell::new(final_faces)?;
         let shell_mut = topo.shell_mut(shell_id)?;
         *shell_mut = new_shell;
+        original_faces = Some(current_faces);
     }
 
     let mut total_edges_merged = 0;
@@ -255,6 +273,27 @@ pub fn unify_same_domain(
             let outer_wire = topo.face(fid)?.outer_wire();
             let merged = merge_collinear_edges(topo, outer_wire, options)?;
             total_edges_merged += merged;
+        }
+    }
+
+    if let Some(original) = original_faces {
+        let after: Vec<FaceId> = topo.shell(shell_id)?.faces().to_vec();
+        let bad_after = unpaired_edge_count(topo, &after)?;
+        if bad_after > bad_before {
+            log::warn!(
+                "unify_same_domain: reverting ({total_merged} faces, {total_edges_merged} edges) — unpaired edges would rise {bad_before} -> {bad_after}"
+            );
+            let restored = Shell::new(original)?;
+            let shell_mut = topo.shell_mut(shell_id)?;
+            *shell_mut = restored;
+            return Ok((
+                solid_id,
+                UnifyResult {
+                    faces_merged: 0,
+                    edges_merged: 0,
+                    status: Status::OK,
+                },
+            ));
         }
     }
 
@@ -272,6 +311,24 @@ pub fn unify_same_domain(
             status,
         },
     ))
+}
+
+/// Count edges of `faces` that are NOT shared by exactly two of them.
+///
+/// A closed manifold shell pairs every edge exactly twice; free (once) and
+/// over-shared (3+) edges are both defects. Used to prove a merge did not make
+/// the shell worse before committing it.
+fn unpaired_edge_count(topo: &Topology, faces: &[FaceId]) -> Result<usize, HealError> {
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                *uses.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(uses.values().filter(|&&c| c != 2).count())
 }
 
 /// Merge a hole-free group on a curved (non-planar) surface.
