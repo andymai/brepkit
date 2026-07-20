@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784496298556,
+  "lastUpdate": 1784514251417,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7343,6 +7343,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26403820,
             "range": "± 44295",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d9a0400b8101152ce1fa8bc21f60f1691bcb6d0f",
+          "message": "fix(heal): stop unify_same_domain discarding closed-curve boundary loops (#1129)\n\n## The defect\n\nA full circle is stored as a **closed edge** — `start == end` with a\nzero chord. `merge_group_with_holes` filtered edges with:\n\n```rust\nif (ep - sp).length() < lin && start == end { continue; }\n```\n\nwhich cannot tell a real circle from a genuinely degenerate zero-length\nsliver, so it discarded both. Discarding a real circle **erases a hole\nboundary**: the drilled annulus merges into its coplanar neighbour and\nthe bore rim is left used once (a free edge).\n\nThis is exactly the closed-edge trap CLAUDE.md documents — *\"whenever an\nedge can be closed, sample points along the curve; never derive from\nendpoints.\"*\n\n## The fix\n\nSample the curve interior to separate a real closed curve from a sliver,\nand **defer** such a group (leave it unmerged) rather than merge it with\na boundary silently dropped.\n\nDeferral rather than repair is deliberate: the reassembly classifies\nloops by UV polygon area, and a closed circle arrives as a\n**single-vertex loop** that yields no polygon, so the group cannot be\nreassembled correctly either way. Skipping matches the function's\nexisting contract — it already returns `Ok(None)` for cases it cannot\nrepresent (periodic surfaces with holes, non-manifold edges, unclosed\nloops).\n\nThis only makes the merge **more conservative**: groups it previously\nmerged wrongly are now skipped, and no group it previously skipped is\nnow merged. The cost is a few unmerged coplanar faces; the alternative\nis a hole in the solid.\n\n## How it was found\n\nThe gridfinity `2×2 lite + screw pads` export fails with **448 STL\nboundary edges**. The chain:\n\n`cutAll` → `compound_cut`, whose trailing `unify_same_domain` merged\neach socket cell's 5 coplanar bottom faces (1 floor + 4 drilled pad\nannuli) into 1, dropping 16 planes and orphaning all 16 bore rims.\n\nReplaying on captured tool operands isolated it to a single flag:\n\n| | F | E | V | free edges | planes |\n|---|---|---|---|---|---|\n| tool's `cutAll` output | 284 | 608 | 352 | **16** | 140 |\n| `compound_cut` unify **on** | 284 | 608 | 352 | **16** | 140 |\n| `compound_cut` unify **off** | 300 | 624 | 368 | 0 | 156 |\n| **with this fix**, unify on | 300 | 624 | 368 | **0** | 156 |\n\nThe unify-on replay reproduced the tool's result *exactly*, and the fix\nmakes it match the clean one. Worth noting the 16 sequential cuts and a\nsingle cut by a 16-component fused tool were both already clean — the\ndrill and phase FF were never at fault.\n\n## Verification\n\n- New regression `compound_cut_unify_keeps_bore_opening` — plate + pad\ncolumn fused (leaving a coplanar bottom disc), bored through. **Fails\nwithout the change** (1 unpaired edge), passes with it.\n- Full workspace suite green; `brepkit-heal` 86/0.\n- Gridfinity canary 27/0.\n- `brepkit-render` GPU tests SIGSEGV identically on clean `main` —\npre-existing, unrelated.\n\n## Scope\n\nThis closes the B-Rep root behind the screw-pad family. It does **not**\nby itself make that scenario pass end-to-end — I have not yet\nre-measured the tool suite with it, so I am claiming the root fix, not\nthe scenario. The lightweight failures are three unrelated roots (this\none, a sub-tolerance `nm=2` on the magnet family that a STEP round-trip\nheals, and two pure 30s timeouts).\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nStops unify_same_domain from dropping closed-circle boundary loops that\nerased hole openings and created free edges. We now sample the curve\ninterior to tell real circles from zero-length slivers and defer those\ngroups instead of merging.\n\n- Bug Fixes\n- Sample closed edges at mid-parameter; if it’s a real circle, skip\nmerging the whole group to preserve the boundary.\n- Prevents bore rims from becoming free edges when unifying coplanar\nfaces.\n  - Adds regression test `compound_cut_unify_keeps_bore_opening`.\n- Behavior is more conservative: previously wrong merges are now\nskipped; previously skipped cases remain skipped.\n\n<sup>Written for commit 737d1049d28cbdf3cd452d25c25e142a64de900d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1129?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-19T19:21:46-07:00",
+          "tree_id": "045c75c600dddfe181dec22d32f90b2aaa035ea2",
+          "url": "https://github.com/andymai/brepkit/commit/d9a0400b8101152ce1fa8bc21f60f1691bcb6d0f"
+        },
+        "date": 1784514250939,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 876569,
+            "range": "± 2973",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 970072,
+            "range": "± 5247",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11919,
+            "range": "± 77",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 642957,
+            "range": "± 9633",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26700327,
+            "range": "± 68664",
             "unit": "ns/iter"
           }
         ]
