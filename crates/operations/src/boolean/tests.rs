@@ -5996,35 +5996,64 @@ fn compound_cut_unify_keeps_bore_opening() {
 fn compound_cut_unify_still_merges_normally() {
     use brepkit_math::mat::Mat4;
 
-    // The unify pass reverts itself when a merge would orphan edges. That guard
-    // must not fire on healthy geometry: a plain slotted bar's coplanar
-    // fragments still have to merge back, or every boolean result keeps its
-    // split faces forever.
-    let mut topo = Topology::new();
-    let bar = crate::primitives::make_box(&mut topo, 30.0, 10.0, 6.0).unwrap();
-    let mut tools = Vec::new();
-    for x in [6.0_f64, 14.0, 22.0] {
-        let t = crate::primitives::make_box(&mut topo, 3.0, 12.0, 3.0).unwrap();
-        crate::transform::transform_solid(&mut topo, t, &Mat4::translation(x, -1.0, 4.0)).unwrap();
-        tools.push(t);
-    }
-    let opts = BooleanOptions {
-        unify_faces: true,
-        ..BooleanOptions::default()
+    // The unify pass rolls itself back when a merge would orphan edges. That
+    // guard must not fire on healthy geometry, or every boolean result keeps
+    // its split faces forever. Asserted DIFFERENTIALLY against the same cut
+    // with unify off: an absolute bound alone would still pass if the guard
+    // suppressed every merge and the raw count happened to sit under it.
+    // An L-shaped fuse with two corner cuts: the cuts split faces the fuse left
+    // coplanar, and the trailing unify merges them back (22 faces -> 16).
+    let build = |topo: &mut Topology| {
+        let a = crate::primitives::make_box(topo, 20.0, 8.0, 8.0).unwrap();
+        let b = crate::primitives::make_box(topo, 8.0, 20.0, 8.0).unwrap();
+        let l = boolean(topo, BooleanOp::Fuse, a, b).unwrap();
+        let mut tools = Vec::new();
+        for (x, y) in [(14.0_f64, 2.0_f64), (2.0, 14.0)] {
+            let t = crate::primitives::make_box(topo, 4.0, 4.0, 10.0).unwrap();
+            crate::transform::transform_solid(topo, t, &Mat4::translation(x, y, -1.0)).unwrap();
+            tools.push(t);
+        }
+        (l, tools)
     };
-    let unified = compound_cut(&mut topo, bar, &tools, opts).unwrap();
 
-    let faces = brepkit_topology::explorer::solid_faces(&topo, unified).unwrap();
-    // Three slots in a bar: 18 faces when the coplanar fragments merge back,
-    // materially more if the guard suppressed a legitimate merge.
+    let mut topo = Topology::new();
+    let (solid_a, tools_a) = build(&mut topo);
+    let unified = compound_cut(
+        &mut topo,
+        solid_a,
+        &tools_a,
+        BooleanOptions {
+            unify_faces: true,
+            ..BooleanOptions::default()
+        },
+    )
+    .unwrap();
+    let unified_faces = brepkit_topology::explorer::solid_faces(&topo, unified)
+        .unwrap()
+        .len();
+
+    let (solid_b, tools_b) = build(&mut topo);
+    let raw = compound_cut(
+        &mut topo,
+        solid_b,
+        &tools_b,
+        BooleanOptions {
+            unify_faces: false,
+            ..BooleanOptions::default()
+        },
+    )
+    .unwrap();
+    let raw_faces = brepkit_topology::explorer::solid_faces(&topo, raw)
+        .unwrap()
+        .len();
+
     assert!(
-        faces.len() <= 20,
-        "unify must still merge coplanar fragments on healthy geometry, got {} faces",
-        faces.len()
+        unified_faces < raw_faces,
+        "unify must still merge coplanar fragments on healthy geometry: {unified_faces} faces with unify vs {raw_faces} without"
     );
     assert_eq!(
         count_non_manifold_edges(&topo, unified),
         0,
-        "slotted bar must stay watertight"
+        "the unified result must stay watertight"
     );
 }

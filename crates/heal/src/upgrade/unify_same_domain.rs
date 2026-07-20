@@ -235,24 +235,20 @@ pub fn unify_same_domain(
     }
 
     // Merging is an OPTIMISATION — it must never leave the shell worse connected
-    // than it found it. Snapshot the pairing first, apply the merge and the
-    // collinear-edge pass, then put the original faces back if either degraded
-    // it. Both phases can orphan edges: a group whose reassembly loses a
-    // boundary edge, and `merge_collinear_edges`, which rewrites only the NEW
-    // faces' wires — a neighbour still referencing the pre-merge edges is left
+    // than it found it. Each phase is applied, measured, and rolled back on its
+    // own so a bad phase does not discard a good one.
+    //
+    // Both phases can orphan edges: a group whose reassembly loses a boundary
+    // edge, and `merge_collinear_edges`, which rewrites only the NEW faces'
+    // wires — a neighbour still referencing the pre-merge edges is left
     // unpaired. That is invisible on analytic solids (few collinear runs) and
     // catastrophic on mesh-fallback ones (thousands of coplanar facets: 1630
     // edge merges orphaned 4574 edges on a drilled 15648-face solid).
-    //
-    // Reverting is complete: removed faces are only dropped from the shell's
-    // list, never deleted from the arena, and the collinear pass only mutates
-    // the new faces' wires, which the revert discards.
-    let mut original_faces: Option<Vec<FaceId>> = None;
-    let mut bad_before = 0;
+    let mut bad_after_faces = 0;
     if total_merged > 0 {
         let shell = topo.shell(shell_id)?;
         let current_faces: Vec<FaceId> = shell.faces().to_vec();
-        bad_before = unpaired_edge_count(topo, &current_faces)?;
+        let bad_before = unpaired_edge_count(topo, &current_faces)?;
 
         let mut final_faces: Vec<FaceId> = current_faces
             .iter()
@@ -261,31 +257,13 @@ pub fn unify_same_domain(
             .collect();
         final_faces.extend(&new_faces_to_add);
 
-        let new_shell = Shell::new(final_faces)?;
-        let shell_mut = topo.shell_mut(shell_id)?;
-        *shell_mut = new_shell;
-        original_faces = Some(current_faces);
-    }
-
-    let mut total_edges_merged = 0;
-    if options.unify_edges && total_merged > 0 {
-        for &fid in &new_faces_to_add {
-            let outer_wire = topo.face(fid)?.outer_wire();
-            let merged = merge_collinear_edges(topo, outer_wire, options)?;
-            total_edges_merged += merged;
-        }
-    }
-
-    if let Some(original) = original_faces {
-        let after: Vec<FaceId> = topo.shell(shell_id)?.faces().to_vec();
-        let bad_after = unpaired_edge_count(topo, &after)?;
-        if bad_after > bad_before {
+        // Removed faces are only dropped from the shell's list, never deleted
+        // from the arena, so restoring that list is a complete revert.
+        bad_after_faces = unpaired_edge_count(topo, &final_faces)?;
+        if bad_after_faces > bad_before {
             log::warn!(
-                "unify_same_domain: reverting ({total_merged} faces, {total_edges_merged} edges) — unpaired edges would rise {bad_before} -> {bad_after}"
+                "unify_same_domain: skipping merge of {total_merged} faces — unpaired edges would rise {bad_before} -> {bad_after_faces}"
             );
-            let restored = Shell::new(original)?;
-            let shell_mut = topo.shell_mut(shell_id)?;
-            *shell_mut = restored;
             return Ok((
                 solid_id,
                 UnifyResult {
@@ -294,6 +272,40 @@ pub fn unify_same_domain(
                     status: Status::OK,
                 },
             ));
+        }
+        let new_shell = Shell::new(final_faces)?;
+        let shell_mut = topo.shell_mut(shell_id)?;
+        *shell_mut = new_shell;
+    }
+
+    let mut total_edges_merged = 0;
+    if options.unify_edges && total_merged > 0 {
+        // `merge_collinear_edges` rewrites each wire in place under the same
+        // WireId, so snapshotting the wires is enough to undo just this phase
+        // and keep the face merges above.
+        let mut wire_snapshots: Vec<(WireId, Wire)> = Vec::with_capacity(new_faces_to_add.len());
+        for &fid in &new_faces_to_add {
+            let wid = topo.face(fid)?.outer_wire();
+            wire_snapshots.push((wid, topo.wire(wid)?.clone()));
+        }
+
+        for &(wid, _) in &wire_snapshots {
+            total_edges_merged += merge_collinear_edges(topo, wid, options)?;
+        }
+
+        if total_edges_merged > 0 {
+            let faces_now: Vec<FaceId> = topo.shell(shell_id)?.faces().to_vec();
+            let bad_after_edges = unpaired_edge_count(topo, &faces_now)?;
+            if bad_after_edges > bad_after_faces {
+                log::warn!(
+                    "unify_same_domain: reverting {total_edges_merged} collinear-edge merges — unpaired edges would rise {bad_after_faces} -> {bad_after_edges} (face merges kept)"
+                );
+                for (wid, original) in wire_snapshots {
+                    let wire_mut = topo.wire_mut(wid)?;
+                    *wire_mut = original;
+                }
+                total_edges_merged = 0;
+            }
         }
     }
 
