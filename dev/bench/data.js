@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784514693919,
+  "lastUpdate": 1784524333941,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7451,6 +7451,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25249957,
             "range": "± 258690",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dd47ed29ffa2b520de99981de0223e35198a3226",
+          "message": "fix(heal): revert a unify pass that would orphan edges (#1131)\n\n## The defect\n\n`unify_same_domain` could turn a watertight shell into a holed one.\nMerging is an **optimisation** — it must never leave the shell worse\nconnected than it found it.\n\nTwo phases can orphan edges:\n\n1. a group whose reassembly loses a boundary edge, and\n2. **`merge_collinear_edges`**, which rewrites only the NEW faces' outer\nwires. A neighbouring face still referencing the pre-merge edges is left\nunpaired.\n\nThe second is a one-sided topology edit and is the larger defect. This\nPR **bounds** its damage rather than repairing it — a two-sided rewrite\nis still worth doing, and I did not want to attempt that reshaping on\nthe back of a guard.\n\n## Why it went unnoticed\n\nIt is invisible on analytic solids, where collinear runs are rare, and\nsevere on mesh-fallback ones, where thousands of coplanar facets merge\nat once.\n\nFound digging the gridfinity `4×4 lite export (stress)` failure (48 STL\nboundary edges). Its base mesh-falls-back to a 15648-face solid, and a\n**single** drill through `compound_cut` merged 3184 faces and 1630\ncollinear edges — orphaning 4574:\n\n| | faces | free edges |\n|---|---|---|\n| `boolean(Cut)` 1 drill (no unify) | 15650 | 0 |\n| `compound_cut` unify=**false** | 15650 | 0 |\n| `compound_cut` unify=**true** — before | 12466 | **4574** |\n| `compound_cut` unify=**true** — after | 15650 | **0** |\n\nThe guard logs its reason: `reverting (3184 faces, 1630 edges) —\nunpaired edges would rise 0 -> 4574`.\n\n## Why the revert is complete\n\nRemoved faces are only dropped from the shell's face list, never deleted\nfrom the arena, and the collinear pass only mutates the **new** faces'\nwires — which the revert discards. So restoring the original face list\nfully restores the prior topology.\n\n## Verification\n\n- `compound_cut_unify_still_merges_normally` — new; pins that the guard\ndoes **not** over-trigger: a slotted bar's coplanar fragments must still\nmerge back (≤20 faces). Without it, a future change could make the guard\nfire everywhere and silently disable unify.\n- `compound_cut_unify_keeps_bore_opening` (from the closed-curve fix,\n#1129) continues to pass.\n- Full workspace suite green; `brepkit-heal` 86/0; gridfinity canary\n27/0.\n- `brepkit-render` GPU tests SIGSEGV identically on clean `main` —\npre-existing, unrelated.\n\n## Honest gap\n\n**No compact synthetic reproduces the collinear-edge path yet.** I tried\nsix shapes (slotted bars, coplanar pocket grids, stacked fuses,\nthrough-slot grids, a mesh-fallback cylinder∪cone, box mesh booleans);\nnone trigger it — adjacent facets on curved surfaces are not coplanar so\nnothing merges, and coplanar box facets get merged during mesh→B-Rep\nconversion. The reproducer is the captured 15648-face solid, too large\nto commit. The new test therefore pins the guard's *other* half (no\nover-triggering); the orphaning path itself is verified only against the\ncaptured operands, as recorded above.\n\nThis is a bound on damage, not a scenario fix — `4×4 lite export\n(stress)` also needs the pad fuse to stop falling back, which is\nseparate (and previously measured as expensive).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd a connectivity guard to the unify pass and roll back each phase\nindependently to prevent orphaned edges. This keeps watertight shells\nintact on mesh-fallback solids while still merging valid coplanar faces.\n\n- **Bug Fixes**\n- Measure edge pairing before/after face merges and again after\ncollinear-edge merges; revert only the phase that increases unpaired\nedges. Snapshot new-face wires to undo collinear merges while keeping\nvalid face merges; warn with before/after counts.\n- Replaced the slotted-bar check with a differential L-shaped fuse test:\nunify reduces face count vs no-unify and the result stays watertight.\n\n<sup>Written for commit 29af4141028d933524c04f92884326d7aae372a5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1131?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-19T22:09:38-07:00",
+          "tree_id": "3d7006b376ae8d7b17d5a5323b71f4727e83d713",
+          "url": "https://github.com/andymai/brepkit/commit/dd47ed29ffa2b520de99981de0223e35198a3226"
+        },
+        "date": 1784524332798,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 884222,
+            "range": "± 2626",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 974731,
+            "range": "± 1625",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12135,
+            "range": "± 216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 646627,
+            "range": "± 2776",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26707494,
+            "range": "± 73766",
             "unit": "ns/iter"
           }
         ]
