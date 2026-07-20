@@ -21,7 +21,7 @@ brepkit-topology.workspace = true
 
 bytemuck = {version = "1", features = ["derive"]}
 image = {version = "0.25", default-features = false, features = ["png"]}
-pollster = "0.4"
+pollster = "1.0"
 thiserror.workspace = true
 wgpu = "30"
 
