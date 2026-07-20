@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.2](https://github.com/andymai/brepkit/compare/v2.127.1...v2.127.2) (2026-07-20)
+
+
+### Bug Fixes
+
+* **heal:** stop unify_same_domain discarding closed-curve boundary loops ([#1129](https://github.com/andymai/brepkit/issues/1129)) ([d9a0400](https://github.com/andymai/brepkit/commit/d9a0400b8101152ce1fa8bc21f60f1691bcb6d0f))
+
 ## [2.127.1](https://github.com/andymai/brepkit/compare/v2.127.0...v2.127.1) (2026-07-19)
 
 
