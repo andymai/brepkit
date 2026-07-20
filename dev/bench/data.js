@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784590067816,
+  "lastUpdate": 1784590230514,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7613,6 +7613,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28219693,
             "range": "± 348822",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6c309a87ca4b21f130b2d5e038094bd006f801a3",
+          "message": "chore(deps-dev): bump the npm group with 2 updates (#1133)\n\nBumps the npm group with 2 updates:\n[@commitlint/cli](https://github.com/conventional-changelog/commitlint/tree/HEAD/@commitlint/cli)\nand [prettier](https://github.com/prettier/prettier).\n\nUpdates `@commitlint/cli` from 21.2.0 to 21.2.1\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/conventional-changelog/commitlint/releases\">@​commitlint/cli's\nreleases</a>.</em></p>\n<blockquote>\n<h2>v21.2.1</h2>\n<h1><a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.1.0...v21.2.0\">21.2.0</a>\n(2026-06-30)</h1>\n<h3>Features</h3>\n<ul>\n<li><strong>resolve-extends:</strong> resolve pure-ESM presets\n(conventional-changelog v7/v9/v10) (<a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/issues/4859\">#4859</a>)\n(<a\nhref=\"https://github.com/conventional-changelog/commitlint/commit/fdb566fe59457a786eac80e2a8cbb994638daba0\">fdb566f</a>)</li>\n</ul>\n<h3>Chore, doc, etc.</h3>\n<ul>\n<li>chore(read): replace deprecated git-raw-commits with git-client by\n<a\nhref=\"https://github.com/igordanchenko\"><code>@​igordanchenko</code></a>\nin <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/4860\">conventional-changelog/commitlint#4860</a></li>\n<li>docs(issue-template): ask for package manager and version by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/4867\">conventional-changelog/commitlint#4867</a></li>\n</ul>\n<h2>New Contributors</h2>\n<ul>\n<li><a\nhref=\"https://github.com/igordanchenko\"><code>@​igordanchenko</code></a>\nmade their first contribution in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/4860\">conventional-changelog/commitlint#4860</a></li>\n</ul>\n<p><strong>Full Changelog</strong>: <a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.2.0...v21.2.1\">https://github.com/conventional-changelog/commitlint/compare/v21.2.0...v21.2.1</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/conventional-changelog/commitlint/blob/master/@commitlint/cli/CHANGELOG.md\">@​commitlint/cli's\nchangelog</a>.</em></p>\n<blockquote>\n<h2><a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.2.0...v21.2.1\">21.2.1</a>\n(2026-07-08)</h2>\n<p><strong>Note:</strong> Version bump only for package\n<code>@​commitlint/cli</code></p>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/conventional-changelog/commitlint/commit/6e200411e63fb473d59cca1b4449a28f72067df0\"><code>6e20041</code></a>\nv21.2.1</li>\n<li>See full diff in <a\nhref=\"https://github.com/conventional-changelog/commitlint/commits/v21.2.1/@commitlint/cli\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\nUpdates `prettier` from 3.9.4 to 3.9.5\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/releases\">prettier's\nreleases</a>.</em></p>\n<blockquote>\n<h2>3.9.5</h2>\n<p>🔗 <a\nhref=\"https://github.com/prettier/prettier/blob/3.9.5/CHANGELOG.md#395\">Changelog</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/blob/main/CHANGELOG.md\">prettier's\nchangelog</a>.</em></p>\n<blockquote>\n<h1>3.9.5</h1>\n<p><a\nhref=\"https://github.com/prettier/prettier/compare/3.9.4...3.9.5\">diff</a></p>\n<h4>Markdown: Cap ordered list mark at 999,999,999 (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19351\">#19351</a>\nby <a href=\"https://github.com/tats-u\"><code>@​tats-u</code></a>)</h4>\n<p>CommonMark parsers only support ordered list item numbers up to\n999,999,999.</p>\n<p>With this change, Prettier now caps the ordered list item number at\n999,999,999 to ensure that the output is correctly parsed as an ordered\nlist by CommonMark parsers. Numbers larger than 999,999,999 are not\nparsed as list item numbers and are left unchanged in the output:</p>\n<!-- raw HTML omitted -->\n<pre lang=\"markdown\"><code>&lt;!-- Input --&gt;\n999999998. text\n999999998. text\n999999998. text\n999999998. text\n<p>1234567890123456789012) text</p>\n<p>&lt;!-- Prettier 3.9.4 --&gt;\n999999998. text\n999999999. text\n1000000000. text\n1000000001. text</p>\n<p>1234567890123456789012) text</p>\n<p>&lt;!-- Prettier 3.9.5 --&gt;\n999999998. text\n999999999. text\n999999999. text\n999999999. text</p>\n<p>1234567890123456789012) text\n</code></pre></p>\n<h4>Markdown: Avoid corrupting empty link with title (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19487\">#19487</a>\nby <a href=\"https://github.com/andersk\"><code>@​andersk</code></a>)</h4>\n<p>Do not remove <code>&lt;&gt;</code> from an inline link or image with\nan empty URL and a title, as this removal would change its\ninterpretation.</p>\n<!-- raw HTML omitted -->\n<pre lang=\"md\"><code>&lt;!-- Input --&gt;\n[link](https://github.com/prettier/prettier/blob/main/&lt;&gt;\n&quot;title&quot;)\n<p>&lt;!-- Prettier 3.9.4 --&gt;\n[link](<a\nhref=\"https://github.com/prettier/prettier/blob/main/\">https://github.com/prettier/prettier/blob/main/</a>\n&quot;title&quot;)</p>\n<p>&lt;!-- Prettier 3.9.5 --&gt;\n&lt;/tr&gt;&lt;/table&gt;\n</code></pre></p>\n</blockquote>\n<p>... (truncated)</p>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/b6c7d1806807162658fd5694d002b54b778c3756\"><code>b6c7d18</code></a>\nRelease 3.9.5</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/cd54ccc7288f2a4585ba5bf96883e2ed3b18e781\"><code>cd54ccc</code></a>\nAvoid corrupting empty Markdown link with title (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19487\">#19487</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/2bb67ce8cd326dbaccbdec97e7578985f6009a14\"><code>2bb67ce</code></a>\nPreserving comments' <code>placement</code> property (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19567\">#19567</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/91bcac88ec1d784767ebbf5ec4686a5dbf37c3c1\"><code>91bcac8</code></a>\nAdd more tests for comment-only object type (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19587\">#19587</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/cbee7377a1875686558bfc9416b789d66771d9e7\"><code>cbee737</code></a>\nRemove space in empty object type (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19583\">#19583</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/6394c732090efdf7798e0c8dc44c46583b4131c3\"><code>6394c73</code></a>\nAlign empty module declaration with TS (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19568\">#19568</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/a4e6f7a0264bad45f3c153773111f60a5d406d55\"><code>a4e6f7a</code></a>\nPrevent the addition of space in <code>type()</code> with <code>+</code>\n(<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19516\">#19516</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/3d063b57b1a2fdc660341b6e1c719e09997cc72c\"><code>3d063b5</code></a>\nIgnore dangling comments when checking type parameter comments (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19572\">#19572</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/908503e9ee02718ef0ec21a023f2c0fd5fb00603\"><code>908503e</code></a>\nHandle dangling comments in <code>SwitchStatement</code> (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19581\">#19581</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/943a475c3592149aad6062ad235338da548365ea\"><code>943a475</code></a>\nAngular: Support expression for exhaustive typechecking (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19571\">#19571</a>)</li>\n<li>Additional commits viewable in <a\nhref=\"https://github.com/prettier/prettier/compare/3.9.4...3.9.5\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore <dependency name> major version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's major version (unless you unignore this specific\ndependency's major version or upgrade to it yourself)\n- `@dependabot ignore <dependency name> minor version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's minor version (unless you unignore this specific\ndependency's minor version or upgrade to it yourself)\n- `@dependabot ignore <dependency name>` will close this group update PR\nand stop Dependabot creating any more for the specific dependency\n(unless you unignore this specific dependency or upgrade to it yourself)\n- `@dependabot unignore <dependency name>` will remove all of the ignore\nconditions of the specified dependency\n- `@dependabot unignore <dependency name> <ignore condition>` will\nremove the ignore condition of the specified dependency and ignore\nconditions\n\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate dev tooling to keep commit checks and formatting current: bump\n`@commitlint/cli` to 21.2.1 and `prettier` to 3.9.5. No app code\nchanges.\n\n- **Dependencies**\n- `@commitlint/cli`: 21.2.0 → 21.2.1 (moves to\n`@conventional-changelog/git-client`, replacing deprecated\n`git-raw-commits`)\n  - `prettier`: 3.9.4 → 3.9.5 (minor Markdown fixes)\n\n<sup>Written for commit 7a32bc343dee95aa395cdbf5f413ab771640da62.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1133?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-20T16:25:33-07:00",
+          "tree_id": "68b222176741cfa4aa1c2c82c11d3cad8975fcbd",
+          "url": "https://github.com/andymai/brepkit/commit/6c309a87ca4b21f130b2d5e038094bd006f801a3"
+        },
+        "date": 1784590229678,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 876949,
+            "range": "± 1861",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 970642,
+            "range": "± 10132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11997,
+            "range": "± 80",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 651303,
+            "range": "± 1779",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26723952,
+            "range": "± 86735",
             "unit": "ns/iter"
           }
         ]
