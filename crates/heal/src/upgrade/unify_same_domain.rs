@@ -418,6 +418,30 @@ fn merge_group_with_holes(
         let end = oe.oriented_end(edge);
         let sp = topo.vertex(start)?.point();
         let ep = topo.vertex(end)?.point();
+        // A full circle is stored as a CLOSED edge: start == end with a zero
+        // chord, which the degenerate-sliver test below cannot tell it apart
+        // from. Sampling the curve interior separates them (the endpoints of a
+        // closed curve carry no extent — see the closed-edge rule in
+        // CLAUDE.md). Such a loop is a real boundary, typically a bore opening,
+        // but it reaches the loop walk as a SINGLE-VERTEX loop, and the
+        // containment classification below needs a UV polygon with area to
+        // decide outer-vs-hole. Dropping the edge instead would erase the hole
+        // and orphan its rim — a drilled pad annulus merged into its coplanar
+        // neighbour leaves the bore rim used once (free) — so defer the whole
+        // group rather than merge it wrongly.
+        if start == end {
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+            if (mid - sp).length() > lin {
+                log::debug!(
+                    "unify_same_domain: deferring group of {} faces (closed-curve boundary loop)",
+                    group_face_ids.len()
+                );
+                return Ok(None);
+            }
+        }
         if (ep - sp).length() < lin && start == end {
             continue;
         }

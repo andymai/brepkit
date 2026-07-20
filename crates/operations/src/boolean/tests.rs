@@ -5948,3 +5948,46 @@ fn severing_cut_keeps_pocketed_pieces_analytic() {
         "severed volume {volume:.3} should match analytic {expected:.3}"
     );
 }
+
+#[test]
+fn compound_cut_unify_keeps_bore_opening() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+
+    // A plate with a pad column standing on it: the pad's bottom disc ends up
+    // COPLANAR with the plate's bottom face, so `unify_same_domain` groups the
+    // two for merging.
+    let plate = crate::primitives::make_box(&mut topo, 20.0, 20.0, 2.0).unwrap();
+    let pad = crate::primitives::make_cylinder(&mut topo, 3.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, pad, &Mat4::translation(10.0, 10.0, 0.0)).unwrap();
+    let fused = boolean(&mut topo, BooleanOp::Fuse, plate, pad).unwrap();
+
+    // Bore through the pad. The bottom disc becomes an annulus whose inner wire
+    // is a single CLOSED circle edge (start == end, zero chord) — which the
+    // merge's degenerate-sliver filter used to discard, erasing the opening and
+    // leaving the bore rim used once.
+    let drill = crate::primitives::make_cylinder(&mut topo, 1.0, 30.0).unwrap();
+    crate::transform::transform_solid(&mut topo, drill, &Mat4::translation(10.0, 10.0, -5.0))
+        .unwrap();
+
+    let opts = BooleanOptions {
+        unify_faces: true,
+        ..BooleanOptions::default()
+    };
+    let result = compound_cut(&mut topo, fused, &[drill], opts).unwrap();
+
+    let bad_edges = count_non_manifold_edges(&topo, result);
+    assert_eq!(
+        bad_edges, 0,
+        "the bore opening must survive the unify pass (got {bad_edges} unpaired/over-shared edges)"
+    );
+
+    // Both bore walls (pad column outer + drilled inner) stay analytic, and the
+    // pad's annular bottom face is still present rather than merged away.
+    assert_eq!(
+        count_cylinder_faces(&topo, result),
+        2,
+        "both cylindrical walls must survive"
+    );
+}
