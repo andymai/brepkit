@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.3](https://github.com/andymai/brepkit/compare/v2.127.2...v2.127.3) (2026-07-20)
+
+
+### Bug Fixes
+
+* **heal:** revert a unify pass that would orphan edges ([#1131](https://github.com/andymai/brepkit/issues/1131)) ([dd47ed2](https://github.com/andymai/brepkit/commit/dd47ed29ffa2b520de99981de0223e35198a3226))
+
 ## [2.127.2](https://github.com/andymai/brepkit/compare/v2.127.1...v2.127.2) (2026-07-20)
 
 
