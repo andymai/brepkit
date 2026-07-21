@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784635788085,
+  "lastUpdate": 1784638842609,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8315,6 +8315,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26352744,
             "range": "± 365286",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd8cfb965c1fe826e84989e8af00072bd49663bf",
+          "message": "fix(algo): trim closed-section windows against the margin-free face window (#1148)\n\n## Root\n\nLite magnet-pad fold-2 dig continuation (#1136–#1146 series).\n`emit_closed_curve_windows` (added in #1144) bisects each window's\nin/out transition against `FaceExtent::contains` — which credits the\nboundary **margin** (~1% of the face extent). The margin exists so\nboundary-coincident sections aren't rejected, but for *trimming* it\nmakes every window overshoot the true face boundary by the margin. Two\nadjacent coplanar faces' copies of the same closed-section curve (the\npad×east-slope ellipse, one copy per wall face) then **overlap** by that\nmuch instead of chaining at their shared boundary: interleaved\nmicro-fragments of the overlap span end up used 3× by the pad wall (5 of\nthe fold-2 foot's 16 odd assembly edges).\n\n## Fix\n\nBisect against `contains_strict(p, 0.0)` — the margin-free window — so\nadjacent faces' windows meet at the shared boundary within bisection\nprecision and weld. Detection (the in-both sampling) keeps the generous\nmargin; only the transition refinement is strict.\n\nOn the fold-2 operands this eliminates the entire ×3 overlap family (16\n→ 9 odd junction edges; the remaining 9 are the corner-notch chain,\ntracked separately).\n\n## Verification\n\nFoil web green: algo 178, ops lib 773, wasm gridfinity canary 27/27,\nfull io fixture suite (incl. the lite graze-fuse fixture), clippy/fmt\nclean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nTrim closed-section windows against the margin-free face extent by\nanchoring bisection on a strict `contains_strict(..., 0.0)` sample and\nfalling back to the lenient window when a run has no strict hit. This\nremoves margin-induced overshoot while avoiding boundary-hugging\ncollapse, so adjacent coplanar faces meet at the true boundary and weld,\neliminating the 3× overlap fragments on the lite diagonal pad operands.\n\n<sup>Written for commit 94e83fd16ac88d3c094382acb9699c429a53359d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1148?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T12:58:18Z",
+          "tree_id": "bacc78d9c8892b64a76732d2c6a6dd84f2af57be",
+          "url": "https://github.com/andymai/brepkit/commit/bd8cfb965c1fe826e84989e8af00072bd49663bf"
+        },
+        "date": 1784638842069,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 935553,
+            "range": "± 4526",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1038854,
+            "range": "± 13274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13029,
+            "range": "± 262",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650007,
+            "range": "± 17858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28847510,
+            "range": "± 131459",
             "unit": "ns/iter"
           }
         ]
