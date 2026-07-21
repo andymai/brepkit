@@ -1,0 +1,72 @@
+.claude/skills/roadmap/SKILL.md
+  s_a16961766e7898::t_6ffbc6dbcbdbbc 752-790
+crates/algo/src/builder/fill_images_faces.rs
+  s_a16961766e7898::t_163dcc6c3bbc33 2049-2050,2061-2072,2075-2076
+  s_a16961766e7898::t_7a41bee595aad7 2073-2074
+crates/operations/src/boolean/mod.rs
+  s_a16961766e7898::t_75e2e1e9e93bab 674-680
+  s_a16961766e7898::t_1224478ff283bc 544-566
+crates/operations/src/tessellate/edge_sampling.rs
+  s_a16961766e7898::t_603c753afdc7e8 135-141
+  s_a16961766e7898::t_4c05f79ad8e5be 474-479
+  s_a16961766e7898::t_63b21518dae020 440-446
+  s_a16961766e7898::t_334b58ca6f9679 298-304,306-307,310-311
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a16961766e7898::t_75da301434053f 3379,3381
+  s_a16961766e7898::t_e43103f5db56e7 3298,3304,3307,3309
+  s_a16961766e7898::t_ac1e24a0ef079c 980-982
+  s_a16961766e7898::t_1ee091a56f68e9 719,3269-3273,3282-3283
+  s_a16961766e7898::t_170f50db345af5 3358
+  s_a16961766e7898::t_7e6055d4290879 961-963
+  s_a16961766e7898::t_a688dbebecdc18 1336-1340,1342,1344,1347-1389,1392-1394,1438-1440,1445-1446
+  s_a16961766e7898::t_2ede3ebfcf6d7b 1245-1261,1263,1267-1335,1441,1447-1449
+  s_a16961766e7898::t_1940952bd7f601 3394-3395,3403,3406,3408,3415-3442,3448
+  s_a16961766e7898::t_385366f76405aa 3254
+  s_a16961766e7898::t_474275ae1984a8 3242-3244,3246-3253,3255-3268,3274-3281,3284-3297,3299-3303
+  s_a16961766e7898::t_8fa0b075d11db6 3214-3223
+  s_a16961766e7898::t_b220b89cc5de0b 3240-3241,3245
+  s_a16961766e7898::t_22652c703f635b 712-718,720-742
+  s_a16961766e7898::t_f6801ad97f6f73 1442-1444
+  s_a16961766e7898::t_d4572f1c295ca9 1262,1264-1266
+  s_a16961766e7898::t_c23b57dc400502 1341,1345-1346,1390-1391,1395-1437
+  s_a16961766e7898::t_b45ab292b9782b 1343
+crates/math/src/curves.rs
+  s_a16961766e7898::t_72e72b32a39da1 386-452
+crates/io/tests/lite_pad_graze_fuse_inmem.rs
+  s_a16961766e7898::t_37dd5e8d29a7ae 1-164
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_a16961766e7898::t_2ea44b77fe7601 170-174
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a16961766e7898::t_1ee091a56f68e9 4580,4867
+  s_a16961766e7898::t_28d0cc908ac250 4555-4563,4565-4579,4581,4587,4589-4592
+  s_a16961766e7898::t_663a406fde0192 4836-4837,4845-4854,4868-4870
+  s_a16961766e7898::t_6bd38caaf83365 4605-4609,4611-4615
+  s_a16961766e7898::t_45728e3e531e90 4863-4866
+  s_a16961766e7898::t_d797320d3e2a3d 4564,4582-4586,4588
+  s_a16961766e7898::t_bff70807b3789e 4855-4862
+crates/io/tests/data/lite_pad.bin
+  s_a16961766e7898::t_8f26bed3a6df7b 1
+crates/io/tests/data/lite_foot_neighbor.bin
+  s_a16961766e7898::t_8f26bed3a6df7b 1
+crates/math/src/curves/tests.rs
+  s_a16961766e7898::t_1ee091a56f68e9 638-643
+  s_a16961766e7898::t_a53d3b47bd5dbb 587-637,644-666
+crates/io/tests/data/lite_foot_hot.bin
+  s_a16961766e7898::t_8f26bed3a6df7b 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "700b796d40fafd5c302732a69ee6f6a87494bb9d",
+  "prompts": {},
+  "sessions": {
+    "s_a16961766e7898": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "41d1df3b-4d51-4eab-ba69-cf800485b350",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
