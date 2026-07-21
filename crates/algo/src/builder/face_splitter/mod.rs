@@ -924,6 +924,62 @@ fn wire_loops_have_degenerate_area(loops: &[Vec<OrientedPCurveEdge>], tol: f64) 
     })
 }
 
+/// Split a wire loop at UV vertices it visits more than once (a "pinch"): a
+/// grand-tour trace that absorbed a sub-region as an excursion is separated
+/// into the sub-cycle and the rest, recursively. Pure out-and-back excursions
+/// separate into zero-area remnants, which are dropped (their edges' other
+/// orientation still lives in the sibling region's loop). Comparison is on
+/// the raw (unwrapped) UV, so a full-period band's two seam copies — one
+/// period apart — never read as a pinch.
+fn split_loop_at_pinch_vertices(
+    wire: &[OrientedPCurveEdge],
+    tol: f64,
+) -> Vec<Vec<OrientedPCurveEdge>> {
+    if wire.len() < 4 {
+        return vec![wire.to_vec()];
+    }
+    let qscale = 1.0 / tol.max(1e-12);
+    #[allow(clippy::cast_possible_truncation)]
+    let qkey = |p: brepkit_math::vec::Point2| -> (i64, i64) {
+        (
+            (p.x() * qscale).round() as i64,
+            (p.y() * qscale).round() as i64,
+        )
+    };
+    let mut seen: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
+    let mut pinch: Option<(usize, usize)> = None;
+    for (i, e) in wire.iter().enumerate() {
+        if let Some(&j) = seen.get(&qkey(e.start_uv)) {
+            pinch = Some((j, i));
+            break;
+        }
+        seen.insert(qkey(e.start_uv), i);
+    }
+    let Some((j, i)) = pinch else {
+        return vec![wire.to_vec()];
+    };
+    let sub: Vec<OrientedPCurveEdge> = wire[j..i].to_vec();
+    let mut rest: Vec<OrientedPCurveEdge> = wire[..j].to_vec();
+    rest.extend_from_slice(&wire[i..]);
+    let keep = |lp: Vec<OrientedPCurveEdge>| -> Vec<Vec<OrientedPCurveEdge>> {
+        if lp.is_empty() {
+            return Vec::new();
+        }
+        let pts = sample_wire_loop_uv(&lp);
+        let mut perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+            perimeter += (*last - *first).length();
+        }
+        if signed_area_2d(&pts).abs() <= perimeter * tol {
+            return Vec::new(); // out-and-back remnant
+        }
+        split_loop_at_pinch_vertices(&lp, tol)
+    };
+    let mut out = keep(sub);
+    out.extend(keep(rest));
+    out
+}
+
 /// True when any wire loop revisits a UV vertex — the signature of a
 /// self-crossing trace from the angular wire builder, which the arrangement
 /// decomposition can replace with simple (non-self-intersecting) regions even
@@ -4868,6 +4924,27 @@ fn split_face_2d_impl(
         {
             loops = retry;
         }
+        // Pinch resolution: a grand-tour loop that revisits a UV vertex is
+        // two (or more) regions traced as one — split it there. Working in
+        // the UNWRAPPED uv keeps the legitimate seam double-visit out (its
+        // two copies differ by a period). Zero-area remnants (pure
+        // out-and-back excursions) are dropped; the sliver guard below
+        // would misclassify them as holes.
+        if wire_loops_self_cross(&loops, tol.linear) {
+            let resolved: Vec<Vec<OrientedPCurveEdge>> = loops
+                .iter()
+                .flat_map(|lp| split_loop_at_pinch_vertices(lp, tol.linear))
+                .collect();
+            // Adopt only when the split UNCOVERED a region (strictly more
+            // loops) and the self-cross cleared. Equal-count adoption (shed
+            // remnant only) was tried and REFUTED: an out-and-back remnant
+            // can be load-bearing — dropping it on the straight-graze pad
+            // wall regressed the lite_pad_graze_fuse fixture to mesh
+            // fallback. Downstream reconciliation consumes those remnants.
+            if resolved.len() > loops.len() && !wire_loops_self_cross(&resolved, tol.linear) {
+                loops = resolved;
+            }
+        }
     }
 
     // Classify each loop as outer (positive area) or hole (negative).
@@ -6034,5 +6111,74 @@ mod tests {
             (c.center() - Point3::new(0.7, 0.7, 0.0)).length() < 1e-9,
             "the carved disc must be the genuine cap, not the in-hole one"
         );
+    }
+
+    fn uv_line_edge(a: Point2, b: Point2) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: dummy_pcurve(),
+            start_uv: a,
+            end_uv: b,
+            start_3d: Point3::new(a.x(), a.y(), 0.0),
+            end_3d: Point3::new(b.x(), b.y(), 0.0),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    #[test]
+    fn pinch_split_separates_figure_eight_into_two_squares() {
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let wire = vec![
+            uv_line_edge(p(0.0, 0.0), p(1.0, 0.0)),
+            uv_line_edge(p(1.0, 0.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(2.0, 1.0)),
+            uv_line_edge(p(2.0, 1.0), p(2.0, 2.0)),
+            uv_line_edge(p(2.0, 2.0), p(1.0, 2.0)),
+            uv_line_edge(p(1.0, 2.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(0.0, 1.0)),
+            uv_line_edge(p(0.0, 1.0), p(0.0, 0.0)),
+        ];
+        let out = split_loop_at_pinch_vertices(&wire, 1e-7);
+        assert_eq!(out.len(), 2, "figure-eight must split into its two cycles");
+        for lp in &out {
+            assert_eq!(lp.len(), 4);
+            let pts = sample_wire_loop_uv(lp);
+            assert!((signed_area_2d(&pts).abs() - 1.0).abs() < 1e-9);
+        }
+        assert!(!wire_loops_self_cross(&out, 1e-7));
+    }
+
+    #[test]
+    fn pinch_split_drops_pure_out_and_back_excursion() {
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let wire = vec![
+            uv_line_edge(p(0.0, 0.0), p(1.0, 0.0)),
+            uv_line_edge(p(1.0, 0.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(2.0, 1.0)),
+            uv_line_edge(p(2.0, 1.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(0.0, 1.0)),
+            uv_line_edge(p(0.0, 1.0), p(0.0, 0.0)),
+        ];
+        let out = split_loop_at_pinch_vertices(&wire, 1e-7);
+        assert_eq!(out.len(), 1, "the zero-area excursion must be dropped");
+        assert_eq!(out[0].len(), 4);
+        let pts = sample_wire_loop_uv(&out[0]);
+        assert!((signed_area_2d(&pts).abs() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pinch_split_keeps_simple_loop_whole() {
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let wire = vec![
+            uv_line_edge(p(0.0, 0.0), p(1.0, 0.0)),
+            uv_line_edge(p(1.0, 0.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(0.0, 1.0)),
+            uv_line_edge(p(0.0, 1.0), p(0.0, 0.0)),
+        ];
+        let out = split_loop_at_pinch_vertices(&wire, 1e-7);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].len(), 4);
     }
 }
