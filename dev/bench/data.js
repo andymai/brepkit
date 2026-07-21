@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784622083086,
+  "lastUpdate": 1784623888473,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7991,6 +7991,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28438946,
             "range": "± 33629",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f50ac308888fad9c6ab9974a74bd9f90ff5013bd",
+          "message": "fix(algo): sample a closed rim circle's full period in the line-clip polygon (#1142)\n\n## Root\n\nContinuation of the lite magnet-pad family (#1136, #1138, #1140), fold-2\ndig. `clip_line_to_face_boundary` classifies each candidate interval\nmidpoint against the face's arc-true boundary polygon — but a **closed**\ncircle boundary edge (a disc rim, seam vertex at both ends) has a\ndegenerate endpoint span, so `evaluate_edge_at_t` collapsed every\npolygon sample to the seam point. Any midpoint away from the seam\nclassified outside and its section chord was silently dropped.\n\nConcretely: the diagonal pad's top disc is crossed by two wall chords.\nThe east chord happened to pass within the boundary band of the\ndegenerate seam-point polygon and survived; the geometrically identical\nnorth chord (90° from the seam) vanished — the disc never split and the\njunction edges went unpaired. A pure orientation-dependent asymmetry\nfrom a collapsed polygon.\n\n## Fix\n\nWhen the boundary arc edge is a closed circle, sample its full period\nfrom the seam angle instead of the endpoint span. One-branch change,\neverything else untouched.\n\n## Result\n\nOn the captured fold-2 operands the raw fuse improves from free=12\nover=15 to free=14 over=8 (posBad 27 → 22); the remaining imbalance is\nthe pad-wall/wall-plane partition (tracked in the follow-up dig).\n\n## Verification\n\n- Regression test `through_chord_far_from_seam_clips_to_rim_crossings`\n(fails pre-fix: the chord is dropped entirely; passes now with exact rim\ncrossings).\n- Foil web green: algo 173, ops lib 773, wasm gridfinity canary 27/27,\nfull io fixture suite (incl. the #1136 fixture), clippy/fmt clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes line clipping against faces with a closed circular or elliptical\nrim by sampling the rim over its full 360° from the seam instead of the\ndegenerate endpoint span. Detects closure by vertex identity to prevent\npolygon collapse and preserve correct rim crossings.\n\n- **Bug Fixes**\n- Closed rims (circle/ellipse): if start/end vertices are identical,\nsample 96 points over TAU from the seam angle; genuine open arcs with\nnear-coincident endpoints keep span sampling.\n- Tests: added `through_chord_far_from_seam_clips_to_rim_crossings`;\naligned tolerances with the module’s convention.\n\n<sup>Written for commit a724f37caf6068f0783fca49bc7aa5f70a5ef8e5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1142?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T08:49:12Z",
+          "tree_id": "2a7df05dee34fd1d231626222ba5aa572e1eeb30",
+          "url": "https://github.com/andymai/brepkit/commit/f50ac308888fad9c6ab9974a74bd9f90ff5013bd"
+        },
+        "date": 1784623887945,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 902191,
+            "range": "± 9462",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1000519,
+            "range": "± 2363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11972,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 651386,
+            "range": "± 1033",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26902500,
+            "range": "± 93563",
             "unit": "ns/iter"
           }
         ]
