@@ -43,6 +43,47 @@ fn fuse_disjoint_cubes() {
 }
 
 #[test]
+fn intersect_multi_piece_operand_keeps_disjoint_chunks() {
+    // The lite divider clip: intersecting a multi-piece solid (two disjoint
+    // cubes merged into one solid) with a bar that crosses both legitimately
+    // yields two disjoint chunks. The multi-region acceptance gate must admit
+    // the analytic Intersect result instead of rejecting it on the
+    // single-component Euler check (which forced a mesh fallback whose open
+    // output poisoned the whole lite export chain).
+    use crate::measure::solid_volume;
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let cyl_a = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+    let cyl_b = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+    transform_solid(&mut topo, cyl_b, &Mat4::translation(6.0, 0.0, 0.0)).unwrap();
+    let two_cyls = boolean(&mut topo, BooleanOp::Fuse, cyl_a, cyl_b).unwrap();
+    let bar = crate::primitives::make_box(&mut topo, 12.0, 4.0, 1.0).unwrap();
+    transform_solid(&mut topo, bar, &Mat4::translation(-3.0, -2.0, 1.5)).unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Intersect, two_cyls, bar).unwrap();
+    let n_faces = check_result(&topo, result);
+    // The curved walls are the fallback tell: a mesh fallback re-emits the
+    // chunks as all-plane facets, the analytic path keeps the cylinders.
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let cylinders = faces
+        .iter()
+        .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == "cylinder")
+        .count();
+    assert!(
+        cylinders >= 2,
+        "analytic chunks must keep their cylinder walls, got {cylinders} of {n_faces} faces"
+    );
+    let vol = solid_volume(&topo, result, 0.05).unwrap();
+    let expected = 2.0 * std::f64::consts::PI; // two r=1 disc slabs of height 1
+    assert!(
+        (vol - expected).abs() < 0.05,
+        "two disc slabs expected (vol {expected:.3}), got {vol}"
+    );
+}
+
+#[test]
 fn fuse_six_disjoint_boxes_2x3_grid() {
     // Mirrors brepjs's `rectangularPattern() > creates a 2x3 grid` test:
     // 6 boxes of 5×5×5 at (col*10, row*10, 0), fused pairwise via

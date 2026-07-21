@@ -671,17 +671,36 @@ pub fn boolean(
                         .is_none_or(|cls_b| {
                             all_component_centers_outside(topo, &components_vec, cls_b, tol)
                         });
+                // Intersect's mirror hazard: GFA could emit a piece that is not
+                // part of A∩B at all. Reject when any component's interior
+                // sample classifies OUTSIDE either operand; `On`/unknown stay
+                // accepted (thin clip pieces legitimately touch both
+                // boundaries). Same heuristic strength as `cut_safe`'s
+                // B-interior probe — a false accept needs a non-convex piece
+                // whose AABB centre escapes it, and rejection just falls back.
+                let intersect_safe = op != BooleanOp::Intersect
+                    || [a, b].iter().all(|&operand| {
+                        brepkit_algo::classifier::try_build_analytic_classifier(topo, operand)
+                            .as_ref()
+                            .is_none_or(|cls| {
+                                no_component_center_outside(topo, &components_vec, cls, tol)
+                            })
+                    });
                 // Fuse shares this gate: fusing a tool into ONE piece of a
                 // multi-component operand (the lite base's 16 disjoint feet
                 // before their web joins them) legitimately leaves N disjoint
                 // closed manifolds, which the single-component Euler gate above
                 // can never accept. The same conditions apply; `cut_safe`'s
                 // B-interior probe is Cut-specific and passes vacuously here.
-                if matches!(op, BooleanOp::Cut | BooleanOp::Fuse)
+                // Intersect joins for the same reason: clipping a multi-piece
+                // operand (the lite void against a divider-column prism)
+                // legitimately yields N disjoint chunks.
+                if matches!(op, BooleanOp::Cut | BooleanOp::Fuse | BooleanOp::Intersect)
                     && components >= 2
                     && euler_corrected == expected_euler
                     && components_are_disjoint_pieces(topo, &components_vec)
                     && cut_safe
+                    && intersect_safe
                     // Reuse the `closed_manifold` computed above: nothing between
                     // it and here mutates the result (only read-only component
                     // and classifier queries run in between).
@@ -2340,6 +2359,64 @@ fn all_component_centers_outside(
         }
     }
     true
+}
+
+/// True when no component's AABB-centre sample classifies strictly OUTSIDE
+/// the given operand. The Intersect twin of
+/// [`all_component_centers_outside`]: an intersection piece must lie inside
+/// both operands, so an Outside verdict marks a piece GFA should not have
+/// kept. `On`/unclassifiable samples pass — thin clip pieces legitimately
+/// touch the operand boundaries, and rejection only costs the mesh fallback.
+fn no_component_center_outside(
+    topo: &Topology,
+    components: &[Vec<FaceId>],
+    classifier: &brepkit_algo::classifier::AnalyticClassifier,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    use brepkit_algo::FaceClass;
+    for comp in components {
+        let Some(centre) = component_aabb_centre(topo, comp) else {
+            continue;
+        };
+        if matches!(classifier.classify(centre, tol), Some(FaceClass::Outside)) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Centre of a face component's vertex AABB, or `None` for an empty component.
+fn component_aabb_centre(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
+    let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for &fid in comp {
+        let Ok(face) = topo.face(fid) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                for vid in [edge.start(), edge.end()] {
+                    if let Ok(v) = topo.vertex(vid) {
+                        let p = v.point();
+                        min =
+                            Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
+                        max =
+                            Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
+                    }
+                }
+            }
+        }
+    }
+    if min.x() > max.x() {
+        return None;
+    }
+    Some(Point3::new(
+        (min.x() + max.x()) * 0.5,
+        (min.y() + max.y()) * 0.5,
+        (min.z() + max.z()) * 0.5,
+    ))
 }
 
 fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
