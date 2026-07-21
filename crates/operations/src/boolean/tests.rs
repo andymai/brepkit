@@ -6057,3 +6057,43 @@ fn compound_cut_unify_still_merges_normally() {
         "the unified result must stay watertight"
     );
 }
+
+#[test]
+fn fuse_multi_component_tool_folds_each_piece() {
+    use crate::measure::solid_volume;
+    // Target 10x10x2 slab; tool = two disjoint 2x2x4 posts overlapping it,
+    // assembled into ONE two-component solid (the multi-piece tool shape a
+    // pad-union fuse delivers). The fold must merge BOTH posts.
+    let mut topo = Topology::new();
+    let base = crate::primitives::make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+    let p1 = crate::primitives::make_box(&mut topo, 2.0, 2.0, 4.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        p1,
+        &brepkit_math::mat::Mat4::translation(1.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let p2 = crate::primitives::make_box(&mut topo, 2.0, 2.0, 4.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        p2,
+        &brepkit_math::mat::Mat4::translation(7.0, 7.0, 0.0),
+    )
+    .unwrap();
+    let mut tool_faces = brepkit_topology::explorer::solid_faces(&topo, p1).unwrap();
+    tool_faces.extend(brepkit_topology::explorer::solid_faces(&topo, p2).unwrap());
+    let tool_shell = topo.add_shell(brepkit_topology::shell::Shell::new(tool_faces).unwrap());
+    let tool = topo.add_solid(brepkit_topology::solid::Solid::new(tool_shell, Vec::new()));
+    let components = super::assembly::face_components(&topo, tool);
+    assert_eq!(components.len(), 2, "tool must split into two pieces");
+
+    let result = super::fuse_multi_component_tool(&mut topo, base, components).unwrap();
+
+    let vol = solid_volume(&topo, result, 0.05).unwrap();
+    // 10*10*2 + 2 posts' above-slab parts (2*2*2 each).
+    assert!(
+        (vol - 216.0).abs() < 0.5,
+        "folded fuse volume {vol}, expected 216"
+    );
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+}
