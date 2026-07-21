@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784677061703,
+  "lastUpdate": 1784677480578,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8909,6 +8909,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26601999,
             "range": "± 294421",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "622675d2bcdef408fe860a1277de1f1f5e402dc4",
+          "message": "chore(main): release 2.127.15 (#1159)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.15](https://github.com/andymai/brepkit/compare/v2.127.14...v2.127.15)\n(2026-07-21)\n\n\n### Performance\n\n* **algo:** hoist the NURBS section domain out of the split-finder eval\nloop ([#1158](https://github.com/andymai/brepkit/issues/1158))\n([51d7d8f](https://github.com/andymai/brepkit/commit/51d7d8f9965ebe213895b6a2352ed3135a0258f1))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.15 for `brepkit-wasm`, focused on speeding up NURBS\nsplit-finder evaluations by moving section-domain calculation outside\nthe inner loop.\n\n- **Performance**\n- Hoisted the NURBS section domain out of the split-finder eval loop to\nremove repeated work and reduce CPU time.\n\n<sup>Written for commit b940b70dc43eb59979d271b3597ee77d4d3e952b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1159?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-21T23:42:25Z",
+          "tree_id": "2552e8b5394d25d0939d33db53050c18c77b46f4",
+          "url": "https://github.com/andymai/brepkit/commit/622675d2bcdef408fe860a1277de1f1f5e402dc4"
+        },
+        "date": 1784677480004,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 933664,
+            "range": "± 15980",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1031148,
+            "range": "± 4791",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13103,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650133,
+            "range": "± 1367",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28670669,
+            "range": "± 50593",
             "unit": "ns/iter"
           }
         ]
