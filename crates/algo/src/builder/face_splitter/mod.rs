@@ -33,8 +33,8 @@ use conversion::{
     uv_endpoints_from_pcurve,
 };
 use edge_splitting::{
-    find_splits_on_ellipse, find_splits_on_line, find_splits_on_nurbs_section,
-    find_splits_on_section_arc, split_boundary_edges_at_3d_points,
+    find_splits_on_line, find_splits_on_nurbs_section, find_splits_on_section_arc,
+    find_splits_on_section_ellipse, split_boundary_edges_at_3d_points,
 };
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic, sample_wire_loop_uv_via_frame};
 use special_cases::{
@@ -229,16 +229,17 @@ fn split_sections_at_t_junctions(
             // corners), so scan the full endpoint set for them; the
             // O(sections²) pressure comes from the many Line sections, which the
             // grid prunes. `find_splits_on_*` exclude the edge's own endpoints.
-            // Circle sections use the shorter-arc parameterization: each is
-            // pushed as a forward/reverse PAIR, and the CCW-domain convention
-            // returns the long complement span for the reverse twin (phantom
-            // interior splits from points outside the arc — see
-            // `find_splits_on_section_arc`). Circle sections are ≤ π by
-            // construction (the FF closed-circle emitter splits longer spans);
-            // ellipse sections carry no such guarantee, so they keep the
-            // domain-based splitter.
+            // Circle AND ellipse sections use the shorter-arc
+            // parameterization: each is pushed as a forward/reverse PAIR, and
+            // the CCW-domain convention returns the long complement span for
+            // the reverse twin (phantom interior splits from points outside
+            // the arc — see `find_splits_on_section_arc` /
+            // `find_splits_on_section_ellipse`). The shorter-arc convention
+            // matches `evaluate_edge_at_t`, which both twins share.
             EdgeCurve::Circle(_) => find_splits_on_section_arc(&edge, &endpoints, tol),
-            EdgeCurve::Ellipse(ellipse) => find_splits_on_ellipse(ellipse, &edge, &endpoints, tol),
+            EdgeCurve::Ellipse(ellipse) => {
+                find_splits_on_section_ellipse(ellipse, &edge, &endpoints, tol)
+            }
             // A marched-NURBS section (a plane×cone conic) bulges past its
             // chord like an arc — a junction endpoint mid-curve is invisible
             // to the chord-based search, so use sampled point-to-curve
