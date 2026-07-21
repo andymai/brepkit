@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784670884656,
+  "lastUpdate": 1784671301398,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8801,6 +8801,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28659481,
             "range": "± 15576",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e53ff0f377ce821a6818d3d0e420f5a4b21d310f",
+          "message": "chore(main): release 2.127.14 (#1157)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.14](https://github.com/andymai/brepkit/compare/v2.127.13...v2.127.14)\n(2026-07-21)\n\n\n### Bug Fixes\n\n* **algo:** arc-true hole-promotion containment on plane faces\n([#1156](https://github.com/andymai/brepkit/issues/1156))\n([936c007](https://github.com/andymai/brepkit/commit/936c0073ab8556f621dbd439c67a5f46a7e3b358))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.14 updates `brepkit-wasm` with a fix for arc-true\nhole-promotion containment on planar faces. This prevents misclassified\nholes and geometry artifacts.\n\n<sup>Written for commit 9b44a86c93cf333555cb5b4c993311f36262560b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1157?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-21T21:59:36Z",
+          "tree_id": "fdd4c13d1c0960c03c7e469e5df6e9e0a0a9a24c",
+          "url": "https://github.com/andymai/brepkit/commit/e53ff0f377ce821a6818d3d0e420f5a4b21d310f"
+        },
+        "date": 1784671300580,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 726684,
+            "range": "± 2340",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 802555,
+            "range": "± 1936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10183,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 501875,
+            "range": "± 4625",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22270984,
+            "range": "± 51818",
             "unit": "ns/iter"
           }
         ]
