@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.8](https://github.com/andymai/brepkit/compare/v2.127.7...v2.127.8) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** emit every in-face window of a closed section curve ([#1144](https://github.com/andymai/brepkit/issues/1144)) ([b2f062e](https://github.com/andymai/brepkit/commit/b2f062efb4b2c04df10cb6ca308743d89c3838ad))
+
 ## [2.127.7](https://github.com/andymai/brepkit/compare/v2.127.6...v2.127.7) (2026-07-21)
 
 
