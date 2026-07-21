@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.9](https://github.com/andymai/brepkit/compare/v2.127.8...v2.127.9) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** never silently drop a non-trivial open growth shell ([#1146](https://github.com/andymai/brepkit/issues/1146)) ([8326473](https://github.com/andymai/brepkit/commit/83264739a97dbb5d98563aae9029374c278db732))
+
 ## [2.127.8](https://github.com/andymai/brepkit/compare/v2.127.7...v2.127.8) (2026-07-21)
 
 
