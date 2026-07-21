@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784590230514,
+  "lastUpdate": 1784614656047,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7667,6 +7667,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26723952,
             "range": "± 86735",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8d626c74e46c118800ac826e7ce8cc4ed04a93bd",
+          "message": "fix(algo): rescue corner-window cone-cylinder sections and accept multi-piece fuses (#1136)\n\n## Root\n\nThe lite magnet-pad fuse (the lightweight export family's `4×4 stress` /\n`solid bin + magnet` root): a pad wall (r=4.45) grazes a socket-profile\ncorner cone by 0.094 mm, and the parallel-axis cone×cylinder\nintersection branches exit the cone patch through its **angular-window\ncorner**. The in-both span is a 0.097 mm piece of a 1.4 mm curve — far\nbelow the graze-refinement's extent-scaled minimum crossing — so\n`restrict_curves_to_faces` dropped both branch curves. With the\nconnecting pieces missing, the wire builder dead-ended at the junctions\nand backtracked into zero-area out-and-back slits (free=5 over=19), the\nfuse fell back to a ~9755-face mesh, and every downstream drill\ninherited the poison.\n\n## Fixes (all five required — each unmasked the next)\n\n1. **math**: `Circle3D::intersect_circle` (coplanar pair, near-tangent\ndouble-root collapse in the `sqrt(2r·δ)` well);\n`closed_circle_boundary_crossings` now also crosses Circle boundary\nedges (the Line-only scan produced ODD crossing sets, desynchronizing\nthe cyclic arc pairing) and inserts a midpoint between same-arc hit\npairs so a kept span never shares both endpoints with the boundary arc\n(the co-endpoint-lens class — `merge_duplicate_edges` would fold the\npair and collapse the lens to a zero-area slit).\n2. **phase FF**: `rescue_corner_crossing` — at both graze-drop sites,\nbisect the in/out window transitions, emit the trimmed sub-span, and\nsnap its endpoints to the exact boundary-curve × partner-surface triple\njunction (the boundary *foot* alone is displaced ~1e-6 along the\nboundary by the curve-fit error and mints a duplicate vertex). A\nstrict-interior midpoint gate keeps true tangency grazes dropped.\n3. **fit-error weld plumbing** (the recurring 1e-6-fit vs 1e-7-gate\nclass): `curve_endpoints` returns pave-vertex positions when within the\nweld band; section↔boundary UV copies of one 3D junction are reconciled\nbefore the pendant filter (they landed in different 1e-7 graph cells);\n`find_splits_on_line` dedups candidates at weld scale in 3D; plane faces\ndrop zero-extent section remnants.\n4. **face splitter**: mirrored-winding retry when the greedy trace on a\nu-periodic cylinder is broken and the rectilinear arrangement declines\n(oblique ellipse/conic cuts are outside its domain); adopted only with\nno NEW broken-loop signatures (`wire_loops_self_cross` legitimately\nstays set on full-period band loops — the seam vertex appears at both\nunwrapped copies).\n5. **ops gate + tessellation**: the multi-component balance (euler − L\n== 2N disjoint closed pieces) is checked **before** `unify_faces` (the\nlite base at this stage is legitimately 16 disjoint feet; unify was\nmangling a clean result), and Fuse is admitted to the multi-region\nacceptance gate. Tessellation edge sampling now honors the\nendpoint-trimmed NURBS convention — all three `edge_sampling.rs` NURBS\narms sampled the full knot domain, ripping a bd=119 crack along the\nparent curve of a trimmed junction spline.\n\n## Result\n\nCaptured single-pad fuse (real tool operands): ops `boolean()` returns\nthe **analytic 951-face result** (194 cyl / 256 cone / 501 plane),\nposition-manifold (free=0 over=0 posBad=0), mesh **bd=0 nm=0** at export\ndeflection, **1.2 s vs 2.7 s** for the fallback it replaces.\n\n## Verification\n\n- New fixture `crates/io/tests/lite_pad_graze_fuse_inmem.rs` (two\ncropped lite feet + the grazing pad, 73 KB of arena bins) — **fails on\nthe pre-fix engine, passes now** (differential-verified by stashing the\nengine changes).\n- New unit tests for `intersect_circle` (two-point, real pad/rim\nconfiguration, near-tangent collapse, disjoint/skew/concentric empties).\n- Foil web green: wasm gridfinity canary 27/27, ops lib 772, algo 169,\nmath 463, full io fixture suite (groove-mouth, junction-disc, snap-slot,\nnub, deepened-notch, d-series lip fuses all pass).\n\nNot yet covered (follow-ups tracked in the roadmap): the 64-pad\nwhole-base fuse + drill chain, and the tool-side lightweight re-probe\nafter release.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a graze-case cone×cylinder intersection that dropped corner-window\nsections and forced a mesh fallback. Restores an analytic, watertight\nfuse and admits multi-piece operands; 951 faces, 0 cracks, 1.2 s vs 2.7\ns.\n\n- Bug Fixes\n- `math`: `Circle3D::intersect_circle` collapses near-tangent double\nroots; circle sections also split at circle boundaries with a midpoint\nto avoid co-endpoint lenses.\n- `phase_ff`: rescue corner-window crossings; trim the kept sub-span\nclamped to the boundary edge span; snap endpoints to the exact\nboundary×surface junction (searches hole wires too); strict-interior\ngate keeps true tangency grazes dropped and fails closed on projection\nerrors.\n- Weld plumbing: `curve_endpoints` returns pave-vertex positions within\nthe weld band; reconcile section/boundary UV copies; weld-scale dedup in\n`find_splits_on_line`; drop zero-extent plane remnants.\n- Face splitter: mirrored-winding retry on u-periodic cylinders when the\ngreedy trace breaks; adopted only when it adds no new broken-loop\nsignatures.\n- Operations: check multi-component Euler balance before `unify_faces`,\nand allow Fuse results with multiple disjoint regions.\n- Tessellation: NURBS edge sampling honors endpoint-trimmed domains to\nprevent cracks along trimmed junction splines.\n\n<sup>Written for commit 42381dd3051393709068b166eee5362cb4014943.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1136?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T06:15:15Z",
+          "tree_id": "8ecd0c9c8c0bfd3c9e24137db92c74f015763f40",
+          "url": "https://github.com/andymai/brepkit/commit/8d626c74e46c118800ac826e7ce8cc4ed04a93bd"
+        },
+        "date": 1784614655456,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 949173,
+            "range": "± 1860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1051849,
+            "range": "± 1367",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13110,
+            "range": "± 260",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 662147,
+            "range": "± 10301",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28888797,
+            "range": "± 36998",
             "unit": "ns/iter"
           }
         ]
