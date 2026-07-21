@@ -80,4 +80,14 @@ fn midcell_lip_fuse_is_analytic_and_watertight() {
         curved >= 30 && n_faces < 300,
         "analytic result expected, got {curved} curved of {n_faces} faces"
     );
+
+    // Volume pins the geometry, not just the path: a wrong-but-watertight
+    // result (throat filled by the spurious disc, or a dropped region) moves
+    // the volume far beyond this band. Reference: analytic fuse of the
+    // captured operands (11983.75), watertight at export deflection.
+    let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - 11983.8).abs() < 15.0,
+        "fused volume out of band: got {vol}"
+    );
 }

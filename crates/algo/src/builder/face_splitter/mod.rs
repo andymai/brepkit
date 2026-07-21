@@ -5132,7 +5132,7 @@ fn split_face_2d_impl(
         }
         let areas: Vec<f64> = holes
             .iter()
-            .map(|h| signed_area_2d(&sample_wire_loop_uv(h)))
+            .map(|h| signed_area_2d(&sample_wire_loop_uv_periodic(h, u_per_opt, v_per_opt)))
             .collect();
         let largest = areas
             .iter()
