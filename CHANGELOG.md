@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.15](https://github.com/andymai/brepkit/compare/v2.127.14...v2.127.15) (2026-07-21)
+
+
+### Performance
+
+* **algo:** hoist the NURBS section domain out of the split-finder eval loop ([#1158](https://github.com/andymai/brepkit/issues/1158)) ([51d7d8f](https://github.com/andymai/brepkit/commit/51d7d8f9965ebe213895b6a2352ed3135a0258f1))
+
 ## [2.127.14](https://github.com/andymai/brepkit/compare/v2.127.13...v2.127.14) (2026-07-21)
 
 
