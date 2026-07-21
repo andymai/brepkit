@@ -317,8 +317,20 @@ pub(super) fn find_splits_on_nurbs_section(
     tol: f64,
 ) -> Vec<(f64, Point3)> {
     let n_samples = 64usize;
-    let eval_at =
-        |t: f64| -> Point3 { evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t) };
+    // Hoist the domain: `evaluate_edge_at_t` re-derives `domain_with_endpoints`
+    // on EVERY call, and for a trimmed NURBS sub-span that is two iterative
+    // point-to-curve projections per evaluation — this finder makes ~115
+    // evaluations per candidate point, which turned each pad-fuse face split
+    // into ~700ms (the lite magnet scenarios' timeout class). One domain
+    // computation per edge, then direct parametric evaluation.
+    let (dom0, dom1) = edge
+        .curve_3d
+        .domain_with_endpoints(edge.start_3d, edge.end_3d);
+    let dom_span = dom1 - dom0;
+    let eval_at = |t: f64| -> Point3 {
+        edge.curve_3d
+            .evaluate_with_endpoints(t.mul_add(dom_span, dom0), edge.start_3d, edge.end_3d)
+    };
     let samples: Vec<Point3> = (0..=n_samples)
         .map(|i| {
             #[allow(clippy::cast_precision_loss)]
