@@ -1,0 +1,27 @@
+crates/io/tests/midcell_lipfuse_inmem.rs
+  s_100d196bea722f::t_8efdb655cb2de4 1-83
+crates/io/tests/data/midcell_lipfuse_body.bin
+  s_100d196bea722f::t_c2280c14406168 1
+crates/io/tests/data/midcell_lipfuse_top.bin
+  s_100d196bea722f::t_c2280c14406168 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_100d196bea722f::t_7bebbe4c31c435 5116-5123,5133-5147
+  s_100d196bea722f::t_8f0141155ae868 5181
+  s_100d196bea722f::t_4365783fbccb19 5168-5180,5184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "29dbe7bd493f6831a1c4e91d3bb634277e9d10b5",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
