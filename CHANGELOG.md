@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.5](https://github.com/andymai/brepkit/compare/v2.127.4...v2.127.5) (2026-07-21)
+
+
+### Bug Fixes
+
+* **operations:** fold a multi-component fuse tool in piece by piece ([#1138](https://github.com/andymai/brepkit/issues/1138)) ([f5ef4df](https://github.com/andymai/brepkit/commit/f5ef4df7f3490bdfb993e3024c1220409c7282b6))
+
 ## [2.127.4](https://github.com/andymai/brepkit/compare/v2.127.3...v2.127.4) (2026-07-21)
 
 
