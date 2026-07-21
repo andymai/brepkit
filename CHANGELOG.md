@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.13](https://github.com/andymai/brepkit/compare/v2.127.12...v2.127.13) (2026-07-21)
+
+
+### Bug Fixes
+
+* **operations:** admit Intersect to the multi-region acceptance gate ([#1154](https://github.com/andymai/brepkit/issues/1154)) ([5345412](https://github.com/andymai/brepkit/commit/5345412600776fbaf8273c1e3f725688989aac21))
+
 ## [2.127.12](https://github.com/andymai/brepkit/compare/v2.127.11...v2.127.12) (2026-07-21)
 
 
