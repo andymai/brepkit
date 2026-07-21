@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.12](https://github.com/andymai/brepkit/compare/v2.127.11...v2.127.12) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** trace full-period cylinder partitions with the seam-glued DCEL ([#1152](https://github.com/andymai/brepkit/issues/1152)) ([f253b52](https://github.com/andymai/brepkit/commit/f253b52ad6cb5db7e3f94de1ee4651acd52c8fd3))
+
 ## [2.127.11](https://github.com/andymai/brepkit/compare/v2.127.10...v2.127.11) (2026-07-21)
 
 
