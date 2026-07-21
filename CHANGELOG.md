@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.7](https://github.com/andymai/brepkit/compare/v2.127.6...v2.127.7) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** sample a closed rim circle's full period in the line-clip polygon ([#1142](https://github.com/andymai/brepkit/issues/1142)) ([f50ac30](https://github.com/andymai/brepkit/commit/f50ac308888fad9c6ab9974a74bd9f90ff5013bd))
+
 ## [2.127.6](https://github.com/andymai/brepkit/compare/v2.127.5...v2.127.6) (2026-07-21)
 
 
