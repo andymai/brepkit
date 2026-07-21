@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784652882652,
+  "lastUpdate": 1784653320327,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8585,6 +8585,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27026821,
             "range": "± 132364",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b702e3103e708ea86124c351db9dac10fb77e2a6",
+          "message": "chore(main): release 2.127.12 (#1153)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.12](https://github.com/andymai/brepkit/compare/v2.127.11...v2.127.12)\n(2026-07-21)\n\n\n### Bug Fixes\n\n* **algo:** trace full-period cylinder partitions with the seam-glued\nDCEL ([#1152](https://github.com/andymai/brepkit/issues/1152))\n([f253b52](https://github.com/andymai/brepkit/commit/f253b52ad6cb5db7e3f94de1ee4651acd52c8fd3))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.12 of `brepkit-wasm` with a fix for tracing full-period\ncylinder partitions. We now glue the DCEL across the seam to avoid gaps\nand ensure correct partition traces.\n\n<sup>Written for commit 8fa87abbd64ffd4794c18821a9c7dc723fa884b1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1153?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-21T16:59:35Z",
+          "tree_id": "34556d1f5ef7990084d2b6b1cb9ec8fa00d464ac",
+          "url": "https://github.com/andymai/brepkit/commit/b702e3103e708ea86124c351db9dac10fb77e2a6"
+        },
+        "date": 1784653319773,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 936789,
+            "range": "± 18941",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1033114,
+            "range": "± 17219",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13088,
+            "range": "± 257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650303,
+            "range": "± 2038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28950858,
+            "range": "± 55443",
             "unit": "ns/iter"
           }
         ]
