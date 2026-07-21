@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.10](https://github.com/andymai/brepkit/compare/v2.127.9...v2.127.10) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** trim closed-section windows against the margin-free face window ([#1148](https://github.com/andymai/brepkit/issues/1148)) ([bd8cfb9](https://github.com/andymai/brepkit/commit/bd8cfb965c1fe826e84989e8af00072bd49663bf))
+
 ## [2.127.9](https://github.com/andymai/brepkit/compare/v2.127.8...v2.127.9) (2026-07-21)
 
 
