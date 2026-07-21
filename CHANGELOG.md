@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.6](https://github.com/andymai/brepkit/compare/v2.127.5...v2.127.6) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** split grand-tour cylinder loops at pinch vertices ([#1140](https://github.com/andymai/brepkit/issues/1140)) ([3221f79](https://github.com/andymai/brepkit/commit/3221f7978347c2d375829dd619b49a521fbc4472))
+
 ## [2.127.5](https://github.com/andymai/brepkit/compare/v2.127.4...v2.127.5) (2026-07-21)
 
 
