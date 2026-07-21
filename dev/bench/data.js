@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784639284320,
+  "lastUpdate": 1784648728556,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8423,6 +8423,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27076608,
             "range": "± 69642",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a5e35d36b8252a9cc737963b6eccb19e8e96b62b",
+          "message": "fix(algo): split ellipse sections with the shorter-arc convention on both twins (#1150)\n\n## Root cause\n\nSection edges enter the face splitter as forward/reverse pairs, but\n`find_splits_on_ellipse` normalized split candidates in the CCW\n`domain_with_endpoints` span — which is the **long complement span** for\nthe reverse twin. A point on the ellipse but outside the section's own\narc — e.g. an endpoint of **another window of the same multi-window\nellipse** (a socket chamfer plane cutting a pad cylinder yields one\nclosed ellipse with several in-face windows) — then normalizes to an\ninterior `t`, and the shorter-arc split evaluator (`evaluate_edge_at_t`)\nmints a phantom vertex inside the true arc.\n\nOnly the reverse twin gets split, so the pair desyncs: the wire builders\ntrace zero-area lens cells between the whole forward copy and the split\nreverse pieces, the cells attach as degenerate out-and-back hole wires,\nedge uses go odd, the shell opens, and the boolean falls back to mesh\n(the lite magnet-pad diagonal fuse: pad wall graph 46 edges with 12\nphantom pieces).\n\nThis is exactly the circle-section hazard already fixed by\n`find_splits_on_section_arc`; the comment exempted ellipses on a \"no ≤ π\nguarantee\" argument that is moot — `evaluate_edge_at_t` already applies\nthe shorter-arc convention to open ellipse edges unconditionally, so the\ndomain-based finder could never agree with the evaluator on reverse\ntwins.\n\n## Fix\n\n`find_splits_on_section_ellipse` mirrors `find_splits_on_section_arc`:\nshorter-arc parameterization matching `evaluate_edge_at_t` for both\ntwins. Genuine interior junctions still split symmetrically on both\ntwins; other-window points are excluded. Used only in\n`split_sections_at_t_junctions` (the section path); boundary-edge\nsplitting (`split_boundary_edges_at_3d_points`) deliberately keeps the\ndomain-based finder — boundary arcs may genuinely exceed π and that path\nmanages its own parameter conventions.\n\n## Verification\n\n- New regression test\n`ellipse_section_reverse_twin_ignores_other_window_points` — **fails\nagainst the old finder** (phantom split from the other-window point),\npasses with the new one; also asserts a genuine junction splits both\ntwins at the same 3D point.\n- Lite fold-2 operand replay (captured diagonal-pad fuse): pad-wall\ngraph 46 → 38 edges (phantom splits gone), open-shell odd edges 16 → 9,\nall ×3 odd families gone, wall partitions into its true 2 sub-faces via\nthe plain greedy walker.\n- Single-pad ops fuse milestone holds: F=951 analytic, mesh bd=0 nm=0,\n1.29 s, volume consistent.\n- `brepkit-algo` 180/180, `brepkit-operations` 773/773 (+ all\nintegration groups), d4 canary (`brepkit-wasm --lib gridfinity`) 27/27,\nboundaries clean, new test 10× flake-gate clean.\n\nPart of the lightweight-export parity campaign (magnet-pad fuse family).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix ellipse section splitting by applying the shorter-arc convention on\nboth twins to match `evaluate_edge_at_t`. This removes phantom\nreverse‑twin splits from other-window points and prevents degenerate\nwires/open shells in multi-window ellipse cases.\n\n- **Bug Fixes**\n- Added `find_splits_on_section_ellipse` (edge-based; mirrors\n`find_splits_on_section_arc`) and used it in\n`split_sections_at_t_junctions`; boundary edges keep the domain-based\nfinder.\n- Splits forward and reverse twins identically; ignores points outside\nthe section arc.\n- Added regression test\n`ellipse_section_reverse_twin_ignores_other_window_points` (also pins\nthe old reverse‑twin phantom split).\n\n- **Refactors**\n- Matched the arc finder’s shape by extracting the ellipse from the edge\nin the section split finder; updated the test to document the\ndomain-based finder’s reverse‑twin behavior.\n- Merged duplicated roadmap “Deferred” section and noted the >π\nellipse-section emission follow-up.\n\n<sup>Written for commit f88598578c09aa89330a0fdfa7dd1d9104de15be.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1150?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T15:43:06Z",
+          "tree_id": "d4e976ebb5d721753866098a3044a389afeac039",
+          "url": "https://github.com/andymai/brepkit/commit/a5e35d36b8252a9cc737963b6eccb19e8e96b62b"
+        },
+        "date": 1784648727668,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 898474,
+            "range": "± 1193",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 992848,
+            "range": "± 3069",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11948,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 642977,
+            "range": "± 10800",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26815883,
+            "range": "± 238796",
             "unit": "ns/iter"
           }
         ]
