@@ -584,3 +584,83 @@ fn hyperbola_tangent_nonzero_t() {
         tang_analytic.z()
     );
 }
+
+#[test]
+fn circle_intersect_circle_two_points() {
+    // Two unit-radius coplanar circles with centers 1 apart: two crossings at
+    // x = 0.5, y = ±sqrt(3)/2.
+    let a = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let b = Circle3D::new(Point3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let hits = a.intersect_circle(&b, 1e-9);
+    assert_eq!(hits.len(), 2);
+    for (p, t) in &hits {
+        assert!((p.x() - 0.5).abs() < 1e-12);
+        assert!((p.y().abs() - 3.0_f64.sqrt() / 2.0).abs() < 1e-12);
+        // Returned parameter evaluates back to the point on `a`.
+        let q = a.evaluate(*t);
+        assert!((q - *p).length() < 1e-12);
+    }
+}
+
+#[test]
+fn circle_intersect_circle_lite_pad_configuration() {
+    // The lite magnet-pad junction: pad circle r=4.45 about (-50,-76) crossing
+    // the socket cone's z=-3.8 rim circle r=1.05 about (-47.45,-78.55). The
+    // crossings are the two triple-junction points of the pad fuse.
+    let pad = Circle3D::new(
+        Point3::new(-50.0, -76.0, -3.8),
+        Vec3::new(0.0, 0.0, 1.0),
+        4.45,
+    )
+    .unwrap();
+    let rim = Circle3D::new(
+        Point3::new(-47.45, -78.55, -3.8),
+        Vec3::new(0.0, 0.0, 1.0),
+        1.05,
+    )
+    .unwrap();
+    let hits = pad.intersect_circle(&rim, 1e-7);
+    assert_eq!(hits.len(), 2);
+    for (p, _) in &hits {
+        let dp = ((p.x() + 50.0).powi(2) + (p.y() + 76.0).powi(2)).sqrt();
+        let dr = ((p.x() + 47.45).powi(2) + (p.y() + 78.55).powi(2)).sqrt();
+        assert!((dp - 4.45).abs() < 1e-9, "on pad circle: {dp}");
+        assert!((dr - 1.05).abs() < 1e-9, "on rim circle: {dr}");
+    }
+}
+
+#[test]
+fn circle_intersect_circle_near_tangent_collapses_to_foot() {
+    // Externally near-tangent pair: centers 2 + delta apart with delta far
+    // below the tolerance well. The noise root pair collapses to the single
+    // well-conditioned foot on the center line.
+    let a = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let b = Circle3D::new(
+        Point3::new(2.0 - 1e-12, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        1.0,
+    )
+    .unwrap();
+    let hits = a.intersect_circle(&b, 1e-7);
+    assert_eq!(hits.len(), 1);
+    let (p, _) = hits[0];
+    assert!((p.x() - 1.0).abs() < 1e-6);
+    assert!(p.y().abs() < 1e-6);
+}
+
+#[test]
+fn circle_intersect_circle_disjoint_and_non_coplanar_empty() {
+    let a = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    // Far apart.
+    let b = Circle3D::new(Point3::new(5.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    assert!(a.intersect_circle(&b, 1e-9).is_empty());
+    // Parallel but offset planes.
+    let c = Circle3D::new(Point3::new(1.0, 0.0, 0.5), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    assert!(a.intersect_circle(&c, 1e-9).is_empty());
+    // Skew planes.
+    let d = Circle3D::new(Point3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 1.0).unwrap();
+    assert!(a.intersect_circle(&d, 1e-9).is_empty());
+    // Concentric.
+    let e = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5).unwrap();
+    assert!(a.intersect_circle(&e, 1e-9).is_empty());
+}

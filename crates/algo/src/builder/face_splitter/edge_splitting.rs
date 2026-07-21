@@ -167,7 +167,11 @@ pub(super) fn find_splits_on_line(
         }
     }
     splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    // Weld-scale 3D dedup: two candidates within the weld band are copies of
+    // the SAME junction carrying different fit error (~1e-6); a parameter-only
+    // exact-tol dedup keeps both and mints an untrackable micro boundary piece
+    // between them.
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol || (a.1 - b.1).length() < tol * 100.0);
     splits
 }
 

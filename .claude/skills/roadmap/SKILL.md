@@ -749,6 +749,45 @@ nozzle nm 1→15, clip volume 46.78→46.70 vs 46.6±0.05). Dovetail residuals:
   must be watertight or rejected. Repro: the dblcorner fixture operands with
   the analytic path disabled, or any pre-fix build.
 
+Lite magnet-pad graze fuse — CLOSED at engine level (2026-07-21, fixture
+`crates/io/tests/lite_pad_graze_fuse_inmem.rs`; the lightweight export family's
+`4×4 stress`/`solid bin + magnet` root, full dig log in memory
+`project_lightweight-export-failure-map.md` §2026-07-21): a magnet pad's r=4.45 wall
+clips a socket-profile corner cone by 0.094 mm, and the cone×cylinder branch curves
+exit the cone patch through its ANGULAR-window corner — the in-both run (0.097 mm of a
+1.4 mm curve) is far below the graze-refinement's extent-scaled minimum, so restrict
+dropped both curves and the wire builder backtracked into out-and-back slits → whole
+fuse mesh-fell-back and poisoned every downstream drill. FIVE coordinated fixes, all
+required: (1) `Circle3D::intersect_circle` (new math primitive, near-tangent
+double-root collapse) + Circle-boundary-edge crossings in
+`closed_circle_boundary_crossings` (the Line-only scan left ODD crossing sets) + a
+midpoint inserted between same-arc hit pairs (co-endpoint-lens sanctioned split);
+(2) `rescue_corner_crossing` in the phase-FF restrict: bisect the in/out window
+transitions, trim the sub-span, snap endpoints to the boundary foot then refine to
+the exact boundary-curve×partner-surface triple junction (the foot alone is displaced
+~1e-6 ALONG the boundary and mints a duplicate vertex); strict-interior midpoint gate
+keeps true grazes dropped; (3) fit-error weld plumbing — `curve_endpoints` returns
+pave-VERTEX positions within the weld band, section↔boundary UV reconciliation before
+the pendant filter (same 3D junction, UV copies 1e-6 apart, 1e-7 graph cells),
+weld-scale 3D dedup in `find_splits_on_line`, plane-face zero-extent section filter;
+(4) cylinder-face mirrored-winding retry when the greedy loops are broken and the
+rectilinear arrangement declines (oblique ellipse cuts; adopt only with NO NEW broken
+flags — `wire_loops_self_cross` false-positives on full-period band loops at the seam
+vertex); (5) the ops gate: multi-component balance (euler−L == 2·N disjoint closed
+pieces) checked BEFORE `unify_faces` (which otherwise mangles a clean N-piece result
+— the lite base at this stage is LEGITIMATELY 16 disjoint feet) + Fuse admitted to
+the multi-region acceptance, and tessellation edge sampling honoring the
+endpoint-trimmed NURBS convention (all three `edge_sampling.rs` NURBS arms sampled
+the FULL knot domain, ripping a bd=119 crack along the parent curve of a trimmed
+junction spline). Single-pad ops fuse: analytic F=951, position-manifold, mesh bd=0
+nm=0 at 0.01, 1.2 s vs the 2.7 s fallback. DURABLE: the greedy walker's outcome is
+CHAOTIC in junction-level geometry (each 1e-6 change flipped it between different
+broken traces during the dig) — fix junction identity everywhere, then partition
+health follows; and a "graze" heuristic keyed to face extent is blind to
+corner-window exits, which can be arbitrarily smaller than either face. NOT yet
+verified: the 64-pad whole-base fuse and drill chain, and the tool-side lightweight
+re-probe (needs release + overlay).
+
 Funnel/honeycomb cylinder-disc arrangement campaign — CLOSED (2026-07-17, memory
 `project_cylinder-arrangement-rescue.md`): curved/periodic faces had NO arrangement
 rescue (the plane path's rescues are all `is_plane`-gated), so a box cut crossing a

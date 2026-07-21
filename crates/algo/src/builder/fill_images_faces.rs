@@ -2046,8 +2046,8 @@ fn sample_curve_interior(curve_ds: &crate::ds::IntersectionCurveDS) -> Vec<Point
 /// For these types, `evaluate_with_endpoints` ignores the start/end reference
 /// points entirely — they dispatch to `ParametricCurve::evaluate(t)`.
 fn curve_endpoints(
-    _topo: &Topology,
-    _arena: &GfaArena,
+    topo: &Topology,
+    arena: &GfaArena,
     curve_ds: &crate::ds::IntersectionCurveDS,
 ) -> (Option<Point3>, Option<Point3>) {
     use brepkit_math::vec::Point3;
@@ -2058,6 +2058,22 @@ fn curve_endpoints(
     let dummy = Point3::new(0.0, 0.0, 0.0);
     let start_3d = curve_ds.curve.evaluate_with_endpoints(t0, dummy, dummy);
     let end_3d = curve_ds.curve.evaluate_with_endpoints(t1, dummy, dummy);
+    // A marched/fitted curve evaluates ~1e-6 off the exact junction its mint
+    // snapped the pave vertices to (boundary-foot anchors); downstream boundary
+    // splitters gate on the exact 1e-7 tolerance, so hand back the VERTEX
+    // positions when they are the same endpoints (within the weld band) —
+    // never a repositioning, only the exact-snap variant of the same point.
+    if curve_ds.pave_blocks.len() == 1
+        && !matches!(curve_ds.curve, brepkit_topology::edge::EdgeCurve::Line)
+        && let Some(pb) = arena.pave_blocks.get(curve_ds.pave_blocks[0])
+        && let (Ok(sv), Ok(ev)) = (topo.vertex(pb.start.vertex), topo.vertex(pb.end.vertex))
+    {
+        let weld = 1e-5;
+        let (svp, evp) = (sv.point(), ev.point());
+        if (svp - start_3d).length() <= weld && (evp - end_3d).length() <= weld {
+            return (Some(svp), Some(evp));
+        }
+    }
     (Some(start_3d), Some(end_3d))
 }
 
