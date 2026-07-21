@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784614656047,
+  "lastUpdate": 1784615089461,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7721,6 +7721,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28888797,
             "range": "± 36998",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f0fcaee8c4cc3d69a25bfb78a714c2142f85d7af",
+          "message": "chore(main): release 2.127.4 (#1137)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.4](https://github.com/andymai/brepkit/compare/v2.127.3...v2.127.4)\n(2026-07-21)\n\n\n### Bug Fixes\n\n* **algo:** rescue corner-window cone-cylinder sections and accept\nmulti-piece fuses\n([#1136](https://github.com/andymai/brepkit/issues/1136))\n([8d626c7](https://github.com/andymai/brepkit/commit/8d626c74e46c118800ac826e7ce8cc4ed04a93bd))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.4 updates `brepkit-wasm` with an algorithm fix for\ncorner-window cone–cylinder intersections and support for multi-piece\nfuses. This reduces failures in complex boolean operations.\n\n- **Bug Fixes**\n- Recover cone–cylinder sections in corner-window cases and allow\nmulti-piece fuses.\n\n<sup>Written for commit 938579b1e487f88a188ffa939ebd968873ec4531.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1137?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-21T06:22:35Z",
+          "tree_id": "0cdbbbbbd12dfa03e02f5955acc983a97b11187b",
+          "url": "https://github.com/andymai/brepkit/commit/f0fcaee8c4cc3d69a25bfb78a714c2142f85d7af"
+        },
+        "date": 1784615088247,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 750336,
+            "range": "± 6802",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 850217,
+            "range": "± 16448",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10311,
+            "range": "± 127",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 549977,
+            "range": "± 5187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23474649,
+            "range": "± 338440",
             "unit": "ns/iter"
           }
         ]
