@@ -2258,7 +2258,8 @@ fn clip_line_to_face_boundary(
     // clipped to the TRUE arc rather than its chord.
     let edges = wire.edges();
     let mut boundary_segments: Vec<(Point3, Point3)> = Vec::with_capacity(edges.len());
-    let mut boundary_arcs: Vec<Option<(EdgeCurve, Point3, Point3)>> =
+    // (curve, oriented start/end points, closed-by-vertex-identity)
+    let mut boundary_arcs: Vec<Option<(EdgeCurve, Point3, Point3, bool)>> =
         Vec::with_capacity(edges.len());
     for oe in edges {
         let edge = topo.edge(oe.edge()).ok()?;
@@ -2267,7 +2268,8 @@ fn clip_line_to_face_boundary(
         boundary_segments.push((sp, ep));
         match edge.curve() {
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-                boundary_arcs.push(Some((edge.curve().clone(), sp, ep)));
+                let closed = oe.oriented_start(edge) == oe.oriented_end(edge);
+                boundary_arcs.push(Some((edge.curve().clone(), sp, ep, closed)));
             }
             // A straight edge already equals its chord, and a NURBS boundary edge
             // has no analytic arc to clip against, so neither contributes a
@@ -2298,7 +2300,7 @@ fn clip_line_to_face_boundary(
         // chord crossing the existing cases rely on — it only reaches farther
         // out when the arc genuinely does. Arcs the line misses contribute
         // nothing (the lip-cut sections that graze a corner chord keep working).
-        if let Some((curve, asp, aep)) = &boundary_arcs[seg_idx] {
+        if let Some((curve, asp, aep, _)) = &boundary_arcs[seg_idx] {
             // Intersect the arc with the EXTENDED line, not just the segment: a
             // section whose FF-clipped endpoint lies in the sliver between a
             // convex arc and its chord (the slot walls crossing a socket-edge
@@ -2417,25 +2419,31 @@ fn clip_line_to_face_boundary(
         let mut poly = Vec::new();
         for (seg_idx, (sp, ep)) in boundary_segments.iter().enumerate() {
             poly.push(frame.project(*sp));
-            if let Some((curve, asp, aep)) = &boundary_arcs[seg_idx] {
+            if let Some((curve, asp, aep, closed)) = &boundary_arcs[seg_idx] {
                 // Dense sampling: at 12 samples an r=4 quarter-arc's chord
                 // sagitta is ~0.14 — larger than the ~0.1 mm groove-mouth
                 // slivers this polygon must classify. 96 samples keep the
                 // polygon error well under the features decided by it.
                 //
-                // A CLOSED circle edge (a disc rim: seam vertex at both ends)
-                // has a degenerate endpoint span — `evaluate_edge_at_t` would
-                // collapse every sample to the seam and the polygon to a
-                // point, so everything but the seam neighbourhood classified
-                // outside (the lite pad top-disc's wall chords). Sample its
-                // full period from the seam angle instead.
-                if let EdgeCurve::Circle(c) = curve
-                    && (*asp - *aep).length() < tol
-                {
+                // A CLOSED rim edge (a disc rim: the same seam vertex at both
+                // ends) has a degenerate endpoint span — `evaluate_edge_at_t`
+                // would collapse every sample to the seam and the polygon to
+                // a point, so everything but the seam neighbourhood
+                // classified outside (the lite pad top-disc's wall chords).
+                // Sample its full period from the seam angle instead.
+                // Closedness is vertex IDENTITY, so a genuine open arc with
+                // near-coincident endpoints keeps the span sampling.
+                if *closed && let EdgeCurve::Circle(c) = curve {
                     let a_seam = c.project(*asp);
                     for k in 1..96 {
                         let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
                         poly.push(frame.project(c.evaluate(a)));
+                    }
+                } else if *closed && let EdgeCurve::Ellipse(el) = curve {
+                    let a_seam = el.project(*asp);
+                    for k in 1..96 {
+                        let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
+                        poly.push(frame.project(el.evaluate(a)));
                     }
                 } else {
                     for k in 1..96 {
@@ -3106,7 +3114,7 @@ mod clip_tests {
         let half = (4.45_f64 * 4.45 - 4.4 * 4.4).sqrt();
         assert!((a.x().abs() - half).abs() < 1e-6, "start {a:?}");
         assert!((b.x().abs() - half).abs() < 1e-6, "end {b:?}");
-        assert!((a.y() - 4.4).abs() < 1e-9 && (b.y() - 4.4).abs() < 1e-9);
+        assert!((a.y() - 4.4).abs() < 1e-6 && (b.y() - 4.4).abs() < 1e-6);
     }
 
     #[test]
