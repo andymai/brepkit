@@ -5113,7 +5113,14 @@ fn split_face_2d_impl(
         }
     }
 
-    // If all loops are CW (negative area), the winding is reversed.
+    // If all loops are CW (negative area), the winding is reversed. Promote
+    // the LARGEST-area loop as the outer — promoting whichever loop the wire
+    // builder happened to trace first is order-dependent: when a down-facing
+    // annulus (a lip's base ring) traces throat-first, the throat became the
+    // "outer", the outline was then separately promoted by the nesting pass,
+    // and the throat was never re-attached as a hole — two hole-less regions
+    // whose spurious full disc capped the bin interior (the mid-cell-dividers
+    // lip fuse: 3-way shared ring edge → open hole shell → mesh fallback).
     if !use_structural_classification && outers.is_empty() && !holes.is_empty() {
         for hole in &mut holes {
             hole.reverse();
@@ -5123,9 +5130,21 @@ fn split_face_2d_impl(
                 edge.forward = !edge.forward;
             }
         }
-        let pts: Vec<Point2> = holes[0].iter().map(|e| e.start_uv).collect();
-        let area = signed_area_2d(&pts);
-        outers.push((holes.remove(0), area));
+        let areas: Vec<f64> = holes
+            .iter()
+            .map(|h| signed_area_2d(&sample_wire_loop_uv_periodic(h, u_per_opt, v_per_opt)))
+            .collect();
+        let largest = areas
+            .iter()
+            .enumerate()
+            .max_by(|a, b| {
+                a.1.abs()
+                    .partial_cmp(&b.1.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map_or(0, |(i, _)| i);
+        let area = areas[largest];
+        outers.push((holes.remove(largest), area));
     }
 
     // A negative-area loop is only a true hole if it is geometrically NESTED
@@ -5146,11 +5165,23 @@ fn split_face_2d_impl(
     // holes so the matching below threads their edges through the split — the
     // shelled-cup lip fuse regresses if they become regions or are dropped.
     if !use_structural_classification && !outers.is_empty() && !holes.is_empty() {
-        let outer_uv: Vec<Vec<Point2>> =
-            outers.iter().map(|(w, _)| sample_wire_loop_uv(w)).collect();
+        // Plane faces: arc-true via-frame polygons. The pcurve sampler chords
+        // Circle2D arcs (and can fold reversed-boundary arcs), so a hole whose
+        // corner arcs poke past the outer's chord-approximated corners read as
+        // "outside" and got promoted — a lip base annulus lost its throat hole
+        // and the spurious full disc capped the bin interior (the
+        // mid-cell-dividers lip fuse).
+        let sample_loop = |wl: &[OrientedPCurveEdge]| -> Vec<Point2> {
+            if is_plane {
+                sampling::sample_wire_loop_uv_via_frame(wl, frame)
+            } else {
+                sample_wire_loop_uv(wl)
+            }
+        };
+        let outer_uv: Vec<Vec<Point2>> = outers.iter().map(|(w, _)| sample_loop(w)).collect();
         let mut promoted: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
         holes.retain(|hole| {
-            let hole_pts = sample_wire_loop_uv(hole);
+            let hole_pts = sample_loop(hole);
             if hole_pts.len() < 3 {
                 return true;
             }
