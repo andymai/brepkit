@@ -223,9 +223,15 @@ pub fn build_wire_loops_with_winding(
 /// chain (the defect of a min-angle successor).
 ///
 /// Sections already arrive as forward+reverse pairs; boundary edges get
-/// SYNTHETIC reversed twins for the trace only. Faces that use a synthetic
-/// half are the outer face (or touch an unpaired defect) and are dropped;
-/// the remaining orbits are the interior partition. Requires the input
+/// SYNTHETIC reversed twins for the trace only. An interior region may
+/// legitimately use synthetic halves (a CW-wound face traverses its rim
+/// reversed), so unbounded orbits are identified by area and winding, not by
+/// synthetic content: on planar faces the most-negative-area orbit is the
+/// outer face; on periodic faces the outer faces are the period-winding
+/// orbits made purely of synthetic rim twins, while a winding orbit carrying
+/// real halves is a genuine full-period band region. Orbit areas use a
+/// lifted minimal-image shoelace, so edge UVs may sit at either period copy
+/// as long as single-edge spans stay below half a period. Requires the input
 /// discipline the face splitter provides: junctions pre-split, endpoint UVs
 /// reconciled.
 pub fn build_wire_loops_dcel(

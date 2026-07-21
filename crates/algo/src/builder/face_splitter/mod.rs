@@ -4914,13 +4914,13 @@ fn split_face_2d_impl(
         // period copy — the pinch splitter would shear the band there into
         // wrong fragments (three over-shared wall sub-faces on the lite
         // diagonal-pad fuse).
-        if !wire_loops_have_degenerate_area(&dcel, tol.linear)
+        let dcel_adopted = !wire_loops_have_degenerate_area(&dcel, tol.linear)
             && (!wire_loops_self_cross(&dcel, tol.linear)
                 || wire_loops_self_cross(&loops, tol.linear))
             && (!greedy_outer_loops_nested(&dcel, cw_loops)
                 || greedy_outer_loops_nested(&loops, cw_loops))
-            && (dcel.len() > loops.len() || wire_loops_have_degenerate_area(&loops, tol.linear))
-        {
+            && (dcel.len() > loops.len() || wire_loops_have_degenerate_area(&loops, tol.linear));
+        if dcel_adopted {
             loops = dcel;
         } else {
             // The mirrored turn rule as a legacy fallback: adopt the retry only
@@ -4948,12 +4948,15 @@ fn split_face_2d_impl(
         }
         // Pinch resolution: a grand-tour loop that revisits a UV vertex is
         // two (or more) regions traced as one — split it there, whichever
-        // builder produced the winning loops. Working in the UNWRAPPED uv
-        // keeps the legitimate seam double-visit out (its two copies differ
-        // by a period). Zero-area remnants (pure out-and-back excursions)
-        // are dropped; the sliver guard below would misclassify them as
-        // holes.
-        if wire_loops_self_cross(&loops, tol.linear) {
+        // GREEDY-family builder produced the winning loops. Working in the
+        // UNWRAPPED uv keeps the legitimate seam double-visit out (its two
+        // copies differ by a period). Zero-area remnants (pure out-and-back
+        // excursions) are dropped; the sliver guard below would misclassify
+        // them as holes. An ADOPTED DCEL result is exempt: it is already the
+        // true subdivision, and its band orbit can revisit the glued seam
+        // node at the SAME stored period copy — pinch-shearing there
+        // recreates the over-shared wall fragments the trace fixed.
+        if !dcel_adopted && wire_loops_self_cross(&loops, tol.linear) {
             let resolved: Vec<Vec<OrientedPCurveEdge>> = loops
                 .iter()
                 .flat_map(|lp| split_loop_at_pinch_vertices(lp, tol.linear))
@@ -4984,11 +4987,17 @@ fn split_face_2d_impl(
         let dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
         // This branch is u-periodic by its gate: the pinch splitter is
         // unsafe on the glued seam graph (see the DCEL consult above), so
-        // the trace is used as-is.
+        // the trace is used as-is. The broken-loop flags are RELATIVE to the
+        // greedy result, not absolute — `wire_loops_self_cross` is not
+        // periodic-aware, so a valid winding band orbit revisiting the
+        // quantized seam vertex would fail an absolute gate and the refined
+        // partition (the separated strip) would be rejected.
         if dcel.len() > loops.len()
             && !wire_loops_have_degenerate_area(&dcel, tol.linear)
-            && !wire_loops_self_cross(&dcel, tol.linear)
-            && !greedy_outer_loops_nested(&dcel, cw_loops)
+            && (!wire_loops_self_cross(&dcel, tol.linear)
+                || wire_loops_self_cross(&loops, tol.linear))
+            && (!greedy_outer_loops_nested(&dcel, cw_loops)
+                || greedy_outer_loops_nested(&loops, cw_loops))
         {
             loops = dcel;
         }
