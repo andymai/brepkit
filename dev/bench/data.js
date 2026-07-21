@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784653320327,
+  "lastUpdate": 1784666324232,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8639,6 +8639,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28950858,
             "range": "± 55443",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5345412600776fbaf8273c1e3f725688989aac21",
+          "message": "fix(operations): admit Intersect to the multi-region acceptance gate (#1154)\n\n## Root cause\n\nIntersecting a multi-piece operand with a tool that crosses several\npieces legitimately yields N disjoint closed chunks — the lite base's\ndivider clip (`intersect(void solid, divider-column prism)` in the\ngridfinity `2×1 lite + mid-cell dividers` scenario) is exactly this. The\nmulti-region acceptance gate only admitted **Cut and Fuse**, so the\nclean analytic Intersect result (F=94, by-edge free=0/over=0) failed the\nsingle-component Euler check and fell back to mesh — feeding a 700-face\nall-plane operand into every downstream lite boolean of that scenario.\n\nFound while root-causing the `mid-cell dividers` bd=115 export\nregression (surfaced by #1146's fail-safe; the version bisect pins\n2.127.9). This fix rescues the first fallback in that chain; the\nscenario itself still needs the mesh-boolean open-output row (the\nterminal sink) — verified by an end-to-end overlay run, so this PR\nclaims the op-class rescue, not the scenario.\n\n## Fix\n\nAdmit `Intersect` to the multi-region gate with a mirror of Cut's\nB-interior probe: reject when any component's AABB-centre sample\nclassifies strictly **Outside either operand** (an intersection piece\nmust lie inside both). `On`/unclassifiable samples pass — thin clip\npieces legitimately touch the operand boundaries, and a false rejection\nonly costs the mesh fallback (the status quo). Same heuristic strength\nas `cut_safe`.\n\n## Results (captured divider-clip operands)\n\n| | before | after |\n|---|---|---|\n| clip intersect | 700-face all-plane fallback, 137 ms | analytic F=94,\n4 chunks, cyl/cone walls intact, 70 ms |\n\n## Verification\n\n- New regression test\n`intersect_multi_piece_operand_keeps_disjoint_chunks` (two disjoint\ncylinders ∩ crossing bar): **fails without the gate change** (0 cylinder\nfaces of 44 — all-plane fallback), passes with it (curved walls kept,\nvolume exact). The first draft used boxes and was vacuous — box\nfallbacks re-merge to few planes; the curved-wall census is the\ndiscriminator.\n- `brepkit-operations` 774/774 (+ all integration groups),\n`brepkit-algo` 184/184, d4 canary 27/27, boundaries clean, full\nworkspace via pre-push.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdmits `Intersect` to the multi‑region acceptance gate so analytic\nintersects that produce multiple disjoint chunks are accepted. This\nprevents mesh fallbacks in the lite divider clip and preserves curved\nwalls with faster runtimes.\n\n- **Bug Fixes**\n- Admit `Intersect` alongside `Cut` and `Fuse` when components ≥ 2,\nEuler checks pass, and pieces are disjoint.\n- Add winding‑based `intersect_safe`: reject when any component\nAABB‑center classifies Outside for either operand; `On` passes;\nclassification errors reject (keeps mesh fallback). Uses\n`classify_point_robust` to handle multi‑piece operands.\n- Keeps disjoint chunks for the divider‑clip case, avoiding the\n700‑plane mesh fallback; observed 94 analytic faces in ~70 ms.\n- Regression test `intersect_multi_piece_operand_keeps_disjoint_chunks`:\nverifies cylinder walls, exact volume, and that the two chunks remain\nseparate components.\n\n<sup>Written for commit c98bc89791a1dfe00c5e3272c8eefdbbe63a6a9e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1154?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T20:36:16Z",
+          "tree_id": "ef461839eb3abe2822918f4c5769523ad0841804",
+          "url": "https://github.com/andymai/brepkit/commit/5345412600776fbaf8273c1e3f725688989aac21"
+        },
+        "date": 1784666322924,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 871613,
+            "range": "± 3289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 964054,
+            "range": "± 2862",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12077,
+            "range": "± 199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 608679,
+            "range": "± 4251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26337202,
+            "range": "± 115442",
             "unit": "ns/iter"
           }
         ]
