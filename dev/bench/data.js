@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784635341867,
+  "lastUpdate": 1784635788085,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8261,6 +8261,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26860166,
             "range": "± 67965",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "66d1e028bd4fff841dcfc60afe824114a6bef524",
+          "message": "chore(main): release 2.127.9 (#1147)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.9](https://github.com/andymai/brepkit/compare/v2.127.8...v2.127.9)\n(2026-07-21)\n\n\n### Bug Fixes\n\n* **algo:** never silently drop a non-trivial open growth shell\n([#1146](https://github.com/andymai/brepkit/issues/1146))\n([8326473](https://github.com/andymai/brepkit/commit/83264739a97dbb5d98563aae9029374c278db732))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.9 for `brepkit-wasm` fixes an algorithm bug that could\nsilently drop non-trivial open growth shells. This prevents missing\ngeometry and preserves expected topology.\n\n<sup>Written for commit 2796ff756b6d1c44703adfec63437fbb726551c1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1147?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-21T12:07:21Z",
+          "tree_id": "b7c30d82f81d049fb1701c9cfa7b30fea21be08a",
+          "url": "https://github.com/andymai/brepkit/commit/66d1e028bd4fff841dcfc60afe824114a6bef524"
+        },
+        "date": 1784635787492,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 863673,
+            "range": "± 4313",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 984330,
+            "range": "± 17333",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11548,
+            "range": "± 51",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 612055,
+            "range": "± 1750",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26352744,
+            "range": "± 365286",
             "unit": "ns/iter"
           }
         ]
