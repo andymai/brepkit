@@ -729,7 +729,9 @@ pub fn boolean(
     // pavefiller when fed whole. Fuse distributes over a disjoint-union
     // tool, so fold the pieces in one at a time — each per-piece fuse is
     // the configuration the engine handles analytically.
-    if op == BooleanOp::Fuse {
+    // Gated to tools WITHOUT inner (cavity) shells: `face_components` walks
+    // the outer shell only, so a hollow piece would silently lose its cavity.
+    if op == BooleanOp::Fuse && topo.solid(b).is_ok_and(|s| s.inner_shells().is_empty()) {
         let tool_components = crate::boolean::assembly::face_components(topo, b);
         if tool_components.len() >= 2
             && components_are_disjoint_pieces(topo, &tool_components)
@@ -2398,16 +2400,6 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
     true
 }
 
-/// Merge duplicate vertices in a solid's shell by position.
-///
-/// Cut a multi-region input solid: split the components, cut each
-/// against `b` independently, then combine the per-component results
-/// back into a single multi-region solid.
-///
-/// This works around the GFA pavefiller's assumption of a single
-/// connected input — feeding a 2-piece "solid" into GFA loses one piece
-/// at a time as the cut proceeds (Category B `multiple cuts creating
-/// three pieces` and gear bore are both downstream of this).
 /// Fuse a multi-component TOOL by folding its disjoint pieces into the
 /// target one at a time.
 ///
@@ -2432,6 +2424,14 @@ fn fuse_multi_component_tool(
     Ok(result)
 }
 
+/// Cut a multi-region input solid: split the components, cut each
+/// against `b` independently, then combine the per-component results
+/// back into a single multi-region solid.
+///
+/// This works around the GFA pavefiller's assumption of a single
+/// connected input — feeding a 2-piece "solid" into GFA loses one piece
+/// at a time as the cut proceeds (Category B `multiple cuts creating
+/// three pieces` and gear bore are both downstream of this).
 fn cut_multi_region_input(
     topo: &mut Topology,
     a: SolidId,
