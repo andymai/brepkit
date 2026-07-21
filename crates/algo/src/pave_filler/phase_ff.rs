@@ -709,6 +709,37 @@ impl FaceExtent {
         }
     }
 
+    /// Like `contains`, but requires the point to sit INSIDE the true face
+    /// window by at least `depth` (no boundary margin credit). Distinguishes a
+    /// section that genuinely crosses the window interior from one that only
+    /// rides the margin band along a boundary (a tangency graze).
+    fn contains_strict(&self, p: Point3, depth: f64) -> bool {
+        match self {
+            Self::Plane {
+                frame, poly, holes, ..
+            } => {
+                let uv = frame.project(p);
+                crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
+                    && point_to_polygon_dist(uv, poly) > depth
+                    && !holes.iter().any(|h| {
+                        crate::builder::classify_2d::point_in_polygon_2d(uv, h)
+                            || point_to_polygon_dist(uv, h) <= depth
+                    })
+            }
+            Self::Analytic {
+                surface,
+                v0,
+                v1,
+                u_gap,
+                ..
+            } => surface.project_point(p).is_none_or(|(u, v)| {
+                let in_v = v >= *v0 + depth && v <= *v1 - depth;
+                let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
+                in_v && in_u
+            }),
+        }
+    }
+
     fn contains(&self, p: Point3) -> bool {
         match self {
             Self::Plane {
@@ -927,6 +958,9 @@ fn restrict_curves_to_faces(
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let n_fine = ((8.0 * approx_len / min_dim).ceil() as usize).clamp(N, 1024);
             if n_fine <= N {
+                out.extend(rescue_corner_crossing(
+                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb, tol,
+                ));
                 continue;
             }
             let ptf = |i: usize| -> Point3 {
@@ -943,6 +977,9 @@ fn restrict_curves_to_faces(
                 .collect();
             let (f0, f1) = longest_inboth_run(&inb_fine, closed);
             if f1 - f0 < 2 {
+                out.extend(rescue_corner_crossing(
+                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, tol,
+                ));
                 continue;
             }
             if closed && f1 - f0 < n_fine && !matches!(raw.curve, EdgeCurve::Circle(_)) {
@@ -1203,6 +1240,211 @@ fn trim_torus_oval_to_box_face(
         return None;
     }
     Some(out_arcs)
+}
+
+/// Rescue a real-but-tiny corner crossing from the graze-drop.
+///
+/// The extent-scaled refinement above assumes the smallest real crossing spans
+/// a fraction of the smaller face's extent — but an open section curve that
+/// clips just a CORNER of the mutual face window (entering through one
+/// boundary and exiting through an adjacent one, e.g. a parallel-axis
+/// cone×cylinder branch leaving through the cone patch's angular window edge)
+/// has an in-both run arbitrarily smaller than either face. Dropping it gaps
+/// the section chain exactly where the neighbouring faces' sections terminate,
+/// so the wire builder backtracks into a zero-area slit (the lite magnet-pad
+/// fuse family).
+///
+/// Bisects the in/out transitions around the sampled in-both run to the exact
+/// window crossings and emits the trimmed sub-span. Two gates keep true
+/// tangency grazes dropped: the piece midpoint must sit strictly INSIDE both
+/// faces' windows (no boundary-margin credit — a graze only ever rides the
+/// margin band), and the piece must have real arc length.
+#[allow(clippy::too_many_arguments)]
+fn rescue_corner_crossing(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    raw: &RawCurve,
+    ext_a: &FaceExtent,
+    ext_b: &FaceExtent,
+    inb: &[bool],
+    tol: Tolerance,
+) -> Option<RawCurve> {
+    // Open curves only: a closed near-tangent loop keeps the historical drop
+    // (the seam-adoption / internal-loop paths own closed sections).
+    if (raw.p_start - raw.p_end).length() < 1e-7 {
+        return None;
+    }
+    let n = inb.len() - 1;
+    let (b0, b1) = longest_inboth_run(inb, false);
+    if !inb[b0] {
+        return None; // no in-both sample at all
+    }
+    let span = raw.t_range.1 - raw.t_range.0;
+    #[allow(clippy::cast_precision_loss)]
+    let t_at = |i: usize| raw.t_range.0 + span * (i as f64) / (n as f64);
+    let point_at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+    let inside = |t: f64| {
+        let p = point_at(t);
+        ext_a.contains(p) && ext_b.contains(p)
+    };
+    let mut t_lo = t_at(b0);
+    if b0 > 0 {
+        let (mut out_t, mut in_t) = (t_at(b0 - 1), t_lo);
+        for _ in 0..48 {
+            let mid = 0.5 * (out_t + in_t);
+            if inside(mid) {
+                in_t = mid;
+            } else {
+                out_t = mid;
+            }
+        }
+        t_lo = in_t;
+    }
+    let mut t_hi = t_at(b1);
+    if b1 < n {
+        let (mut in_t, mut out_t) = (t_hi, t_at(b1 + 1));
+        for _ in 0..48 {
+            let mid = 0.5 * (in_t + out_t);
+            if inside(mid) {
+                in_t = mid;
+            } else {
+                out_t = mid;
+            }
+        }
+        t_hi = in_t;
+    }
+    if t_hi <= t_lo {
+        return None;
+    }
+    let depth = tol.linear * 100.0;
+    let mid = point_at(0.5 * (t_lo + t_hi));
+    if !(ext_a.contains_strict(mid, depth) && ext_b.contains_strict(mid, depth)) {
+        return None;
+    }
+    let mut len = 0.0;
+    let mut prev = point_at(t_lo);
+    for k in 1..=16 {
+        #[allow(clippy::cast_precision_loss)]
+        let p = point_at(t_lo + (t_hi - t_lo) * f64::from(k) / 16.0);
+        len += (p - prev).length();
+        prev = p;
+    }
+    if len < depth {
+        return None;
+    }
+    // Snap each endpoint onto the nearest face-boundary curve within the weld
+    // band. The trimmed curve is fitted geometry (~1e-6 off the exact
+    // surfaces), while the boundary splitters gate candidates at the exact
+    // 1e-7 tolerance — the recurring fit-error-vs-exact-gate class. Adopting
+    // the boundary FOOT gives both faces the identical on-boundary junction.
+    let surf_of = |fid: FaceId| topo.face(fid).ok().map(|f| f.surface().clone());
+    let snap = |p: Point3| -> Point3 {
+        const NS: usize = 64;
+        let weld = tol.linear * 100.0;
+        // (distance, foot, foot's curve param, owning face, edge)
+        let mut best: Option<(f64, Point3, f64, FaceId, brepkit_topology::edge::EdgeId)> = None;
+        for fid in [fa, fb] {
+            let Ok(face) = topo.face(fid) else { continue };
+            let Ok(wire) = topo.wire(face.outer_wire()) else {
+                continue;
+            };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                    continue;
+                };
+                let (sp, ep) = (sv.point(), ev.point());
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                let mut best_k = 0;
+                let mut best_d = f64::MAX;
+                for k in 0..=NS {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = d0 + (d1 - d0) * (k as f64) / (NS as f64);
+                    let d = (edge.curve().evaluate_with_endpoints(t, sp, ep) - p).length();
+                    if d < best_d {
+                        best_d = d;
+                        best_k = k;
+                    }
+                }
+                #[allow(clippy::cast_precision_loss)]
+                let mut lo = d0 + (d1 - d0) * (best_k.saturating_sub(1) as f64) / (NS as f64);
+                #[allow(clippy::cast_precision_loss)]
+                let mut hi = d0 + (d1 - d0) * ((best_k + 1).min(NS) as f64) / (NS as f64);
+                for _ in 0..48 {
+                    let m1 = lo + (hi - lo) / 3.0;
+                    let m2 = hi - (hi - lo) / 3.0;
+                    let f1 = (edge.curve().evaluate_with_endpoints(m1, sp, ep) - p).length();
+                    let f2 = (edge.curve().evaluate_with_endpoints(m2, sp, ep) - p).length();
+                    if f1 < f2 {
+                        hi = m2;
+                    } else {
+                        lo = m1;
+                    }
+                }
+                let tm = 0.5 * (lo + hi);
+                let foot = edge.curve().evaluate_with_endpoints(tm, sp, ep);
+                let d = (foot - p).length();
+                if d < weld && best.as_ref().is_none_or(|b| d < b.0) {
+                    best = Some((d, foot, tm, fid, oe.edge()));
+                }
+            }
+        }
+        let Some((_, foot, tm, owner_fid, eid)) = best else {
+            return p;
+        };
+        // The foot lies ON the boundary curve but is displaced along it by the
+        // section's fit error. The true junction is where that boundary curve
+        // meets the PARTNER face's surface — refine to it so every section
+        // ending here (this one, and the partner-pair sections computed
+        // independently) mints the SAME vertex.
+        let other = if owner_fid == fa { fb } else { fa };
+        let (Some(other_surf), Ok(edge)) = (surf_of(other), topo.edge(eid)) else {
+            return foot;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return foot;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        let dist_to_surf = |q: Point3| -> f64 {
+            other_surf
+                .project_point(q)
+                .and_then(|(u, v)| other_surf.evaluate(u, v))
+                .map_or(f64::MAX, |s| (s - q).length())
+        };
+        let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+        let half = (d1 - d0).abs().max(1e-9) * 0.01;
+        let (mut lo, mut hi) = (tm - half, tm + half);
+        for _ in 0..64 {
+            let m1 = lo + (hi - lo) / 3.0;
+            let m2 = hi - (hi - lo) / 3.0;
+            let f1 = dist_to_surf(edge.curve().evaluate_with_endpoints(m1, sp, ep));
+            let f2 = dist_to_surf(edge.curve().evaluate_with_endpoints(m2, sp, ep));
+            if f1 < f2 {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        let tj = 0.5 * (lo + hi);
+        let junction = edge.curve().evaluate_with_endpoints(tj, sp, ep);
+        if dist_to_surf(junction) <= tol.linear * 10.0 && (junction - foot).length() <= weld {
+            junction
+        } else {
+            foot
+        }
+    };
+    let p_start = snap(point_at(t_lo));
+    let p_end = snap(point_at(t_hi));
+    Some(RawCurve {
+        curve: raw.curve.clone(),
+        bbox: raw.bbox,
+        t_range: (t_lo, t_hi),
+        p_start,
+        p_end,
+    })
 }
 
 /// Trim a CLOSED section curve (Ellipse or NURBS) to its in-both arc
@@ -2969,8 +3211,16 @@ fn closed_circle_boundary_crossings(
     circle: &brepkit_math::curves::Circle3D,
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
-    let face_hits = |fid: FaceId| -> Vec<(f64, Point3)> {
-        let mut hits: Vec<(f64, Point3)> = Vec::new();
+    // Hits carry the boundary edge they came from when that edge is an ARC
+    // (`Some(edge_id)`); line-edge hits carry `None`. Adjacent same-arc hit
+    // pairs get a midpoint inserted below — the kept span between them would
+    // otherwise share BOTH endpoints with the boundary arc (a co-endpoint
+    // lens), which `merge_duplicate_edges` folds into one edge, collapsing
+    // the lens region to a zero-area slit. The midpoint split is the
+    // sanctioned splitter-side resolution (never make the shared merge
+    // smarter).
+    let face_hits = |fid: FaceId| -> Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> {
+        let mut hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> = Vec::new();
         let Ok(face) = topo.face(fid) else {
             return hits;
         };
@@ -2981,23 +3231,82 @@ fn closed_circle_boundary_crossings(
             let Ok(edge) = topo.edge(oe.edge()) else {
                 continue;
             };
-            // Only line boundary edges are supported for now (covers all
-            // current sphere-hemisphere + box-face boundaries).
-            if !matches!(edge.curve(), EdgeCurve::Line) {
-                continue;
-            }
             let Ok(sv) = topo.vertex(edge.start()) else {
                 continue;
             };
             let Ok(ev) = topo.vertex(edge.end()) else {
                 continue;
             };
-            for (p, t) in circle.intersect_segment(sv.point(), ev.point(), tol.linear) {
+            let mut edge_hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> =
+                Vec::new();
+            match edge.curve() {
+                EdgeCurve::Line => {
+                    for (p, t) in circle.intersect_segment(sv.point(), ev.point(), tol.linear) {
+                        edge_hits.push((t, p, None));
+                    }
+                }
+                // Arc boundary edges (a plane face rimmed by a cone/cylinder
+                // corner): a section circle crossing them was invisible to the
+                // Line-only scan, leaving an ODD crossing set — the arcs then
+                // desynchronize `emit_split_circle_arcs`' cyclic pairing and
+                // whole in-face spans vanish (the lite magnet-pad fuse).
+                EdgeCurve::Circle(bc) => {
+                    const NS: usize = 128;
+                    let full = (sv.point() - ev.point()).length() < tol.linear;
+                    let cand = circle.intersect_circle(bc, tol.linear);
+                    if cand.is_empty() {
+                        continue;
+                    }
+                    // Filter to the edge's actual arc by proximity to its
+                    // sampled polyline (skipped for a full-circle edge). The
+                    // band covers the sampling sagitta plus the fit weld.
+                    let mut samples: Vec<Point3> = Vec::new();
+                    if !full {
+                        let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
+                        for i in 0..=NS {
+                            #[allow(clippy::cast_precision_loss)]
+                            let t = t0 + (t1 - t0) * (i as f64) / (NS as f64);
+                            samples.push(edge.curve().evaluate_with_endpoints(
+                                t,
+                                sv.point(),
+                                ev.point(),
+                            ));
+                        }
+                    }
+                    let band = {
+                        let step = if samples.len() > 1 {
+                            (samples[1] - samples[0]).length()
+                        } else {
+                            0.0
+                        };
+                        (step * step / (8.0 * bc.radius().max(tol.linear)))
+                            .mul_add(2.0, tol.linear * 100.0)
+                    };
+                    for (p, t) in cand {
+                        let on_arc = full
+                            || samples.windows(2).any(|w| {
+                                let d = w[1] - w[0];
+                                let l2 = d.length_squared();
+                                let f = if l2 > 1e-20 {
+                                    ((p - w[0]).dot(d) / l2).clamp(0.0, 1.0)
+                                } else {
+                                    0.0
+                                };
+                                (p - (w[0] + d * f)).length() <= band
+                            });
+                        if on_arc {
+                            edge_hits.push((t, p, Some(oe.edge())));
+                        }
+                    }
+                }
+                _ => continue,
+            }
+            for (t, p, src) in edge_hits {
                 let dup = hits
                     .iter()
-                    .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
+                    .any(|(_, q, _)| (*q - p).length() < tol.linear * 10.0);
                 if !dup {
-                    hits.push((t, p));
+                    hits.push((t, p, src));
                 }
             }
         }
@@ -3046,7 +3355,7 @@ fn closed_circle_boundary_crossings(
         }
     };
 
-    let mut hits: Vec<(f64, Point3)> = Vec::new();
+    let mut hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> = Vec::new();
     for &fid in &faces_to_check {
         // A sphere hemisphere's boundary is a polygon inscribed in the seam
         // (equator) circle. A section circle that genuinely crosses the seam
@@ -3067,9 +3376,9 @@ fn closed_circle_boundary_crossings(
                 for (t, p) in seam {
                     let dup = hits
                         .iter()
-                        .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
+                        .any(|(_, q, _)| (*q - p).length() < tol.linear * 10.0);
                     if !dup {
-                        hits.push((t, p));
+                        hits.push((t, p, None));
                     }
                 }
                 continue;
@@ -3082,7 +3391,8 @@ fn closed_circle_boundary_crossings(
         // distributed around the full turn. A bare `len > 4` count misses a
         // 4-segment inscribed polygon (square equator → exactly 4 hits), so
         // test even angular distribution instead of relying on the count.
-        if hits_are_inscribed_polygon(&fh) {
+        let fh_plain: Vec<(f64, Point3)> = fh.iter().map(|&(t, p, _)| (t, p)).collect();
+        if hits_are_inscribed_polygon(&fh_plain) {
             log::debug!(
                 "closed_circle_boundary_crossings: {fid:?} has {} hits evenly distributed on \
                  the circle — boundary coincident with circle, excluding its hits",
@@ -3090,24 +3400,52 @@ fn closed_circle_boundary_crossings(
             );
             continue;
         }
-        for (t, p) in fh {
+        for (t, p, src) in fh {
             let dup = hits
                 .iter()
-                .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
+                .any(|(_, q, _)| (*q - p).length() < tol.linear * 10.0);
             if !dup {
-                hits.push((t, p));
+                hits.push((t, p, src));
             }
         }
     }
 
     hits.sort_by(|a, b| a.0.total_cmp(&b.0));
 
+    // Midpoint-split spans whose BOTH ends were minted by the same boundary
+    // ARC edge: the span between them shares both endpoints with that arc (a
+    // co-endpoint lens) and `merge_duplicate_edges` would fold the pair,
+    // collapsing the lens region into a zero-area slit face. Inserting the
+    // angular midpoint keeps the section as two sub-arcs — no shared qpair.
+    let n = hits.len();
+    if n >= 2 {
+        let mut mids: Vec<(f64, Point3)> = Vec::new();
+        for i in 0..n {
+            let (t0, _, s0) = hits[i];
+            let (t1, _, s1) = hits[(i + 1) % n];
+            if let (Some(a), Some(b)) = (s0, s1)
+                && a == b
+            {
+                let mut t1u = t1;
+                if t1u <= t0 {
+                    t1u += std::f64::consts::TAU;
+                }
+                let tm = 0.5 * (t0 + t1u);
+                mids.push((tm.rem_euclid(std::f64::consts::TAU), circle.evaluate(tm)));
+            }
+        }
+        for (t, p) in mids {
+            hits.push((t, p, None));
+        }
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+
     log::trace!(
         "closed_circle_boundary_crossings: face_a={face_a:?} face_b={face_b:?} hits={}",
         hits.len()
     );
 
-    hits
+    hits.into_iter().map(|(t, p, _)| (t, p)).collect()
 }
 
 /// Crossings of a section `circle` with a sphere face's seam (boundary) plane.

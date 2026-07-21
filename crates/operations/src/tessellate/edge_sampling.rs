@@ -132,7 +132,13 @@ pub(super) fn edge_sample_count(
         EdgeCurve::NurbsCurve(nurbs) => {
             // Adaptive: coarse-pass deviation measurement, then refine if the
             // chord sag OR the per-segment turn exceeds tolerance.
-            let (u0, u1) = nurbs.domain();
+            // Endpoint-trimmed convention: a section edge can be a validated
+            // sub-span of its stored curve; measuring the FULL knot domain
+            // would size (and later sample) the whole parent curve.
+            let (u0, u1) = match (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                (Ok(sv), Ok(ev)) => edge.curve().domain_with_endpoints(sv.point(), ev.point()),
+                _ => nurbs.domain(),
+            };
             let n_spans = nurbs
                 .control_points()
                 .len()
@@ -289,12 +295,20 @@ pub(super) fn sample_edge(
             sample_uniform(ellipse, t_start, t_end, n)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
+            // Endpoint-trimmed convention: a validated sub-span samples only
+            // the edge's own piece of the stored curve (already start→end);
+            // sampling the full knot domain traces the whole parent section
+            // curve and rips a crack along the un-shared part.
+            let sp = topo.vertex(edge.start())?.point();
+            let ep = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
             let (u0, u1) = nurbs.domain();
-            let mut pts = sample_uniform(nurbs, u0, u1, n);
+            let is_subspan = (t0 - u0).abs() > 1e-12 || (t1 - u1).abs() > 1e-12;
+            let mut pts = sample_uniform(nurbs, t0, t1, n);
             // Normalize to edge (start→end vertex) order so every consumer's
             // `is_forward` walk holds even for section edges whose stored
-            // curve runs end→start.
-            if nurbs_runs_end_to_start(topo, edge, nurbs)? {
+            // curve runs end→start. Sub-spans are already endpoint-ordered.
+            if !is_subspan && nurbs_runs_end_to_start(topo, edge, nurbs)? {
                 pts.reverse();
             }
             pts
@@ -423,7 +437,13 @@ pub(super) fn sample_wire_positions(
                 );
             }
             EdgeCurve::NurbsCurve(nurbs) => {
-                let (u0, u1) = nurbs.domain();
+                // Endpoint-trimmed convention: sample only the edge's own
+                // sub-span of the stored curve (see `sample_edge`).
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
+                let (u0, u1) = edge.curve().domain_with_endpoints(sp, ep);
+                let full = nurbs.domain();
+                let is_subspan = (u0 - full.0).abs() > 1e-12 || (u1 - full.1).abs() > 1e-12;
                 let n_spans = nurbs
                     .control_points()
                     .len()
@@ -451,7 +471,12 @@ pub(super) fn sample_wire_positions(
                     sag_n.max(turn_n)
                 }
                 .clamp(8, 4096);
-                let forward = oe.is_forward() != nurbs_runs_end_to_start(topo, edge, nurbs)?;
+                let forward = if is_subspan {
+                    // Sub-spans are already endpoint-ordered start→end.
+                    oe.is_forward()
+                } else {
+                    oe.is_forward() != nurbs_runs_end_to_start(topo, edge, nurbs)?
+                };
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| nurbs.evaluate(t),

@@ -383,6 +383,73 @@ impl Circle3D {
 
         out
     }
+
+    /// Intersect the circle with another COPLANAR circle.
+    ///
+    /// Returns up to 2 intersection points along with their angle parameter
+    /// `t` on `self`. Non-coplanar pairs (skew or offset planes) and
+    /// coincident/concentric pairs return no points — callers own those
+    /// configurations separately.
+    ///
+    /// Near-tangent conditioning: when the circles graze (the chord implied
+    /// by the root pair penetrates by less than `tol`), the two roots are
+    /// noise straddling the tangency foot — position error grows as
+    /// `sqrt(2·r·δ)`, the recurring tangential-contact class. The
+    /// well-conditioned double root (the foot on the center line) is emitted
+    /// instead of the pair.
+    #[must_use]
+    pub fn intersect_circle(&self, other: &Self, tol: f64) -> Vec<(Point3, f64)> {
+        let mut out = Vec::new();
+        if self.normal.cross(other.normal).length() > 1e-9 {
+            return out; // Skew planes — not this primitive's case.
+        }
+        let dvec = other.center - self.center;
+        if dvec.dot(self.normal).abs() > tol {
+            return out; // Parallel but offset planes.
+        }
+        let du = dvec.dot(self.u_axis);
+        let dv = dvec.dot(self.v_axis);
+        let d2 = du * du + dv * dv;
+        let d = d2.sqrt();
+        if d < tol {
+            return out; // Concentric (incl. coincident) — no discrete crossings.
+        }
+        let (r1, r2) = (self.radius, other.radius);
+        let a = (d2 + r1 * r1 - r2 * r2) / (2.0 * d);
+        let h2 = r1 * r1 - a * a;
+        let r_eff = r1.min(r2);
+        if h2 < -2.0 * r_eff * tol {
+            return out; // Separated (or nested) beyond the tangency well.
+        }
+        let ux = Vec3::new(
+            (self.u_axis.x() * du + self.v_axis.x() * dv) / d,
+            (self.u_axis.y() * du + self.v_axis.y() * dv) / d,
+            (self.u_axis.z() * du + self.v_axis.z() * dv) / d,
+        );
+        let vx = self.normal.cross(ux);
+        let foot = self.center + ux * a;
+        let mut push = |p: Point3| {
+            let v = p - self.center;
+            let mut t = v.dot(self.v_axis).atan2(v.dot(self.u_axis));
+            if t < 0.0 {
+                t += std::f64::consts::TAU;
+            }
+            if !out
+                .iter()
+                .any(|(q, _): &(Point3, f64)| (*q - p).length() < tol)
+            {
+                out.push((p, t));
+            }
+        };
+        if h2 <= 2.0 * r_eff * tol {
+            push(foot);
+        } else {
+            let h = h2.sqrt();
+            push(foot + vx * h);
+            push(foot - vx * h);
+        }
+        out
+    }
 }
 
 // ── Ellipse3D ──────────────────────────────────────────────────────

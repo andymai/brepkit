@@ -4552,6 +4552,44 @@ fn split_face_2d_impl(
         }
     }
 
+    // Snap section UV endpoints onto 3D-coincident boundary UV copies. The
+    // wire graph keys junctions on UV quantized at the exact tolerance, but a
+    // section endpoint's UV comes from its own pcurve evaluation while the
+    // boundary split's UV comes from span interpolation — the same exact 3D
+    // junction can carry UV copies ~1e-6 apart (the fit-error class), which
+    // lands them in different graph cells and the section reads as pendant.
+    // Adopting the boundary's UV copy is a sub-weld no-op in 3D.
+    {
+        let (bnd, secs) = all_edges.split_at_mut(n_boundary_edges);
+        let mut anchors: Vec<(Point3, Point2)> = bnd
+            .iter()
+            .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
+            .collect();
+        for e in secs {
+            for pick_start in [true, false] {
+                let (p3, uv) = if pick_start {
+                    (e.start_3d, e.start_uv)
+                } else {
+                    (e.end_3d, e.end_uv)
+                };
+                let snapped = anchors
+                    .iter()
+                    .filter(|(a3, auv)| {
+                        (*a3 - p3).length() < tol.linear && (*auv - uv).length() < 1e-2
+                    })
+                    .min_by(|(_, a), (_, b)| (*a - uv).length().total_cmp(&(*b - uv).length()))
+                    .map(|(_, auv)| *auv);
+                let final_uv = snapped.unwrap_or(uv);
+                if pick_start {
+                    e.start_uv = final_uv;
+                } else {
+                    e.end_uv = final_uv;
+                }
+                anchors.push((p3, final_uv));
+            }
+        }
+    }
+
     // Drop pendant section edges that dangle into the face interior — left
     // in, the traversal walks out and back along them, spuriously
     // over-splitting the face (boundary edges are never removed, so the
@@ -4564,7 +4602,17 @@ fn split_face_2d_impl(
     // endpoint mints them); a self-loop edge derails the angular walker into
     // degenerate single-edge sub-faces.
     let all_edges: Vec<OrientedPCurveEdge> = if is_plane {
+        // Plane frames are isometric, so a sub-weld 3D chord IS a degenerate
+        // piece (a self-split remnant ~fit-error long); real sliver edges
+        // (corner lenses) are orders of magnitude longer.
+        let n_b = n_boundary_edges;
+        let weld = tol.linear * 100.0;
         all_edges
+            .into_iter()
+            .enumerate()
+            .filter(|(i, e)| *i < n_b || (e.start_3d - e.end_3d).length() >= weld)
+            .map(|(_, e)| e)
+            .collect()
     } else {
         let n_b = n_boundary_edges;
         all_edges
@@ -4785,7 +4833,8 @@ fn split_face_2d_impl(
         && (wire_loops_self_cross(&loops, tol.linear)
             || greedy_outer_loops_nested(&loops, cw_loops)
             || wire_loops_have_degenerate_area(&loops, tol.linear))
-        && let Some(result) = split_cylinder_band_by_arrangement(
+    {
+        if let Some(result) = split_cylinder_band_by_arrangement(
             &surface,
             &all_edges,
             n_boundary_edges,
@@ -4793,9 +4842,32 @@ fn split_face_2d_impl(
             reversed,
             face_id,
             tol.linear,
-        )
-    {
-        return result;
+        ) {
+            return result;
+        }
+        // Oblique cuts (ellipse/conic sections — e.g. a socket profile biting
+        // a pad wall) are outside the rectilinear arrangement's domain. The
+        // grand-tour trace is a junction-turn artifact: retry with the
+        // mirrored turn rule and adopt the retry only when it is strictly
+        // healthier — more loops and none of the broken signatures.
+        let retry =
+            build_wire_loops_with_winding(&all_edges, tol.linear, u_periodic, v_periodic, true);
+        // Adoption bar: zero degenerate areas, NO NEW broken flags relative to
+        // the greedy result, and a strict improvement — either the greedy had
+        // degenerate loops (which the retry cleared) or the retry partitions
+        // into more loops. `wire_loops_self_cross` is not periodic-aware — a
+        // full-period band loop legitimately visits the seam vertex at both
+        // unwrapped copies — so it may stay set on both sides; what matters is
+        // the retry does not introduce it.
+        if !wire_loops_have_degenerate_area(&retry, tol.linear)
+            && (!wire_loops_self_cross(&retry, tol.linear)
+                || wire_loops_self_cross(&loops, tol.linear))
+            && (!greedy_outer_loops_nested(&retry, cw_loops)
+                || greedy_outer_loops_nested(&loops, cw_loops))
+            && (retry.len() > loops.len() || wire_loops_have_degenerate_area(&loops, tol.linear))
+        {
+            loops = retry;
+        }
     }
 
     // Classify each loop as outer (positive area) or hole (negative).

@@ -541,7 +541,29 @@ pub fn boolean(
                 } else {
                     None
                 };
-                let needs_unify = !euler_balanced_pre || manifold_pre == Some(false);
+                // Multi-component operands (e.g. the lite base's 16 disjoint
+                // feet before their web joins them) balance at 2*N, which the
+                // single-component check above can never see — without this,
+                // `unify_faces` runs on a perfectly clean N-piece result and
+                // its edits break the manifold it was meant to repair.
+                let (multi_balanced_pre, manifold_pre) = if euler_balanced_pre {
+                    (false, manifold_pre)
+                } else {
+                    let comps = crate::boolean::assembly::face_components(topo, result);
+                    #[allow(clippy::cast_possible_wrap)]
+                    let expected = (comps.len() as i64) * 2;
+                    if comps.len() >= 2
+                        && euler_pre2 - inner_shell_surplus - inner_wire_count_pre == expected
+                        && components_are_disjoint_pieces(topo, &comps)
+                    {
+                        let m = is_closed_manifold(topo, result)?;
+                        (m, Some(m))
+                    } else {
+                        (false, None)
+                    }
+                };
+                let needs_unify =
+                    !(euler_balanced_pre || multi_balanced_pre) || manifold_pre == Some(false);
                 let mut unified = false;
                 if needs_unify {
                     for _ in 0..3 {
@@ -649,7 +671,13 @@ pub fn boolean(
                         .is_none_or(|cls_b| {
                             all_component_centers_outside(topo, &components_vec, cls_b, tol)
                         });
-                if op == BooleanOp::Cut
+                // Fuse shares this gate: fusing a tool into ONE piece of a
+                // multi-component operand (the lite base's 16 disjoint feet
+                // before their web joins them) legitimately leaves N disjoint
+                // closed manifolds, which the single-component Euler gate above
+                // can never accept. The same conditions apply; `cut_safe`'s
+                // B-interior probe is Cut-specific and passes vacuously here.
+                if matches!(op, BooleanOp::Cut | BooleanOp::Fuse)
                     && components >= 2
                     && euler_corrected == expected_euler
                     && components_are_disjoint_pieces(topo, &components_vec)
