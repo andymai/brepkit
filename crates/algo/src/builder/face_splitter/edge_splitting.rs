@@ -423,6 +423,55 @@ pub(super) fn find_splits_on_section_arc(
     splits
 }
 
+/// Find split parameters on an ELLIPSE SECTION edge — the ellipse twin of
+/// [`find_splits_on_section_arc`].
+///
+/// Sections are pushed as forward/reverse pairs, and the CCW
+/// `domain_with_endpoints` span for the reverse twin is the LONG complement.
+/// A point on the ellipse but OUTSIDE the section's own arc — e.g. an
+/// endpoint of ANOTHER window of the same multi-window ellipse (a socket
+/// chamfer plane cutting a pad cylinder yields one closed ellipse with
+/// several in-face windows) — then normalizes to an interior `t`, and the
+/// shorter-arc split evaluator mints a phantom vertex inside the true arc.
+/// Only the reverse twin is affected, so the pair desyncs: the wire builders
+/// trace zero-area lens cells between the whole forward copy and the split
+/// reverse pieces, the cells attach as degenerate out-and-back hole wires,
+/// and the shell opens. The shorter-arc parameterization here matches
+/// `evaluate_edge_at_t` for both twins; an ellipse section spanning > π is
+/// already outside that evaluator's contract, so matching it is strictly
+/// more consistent than the domain-based normalization.
+pub(super) fn find_splits_on_section_ellipse(
+    edge: &OrientedPCurveEdge,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    let EdgeCurve::Ellipse(ellipse) = &edge.curve_3d else {
+        return Vec::new();
+    };
+    let a0 = ellipse.project(edge.start_3d);
+    let delta = shorter_arc_delta(ellipse.project(edge.end_3d) - a0);
+    if delta.abs() < 1e-14 {
+        return Vec::new();
+    }
+    let mut splits = Vec::new();
+    for &sp in split_pts_3d {
+        crate::perf::bump_face_split_probe();
+        let angle = ellipse.project(sp);
+        let closest = ellipse.evaluate(angle);
+        if (sp - closest).length() > tol {
+            continue;
+        }
+        let t_norm = shorter_arc_delta(angle - a0) / delta;
+        if t_norm <= tol || t_norm >= 1.0 - tol {
+            continue;
+        }
+        splits.push((t_norm, sp));
+    }
+    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    splits
+}
+
 /// Find split parameters on an ellipse edge.
 pub(super) fn find_splits_on_ellipse(
     ellipse: &brepkit_math::curves::Ellipse3D,
@@ -499,6 +548,82 @@ mod tests {
         assert_eq!(splits.len(), 2);
         assert!((splits[0].1 - sp_a).length() < 1e-6);
         assert!((splits[1].1 - sp_b).length() < 1e-6);
+    }
+
+    fn ellipse_section_edge(
+        ellipse: &brepkit_math::curves::Ellipse3D,
+        a0: f64,
+        a1: f64,
+        forward: bool,
+    ) -> OrientedPCurveEdge {
+        let (s, e) = if forward {
+            (ellipse.evaluate(a0), ellipse.evaluate(a1))
+        } else {
+            (ellipse.evaluate(a1), ellipse.evaluate(a0))
+        };
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Ellipse(ellipse.clone()),
+            pcurve: Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(1.0, 0.0),
+            start_3d: s,
+            end_3d: e,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    /// A multi-window ellipse (one closed cylinder×plane ellipse emitted as
+    /// several in-face windows): a point from ANOTHER window lies on the
+    /// ellipse but outside this section's own arc. The CCW-domain finder
+    /// normalized it to an interior `t` on the REVERSE twin only (the long
+    /// complement span), minting a phantom split that desynced the twins.
+    #[test]
+    fn ellipse_section_reverse_twin_ignores_other_window_points() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::vec::Vec3;
+
+        let ellipse = Ellipse3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            1.0,
+        )
+        .unwrap();
+        let other_window_pt = ellipse.evaluate(3.0);
+        let junction = ellipse.evaluate(0.6);
+
+        for forward in [true, false] {
+            let edge = ellipse_section_edge(&ellipse, 0.2, 1.0, forward);
+            let phantom = find_splits_on_section_ellipse(&edge, &[other_window_pt], 1e-7);
+            assert!(
+                phantom.is_empty(),
+                "other-window point must not split the {} twin",
+                if forward { "forward" } else { "reverse" }
+            );
+
+            let real = find_splits_on_section_ellipse(&edge, &[junction], 1e-7);
+            assert_eq!(real.len(), 1);
+            let minted = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, real[0].0);
+            assert!(
+                (minted - junction).length() < 1e-9,
+                "split evaluator must mint the junction point on both twins"
+            );
+        }
+
+        // Pin the divergence that motivated the section-specific finder: the
+        // domain-based `find_splits_on_ellipse` (still correct for boundary
+        // edges) DOES phantom-split the reverse twin on the other-window
+        // point. If it ever becomes twin-safe, delete this assertion and
+        // consider re-unifying the finders.
+        let rev = ellipse_section_edge(&ellipse, 0.2, 1.0, false);
+        let old = find_splits_on_ellipse(&ellipse, &rev, &[other_window_pt], 1e-7);
+        assert_eq!(
+            old.len(),
+            1,
+            "domain-based finder is expected to phantom-split the reverse twin"
+        );
     }
 
     /// A CLOSED rim on a cylinder, seamed at 3pi/2 (i.e. NOT at the circle's
