@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784624332210,
+  "lastUpdate": 1784626734336,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8099,6 +8099,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27013354,
             "range": "± 182323",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b2f062efb4b2c04df10cb6ca308743d89c3838ad",
+          "message": "fix(algo): emit every in-face window of a closed section curve (#1144)\n\n## Root\n\nLite magnet-pad family, fold-2 dig (follow-up to\n#1136/#1138/#1140/#1142). A closed section curve — the pad-cylinder ×\nsloped-plane ellipse — crossing a **notched** face has one in-face\nwindow per side of the notch. The closed-curve trim in\n`restrict_curves_to_faces` kept only the **longest** in-both run,\nsilently dropping the other windows (the #1085 \"multi-window sections\nkept one window\" class, surviving in the closed-curve path). The section\nchain then gapped at the notch corner and the face never partitioned.\n\n## Fix\n\n- `all_inboth_runs`: every maximal in-both run (cyclic-aware), not just\nthe longest.\n- Non-wrapping windows get their in/out transitions **bisected** to the\nexact mutual-extent boundary and endpoints **snapped** to the boundary\ntriple junction — sample-index endpoints sit ~a sample-spacing (0.03\nhere) off the junction and never weld. The snap is the\n`rescue_corner_crossing` machinery, extracted into a shared\n`snap_to_boundary_junction`.\n- Seam-wrapping windows keep the historical sample-index trim\n(`trim_closed_curve_to_inboth_arc` owns the wrap split).\n\n## Status\n\nOn the captured fold-2 operands the previously missing east-corner\nwindow is now emitted with exact junction endpoints. The fold's face\npartitions still don't fully close (posBad 22, tracked in the ongoing\ndig — the junction complex spans four faces), but this is a\nself-contained completeness fix: closed sections crossing any\nmultiply-notched face were losing real windows.\n\n## Verification\n\nFoil web green: algo 173, ops lib 773, wasm gridfinity canary 27/27,\nfull io fixture suite (incl. the #1136 fixture), clippy/fmt clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nEmit every in-face window of closed section curves and snap endpoints to\nthe boundary junctions to fix notch gaps and ensure face partitioning.\n\n- **Bug Fixes**\n- Return all maximal in-both runs for closed curves and merge the\nseam-wrapping run once to avoid duplicate windows.\n- For non-wrapping windows, bisect in/out transitions and snap endpoints\nto the boundary triple junction for reliable welding.\n- For seam-wrapping windows, apply bisect+snap to wrapped Ellipses; keep\nthe historical sample-index trim only for wrapped NURBS.\n- Extract shared boundary snapping into snap_to_boundary_junction and\nadd unit tests for all_inboth_runs.\n\n<sup>Written for commit 4d5fb80e8bc5f9731a14cdefe4ec88afdc4607b5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1144?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T09:36:29Z",
+          "tree_id": "454d6d75907f7b48d8e2b673b59add956f911e19",
+          "url": "https://github.com/andymai/brepkit/commit/b2f062efb4b2c04df10cb6ca308743d89c3838ad"
+        },
+        "date": 1784626733100,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 907306,
+            "range": "± 1141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1000050,
+            "range": "± 1199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12008,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 648860,
+            "range": "± 20925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26900165,
+            "range": "± 149707",
             "unit": "ns/iter"
           }
         ]
