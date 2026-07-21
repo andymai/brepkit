@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784621620675,
+  "lastUpdate": 1784622083086,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7937,6 +7937,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27031040,
             "range": "± 117203",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea07d570f02b415091767564a9416f1ba5758c5a",
+          "message": "chore(main): release 2.127.6 (#1141)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.6](https://github.com/andymai/brepkit/compare/v2.127.5...v2.127.6)\n(2026-07-21)\n\n\n### Bug Fixes\n\n* **algo:** split grand-tour cylinder loops at pinch vertices\n([#1140](https://github.com/andymai/brepkit/issues/1140))\n([3221f79](https://github.com/andymai/brepkit/commit/3221f7978347c2d375829dd619b49a521fbc4472))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.6 for `brepkit-wasm`. Fixes the grand-tour cylinder\nalgorithm by splitting loops at pinch vertices to avoid invalid loops.\n\n<sup>Written for commit d1b431f7e62d09daedf1d2567e0423567e02a8a7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1141?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-21T08:18:56Z",
+          "tree_id": "34a4d860128c49128cbba2cdb48c7f95af184575",
+          "url": "https://github.com/andymai/brepkit/commit/ea07d570f02b415091767564a9416f1ba5758c5a"
+        },
+        "date": 1784622081804,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 936612,
+            "range": "± 2637",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1032519,
+            "range": "± 1842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13218,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 643332,
+            "range": "± 11803",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28438946,
+            "range": "± 33629",
             "unit": "ns/iter"
           }
         ]
