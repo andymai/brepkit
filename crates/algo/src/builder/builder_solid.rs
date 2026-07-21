@@ -650,13 +650,6 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
         // leaves only an INWARD cavity component is still rejected. Multi-shell
         // results keep the volume-sign split (a Cut can leave the tool's interior
         // as a separate negative-volume cavity shell).
-        if std::env::var("SHELLDBG").is_ok() {
-            log::warn!(
-                "shell: {} faces signed_vol={signed_vol:.2} robust_outward={:?}",
-                shell.len(),
-                shell_is_outward_oriented(topo, shell)
-            );
-        }
         let is_growth = if signed_vol >= 0.0 {
             // Positive corner-fan volume already reads outward — keep the
             // historical behaviour for every solid that integrates cleanly
@@ -1111,6 +1104,16 @@ fn assemble(
     let mut inner_ids = Vec::new();
     for hole in &hole_shells {
         if !shell_is_closed(topo, hole) {
+            if hole.len() >= 4 {
+                // Same fail-safe as the growth side: a sizeable open "hole"
+                // is a mis-signed or mis-selected LUMP, not a cavity sliver —
+                // silently discarding it deletes real material or cavity
+                // boundary from a watertight-looking result.
+                return Err(AlgoError::AssemblyFailed(format!(
+                    "open hole shell with {} faces would be dropped; aborting analytic assembly",
+                    hole.len()
+                )));
+            }
             log::debug!(
                 "BuilderSolid: dropping open {}-face hole-shell fragment",
                 hole.len()
@@ -2694,5 +2697,85 @@ mod tests {
 
         let angle = angle_with_ref(d1, d2, d_ref);
         assert!(angle.abs() < 1e-10, "0° between X and X: got {angle}");
+    }
+
+    #[test]
+    fn open_growth_shell_aborts_assembly_instead_of_vanishing() {
+        // Outer lump: a closed unit cube. Second lump: a translated cube with
+        // one face REMOVED — a 5-face OPEN shell. Depending on which face is
+        // omitted, the corner-fan volume signs it growth or hole; BOTH silent
+        // discard paths deleted its material from a result that still read
+        // watertight to every edge-pairing gate (the lite fused-foot). The
+        // assembler must abort in every open >=4-face case so the boolean
+        // falls back to the mesh path. Exercise each omission to cover both
+        // branches.
+        for omit in 0..6 {
+            let mut topo = Topology::new();
+            let outer = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
+            let second = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
+            let ids: Vec<_> = brepkit_topology::explorer::solid_faces(&topo, second).unwrap();
+            let mut moved: std::collections::HashSet<brepkit_topology::vertex::VertexId> =
+                std::collections::HashSet::new();
+            for &fid in &ids {
+                let face = topo.face(fid).unwrap();
+                let wires: Vec<_> = std::iter::once(face.outer_wire())
+                    .chain(face.inner_wires().iter().copied())
+                    .collect();
+                for wid in wires {
+                    let oes: Vec<_> = topo.wire(wid).unwrap().edges().to_vec();
+                    for oe in oes {
+                        let e = topo.edge(oe.edge()).unwrap();
+                        for vid in [e.start(), e.end()] {
+                            if moved.insert(vid) {
+                                let pnt = topo.vertex(vid).unwrap().point();
+                                topo.vertex_mut(vid).unwrap().set_point(Point3::new(
+                                    pnt.x() + 10.0,
+                                    pnt.y(),
+                                    pnt.z(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            let mut selected: Vec<SelectedFace> = Vec::new();
+            for &fid in &brepkit_topology::explorer::solid_faces(&topo, outer).unwrap() {
+                selected.push(SelectedFace {
+                    face_id: fid,
+                    source_face: fid,
+                    reversed: false,
+                });
+            }
+            for (i, &fid) in ids.iter().enumerate() {
+                if i == omit {
+                    continue;
+                }
+                selected.push(SelectedFace {
+                    face_id: fid,
+                    source_face: fid,
+                    reversed: false,
+                });
+            }
+            // An open shell whose fan volume WINS the outer selection is the
+            // sanctioned-lenient open-outer case (Cut/Fuse keep "best
+            // available" open results); the fail-safe covers NON-outer lumps
+            // only. Skip omissions where the open group becomes the outer.
+            let face_ids: Vec<_> = selected.iter().map(|sf| sf.face_id).collect();
+            let shells = perform_loops(&topo, &face_ids).unwrap();
+            let (growth, _) = perform_areas(&topo, &shells);
+            let outer_is_open = growth
+                .iter()
+                .map(|g| (signed_volume_of_shell(&topo, g), g))
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+                .is_some_and(|(_, g)| !shell_is_closed(&topo, g));
+            if outer_is_open {
+                continue;
+            }
+            let err = build_solid(&mut topo, &selected, &[]);
+            assert!(
+                matches!(err, Err(AlgoError::AssemblyFailed(_))),
+                "omit={omit}: a 5-face open shell must abort assembly, got {err:?}"
+            );
+        }
     }
 }
