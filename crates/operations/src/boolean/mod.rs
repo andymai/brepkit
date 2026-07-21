@@ -671,17 +671,48 @@ pub fn boolean(
                         .is_none_or(|cls_b| {
                             all_component_centers_outside(topo, &components_vec, cls_b, tol)
                         });
+                // Intersect's mirror hazard: GFA could emit a piece that is not
+                // part of A∩B at all. Reject when any component's AABB-centre
+                // sample classifies OUTSIDE either operand — an intersection
+                // piece must lie inside both. The winding-number classifier
+                // (unlike the analytic one) handles multi-piece operands, the
+                // very case this acceptance exists for; a classification error
+                // rejects (this acceptance is purely an optimization, so
+                // unclassifiable geometry keeps the old fallback behaviour).
+                // `OnBoundary` passes — thin clip pieces legitimately touch
+                // the operand boundaries. The centre need not be interior to a
+                // concave piece, but that failure direction only REJECTS a
+                // valid result into the mesh fallback (the status quo), the
+                // same posture `cut_safe` already accepts.
+                let intersect_safe = op != BooleanOp::Intersect
+                    || components_vec.iter().all(|comp| {
+                        let Some(centre) = component_aabb_centre(topo, comp) else {
+                            return true;
+                        };
+                        [a, b].iter().all(|&operand| {
+                            !matches!(
+                                crate::classify::classify_point_robust(
+                                    topo, operand, centre, 0.1, tol.linear,
+                                ),
+                                Ok(crate::classify::PointClassification::Outside) | Err(_)
+                            )
+                        })
+                    });
                 // Fuse shares this gate: fusing a tool into ONE piece of a
                 // multi-component operand (the lite base's 16 disjoint feet
                 // before their web joins them) legitimately leaves N disjoint
                 // closed manifolds, which the single-component Euler gate above
                 // can never accept. The same conditions apply; `cut_safe`'s
                 // B-interior probe is Cut-specific and passes vacuously here.
-                if matches!(op, BooleanOp::Cut | BooleanOp::Fuse)
+                // Intersect joins for the same reason: clipping a multi-piece
+                // operand (the lite void against a divider-column prism)
+                // legitimately yields N disjoint chunks.
+                if matches!(op, BooleanOp::Cut | BooleanOp::Fuse | BooleanOp::Intersect)
                     && components >= 2
                     && euler_corrected == expected_euler
                     && components_are_disjoint_pieces(topo, &components_vec)
                     && cut_safe
+                    && intersect_safe
                     // Reuse the `closed_manifold` computed above: nothing between
                     // it and here mutates the result (only read-only component
                     // and classifier queries run in between).
@@ -2340,6 +2371,40 @@ fn all_component_centers_outside(
         }
     }
     true
+}
+
+/// Centre of a face component's vertex AABB, or `None` for an empty component.
+fn component_aabb_centre(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
+    let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for &fid in comp {
+        let Ok(face) = topo.face(fid) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                for vid in [edge.start(), edge.end()] {
+                    if let Ok(v) = topo.vertex(vid) {
+                        let p = v.point();
+                        min =
+                            Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
+                        max =
+                            Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
+                    }
+                }
+            }
+        }
+    }
+    if min.x() > max.x() {
+        return None;
+    }
+    Some(Point3::new(
+        (min.x() + max.x()) * 0.5,
+        (min.y() + max.y()) * 0.5,
+        (min.z() + max.z()) * 0.5,
+    ))
 }
 
 fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
