@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784626734336,
+  "lastUpdate": 1784627183491,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8153,6 +8153,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26900165,
             "range": "± 149707",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7b850b143ffcd1150573de0656f73199466c0213",
+          "message": "chore(main): release 2.127.8 (#1145)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.8](https://github.com/andymai/brepkit/compare/v2.127.7...v2.127.8)\n(2026-07-21)\n\n\n### Bug Fixes\n\n* **algo:** emit every in-face window of a closed section curve\n([#1144](https://github.com/andymai/brepkit/issues/1144))\n([b2f062e](https://github.com/andymai/brepkit/commit/b2f062efb4b2c04df10cb6ca308743d89c3838ad))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.8 for `brepkit-wasm`, fixing sectioning to emit every\nin-face window for closed section curves and preventing missing windows\nin results.\n\n<sup>Written for commit b6309a693f5c3ee2697ffa6b8de895a4b4f28898.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1145?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-21T09:43:59Z",
+          "tree_id": "78ee7caa8b27de86295e2a5a411312b19be0899c",
+          "url": "https://github.com/andymai/brepkit/commit/7b850b143ffcd1150573de0656f73199466c0213"
+        },
+        "date": 1784627182636,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 954155,
+            "range": "± 6346",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1052545,
+            "range": "± 7563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13101,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674752,
+            "range": "± 9825",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29000253,
+            "range": "± 201155",
             "unit": "ns/iter"
           }
         ]
