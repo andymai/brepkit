@@ -17,6 +17,9 @@ use super::split_types::OrientedPCurveEdge;
 // Types
 // ---------------------------------------------------------------------------
 
+/// Quantized UV endpoint pair, keying edges by their (start, end) node cells.
+type QuantizedPair = ((i64, i64), (i64, i64));
+
 /// An entry in the vertex adjacency map.
 struct VertexEntry {
     /// Index into the input edge slice.
@@ -206,6 +209,231 @@ pub fn build_wire_loops_with_winding(
     }
 
     loops
+}
+
+/// Deterministic DCEL-style face trace over an already-junction-split edge
+/// set: the canonical planar-subdivision face enumeration.
+///
+/// The greedy walker above consumes edges globally (`used`), so an early loop
+/// can steal edges that belong to a later region and grand-tour several
+/// regions as one (the lite diagonal-pad wall). Here the successor of a
+/// half-edge is `rotational-next-of-twin` — a BIJECTION, so every half-edge
+/// lies on exactly one clean face orbit regardless of enumeration order, and
+/// near-parallel arrivals at tangential junctions cannot funnel into one
+/// chain (the defect of a min-angle successor).
+///
+/// Sections already arrive as forward+reverse pairs; boundary edges get
+/// SYNTHETIC reversed twins for the trace only. Faces that use a synthetic
+/// half are the outer face (or touch an unpaired defect) and are dropped;
+/// the remaining orbits are the interior partition. Requires the input
+/// discipline the face splitter provides: junctions pre-split, endpoint UVs
+/// reconciled.
+pub fn build_wire_loops_dcel(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    u_periodic: bool,
+    v_periodic: bool,
+) -> Vec<Vec<OrientedPCurveEdge>> {
+    if edges.is_empty() {
+        return Vec::new();
+    }
+    let u_period = if u_periodic { Some(TAU) } else { None };
+    let v_period = if v_periodic { Some(TAU) } else { None };
+
+    // Half-edge table: the input edges, plus synthetic reversed twins for
+    // every input half that has no reverse partner. `real` marks inputs.
+    let mut halves: Vec<OrientedPCurveEdge> = edges.to_vec();
+    let n_real = halves.len();
+    let key_of = |p: Point2| quantize_uv_periodic(p, tol, u_period, v_period);
+
+    // Twin pairing among the real halves: same unordered endpoint pair,
+    // opposite direction. Prefer the same `source_edge_idx` (a section's own
+    // fwd/rev pair); co-endpoint DISTINCT edges (the lens class) only pair
+    // with each other if no same-source partner exists and both are free.
+    let mut twin: Vec<Option<usize>> = vec![None; n_real];
+    let mut by_pair: HashMap<QuantizedPair, Vec<usize>> = HashMap::new();
+    for (i, e) in edges.iter().enumerate() {
+        by_pair
+            .entry((key_of(e.start_uv), key_of(e.end_uv)))
+            .or_default()
+            .push(i);
+    }
+    for (i, e) in edges.iter().enumerate() {
+        if twin[i].is_some() {
+            continue;
+        }
+        let rev_key = (key_of(e.end_uv), key_of(e.start_uv));
+        if let Some(cands) = by_pair.get(&rev_key) {
+            let pick = cands
+                .iter()
+                .copied()
+                .filter(|&j| j != i && twin[j].is_none())
+                .max_by_key(|&j| {
+                    usize::from(
+                        edges[j].source_edge_idx.is_some()
+                            && edges[j].source_edge_idx == e.source_edge_idx,
+                    )
+                });
+            if let Some(j) = pick {
+                twin[i] = Some(j);
+                twin[j] = Some(i);
+            }
+        }
+    }
+    // Synthetic reversed twins for the unpaired (boundary) halves.
+    let mut twin_all: Vec<usize> = (0..n_real).map(|i| twin[i].unwrap_or(usize::MAX)).collect();
+    for i in 0..n_real {
+        if twin_all[i] != usize::MAX {
+            continue;
+        }
+        let e = &edges[i];
+        let mut r = e.clone();
+        std::mem::swap(&mut r.start_uv, &mut r.end_uv);
+        std::mem::swap(&mut r.start_3d, &mut r.end_3d);
+        r.forward = !r.forward;
+        let j = halves.len();
+        halves.push(r);
+        twin_all[i] = j;
+        twin_all.push(i);
+    }
+    let n_all = halves.len();
+
+    // Per-node circular order of OUTGOING halves by departure angle (ties
+    // broken by index for a strict, deterministic order).
+    let mut node_out: HashMap<(i64, i64), Vec<(f64, usize)>> = HashMap::new();
+    for (i, h) in halves.iter().enumerate() {
+        let ang = edge_angle_at_vertex_periodic(h, true, u_period, v_period);
+        node_out
+            .entry(key_of(h.start_uv))
+            .or_default()
+            .push((ang, i));
+    }
+    for list in node_out.values_mut() {
+        list.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.1.cmp(&b.1))
+        });
+    }
+
+    // Successor: the outgoing half CLOCKWISE-next from twin(h) in the
+    // circular order at h's end node (twin(h) starts there). Clockwise-next
+    // in an angle-ascending list is the PREVIOUS entry, wrapping.
+    let succ: Vec<usize> = (0..n_all)
+        .map(|i| {
+            let t = twin_all[i];
+            let node = key_of(halves[t].start_uv);
+            let list = &node_out[&node];
+            let pos = list.iter().position(|&(_, j)| j == t).unwrap_or(0);
+            let prev = (pos + list.len() - 1) % list.len();
+            list[prev].1
+        })
+        .collect();
+
+    // Orbits of the successor bijection = faces of the subdivision. The
+    // single unbounded (outer) face is the orbit with the most NEGATIVE
+    // signed area — drop it; every other orbit is an interior region. A
+    // region may legitimately use synthetic boundary twins (a face whose
+    // boundary winds clockwise in UV traverses its rim reversed), so
+    // synthetic halves are emitted as reversed traversals, not filtered.
+    let mut visited = vec![false; n_all];
+    let mut orbits: Vec<(f64, Vec<usize>)> = Vec::new();
+    for start in 0..n_all {
+        if visited[start] {
+            continue;
+        }
+        let mut orbit = Vec::new();
+        let mut cur = start;
+        let mut broken = false;
+        loop {
+            visited[cur] = true;
+            orbit.push(cur);
+            cur = succ[cur];
+            if cur == start {
+                break;
+            }
+            if visited[cur] {
+                // Successor is a bijection, so this cannot happen unless the
+                // node data was degenerate; discard defensively.
+                broken = true;
+                break;
+            }
+        }
+        if broken {
+            continue;
+        }
+        // Shoelace over LIFTED vertices: on a periodic surface the node keys
+        // glue the seam (correct cylinder connectivity), but edge UVs are
+        // stored at whichever period copy their pcurve produced — a raw
+        // shoelace over mixed copies is garbage (the full-period remainder
+        // band read as strongly negative and was dropped as "outer"). Lift
+        // each successive vertex by the minimal image against its
+        // predecessor; the net lift after closing the orbit is the WINDING —
+        // nonzero only for the unbounded rim rings of a periodic face.
+        let lift = |val: f64, anchor: f64, period: Option<f64>| -> f64 {
+            match period {
+                Some(p) if p > 1e-12 => val + ((anchor - val) / p).round() * p,
+                _ => val,
+            }
+        };
+        let mut area = 0.0;
+        let mut perimeter = 0.0;
+        let first = halves[orbit[0]].start_uv;
+        let mut prev = first;
+        let mut lifted_first = first;
+        for k in 0..orbit.len() {
+            let raw = halves[orbit[(k + 1) % orbit.len()]].start_uv;
+            let b = Point2::new(
+                lift(raw.x(), prev.x(), u_period),
+                lift(raw.y(), prev.y(), v_period),
+            );
+            if k + 1 == orbit.len() {
+                lifted_first = b;
+            }
+            area += prev.x().mul_add(b.y(), -(b.x() * prev.y()));
+            perimeter += (b - prev).length();
+            prev = b;
+        }
+        let area = area * 0.5;
+        let winding_u = u_period.is_some_and(|p| (lifted_first.x() - first.x()).abs() > p * 0.5);
+        let winding_v = v_period.is_some_and(|p| (lifted_first.y() - first.y()).abs() > p * 0.5);
+        if (winding_u || winding_v) && orbit.iter().all(|&i| i >= n_real) {
+            // A period-winding orbit of pure synthetic halves is an unbounded
+            // rim ring (the periodic face's counterpart of the planar outer
+            // face). A winding orbit WITH real halves is a genuine
+            // full-period band region — a cylinder band's boundary rims are
+            // separate rings in the glued graph, so the band itself winds.
+            continue;
+        }
+        // A zero-area orbit walks out-and-back around a dangling chain (the
+        // graph can carry genuinely unpaired sections); it is not a region.
+        if area.abs() <= perimeter * tol {
+            continue;
+        }
+        orbits.push((area, orbit));
+    }
+    // The planar unbounded face is the most-negative-area orbit. On a
+    // u-periodic face the unbounded sides are the winding rim rings already
+    // dropped above, so every surviving closed orbit is a genuine region.
+    let outer = if u_periodic || v_periodic {
+        None
+    } else {
+        orbits
+            .iter()
+            .enumerate()
+            .min_by(|a, b| {
+                a.1.0
+                    .partial_cmp(&b.1.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+    };
+    orbits
+        .into_iter()
+        .enumerate()
+        .filter(|&(i, _)| Some(i) != outer)
+        .map(|(_, (_, orbit))| orbit.iter().map(|&i| halves[i].clone()).collect())
+        .collect()
 }
 
 /// Drop pendant section edges before loop building.
@@ -721,5 +949,130 @@ mod tests {
         let loops = build_wire_loops(&edges, 1e-7, true, false);
         assert_eq!(loops.len(), 1, "expected 1 loop, got {}", loops.len());
         assert_eq!(loops[0].len(), 4);
+    }
+
+    #[test]
+    fn dcel_plain_square_is_one_loop() {
+        let edges = vec![
+            make_line_edge(Point2::new(0.0, 0.0), Point2::new(10.0, 0.0)),
+            make_line_edge(Point2::new(10.0, 0.0), Point2::new(10.0, 10.0)),
+            make_line_edge(Point2::new(10.0, 10.0), Point2::new(0.0, 10.0)),
+            make_line_edge(Point2::new(0.0, 10.0), Point2::new(0.0, 0.0)),
+        ];
+        let loops = build_wire_loops_dcel(&edges, 1e-7, false, false);
+        assert_eq!(loops.len(), 1, "square must close as one loop");
+        assert_eq!(loops[0].len(), 4);
+    }
+
+    #[test]
+    fn dcel_divided_square_is_two_loops() {
+        // Boundary split at x=5 on both rails + a divider section (fwd+rev).
+        let edges = vec![
+            make_line_edge(Point2::new(0.0, 0.0), Point2::new(5.0, 0.0)),
+            make_line_edge(Point2::new(5.0, 0.0), Point2::new(10.0, 0.0)),
+            make_line_edge(Point2::new(10.0, 0.0), Point2::new(10.0, 10.0)),
+            make_line_edge(Point2::new(10.0, 10.0), Point2::new(5.0, 10.0)),
+            make_line_edge(Point2::new(5.0, 10.0), Point2::new(0.0, 10.0)),
+            make_line_edge(Point2::new(0.0, 10.0), Point2::new(0.0, 0.0)),
+            make_section_edge(Point2::new(5.0, 0.0), Point2::new(5.0, 10.0), 6),
+            make_section_edge(Point2::new(5.0, 10.0), Point2::new(5.0, 0.0), 6),
+        ];
+        let loops = build_wire_loops_dcel(&edges, 1e-7, false, false);
+        assert_eq!(
+            loops.len(),
+            2,
+            "divided square must be two cells, got {}",
+            loops.len()
+        );
+        for lp in &loops {
+            assert_eq!(lp.len(), 4);
+        }
+    }
+
+    #[test]
+    fn dcel_glued_cylinder_strip_partition() {
+        // A full-period cylinder band (u in [0, 2pi], v in [0, 1]) with seam
+        // edges at u=0 and two vertical sections at u=1 and u=2. The glued
+        // node keys identify u=0 with u=2pi; the true partition is three
+        // cells. The top/bottom rim rings traced via synthetic twins are
+        // period-winding pure-synthetic orbits and must be dropped, while
+        // every cell (none winding here — the seam edges cut the period)
+        // must survive. Rim pieces are stored with u=2pi endpoints, so the
+        // lifted shoelace must bridge the copies.
+        let u2 = TAU;
+        let edges = vec![
+            // bottom rim pieces, all spans < pi (the lift precondition;
+            // real rim chains arrive pre-split well below pi)
+            make_line_edge(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)),
+            make_line_edge(Point2::new(1.0, 0.0), Point2::new(2.0, 0.0)),
+            make_line_edge(Point2::new(2.0, 0.0), Point2::new(4.0, 0.0)),
+            make_line_edge(Point2::new(4.0, 0.0), Point2::new(u2, 0.0)),
+            // top rim pieces
+            make_line_edge(Point2::new(1.0, 1.0), Point2::new(0.0, 1.0)),
+            make_line_edge(Point2::new(2.0, 1.0), Point2::new(1.0, 1.0)),
+            make_line_edge(Point2::new(4.0, 1.0), Point2::new(2.0, 1.0)),
+            make_line_edge(Point2::new(u2, 1.0), Point2::new(4.0, 1.0)),
+            // seam pair (the full-period face's boundary contains the seam twice)
+            make_line_edge(Point2::new(0.0, 1.0), Point2::new(0.0, 0.0)),
+            make_line_edge(Point2::new(u2, 0.0), Point2::new(u2, 1.0)),
+            // vertical sections at u=1 and u=2 (fwd+rev pairs)
+            make_section_edge(Point2::new(1.0, 0.0), Point2::new(1.0, 1.0), 100),
+            make_section_edge(Point2::new(1.0, 1.0), Point2::new(1.0, 0.0), 100),
+            make_section_edge(Point2::new(2.0, 0.0), Point2::new(2.0, 1.0), 200),
+            make_section_edge(Point2::new(2.0, 1.0), Point2::new(2.0, 0.0), 200),
+        ];
+        let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
+        assert_eq!(
+            loops.len(),
+            3,
+            "glued strip must partition into three cells, got {}",
+            loops.len()
+        );
+        let mut sizes: Vec<usize> = loops.iter().map(Vec::len).collect();
+        sizes.sort_unstable();
+        assert_eq!(
+            sizes,
+            vec![4, 4, 6],
+            "two square cells + the two-piece-rimmed third"
+        );
+    }
+
+    #[test]
+    fn dcel_winding_band_with_real_halves_is_kept() {
+        // A full-period band with NO seam edges, cut once at u=1: the single
+        // band region winds the period in the glued graph (its rims are
+        // separate rings). A winding orbit carrying real halves is a genuine
+        // region and must be kept; the pure-synthetic winding rim rings must
+        // be dropped (the lite diagonal-pad remainder band was dropped as
+        // "outer" by the planar most-negative rule before the lifted
+        // shoelace + winding rules).
+        let u2 = TAU;
+        let edges = vec![
+            // bottom rim split at u=1 into sub-pi pieces (boundary, single copies)
+            make_line_edge(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)),
+            make_line_edge(Point2::new(1.0, 0.0), Point2::new(3.0, 0.0)),
+            make_line_edge(Point2::new(3.0, 0.0), Point2::new(5.0, 0.0)),
+            make_line_edge(Point2::new(5.0, 0.0), Point2::new(u2, 0.0)),
+            // top rim, same pieces westward
+            make_line_edge(Point2::new(1.0, 1.0), Point2::new(0.0, 1.0)),
+            make_line_edge(Point2::new(3.0, 1.0), Point2::new(1.0, 1.0)),
+            make_line_edge(Point2::new(5.0, 1.0), Point2::new(3.0, 1.0)),
+            make_line_edge(Point2::new(u2, 1.0), Point2::new(5.0, 1.0)),
+            // the single vertical section at u=1
+            make_section_edge(Point2::new(1.0, 0.0), Point2::new(1.0, 1.0), 100),
+            make_section_edge(Point2::new(1.0, 1.0), Point2::new(1.0, 0.0), 100),
+        ];
+        let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
+        assert_eq!(
+            loops.len(),
+            1,
+            "the winding band must survive as one region, got {}",
+            loops.len()
+        );
+        assert_eq!(
+            loops[0].len(),
+            10,
+            "band uses all eight rim pieces + the section twice"
+        );
     }
 }
