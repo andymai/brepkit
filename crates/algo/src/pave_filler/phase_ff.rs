@@ -986,7 +986,9 @@ fn restrict_curves_to_faces(
                 continue;
             }
             if closed && f1 - f0 < n_fine && !matches!(raw.curve, EdgeCurve::Circle(_)) {
-                out.extend(trim_closed_curve_to_inboth_arc(&raw, f0, f1, n_fine));
+                emit_closed_curve_windows(
+                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, n_fine, tol, &mut out,
+                );
                 continue;
             }
             out.push(raw);
@@ -1007,7 +1009,14 @@ fn restrict_curves_to_faces(
         // over-connect the rim. Circles are left whole (seam adoption handles
         // them); open curves are left whole (the splitter clips them).
         if closed && b1 - b0 < N && !matches!(raw.curve, EdgeCurve::Circle(_)) {
-            out.extend(trim_closed_curve_to_inboth_arc(&raw, b0, b1, N));
+            // EVERY maximal in-both run, not just the longest: a closed
+            // ellipse crossing a notched face has one window per side of the
+            // notch, and dropping the shorter window gaps the section chain
+            // at the notch corner (the diagonal magnet pad's east slope).
+            // Non-wrapping windows get bisected in/out transitions and
+            // boundary-junction snapping — sample-index endpoints sit ~0.03
+            // off the junction and never weld.
+            emit_closed_curve_windows(topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, tol, &mut out);
             continue;
         }
         out.push(raw);
@@ -1341,113 +1350,7 @@ fn rescue_corner_crossing(
     // surfaces), while the boundary splitters gate candidates at the exact
     // 1e-7 tolerance — the recurring fit-error-vs-exact-gate class. Adopting
     // the boundary FOOT gives both faces the identical on-boundary junction.
-    let surf_of = |fid: FaceId| topo.face(fid).ok().map(|f| f.surface().clone());
-    let snap = |p: Point3| -> Point3 {
-        const NS: usize = 64;
-        let weld = tol.linear * 100.0;
-        // (distance, foot, foot's curve param, owning face, edge)
-        let mut best: Option<(f64, Point3, f64, FaceId, brepkit_topology::edge::EdgeId)> = None;
-        for fid in [fa, fb] {
-            let Ok(face) = topo.face(fid) else { continue };
-            // Inner (hole) wires are legitimate exit boundaries too: a corner
-            // crossing leaving through a bore rim must share its exact vertex.
-            let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
-                .chain(face.inner_wires().iter().copied())
-                .collect();
-            for oe in wire_ids
-                .iter()
-                .filter_map(|&wid| topo.wire(wid).ok())
-                .flat_map(|w| w.edges().to_vec())
-            {
-                let Ok(edge) = topo.edge(oe.edge()) else {
-                    continue;
-                };
-                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-                    continue;
-                };
-                let (sp, ep) = (sv.point(), ev.point());
-                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
-                let mut best_k = 0;
-                let mut best_d = f64::MAX;
-                for k in 0..=NS {
-                    #[allow(clippy::cast_precision_loss)]
-                    let t = d0 + (d1 - d0) * (k as f64) / (NS as f64);
-                    let d = (edge.curve().evaluate_with_endpoints(t, sp, ep) - p).length();
-                    if d < best_d {
-                        best_d = d;
-                        best_k = k;
-                    }
-                }
-                #[allow(clippy::cast_precision_loss)]
-                let mut lo = d0 + (d1 - d0) * (best_k.saturating_sub(1) as f64) / (NS as f64);
-                #[allow(clippy::cast_precision_loss)]
-                let mut hi = d0 + (d1 - d0) * ((best_k + 1).min(NS) as f64) / (NS as f64);
-                for _ in 0..48 {
-                    let m1 = lo + (hi - lo) / 3.0;
-                    let m2 = hi - (hi - lo) / 3.0;
-                    let f1 = (edge.curve().evaluate_with_endpoints(m1, sp, ep) - p).length();
-                    let f2 = (edge.curve().evaluate_with_endpoints(m2, sp, ep) - p).length();
-                    if f1 < f2 {
-                        hi = m2;
-                    } else {
-                        lo = m1;
-                    }
-                }
-                let tm = 0.5 * (lo + hi);
-                let foot = edge.curve().evaluate_with_endpoints(tm, sp, ep);
-                let d = (foot - p).length();
-                if d < weld && best.as_ref().is_none_or(|b| d < b.0) {
-                    best = Some((d, foot, tm, fid, oe.edge()));
-                }
-            }
-        }
-        let Some((_, foot, tm, owner_fid, eid)) = best else {
-            return p;
-        };
-        // The foot lies ON the boundary curve but is displaced along it by the
-        // section's fit error. The true junction is where that boundary curve
-        // meets the PARTNER face's surface — refine to it so every section
-        // ending here (this one, and the partner-pair sections computed
-        // independently) mints the SAME vertex.
-        let other = if owner_fid == fa { fb } else { fa };
-        let (Some(other_surf), Ok(edge)) = (surf_of(other), topo.edge(eid)) else {
-            return foot;
-        };
-        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-            return foot;
-        };
-        let (sp, ep) = (sv.point(), ev.point());
-        let dist_to_surf = |q: Point3| -> f64 {
-            other_surf
-                .project_point(q)
-                .and_then(|(u, v)| other_surf.evaluate(u, v))
-                .map_or(f64::MAX, |s| (s - q).length())
-        };
-        let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
-        let half = (d1 - d0).abs().max(1e-9) * 0.01;
-        // Clamp the refine window to the edge's own span so the search never
-        // evaluates (and snaps to) a point past the boundary arc's ends.
-        let (span_lo, span_hi) = (d0.min(d1), d0.max(d1));
-        let (mut lo, mut hi) = ((tm - half).max(span_lo), (tm + half).min(span_hi));
-        for _ in 0..64 {
-            let m1 = lo + (hi - lo) / 3.0;
-            let m2 = hi - (hi - lo) / 3.0;
-            let f1 = dist_to_surf(edge.curve().evaluate_with_endpoints(m1, sp, ep));
-            let f2 = dist_to_surf(edge.curve().evaluate_with_endpoints(m2, sp, ep));
-            if f1 < f2 {
-                hi = m2;
-            } else {
-                lo = m1;
-            }
-        }
-        let tj = 0.5 * (lo + hi);
-        let junction = edge.curve().evaluate_with_endpoints(tj, sp, ep);
-        if dist_to_surf(junction) <= tol.linear * 10.0 && (junction - foot).length() <= weld {
-            junction
-        } else {
-            foot
-        }
-    };
+    let snap = |p: Point3| snap_to_boundary_junction(topo, fa, fb, p, tol);
     let p_start = snap(point_at(t_lo));
     let p_end = snap(point_at(t_hi));
     Some(RawCurve {
@@ -1457,6 +1360,214 @@ fn rescue_corner_crossing(
         p_start,
         p_end,
     })
+}
+
+/// Emit every maximal in-both window of a CLOSED section curve. Non-wrapping
+/// windows get their in/out transitions bisected to the exact mutual-extent
+/// boundary and their endpoints snapped to the boundary triple junction —
+/// sample-index endpoints land ~a sample-spacing off the junction the chain
+/// must weld to. Seam-wrapping windows keep the historical sample-index trim
+/// (bisection across the seam is curve-type dependent; `trim_closed_curve_to_inboth_arc`
+/// owns the wrap split).
+#[allow(clippy::too_many_arguments)]
+fn emit_closed_curve_windows(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    raw: &RawCurve,
+    ext_a: &FaceExtent,
+    ext_b: &FaceExtent,
+    inb: &[bool],
+    n: usize,
+    tol: Tolerance,
+    out: &mut Vec<RawCurve>,
+) {
+    let span = raw.t_range.1 - raw.t_range.0;
+    #[allow(clippy::cast_precision_loss)]
+    let t_at = |i: usize| raw.t_range.0 + span * (i as f64) / (n as f64);
+    let point_at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+    let inside = |t: f64| {
+        let p = point_at(t);
+        ext_a.contains(p) && ext_b.contains(p)
+    };
+    for (r0, r1) in all_inboth_runs(inb, true) {
+        if r1 - r0 < 2 {
+            continue;
+        }
+        if r1 > n {
+            // Seam-wrapping window. An Ellipse evaluates out-of-domain
+            // parameters periodically, so its transitions can be bisected in
+            // the unwrapped parameter like any other window (fall through).
+            // A clamped NURBS cannot (out-of-domain evaluation is garbage);
+            // it keeps the historical sample-index trim, whose wrap split
+            // `trim_closed_curve_to_inboth_arc` owns.
+            if !matches!(raw.curve, EdgeCurve::Ellipse(_)) {
+                out.extend(trim_closed_curve_to_inboth_arc(raw, r0, r1, n));
+                continue;
+            }
+        }
+        let mut t_lo = t_at(r0);
+        if r0 > 0 {
+            let (mut out_t, mut in_t) = (t_at(r0 - 1), t_lo);
+            for _ in 0..48 {
+                let mid = 0.5 * (out_t + in_t);
+                if inside(mid) {
+                    in_t = mid;
+                } else {
+                    out_t = mid;
+                }
+            }
+            t_lo = in_t;
+        }
+        let mut t_hi = t_at(r1);
+        // `r1 == n` ends exactly at the seam duplicate (no out-sample to
+        // bisect against in-domain); `r1 > n` is the wrapped-Ellipse
+        // fall-through, whose periodic evaluation makes the out-of-domain
+        // bisection valid.
+        if r1 != n {
+            let (mut in_t, mut out_t) = (t_hi, t_at(r1 + 1));
+            for _ in 0..48 {
+                let mid = 0.5 * (in_t + out_t);
+                if inside(mid) {
+                    in_t = mid;
+                } else {
+                    out_t = mid;
+                }
+            }
+            t_hi = in_t;
+        }
+        if t_hi <= t_lo {
+            continue;
+        }
+        let p_start = snap_to_boundary_junction(topo, fa, fb, point_at(t_lo), tol);
+        let p_end = snap_to_boundary_junction(topo, fa, fb, point_at(t_hi), tol);
+        out.push(RawCurve {
+            curve: raw.curve.clone(),
+            bbox: raw.bbox,
+            t_range: (t_lo, t_hi),
+            p_start,
+            p_end,
+        });
+    }
+}
+
+/// Snap a fitted section endpoint onto the nearest boundary curve of either
+/// face (outer or inner wires) within the weld band, then refine along that
+/// boundary to its exact crossing with the PARTNER face's surface — the
+/// triple junction every section ending here must share. Returns the input
+/// point unchanged when no boundary is within the weld band.
+fn snap_to_boundary_junction(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    p: Point3,
+    tol: Tolerance,
+) -> Point3 {
+    const NS: usize = 64;
+    let surf_of = |fid: FaceId| topo.face(fid).ok().map(|f| f.surface().clone());
+    let weld = tol.linear * 100.0;
+    // (distance, foot, foot's curve param, owning face, edge)
+    let mut best: Option<(f64, Point3, f64, FaceId, brepkit_topology::edge::EdgeId)> = None;
+    for fid in [fa, fb] {
+        let Ok(face) = topo.face(fid) else { continue };
+        // Inner (hole) wires are legitimate exit boundaries too: a corner
+        // crossing leaving through a bore rim must share its exact vertex.
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for oe in wire_ids
+            .iter()
+            .filter_map(|&wid| topo.wire(wid).ok())
+            .flat_map(|w| w.edges().to_vec())
+        {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (sp, ep) = (sv.point(), ev.point());
+            let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+            let mut best_k = 0;
+            let mut best_d = f64::MAX;
+            for k in 0..=NS {
+                #[allow(clippy::cast_precision_loss)]
+                let t = d0 + (d1 - d0) * (k as f64) / (NS as f64);
+                let d = (edge.curve().evaluate_with_endpoints(t, sp, ep) - p).length();
+                if d < best_d {
+                    best_d = d;
+                    best_k = k;
+                }
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let mut lo = d0 + (d1 - d0) * (best_k.saturating_sub(1) as f64) / (NS as f64);
+            #[allow(clippy::cast_precision_loss)]
+            let mut hi = d0 + (d1 - d0) * ((best_k + 1).min(NS) as f64) / (NS as f64);
+            for _ in 0..48 {
+                let m1 = lo + (hi - lo) / 3.0;
+                let m2 = hi - (hi - lo) / 3.0;
+                let f1 = (edge.curve().evaluate_with_endpoints(m1, sp, ep) - p).length();
+                let f2 = (edge.curve().evaluate_with_endpoints(m2, sp, ep) - p).length();
+                if f1 < f2 {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let tm = 0.5 * (lo + hi);
+            let foot = edge.curve().evaluate_with_endpoints(tm, sp, ep);
+            let d = (foot - p).length();
+            if d < weld && best.as_ref().is_none_or(|b| d < b.0) {
+                best = Some((d, foot, tm, fid, oe.edge()));
+            }
+        }
+    }
+    let Some((_, foot, tm, owner_fid, eid)) = best else {
+        return p;
+    };
+    // The foot lies ON the boundary curve but is displaced along it by the
+    // section's fit error. The true junction is where that boundary curve
+    // meets the PARTNER face's surface — refine to it so every section
+    // ending here (this one, and the partner-pair sections computed
+    // independently) mints the SAME vertex.
+    let other = if owner_fid == fa { fb } else { fa };
+    let (Some(other_surf), Ok(edge)) = (surf_of(other), topo.edge(eid)) else {
+        return foot;
+    };
+    let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+        return foot;
+    };
+    let (sp, ep) = (sv.point(), ev.point());
+    let dist_to_surf = |q: Point3| -> f64 {
+        other_surf
+            .project_point(q)
+            .and_then(|(u, v)| other_surf.evaluate(u, v))
+            .map_or(f64::MAX, |s| (s - q).length())
+    };
+    let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+    let half = (d1 - d0).abs().max(1e-9) * 0.01;
+    // Clamp the refine window to the edge's own span so the search never
+    // evaluates (and snaps to) a point past the boundary arc's ends.
+    let (span_lo, span_hi) = (d0.min(d1), d0.max(d1));
+    let (mut lo, mut hi) = ((tm - half).max(span_lo), (tm + half).min(span_hi));
+    for _ in 0..64 {
+        let m1 = lo + (hi - lo) / 3.0;
+        let m2 = hi - (hi - lo) / 3.0;
+        let f1 = dist_to_surf(edge.curve().evaluate_with_endpoints(m1, sp, ep));
+        let f2 = dist_to_surf(edge.curve().evaluate_with_endpoints(m2, sp, ep));
+        if f1 < f2 {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    let tj = 0.5 * (lo + hi);
+    let junction = edge.curve().evaluate_with_endpoints(tj, sp, ep);
+    if dist_to_surf(junction) <= tol.linear * 10.0 && (junction - foot).length() <= weld {
+        junction
+    } else {
+        foot
+    }
 }
 
 /// Trim a CLOSED section curve (Ellipse or NURBS) to its in-both arc
@@ -2196,6 +2307,63 @@ fn trim_nurbs_to_span(
 /// search walks the circular sequence and the returned `b1` may exceed `N`
 /// (the caller maps it back through the curve's periodic parameterization). A
 /// run covering every distinct sample returns the whole span `(0, N)`.
+/// Every maximal contiguous in-both run of a sampled curve, in the same
+/// index convention as [`longest_inboth_run`] (for a closed curve a run may
+/// wrap: its end index exceeds the sample count and maps back periodically).
+fn all_inboth_runs(inb: &[bool], closed: bool) -> Vec<(usize, usize)> {
+    let n = inb.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if !closed || n < 2 {
+        let mut runs = Vec::new();
+        let mut start: Option<usize> = None;
+        for (i, &v) in inb.iter().enumerate() {
+            match (v, start) {
+                (true, None) => start = Some(i),
+                (false, Some(s)) => {
+                    runs.push((s, i - 1));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(s) = start {
+            runs.push((s, n - 1));
+        }
+        return runs;
+    }
+    // Closed: distinct samples are 0..m (sample m duplicates sample 0). Scan
+    // two periods so a seam-wrapping run appears once, starting at its true
+    // beginning; runs beginning in the second period are duplicates, and a
+    // run beginning at index 0 while `inb[m-1]` is true is the TAIL of the
+    // wrapping run — emitting it too would duplicate that window.
+    let m = n - 1;
+    if inb[..m].iter().all(|&v| v) {
+        return vec![(0, m)];
+    }
+    let wraps = inb[0] && inb[m - 1];
+    let mut runs = Vec::new();
+    let mut start: Option<usize> = None;
+    for k in 0..2 * m {
+        if inb[k % m] {
+            start.get_or_insert(k);
+        } else if let Some(s) = start.take()
+            && s < m
+            && !(s == 0 && wraps)
+        {
+            runs.push((s, k - 1));
+        }
+    }
+    if let Some(s) = start
+        && s < m
+        && !(s == 0 && wraps)
+    {
+        runs.push((s, 2 * m - 1));
+    }
+    runs
+}
+
 fn longest_inboth_run(inb: &[bool], closed: bool) -> (usize, usize) {
     let n = inb.len();
     if !closed || n < 2 {
@@ -4576,5 +4744,35 @@ mod tests {
         // far from the even spacing of an inscribed polygon.
         let hits = vec![hit_at(0.1), hit_at(0.2), hit_at(0.3), hit_at(0.4)];
         assert!(!hits_are_inscribed_polygon(&hits));
+    }
+
+    #[test]
+    fn all_inboth_runs_finds_disjoint_windows() {
+        // Open scan: two disjoint runs.
+        let inb = [false, true, true, true, false, true, true, false];
+        assert_eq!(all_inboth_runs(&inb, false), vec![(1, 3), (5, 6)]);
+    }
+
+    #[test]
+    fn all_inboth_runs_merges_seam_wrapping_run_once() {
+        // Closed: distinct samples 0..6, sample 6 duplicates sample 0.
+        // Trues at [5, 0, 1] wrap the seam: ONE run starting at 5, no
+        // duplicate (0, 1) prefix emission.
+        let inb = [true, true, false, false, false, true, true];
+        assert_eq!(all_inboth_runs(&inb, true), vec![(5, 7)]);
+    }
+
+    #[test]
+    fn all_inboth_runs_wrapping_plus_interior_window() {
+        // Closed: a seam-wrapping run AND an interior run must both appear,
+        // each exactly once.
+        let inb = [true, false, false, true, false, true, true];
+        assert_eq!(all_inboth_runs(&inb, true), vec![(3, 3), (5, 6)]);
+    }
+
+    #[test]
+    fn all_inboth_runs_all_true_is_the_whole_curve() {
+        let inb = [true, true, true, true, true];
+        assert_eq!(all_inboth_runs(&inb, true), vec![(0, 4)]);
     }
 }
