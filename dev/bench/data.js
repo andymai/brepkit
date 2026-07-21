@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784617688935,
+  "lastUpdate": 1784621620675,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7883,6 +7883,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26313940,
             "range": "± 63793",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3221f7978347c2d375829dd619b49a521fbc4472",
+          "message": "fix(algo): split grand-tour cylinder loops at pinch vertices (#1140)\n\n## Root\n\nFollow-up in the lite magnet-pad family (#1136, #1138). The DIAGONAL\ncorner pad (axis at the foot's corner) grazes its socket's corner cone\nAND notches the adjacent socket row's wall — the pad-wall cylinder's\ngreedy wire trace absorbs those sub-regions as excursions, revisiting\ntheir junction vertices, and hands back a 2-loop grand tour\n(self-crossing, edges doubled). The rectilinear arrangement declines\n(oblique ellipse cuts) and the mirrored-winding retry converges to the\n*identical* trace, so neither existing rescue helps.\n\n## Fix\n\nPinch resolution — the named missing primitive from the funnel-family\ndig: split each self-crossing loop at UV vertices it visits more than\nonce, recursively; sub-cycles become their own regions, pure\nout-and-back remnants drop as zero-area. Comparison is on the raw\n**unwrapped** UV, so a full-period band's two seam copies (one period\napart) never read as a pinch. Adopted only when the resolution strictly\nincreases the loop count and clears the self-cross flag, and only inside\nthe existing broken-greedy gate.\n\nOn the captured fold-2 operands the pad wall's 2-loop grand tour becomes\nthe correct 4-region partition (corner bite, two wall notches,\nremainder). The fold's remaining defects live on the partner\ntop-disc/wall faces (tracked as the next dig); this piece is shipped on\nits own because it is deterministic, strictly gated, and the structural\nprimitive the whole grand-tour class needs.\n\n## Verification\n\nFoil web green: wasm gridfinity canary 27/27, algo 169, ops lib 773,\nfull io fixture suite (incl. the #1136 fixture), clippy/fmt clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes self-crossing grand-tour loops on u-periodic cylinder faces by\nsplitting at repeated (unwrapped) UV vertices. Produces correct region\npartitions for the diagonal magnet pad wall and similar cases, without\nseam false positives.\n\n- **Bug Fixes**\n- Added pinch resolution: split at repeated UV vertices, recurse; drop\nzero-area out-and-backs.\n- Applied only when loop count increases and self-crossing clears; runs\ninside the broken-greedy gate. Equal-count adoption was tried and\nrejected due to the `lite_pad_graze_fuse` regression.\n- Added tests (figure-eight split, zero-area drop, simple loop\nuntouched) and restored the `wire_loops_self_cross` doc block.\n\n<sup>Written for commit d125622741e0a685d1b1e24218c4c51485cea388.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1140?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T08:11:15Z",
+          "tree_id": "65ce288af7485354a2986b8a97679067ae80f314",
+          "url": "https://github.com/andymai/brepkit/commit/3221f7978347c2d375829dd619b49a521fbc4472"
+        },
+        "date": 1784621619373,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 905451,
+            "range": "± 2725",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1000454,
+            "range": "± 10666",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12108,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 646317,
+            "range": "± 841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27031040,
+            "range": "± 117203",
             "unit": "ns/iter"
           }
         ]
