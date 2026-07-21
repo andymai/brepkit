@@ -1393,14 +1393,31 @@ fn emit_closed_curve_windows(
     // the same section then OVERLAP by that much instead of chaining at the
     // shared boundary, and the overlap span triples the edge use (the lite
     // diagonal pad's east-slope windows).
-    let inside = |t: f64| {
+    let strict_inside = |t: f64| {
         let p = point_at(t);
         ext_a.contains_strict(p, 0.0) && ext_b.contains_strict(p, 0.0)
+    };
+    let lenient_inside = |t: f64| {
+        let p = point_at(t);
+        ext_a.contains(p) && ext_b.contains(p)
     };
     for (r0, r1) in all_inboth_runs(inb, true) {
         if r1 - r0 < 2 {
             continue;
         }
+        // Anchor the bisection on a sample the STRICT predicate certifies.
+        // A boundary-hugging run (margin-only samples, or an analytic
+        // projection failure — `contains` accepts on failure, strict
+        // rejects) has none: bisecting from a false anchor would collapse
+        // the window arbitrarily, so such a run keeps the margin-inclusive
+        // predicate (the pre-strict behavior; the boundary-coincident
+        // re-trace class is handled downstream).
+        let anchor = (r0..=r1.min(n)).find(|&i| strict_inside(t_at(i)));
+        let inside: &dyn Fn(f64) -> bool = if anchor.is_some() {
+            &strict_inside
+        } else {
+            &lenient_inside
+        };
         if r1 > n {
             // Seam-wrapping window. An Ellipse evaluates out-of-domain
             // parameters periodically, so its transitions can be bisected in
@@ -4781,5 +4798,95 @@ mod tests {
     fn all_inboth_runs_all_true_is_the_whole_curve() {
         let inb = [true, true, true, true, true];
         assert_eq!(all_inboth_runs(&inb, true), vec![(0, 4)]);
+    }
+
+    #[test]
+    fn closed_window_trim_lands_on_the_true_boundary() {
+        // A square plane face and a wide second extent; a closed circle
+        // section crossing the square's bottom edge (y = 0) in one window.
+        // The window's transitions must bisect to the TRUE boundary, not the
+        // margin-inflated one (adjacent coplanar faces' copies of a shared
+        // section must chain at the boundary, not overlap by the margin).
+        use brepkit_topology::edge::{Edge, EdgeCurve as EC};
+        use brepkit_topology::face::{Face, FaceSurface as FS};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        const N: usize = 24;
+        let mut topo = Topology::new();
+        let mk = |t: &mut Topology, p: Point3| t.add_vertex(Vertex::new(p, 1e-7));
+        let corners = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 10.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+        ];
+        let vids: Vec<_> = corners.iter().map(|&p| mk(&mut topo, p)).collect();
+        let mut oes = Vec::new();
+        for i in 0..4 {
+            let e = topo.add_edge(Edge::new(vids[i], vids[(i + 1) % 4], EC::Line));
+            oes.push(OrientedEdge::new(e, true));
+        }
+        let wid = topo.add_wire(Wire::new(oes, true).unwrap());
+        let face = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FS::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let tol = Tolerance::default();
+        let surface = topo.face(face).unwrap().surface().clone();
+        let ext = FaceExtent::new(&topo, face, &surface, None, tol).unwrap();
+
+        // Circular ellipse r=3 centered (5,-1,0) with u_axis pinned to +x
+        // (a raw Circle3D picks its own reference axis, and closed Circles
+        // route through seam adoption in production, not this path): inside
+        // the square for y in [0, 2], one non-wrapping window.
+        let c = brepkit_math::curves::Ellipse3D::new_with_ref(
+            Point3::new(5.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            3.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let p0 = c.evaluate(0.0);
+        let raw = RawCurve {
+            curve: EdgeCurve::Ellipse(c.clone()),
+            bbox: brepkit_math::aabb::Aabb3 {
+                min: Point3::new(2.0, -4.0, 0.0),
+                max: Point3::new(8.0, 2.0, 0.0),
+            },
+            t_range: (0.0, std::f64::consts::TAU),
+            p_start: p0,
+            p_end: p0,
+        };
+        let inb: Vec<bool> = (0..=N)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = std::f64::consts::TAU * (i as f64) / (N as f64);
+                ext.contains(c.evaluate(t))
+            })
+            .collect();
+        assert!(ext.contains(Point3::new(5.0, 0.2, 0.0)));
+        assert!(
+            ext.contains_strict(Point3::new(5.0, 0.2, 0.0), 0.0),
+            "probe point (5,0.2) must be strictly inside the square"
+        );
+        let mut out = Vec::new();
+        // Both extents the same square: the second face in a real pair only
+        // narrows the window further, which this test doesn't need.
+        emit_closed_curve_windows(&topo, face, face, &raw, &ext, &ext, &inb, N, tol, &mut out);
+        assert_eq!(out.len(), 1, "one crossing window expected");
+        let w = &out[0];
+        assert!(
+            w.p_start.y().abs() < 1e-6 && w.p_end.y().abs() < 1e-6,
+            "window ends must land ON y=0 (no margin overshoot): start_y={} end_y={}",
+            w.p_start.y(),
+            w.p_end.y()
+        );
+        assert!(w.p_start.y().abs() < 1e-9 || w.p_end.y().abs() < 1e-9);
     }
 }
