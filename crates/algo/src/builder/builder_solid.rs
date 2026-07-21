@@ -650,6 +650,13 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
         // leaves only an INWARD cavity component is still rejected. Multi-shell
         // results keep the volume-sign split (a Cut can leave the tool's interior
         // as a separate negative-volume cavity shell).
+        if std::env::var("SHELLDBG").is_ok() {
+            log::warn!(
+                "shell: {} faces signed_vol={signed_vol:.2} robust_outward={:?}",
+                shell.len(),
+                shell_is_outward_oriented(topo, shell)
+            );
+        }
         let is_growth = if signed_vol >= 0.0 {
             // Positive corner-fan volume already reads outward — keep the
             // historical behaviour for every solid that integrates cleanly
@@ -1071,6 +1078,25 @@ fn assemble(
         }
         if shell_is_closed(topo, gs) {
             outer_faces.extend_from_slice(gs);
+        } else if gs.len() >= 4 {
+            // An OPEN growth shell of real size is not a fragmentation
+            // sliver — it is a genuine solid lump whose selection left
+            // unpaired junction edges. Silently discarding it deletes its
+            // whole volume from a watertight-looking result (the lite
+            // fused-foot: 72 faces, ~2700 units^3, invisible to every
+            // edge-pairing gate). Fail the analytic assembly instead so the
+            // boolean falls back to the volume-correct mesh path. Note the
+            // OUTER shell is never subjected to this test, so which lump
+            // dodges it historically depended on volume-ordering luck.
+            return Err(AlgoError::AssemblyFailed(format!(
+                "open growth shell with {} faces would be dropped; aborting analytic assembly",
+                gs.len()
+            )));
+        } else {
+            log::debug!(
+                "BuilderSolid: dropping open {}-face growth sliver",
+                gs.len()
+            );
         }
     }
     let outer_shell = Shell::new(outer_faces)
