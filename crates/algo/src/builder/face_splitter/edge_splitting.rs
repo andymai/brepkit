@@ -326,9 +326,10 @@ pub(super) fn find_splits_on_nurbs_section(
     let (dom0, dom1) = edge
         .curve_3d
         .domain_with_endpoints(edge.start_3d, edge.end_3d);
+    let dom_span = dom1 - dom0;
     let eval_at = |t: f64| -> Point3 {
         edge.curve_3d
-            .evaluate_with_endpoints(dom0 + (dom1 - dom0) * t, edge.start_3d, edge.end_3d)
+            .evaluate_with_endpoints(t.mul_add(dom_span, dom0), edge.start_3d, edge.end_3d)
     };
     let samples: Vec<Point3> = (0..=n_samples)
         .map(|i| {
