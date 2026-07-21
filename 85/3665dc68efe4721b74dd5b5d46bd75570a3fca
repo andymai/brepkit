@@ -1,0 +1,22 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_100d196bea722f::t_645b2ead6646a6 5135
+crates/io/tests/midcell_lipfuse_inmem.rs
+  s_100d196bea722f::t_1f2e66588afa37 83-89,91-92
+  s_100d196bea722f::t_7ccc6cb3b2c7cf 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "853665dc68efe4721b74dd5b5d46bd75570a3fca",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
