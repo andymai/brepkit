@@ -2422,10 +2422,27 @@ fn clip_line_to_face_boundary(
                 // sagitta is ~0.14 — larger than the ~0.1 mm groove-mouth
                 // slivers this polygon must classify. 96 samples keep the
                 // polygon error well under the features decided by it.
-                for k in 1..96 {
-                    let f = f64::from(k) / 96.0;
-                    let p3 = super::pcurve_compute::evaluate_edge_at_t(curve, *asp, *aep, f);
-                    poly.push(frame.project(p3));
+                //
+                // A CLOSED circle edge (a disc rim: seam vertex at both ends)
+                // has a degenerate endpoint span — `evaluate_edge_at_t` would
+                // collapse every sample to the seam and the polygon to a
+                // point, so everything but the seam neighbourhood classified
+                // outside (the lite pad top-disc's wall chords). Sample its
+                // full period from the seam angle instead.
+                if let EdgeCurve::Circle(c) = curve
+                    && (*asp - *aep).length() < tol
+                {
+                    let a_seam = c.project(*asp);
+                    for k in 1..96 {
+                        let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
+                        poly.push(frame.project(c.evaluate(a)));
+                    }
+                } else {
+                    for k in 1..96 {
+                        let f = f64::from(k) / 96.0;
+                        let p3 = super::pcurve_compute::evaluate_edge_at_t(curve, *asp, *aep, f);
+                        poly.push(frame.project(p3));
+                    }
                 }
             }
             let _ = ep;
@@ -3063,6 +3080,33 @@ mod clip_tests {
                 d: 0.0,
             },
         ))
+    }
+
+    #[test]
+    fn through_chord_far_from_seam_clips_to_rim_crossings() {
+        // A chord crossing the disc well away from its seam vertex (the seam
+        // sits at (+r, 0)). The rim is ONE closed circle edge; sampling it
+        // through the endpoint span collapses every polygon vertex to the
+        // seam, so the in-face interval's midpoint classified outside and the
+        // whole chord was dropped (the lite pad top-disc's north wall chord —
+        // its east twin only survived by passing within the boundary band of
+        // the degenerate seam-point polygon).
+        let mut topo = Topology::new();
+        let face = disc_face(&mut topo, 4.45);
+        let out = clip_line_to_face_boundary(
+            &topo,
+            face,
+            Point3::new(-20.0, 4.4, 0.0),
+            Point3::new(20.0, 4.4, 0.0),
+            1e-7,
+        );
+        let segs = out.expect("a through-chord far from the seam must be kept");
+        assert_eq!(segs.len(), 1);
+        let (a, b) = segs[0];
+        let half = (4.45_f64 * 4.45 - 4.4 * 4.4).sqrt();
+        assert!((a.x().abs() - half).abs() < 1e-6, "start {a:?}");
+        assert!((b.x().abs() - half).abs() < 1e-6, "end {b:?}");
+        assert!((a.y() - 4.4).abs() < 1e-9 && (b.y() - 4.4).abs() < 1e-9);
     }
 
     #[test]
