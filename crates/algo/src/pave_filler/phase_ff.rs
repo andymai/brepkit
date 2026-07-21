@@ -1386,9 +1386,16 @@ fn emit_closed_curve_windows(
     #[allow(clippy::cast_precision_loss)]
     let t_at = |i: usize| raw.t_range.0 + span * (i as f64) / (n as f64);
     let point_at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+    // Trim against the MARGIN-FREE window: the boundary margin exists so
+    // boundary-coincident sections aren't rejected, but bisecting a window's
+    // end against the inflated extent overshoots the true face boundary by
+    // the margin (~1% of the extent) — two adjacent coplanar faces' copies of
+    // the same section then OVERLAP by that much instead of chaining at the
+    // shared boundary, and the overlap span triples the edge use (the lite
+    // diagonal pad's east-slope windows).
     let inside = |t: f64| {
         let p = point_at(t);
-        ext_a.contains(p) && ext_b.contains(p)
+        ext_a.contains_strict(p, 0.0) && ext_b.contains_strict(p, 0.0)
     };
     for (r0, r1) in all_inboth_runs(inb, true) {
         if r1 - r0 < 2 {
