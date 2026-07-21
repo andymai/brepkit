@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784623888473,
+  "lastUpdate": 1784624332210,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8045,6 +8045,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26902500,
             "range": "± 93563",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "24bdbce8f5f169dfb6888ed02d952e91fde9cca0",
+          "message": "chore(main): release 2.127.7 (#1143)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.7](https://github.com/andymai/brepkit/compare/v2.127.6...v2.127.7)\n(2026-07-21)\n\n\n### Bug Fixes\n\n* **algo:** sample a closed rim circle's full period in the line-clip\npolygon ([#1142](https://github.com/andymai/brepkit/issues/1142))\n([f50ac30](https://github.com/andymai/brepkit/commit/f50ac308888fad9c6ab9974a74bd9f90ff5013bd))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.127.7 with a fix to line-clip polygon for\nclosed rim circles. It now samples the circle’s full period to avoid\nmissed intersections and clipping gaps.\n\n- **Bug Fixes**\n- Sample the full period of closed rim circles in the line-clip polygon,\npreventing skipped segments and inconsistent results.\n\n<sup>Written for commit 5ec6cb4e9a6bd6a7e8f39342c0153a466bce6d35.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1143?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-21T08:56:36Z",
+          "tree_id": "732288e03b48212528710d3f2fdf1af9f7ff18cf",
+          "url": "https://github.com/andymai/brepkit/commit/24bdbce8f5f169dfb6888ed02d952e91fde9cca0"
+        },
+        "date": 1784624331608,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 913359,
+            "range": "± 3912",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 999979,
+            "range": "± 3567",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11928,
+            "range": "± 58",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 648384,
+            "range": "± 11156",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27013354,
+            "range": "± 182323",
             "unit": "ns/iter"
           }
         ]
