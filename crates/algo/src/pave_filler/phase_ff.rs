@@ -1395,8 +1395,16 @@ fn emit_closed_curve_windows(
             continue;
         }
         if r1 > n {
-            out.extend(trim_closed_curve_to_inboth_arc(raw, r0, r1, n));
-            continue;
+            // Seam-wrapping window. An Ellipse evaluates out-of-domain
+            // parameters periodically, so its transitions can be bisected in
+            // the unwrapped parameter like any other window (fall through).
+            // A clamped NURBS cannot (out-of-domain evaluation is garbage);
+            // it keeps the historical sample-index trim, whose wrap split
+            // `trim_closed_curve_to_inboth_arc` owns.
+            if !matches!(raw.curve, EdgeCurve::Ellipse(_)) {
+                out.extend(trim_closed_curve_to_inboth_arc(raw, r0, r1, n));
+                continue;
+            }
         }
         let mut t_lo = t_at(r0);
         if r0 > 0 {
@@ -1412,7 +1420,11 @@ fn emit_closed_curve_windows(
             t_lo = in_t;
         }
         let mut t_hi = t_at(r1);
-        if r1 < n {
+        // `r1 == n` ends exactly at the seam duplicate (no out-sample to
+        // bisect against in-domain); `r1 > n` is the wrapped-Ellipse
+        // fall-through, whose periodic evaluation makes the out-of-domain
+        // bisection valid.
+        if r1 != n {
             let (mut in_t, mut out_t) = (t_hi, t_at(r1 + 1));
             for _ in 0..48 {
                 let mid = 0.5 * (in_t + out_t);
@@ -2323,11 +2335,14 @@ fn all_inboth_runs(inb: &[bool], closed: bool) -> Vec<(usize, usize)> {
     }
     // Closed: distinct samples are 0..m (sample m duplicates sample 0). Scan
     // two periods so a seam-wrapping run appears once, starting at its true
-    // beginning; runs beginning in the second period are duplicates.
+    // beginning; runs beginning in the second period are duplicates, and a
+    // run beginning at index 0 while `inb[m-1]` is true is the TAIL of the
+    // wrapping run — emitting it too would duplicate that window.
     let m = n - 1;
     if inb[..m].iter().all(|&v| v) {
         return vec![(0, m)];
     }
+    let wraps = inb[0] && inb[m - 1];
     let mut runs = Vec::new();
     let mut start: Option<usize> = None;
     for k in 0..2 * m {
@@ -2335,12 +2350,14 @@ fn all_inboth_runs(inb: &[bool], closed: bool) -> Vec<(usize, usize)> {
             start.get_or_insert(k);
         } else if let Some(s) = start.take()
             && s < m
+            && !(s == 0 && wraps)
         {
             runs.push((s, k - 1));
         }
     }
     if let Some(s) = start
         && s < m
+        && !(s == 0 && wraps)
     {
         runs.push((s, 2 * m - 1));
     }
@@ -4727,5 +4744,35 @@ mod tests {
         // far from the even spacing of an inscribed polygon.
         let hits = vec![hit_at(0.1), hit_at(0.2), hit_at(0.3), hit_at(0.4)];
         assert!(!hits_are_inscribed_polygon(&hits));
+    }
+
+    #[test]
+    fn all_inboth_runs_finds_disjoint_windows() {
+        // Open scan: two disjoint runs.
+        let inb = [false, true, true, true, false, true, true, false];
+        assert_eq!(all_inboth_runs(&inb, false), vec![(1, 3), (5, 6)]);
+    }
+
+    #[test]
+    fn all_inboth_runs_merges_seam_wrapping_run_once() {
+        // Closed: distinct samples 0..6, sample 6 duplicates sample 0.
+        // Trues at [5, 0, 1] wrap the seam: ONE run starting at 5, no
+        // duplicate (0, 1) prefix emission.
+        let inb = [true, true, false, false, false, true, true];
+        assert_eq!(all_inboth_runs(&inb, true), vec![(5, 7)]);
+    }
+
+    #[test]
+    fn all_inboth_runs_wrapping_plus_interior_window() {
+        // Closed: a seam-wrapping run AND an interior run must both appear,
+        // each exactly once.
+        let inb = [true, false, false, true, false, true, true];
+        assert_eq!(all_inboth_runs(&inb, true), vec![(3, 3), (5, 6)]);
+    }
+
+    #[test]
+    fn all_inboth_runs_all_true_is_the_whole_curve() {
+        let inb = [true, true, true, true, true];
+        assert_eq!(all_inboth_runs(&inb, true), vec![(0, 4)]);
     }
 }
