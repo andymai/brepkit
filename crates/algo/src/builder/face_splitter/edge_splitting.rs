@@ -441,11 +441,13 @@ pub(super) fn find_splits_on_section_arc(
 /// already outside that evaluator's contract, so matching it is strictly
 /// more consistent than the domain-based normalization.
 pub(super) fn find_splits_on_section_ellipse(
-    ellipse: &brepkit_math::curves::Ellipse3D,
     edge: &OrientedPCurveEdge,
     split_pts_3d: &[Point3],
     tol: f64,
 ) -> Vec<(f64, Point3)> {
+    let EdgeCurve::Ellipse(ellipse) = &edge.curve_3d else {
+        return Vec::new();
+    };
     let a0 = ellipse.project(edge.start_3d);
     let delta = shorter_arc_delta(ellipse.project(edge.end_3d) - a0);
     if delta.abs() < 1e-14 {
@@ -594,14 +596,14 @@ mod tests {
 
         for forward in [true, false] {
             let edge = ellipse_section_edge(&ellipse, 0.2, 1.0, forward);
-            let phantom = find_splits_on_section_ellipse(&ellipse, &edge, &[other_window_pt], 1e-7);
+            let phantom = find_splits_on_section_ellipse(&edge, &[other_window_pt], 1e-7);
             assert!(
                 phantom.is_empty(),
                 "other-window point must not split the {} twin",
                 if forward { "forward" } else { "reverse" }
             );
 
-            let real = find_splits_on_section_ellipse(&ellipse, &edge, &[junction], 1e-7);
+            let real = find_splits_on_section_ellipse(&edge, &[junction], 1e-7);
             assert_eq!(real.len(), 1);
             let minted = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, real[0].0);
             assert!(
@@ -609,6 +611,19 @@ mod tests {
                 "split evaluator must mint the junction point on both twins"
             );
         }
+
+        // Pin the divergence that motivated the section-specific finder: the
+        // domain-based `find_splits_on_ellipse` (still correct for boundary
+        // edges) DOES phantom-split the reverse twin on the other-window
+        // point. If it ever becomes twin-safe, delete this assertion and
+        // consider re-unifying the finders.
+        let rev = ellipse_section_edge(&ellipse, 0.2, 1.0, false);
+        let old = find_splits_on_ellipse(&ellipse, &rev, &[other_window_pt], 1e-7);
+        assert_eq!(
+            old.len(),
+            1,
+            "domain-based finder is expected to phantom-split the reverse twin"
+        );
     }
 
     /// A CLOSED rim on a cylinder, seamed at 3pi/2 (i.e. NOT at the circle's

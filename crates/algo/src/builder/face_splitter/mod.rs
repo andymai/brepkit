@@ -237,9 +237,7 @@ fn split_sections_at_t_junctions(
             // `find_splits_on_section_ellipse`). The shorter-arc convention
             // matches `evaluate_edge_at_t`, which both twins share.
             EdgeCurve::Circle(_) => find_splits_on_section_arc(&edge, &endpoints, tol),
-            EdgeCurve::Ellipse(ellipse) => {
-                find_splits_on_section_ellipse(ellipse, &edge, &endpoints, tol)
-            }
+            EdgeCurve::Ellipse(_) => find_splits_on_section_ellipse(&edge, &endpoints, tol),
             // A marched-NURBS section (a plane×cone conic) bulges past its
             // chord like an arc — a junction endpoint mid-curve is invisible
             // to the chord-based search, so use sampled point-to-curve
