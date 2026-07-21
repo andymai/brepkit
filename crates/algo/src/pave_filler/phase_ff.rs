@@ -732,7 +732,10 @@ impl FaceExtent {
                 v1,
                 u_gap,
                 ..
-            } => surface.project_point(p).is_none_or(|(u, v)| {
+            } => surface.project_point(p).is_some_and(|(u, v)| {
+                // Unlike `contains` (conservative keep on projection failure),
+                // the STRICT gate fails closed: an unprojectable point cannot
+                // certify a genuine interior crossing.
                 let in_v = v >= *v0 + depth && v <= *v1 - depth;
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 in_v && in_u
@@ -1346,10 +1349,16 @@ fn rescue_corner_crossing(
         let mut best: Option<(f64, Point3, f64, FaceId, brepkit_topology::edge::EdgeId)> = None;
         for fid in [fa, fb] {
             let Ok(face) = topo.face(fid) else { continue };
-            let Ok(wire) = topo.wire(face.outer_wire()) else {
-                continue;
-            };
-            for oe in wire.edges() {
+            // Inner (hole) wires are legitimate exit boundaries too: a corner
+            // crossing leaving through a bore rim must share its exact vertex.
+            let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .collect();
+            for oe in wire_ids
+                .iter()
+                .filter_map(|&wid| topo.wire(wid).ok())
+                .flat_map(|w| w.edges().to_vec())
+            {
                 let Ok(edge) = topo.edge(oe.edge()) else {
                     continue;
                 };
@@ -1416,7 +1425,10 @@ fn rescue_corner_crossing(
         };
         let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
         let half = (d1 - d0).abs().max(1e-9) * 0.01;
-        let (mut lo, mut hi) = (tm - half, tm + half);
+        // Clamp the refine window to the edge's own span so the search never
+        // evaluates (and snaps to) a point past the boundary arc's ends.
+        let (span_lo, span_hi) = (d0.min(d1), d0.max(d1));
+        let (mut lo, mut hi) = ((tm - half).max(span_lo), (tm + half).min(span_hi));
         for _ in 0..64 {
             let m1 = lo + (hi - lo) / 3.0;
             let m2 = hi - (hi - lo) / 3.0;
