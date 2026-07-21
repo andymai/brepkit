@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.4](https://github.com/andymai/brepkit/compare/v2.127.3...v2.127.4) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** rescue corner-window cone-cylinder sections and accept multi-piece fuses ([#1136](https://github.com/andymai/brepkit/issues/1136)) ([8d626c7](https://github.com/andymai/brepkit/commit/8d626c74e46c118800ac826e7ce8cc4ed04a93bd))
+
 ## [2.127.3](https://github.com/andymai/brepkit/compare/v2.127.2...v2.127.3) (2026-07-20)
 
 
