@@ -724,6 +724,21 @@ pub fn boolean(
         }
     }
 
+    // A Fuse whose TOOL carries many disjoint pieces (the lite base's 64
+    // magnet pads arrive as one 64-component union) also defeats the
+    // pavefiller when fed whole. Fuse distributes over a disjoint-union
+    // tool, so fold the pieces in one at a time — each per-piece fuse is
+    // the configuration the engine handles analytically.
+    if op == BooleanOp::Fuse {
+        let tool_components = crate::boolean::assembly::face_components(topo, b);
+        if tool_components.len() >= 2
+            && components_are_disjoint_pieces(topo, &tool_components)
+            && let Ok(result) = fuse_multi_component_tool(topo, a, tool_components)
+        {
+            return Ok(result);
+        }
+    }
+
     // Mesh boolean fallback (no recursion).
     log::debug!(
         target: "brepkit_approx",
@@ -2393,6 +2408,30 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
 /// connected input — feeding a 2-piece "solid" into GFA loses one piece
 /// at a time as the cut proceeds (Category B `multiple cuts creating
 /// three pieces` and gear bore are both downstream of this).
+/// Fuse a multi-component TOOL by folding its disjoint pieces into the
+/// target one at a time.
+///
+/// Each piece is copied into a fresh connected solid (the pavefiller
+/// stumbles on shared vertex IDs across what it considers one "solid B")
+/// and fused via the full `boolean` entry, so every per-piece fuse gets the
+/// analytic path, gates, and fallbacks. Fuse distributes over a
+/// disjoint-union tool, so the fold is exact. Recursion terminates: each
+/// piece is single-component, so the recursive call never re-enters this
+/// path.
+fn fuse_multi_component_tool(
+    topo: &mut Topology,
+    a: SolidId,
+    b_components: Vec<Vec<brepkit_topology::face::FaceId>>,
+) -> Result<SolidId, crate::OperationsError> {
+    let mut result = a;
+    for comp_faces in b_components {
+        let comp_solid_raw = make_solid_from_face_subset(topo, &comp_faces)?;
+        let comp_solid = crate::copy::copy_solid(topo, comp_solid_raw)?;
+        result = boolean(topo, BooleanOp::Fuse, result, comp_solid)?;
+    }
+    Ok(result)
+}
+
 fn cut_multi_region_input(
     topo: &mut Topology,
     a: SolidId,
