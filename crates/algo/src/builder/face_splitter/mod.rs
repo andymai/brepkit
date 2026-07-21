@@ -924,21 +924,6 @@ fn wire_loops_have_degenerate_area(loops: &[Vec<OrientedPCurveEdge>], tol: f64) 
     })
 }
 
-/// True when any wire loop revisits a UV vertex — the signature of a
-/// self-crossing trace from the angular wire builder, which the arrangement
-/// decomposition can replace with simple (non-self-intersecting) regions even
-/// when it produces FEWER loops. A simple closed loop visits each vertex once;
-/// a figure-eight or out-and-back revisits one.
-///
-/// Detection is vertex-topological: it tests only the edges' endpoints
-/// (`start_uv`). That is exactly the failure mode this gate targets — the
-/// angular builder over-splits by walking out-and-back through a shared UV
-/// vertex (see `remove_pendant_sections`), so the bad trace always reuses a
-/// vertex. It deliberately does NOT detect a self-crossing that occurs only
-/// along an edge's interior (e.g. an arc whose curved path crosses another
-/// edge's chord in UV between their endpoints, with no shared vertex). No
-/// wire-builder trace produces such a crossing here, so testing arc interiors
-/// would add cost without changing any outcome.
 /// Split a wire loop at UV vertices it visits more than once (a "pinch"): a
 /// grand-tour trace that absorbed a sub-region as an excursion is separated
 /// into the sub-cycle and the rest, recursively. Pure out-and-back excursions
@@ -995,6 +980,21 @@ fn split_loop_at_pinch_vertices(
     out
 }
 
+/// True when any wire loop revisits a UV vertex — the signature of a
+/// self-crossing trace from the angular wire builder, which the arrangement
+/// decomposition can replace with simple (non-self-intersecting) regions even
+/// when it produces FEWER loops. A simple closed loop visits each vertex once;
+/// a figure-eight or out-and-back revisits one.
+///
+/// Detection is vertex-topological: it tests only the edges' endpoints
+/// (`start_uv`). That is exactly the failure mode this gate targets — the
+/// angular builder over-splits by walking out-and-back through a shared UV
+/// vertex (see `remove_pendant_sections`), so the bad trace always reuses a
+/// vertex. It deliberately does NOT detect a self-crossing that occurs only
+/// along an edge's interior (e.g. an arc whose curved path crosses another
+/// edge's chord in UV between their endpoints, with no shared vertex). No
+/// wire-builder trace produces such a crossing here, so testing arc interiors
+/// would add cost without changing any outcome.
 fn wire_loops_self_cross(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
     let qscale = 1.0 / tol.max(1e-12);
     let qkey = |p: brepkit_math::vec::Point2| -> (i64, i64) {
@@ -4935,6 +4935,12 @@ fn split_face_2d_impl(
                 .iter()
                 .flat_map(|lp| split_loop_at_pinch_vertices(lp, tol.linear))
                 .collect();
+            // Adopt only when the split UNCOVERED a region (strictly more
+            // loops) and the self-cross cleared. Equal-count adoption (shed
+            // remnant only) was tried and REFUTED: an out-and-back remnant
+            // can be load-bearing — dropping it on the straight-graze pad
+            // wall regressed the lite_pad_graze_fuse fixture to mesh
+            // fallback. Downstream reconciliation consumes those remnants.
             if resolved.len() > loops.len() && !wire_loops_self_cross(&resolved, tol.linear) {
                 loops = resolved;
             }
@@ -6105,5 +6111,74 @@ mod tests {
             (c.center() - Point3::new(0.7, 0.7, 0.0)).length() < 1e-9,
             "the carved disc must be the genuine cap, not the in-hole one"
         );
+    }
+
+    fn uv_line_edge(a: Point2, b: Point2) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: dummy_pcurve(),
+            start_uv: a,
+            end_uv: b,
+            start_3d: Point3::new(a.x(), a.y(), 0.0),
+            end_3d: Point3::new(b.x(), b.y(), 0.0),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    #[test]
+    fn pinch_split_separates_figure_eight_into_two_squares() {
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let wire = vec![
+            uv_line_edge(p(0.0, 0.0), p(1.0, 0.0)),
+            uv_line_edge(p(1.0, 0.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(2.0, 1.0)),
+            uv_line_edge(p(2.0, 1.0), p(2.0, 2.0)),
+            uv_line_edge(p(2.0, 2.0), p(1.0, 2.0)),
+            uv_line_edge(p(1.0, 2.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(0.0, 1.0)),
+            uv_line_edge(p(0.0, 1.0), p(0.0, 0.0)),
+        ];
+        let out = split_loop_at_pinch_vertices(&wire, 1e-7);
+        assert_eq!(out.len(), 2, "figure-eight must split into its two cycles");
+        for lp in &out {
+            assert_eq!(lp.len(), 4);
+            let pts = sample_wire_loop_uv(lp);
+            assert!((signed_area_2d(&pts).abs() - 1.0).abs() < 1e-9);
+        }
+        assert!(!wire_loops_self_cross(&out, 1e-7));
+    }
+
+    #[test]
+    fn pinch_split_drops_pure_out_and_back_excursion() {
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let wire = vec![
+            uv_line_edge(p(0.0, 0.0), p(1.0, 0.0)),
+            uv_line_edge(p(1.0, 0.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(2.0, 1.0)),
+            uv_line_edge(p(2.0, 1.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(0.0, 1.0)),
+            uv_line_edge(p(0.0, 1.0), p(0.0, 0.0)),
+        ];
+        let out = split_loop_at_pinch_vertices(&wire, 1e-7);
+        assert_eq!(out.len(), 1, "the zero-area excursion must be dropped");
+        assert_eq!(out[0].len(), 4);
+        let pts = sample_wire_loop_uv(&out[0]);
+        assert!((signed_area_2d(&pts).abs() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pinch_split_keeps_simple_loop_whole() {
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let wire = vec![
+            uv_line_edge(p(0.0, 0.0), p(1.0, 0.0)),
+            uv_line_edge(p(1.0, 0.0), p(1.0, 1.0)),
+            uv_line_edge(p(1.0, 1.0), p(0.0, 1.0)),
+            uv_line_edge(p(0.0, 1.0), p(0.0, 0.0)),
+        ];
+        let out = split_loop_at_pinch_vertices(&wire, 1e-7);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].len(), 4);
     }
 }
