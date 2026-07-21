@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.14](https://github.com/andymai/brepkit/compare/v2.127.13...v2.127.14) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** arc-true hole-promotion containment on plane faces ([#1156](https://github.com/andymai/brepkit/issues/1156)) ([936c007](https://github.com/andymai/brepkit/commit/936c0073ab8556f621dbd439c67a5f46a7e3b358))
+
 ## [2.127.13](https://github.com/andymai/brepkit/compare/v2.127.12...v2.127.13) (2026-07-21)
 
 
