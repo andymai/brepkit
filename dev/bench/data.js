@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784627183491,
+  "lastUpdate": 1784635341867,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8207,6 +8207,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29000253,
             "range": "± 201155",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "83264739a97dbb5d98563aae9029374c278db732",
+          "message": "fix(algo): never silently drop a non-trivial open growth shell (#1146)\n\n## Root\n\nFound during the lite magnet-pad fold-2 dig via a **volume audit** (the\ndurable lesson of this family: manifold + position-paired edges is NOT\nacceptance — no edge-pairing gate can see a dropped chunk).\n\nThe assembler joins non-outer growth shells into the result only when\n`shell_is_closed`; an open one is silently discarded as a \"residual\nfragmentation sliver\". But a genuine solid lump whose face selection\nleft unpaired junction edges hits the same path and vanishes wholesale:\non the captured fold-2 operands, a 72-face foot (~2700 units³)\ndisappeared from a result that then read watertight, manifold, and\nposition-paired — while enclosing one foot less volume than the base it\nwas fused onto.\n\nWorse, which lump dodges the test is **volume-ordering luck**: the outer\nshell (largest signed volume) is never subjected to the closure check,\nso the same defect stays hidden or fires depending on how the corner-fan\nvolume estimates happen to rank the shells.\n\n## Fix\n\nWhen an open growth shell has 4+ faces, fail the analytic assembly\n(`AssemblyFailed`) so the boolean falls back to the volume-correct mesh\npath. True few-face slivers (the case the silent drop was built for)\nkeep the drop, now debug-logged.\n\n## Verification\n\nFoil web green: algo 177, ops lib 773, wasm gridfinity canary 27/27,\nfull io fixture suite (incl. the lite graze-fuse fixture), clippy/fmt\nclean. On the fold-2 repro the raw assembly now aborts (→ mesh fallback\nat ops level) instead of silently deleting the foot.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAbort analytic assembly when a non-trivial open growth or hole shell\n(>=4 faces) is detected, forcing a safe mesh fallback. This prevents\nreal solids or cavities from being silently dropped while the result\nappears manifold.\n\n- **Bug Fixes**\n- Abort with `AssemblyFailed` for open non-outer growth or hole shells\nwith 4+ faces to trigger mesh fallback.\n- Tiny shells (<4 faces) are still dropped and debug-logged; removed a\nstray debug block from `perform_areas`.\n- Added a regression test covering a 5-face open lump; skips the\nsanctioned open-outer case.\n\n<sup>Written for commit f13aeb1d935b483432aa35315326558851144778.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1146?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T12:00:02Z",
+          "tree_id": "7ab57870c4a057e434210f9b3bfff78c0e2f47dd",
+          "url": "https://github.com/andymai/brepkit/commit/83264739a97dbb5d98563aae9029374c278db732"
+        },
+        "date": 1784635340892,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 919410,
+            "range": "± 3466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1009328,
+            "range": "± 5042",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11971,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675883,
+            "range": "± 9324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26860166,
+            "range": "± 67965",
             "unit": "ns/iter"
           }
         ]
