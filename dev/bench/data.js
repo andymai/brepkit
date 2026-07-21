@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784666791121,
+  "lastUpdate": 1784670884656,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8747,6 +8747,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27140222,
             "range": "± 907454",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "936c0073ab8556f621dbd439c67a5f46a7e3b358",
+          "message": "fix(algo): arc-true hole-promotion containment on plane faces (#1156)\n\n## Root cause\n\nThe hole-promotion pass in `split_face_2d` sampled loops through the\nstored **pcurves**, which chord `Circle2D` corner arcs (and can trace\nreversed-boundary arcs backwards — the same convention hazard\n`interior_point_3d` was already fixed for in the fractional-width\ncrescent work). A genuinely nested hole whose corner arcs poke past the\nouter loop's chord-approximated corners reads as *not nested* and gets\npromoted to its own region.\n\nOn the gridfinity `2×1 lite + mid-cell dividers (cols=3)` scenario: the\nstacking lip's down-facing base **annulus** lost its throat hole this\nway — the spurious full disc capped the bin interior, the lip-base ring\nedge went three-way shared (box wall + disc + lip skirt), the shell\npartition split into a closed lower box plus an open 109-face rest, the\n#1146 hole-shell fail-safe correctly aborted, and the mesh fallback's\nopen output (free=121) then poisoned **every** downstream boolean of the\nscenario through to the STL export (bd=115 — one of the two new\nlightweight failures surfaced by the 2.127.9 bisect).\n\n## Fix\n\n- Plane faces sample promotion polygons through the `PlaneFrame`\n(`sample_wire_loop_uv_via_frame` — arc-true and\norientation-unambiguous).\n- The all-CW flip branch now promotes the **largest-area** loop instead\nof whichever loop the wire builder traced first — the order-dependent\npick is the same latent class (a throat-first trace makes the throat the\nouter and orphans the outline).\n\n## Results (captured operands, byte-exact arena)\n\n| lip fuse | before | after |\n|---|---|---|\n| result | mesh fallback, 598 planes, **free=121**, 152 ms | **analytic\nF=118 (38 curved), free=0, 53 ms** |\n\n## Verification\n\n- Captured-operand regression `midcell_lipfuse_inmem` (fixtures in\n`tests/data/`, 52 KB): **fails without the fix** (121 free edges),\npasses with it, and pins the analytic outcome via the curved-face census\n(mesh fallback re-emits all-plane).\n- Full foil battery green: `brepkit-algo` 184/184, `brepkit-operations`\n774/774 + all integration groups (the shelled-cup lip fuses,\nsocket-assembly crescents, and every other consumer of this calibrated\npromotion pass), `brepkit-io` full, d4 canary 27/27, boundaries clean,\nfull workspace via pre-push.\n\nThird fix in the mid-cell-dividers chain dig (#1150 → #1152 → #1154 →\nthis); the scenario's remaining distance to bd=0 is re-measured\ntool-side after merge.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes hole promotion on plane faces by sampling loops via the face frame\n(arc-true) and by promoting the largest CW loop with a periodic-aware\narea check. Restores an analytic, watertight lip fuse in the gridfinity\nmid‑cell‑dividers case (F=118, free=0) and avoids the mesh fallback.\n\n- **Bug Fixes**\n- Plane faces sample promotion polygons via `PlaneFrame` using\n`sample_wire_loop_uv_via_frame` to avoid chorded pcurves and\nreversed-arc issues, keeping true holes nested.\n- In the all‑CW flip branch, promote the largest‑area loop using the\nperiodic‑aware sampler; updates the `midcell_lipfuse_inmem` regression\nto also pin fused volume, preventing wrong‑but‑watertight passes.\n\n<sup>Written for commit 853665dc68efe4721b74dd5b5d46bd75570a3fca.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1156?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T21:52:26Z",
+          "tree_id": "fb820e40e5b28315f2602c3240632e6707fec315",
+          "url": "https://github.com/andymai/brepkit/commit/936c0073ab8556f621dbd439c67a5f46a7e3b358"
+        },
+        "date": 1784670884088,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 936217,
+            "range": "± 4164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1037175,
+            "range": "± 3838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12999,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 646729,
+            "range": "± 1491",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28659481,
+            "range": "± 15576",
             "unit": "ns/iter"
           }
         ]
