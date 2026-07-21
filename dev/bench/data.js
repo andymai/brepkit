@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784649167346,
+  "lastUpdate": 1784652882652,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8531,6 +8531,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19055447,
             "range": "± 114786",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f253b52ad6cb5db7e3f94de1ee4651acd52c8fd3",
+          "message": "fix(algo): trace full-period cylinder partitions with the seam-glued DCEL (#1152)\n\n## Root cause\n\nOn a full-period cylinder wall cut by oblique sections (the lite base's\ndiagonal magnet pad grazing two socket corners), the greedy wire builder\nunder-splits: its global `used` filter is order-dependent, and a\ndiscarded walk still consumes its edges — so the wall's third region\n(the corner strip the base-side neighbors pair against) never got\ntraced. The strip stayed merged inside the buried band sub-face,\nclassification dropped that band wholesale, the neighbors' ring edges\nwent unpaired (9 odd edges), assembly failed, and the whole fuse fell\nback to mesh — poisoning every later fold of the 64-pad chain (the `4×4\nlite stress` / `solid bin + magnet` export-integrity failures).\n\n## Fix\n\n`build_wire_loops_dcel` — a deterministic twin-successor face\nenumeration (successor = rotational-next of twin, a bijection, so no\norder dependence and no edge stealing) — consulted only when the greedy\nresult is broken on a sectioned cylinder face, adopted only when\nstrictly healthier (more loops, no new broken-loop flags). Three rules\nmake it correct on the seam-GLUED periodic graph:\n\n1. **Lifted minimal-image shoelace** for orbit area/perimeter: a raw\nshoelace over mixed period copies read the full-period remainder band as\nstrongly negative, so it was dropped as the planar \"outer\" face.\n2. **Periodic outer-face rule**: the unbounded faces of a periodic graph\nare the period-winding orbits made purely of synthetic rim twins; a\nwinding orbit carrying real halves is a genuine band region (a band's\nrims are separate rings in the glued graph, so the band itself winds).\nThe planar most-negative rule is unchanged for non-periodic faces.\n3. **No pinch-splitting of DCEL results in the u-periodic consults**:\nthe band orbit legitimately revisits the glued seam node at the same\nstored period copy; shearing there produced three over-shared wall\nsub-faces.\n\n## Results (captured 4×4-stress operands)\n\n| | before | after |\n|---|---|---|\n| fold-2 raw GFA | AssemblyFailed (open shell, 9 odd edges) | **F=959\nanalytic, posBad=0** |\n| 64-pad fuse chain | mesh fallback, 12–14k all-plane faces, up to bd=21\nat export weld, 268–325 s | **F=1424 analytic (352 cyl/256 cone/816\nplane), mesh bd=0 nm=0, 146 s** |\n| + 64 drills | fallback carrier | **F=1334 analytic, bd=0 nm=0** |\n\nVolume audits pass (the acceptance lesson from the earlier DCEL\nprototype, which was manifold but silently dropped a foot): single fold\ngains +15.8 with analytic vs mesh signed volume agreeing to 0.001%;\nwhole chain 42236 → 49357 (+111/pad average, consistent with the\nsingle-pad +130 for exposed pads).\n\n## Verification\n\n- New unit tests: `dcel_glued_cylinder_strip_partition` (glued node\nkeys, three cells, winding pure-synthetic rim rings dropped, lifted\nshoelace across the period copies) and\n`dcel_winding_band_with_real_halves_is_kept` (the exact remainder-band\nshape that was being dropped as outer).\n- fold-2 replay deterministic across 10 fresh processes (F=959 posBad=0\nevery run).\n- `brepkit-algo` 184/184, `brepkit-operations` 773/773 (+ all\nintegration groups), `brepkit-io` full, d4 canary (`brepkit-wasm --lib\ngridfinity`) 27/27, boundaries clean, full workspace suite via pre-push.\n\nBuilds on #1150 (phantom reverse-twin ellipse splits — the same wall's\nearlier defect). Part of the lightweight-export parity campaign; closes\nthe magnet-pad fuse family at engine level.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes under-splitting on full-period cylinder walls by adding a\ndeterministic DCEL face trace, used with DCEL-first consult and relative\nloop‑health checks for periodic bands. Restores correct wall partitions,\nunblocks assembly, and returns the 64‑pad fuse chain to analytic output\nwith faster exports.\n\n- **Bug Fixes**\n- Added `build_wire_loops_dcel`: twin-successor face enumeration that is\norder-independent; uses a lifted minimal‑image shoelace for periodic\nfaces.\n- Periodic rule: drop pure‑synthetic period‑winding rim orbits; keep\nwinding orbits that include real halves (true bands). Planar faces still\nuse the most‑negative‑area outer rule.\n- In `split_face_2d_impl`: DCEL-first on u‑periodic cylinder faces when\ngreedy loops are broken; adopt only if it produces more loops with no\nnew broken-loop flags relative to greedy; exempt adopted DCEL results\nfrom pinch‑splitting.\n- Under‑split rescue: even when greedy looks clean, adopt the DCEL\npartition only if it strictly refines the loops and passes loop‑health\nchecks relative to greedy (periodic-safe); no pinch‑split on these\nresults.\n- Greedy mirrored‑turn fallback is retained but used only if DCEL is not\nadopted and it strictly improves results.\n- Outcome: assembly passes (no odd edges); 64‑pad chain is fully\nanalytic and faster; new tests cover glued‑cylinder cases.\n\n<sup>Written for commit 12a0e3f14ea95722c85eb8413a2b3623c345d69a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1152?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T16:52:14Z",
+          "tree_id": "923c75cf740eec50ea3d2ffcb391f980611a01e8",
+          "url": "https://github.com/andymai/brepkit/commit/f253b52ad6cb5db7e3f94de1ee4651acd52c8fd3"
+        },
+        "date": 1784652882079,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 902384,
+            "range": "± 3202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 993007,
+            "range": "± 2730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12091,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 645288,
+            "range": "± 15201",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27026821,
+            "range": "± 132364",
             "unit": "ns/iter"
           }
         ]
