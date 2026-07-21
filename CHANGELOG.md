@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.11](https://github.com/andymai/brepkit/compare/v2.127.10...v2.127.11) (2026-07-21)
+
+
+### Bug Fixes
+
+* **algo:** split ellipse sections with the shorter-arc convention on both twins ([#1150](https://github.com/andymai/brepkit/issues/1150)) ([a5e35d3](https://github.com/andymai/brepkit/commit/a5e35d36b8252a9cc737963b6eccb19e8e96b62b))
+
 ## [2.127.10](https://github.com/andymai/brepkit/compare/v2.127.9...v2.127.10) (2026-07-21)
 
 
