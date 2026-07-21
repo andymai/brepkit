@@ -45,11 +45,13 @@ fn fuse_disjoint_cubes() {
 #[test]
 fn intersect_multi_piece_operand_keeps_disjoint_chunks() {
     // The lite divider clip: intersecting a multi-piece solid (two disjoint
-    // cubes merged into one solid) with a bar that crosses both legitimately
-    // yields two disjoint chunks. The multi-region acceptance gate must admit
-    // the analytic Intersect result instead of rejecting it on the
-    // single-component Euler check (which forced a mesh fallback whose open
-    // output poisoned the whole lite export chain).
+    // cylinders merged into one solid) with a bar that crosses both
+    // legitimately yields two disjoint chunks. The multi-region acceptance
+    // gate must admit the analytic Intersect result instead of rejecting it
+    // on the single-component Euler check (which forced a mesh fallback whose
+    // open output poisoned the whole lite export chain). Cylinders, not
+    // boxes: a box fallback re-merges its coplanar facets back to a handful
+    // of planes, so only the curved-wall census discriminates the paths.
     use crate::measure::solid_volume;
     use crate::transform::transform_solid;
     use brepkit_math::mat::Mat4;
@@ -80,6 +82,12 @@ fn intersect_multi_piece_operand_keeps_disjoint_chunks() {
     assert!(
         (vol - expected).abs() < 0.05,
         "two disc slabs expected (vol {expected:.3}), got {vol}"
+    );
+    let components = crate::boolean::assembly::face_components(&topo, result);
+    assert_eq!(
+        components.len(),
+        2,
+        "the two chunks must stay disjoint components"
     );
 }
 

@@ -672,19 +672,31 @@ pub fn boolean(
                             all_component_centers_outside(topo, &components_vec, cls_b, tol)
                         });
                 // Intersect's mirror hazard: GFA could emit a piece that is not
-                // part of A∩B at all. Reject when any component's interior
-                // sample classifies OUTSIDE either operand; `On`/unknown stay
-                // accepted (thin clip pieces legitimately touch both
-                // boundaries). Same heuristic strength as `cut_safe`'s
-                // B-interior probe — a false accept needs a non-convex piece
-                // whose AABB centre escapes it, and rejection just falls back.
+                // part of A∩B at all. Reject when any component's AABB-centre
+                // sample classifies OUTSIDE either operand — an intersection
+                // piece must lie inside both. The winding-number classifier
+                // (unlike the analytic one) handles multi-piece operands, the
+                // very case this acceptance exists for; a classification error
+                // rejects (this acceptance is purely an optimization, so
+                // unclassifiable geometry keeps the old fallback behaviour).
+                // `OnBoundary` passes — thin clip pieces legitimately touch
+                // the operand boundaries. The centre need not be interior to a
+                // concave piece, but that failure direction only REJECTS a
+                // valid result into the mesh fallback (the status quo), the
+                // same posture `cut_safe` already accepts.
                 let intersect_safe = op != BooleanOp::Intersect
-                    || [a, b].iter().all(|&operand| {
-                        brepkit_algo::classifier::try_build_analytic_classifier(topo, operand)
-                            .as_ref()
-                            .is_none_or(|cls| {
-                                no_component_center_outside(topo, &components_vec, cls, tol)
-                            })
+                    || components_vec.iter().all(|comp| {
+                        let Some(centre) = component_aabb_centre(topo, comp) else {
+                            return true;
+                        };
+                        [a, b].iter().all(|&operand| {
+                            !matches!(
+                                crate::classify::classify_point_robust(
+                                    topo, operand, centre, 0.1, tol.linear,
+                                ),
+                                Ok(crate::classify::PointClassification::Outside) | Err(_)
+                            )
+                        })
                     });
                 // Fuse shares this gate: fusing a tool into ONE piece of a
                 // multi-component operand (the lite base's 16 disjoint feet
@@ -2355,30 +2367,6 @@ fn all_component_centers_outside(
             (min.z() + max.z()) * 0.5,
         );
         if matches!(classifier.classify(centre, tol), Some(FaceClass::Inside)) {
-            return false;
-        }
-    }
-    true
-}
-
-/// True when no component's AABB-centre sample classifies strictly OUTSIDE
-/// the given operand. The Intersect twin of
-/// [`all_component_centers_outside`]: an intersection piece must lie inside
-/// both operands, so an Outside verdict marks a piece GFA should not have
-/// kept. `On`/unclassifiable samples pass — thin clip pieces legitimately
-/// touch the operand boundaries, and rejection only costs the mesh fallback.
-fn no_component_center_outside(
-    topo: &Topology,
-    components: &[Vec<FaceId>],
-    classifier: &brepkit_algo::classifier::AnalyticClassifier,
-    tol: brepkit_math::tolerance::Tolerance,
-) -> bool {
-    use brepkit_algo::FaceClass;
-    for comp in components {
-        let Some(centre) = component_aabb_centre(topo, comp) else {
-            continue;
-        };
-        if matches!(classifier.classify(centre, tol), Some(FaceClass::Outside)) {
             return false;
         }
     }
