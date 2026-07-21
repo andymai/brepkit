@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784671301398,
+  "lastUpdate": 1784677061703,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8855,6 +8855,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22270984,
             "range": "± 51818",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51d7d8f9965ebe213895b6a2352ed3135a0258f1",
+          "message": "perf(algo): hoist the NURBS section domain out of the split-finder eval loop (#1158)\n\n## Root cause\n\n`find_splits_on_nurbs_section` evaluated candidate parameters via\n`evaluate_edge_at_t`, which re-derives `domain_with_endpoints` on\n**every call** — and for a trimmed NURBS sub-span edge that means two\niterative point-to-curve projections per evaluation. The finder makes\n~115 evaluations per candidate point (65-sample scan + 50 ternary\nrefinement steps), so any face carrying marched/rescue spline sections\npaid ~700 ms in `split_sections_at_t_junctions` alone.\n\nFound while profiling the lightweight timeout family (all six remaining\nlightweight failures are now timeout-class after the correctness wave):\nthe captured `2×2 lite + magnet pads` base build spends 73.8 s in the\nshell stage, of which the 16-pad fuse is 37.6 s wasm / 23.7 s native —\nand **23.2 s of that was this finder** (32 faces × ~730 ms, uniform).\n\n## Fix\n\nCompute the domain once per edge; evaluate directly through\n`evaluate_with_endpoints` (a plain parametric evaluation for NURBS).\nSemantically identical by construction — the hoisted formula is exactly\nwhat `evaluate_edge_at_t`'s fallback arm computes per call.\n\n## Measurements (captured operands, native)\n\n| | before | after |\n|---|---|---|\n| 16-pad magnet fuse | 23.7 s | **6.9 s** |\n| per hot face (`split_sections_at_t_junctions`) | ~690 ms | below the\n100 ms log threshold |\n\nThe same finder serves boundary-edge splitting\n(`split_boundary_edges_at_3d_points`), so every op over spline-carrying\ngeometry benefits.\n\n## Verification\n\n- `brepkit-algo` 184/184 (includes\n`nurbs_section_splits_ordered_along_forward_edge` covering this exact\nfinder), `brepkit-operations` full (0 failures), `brepkit-io` full, d4\ncanary 27/27, full workspace via pre-push.\n- The remaining pad-fuse time is diffuse (~180 ms/face, no single hot\nspot) — further profiling continues separately.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nHoisted NURBS section domain computation out of the split-finder loop\nand switched to direct parametric evaluation with endpoints, with fused\nmultiply-add for the t→domain mapping. This removes redundant\nprojections per sample and cuts pad-fuse time from 23.7s to 6.9s while\nspeeding up all spline-edge splits.\n\n- **Performance**\n- Compute domain once per edge; evaluate via `evaluate_with_endpoints`\ninstead of `evaluate_edge_at_t`; use FMA for t mapping.\n- Results: 16-pad magnet fuse 23.7s → 6.9s; per hot face ~690ms →\n<100ms; benefits boundary-edge splitting too.\n\n<sup>Written for commit ba68804c80dc63c341f0d013eaba1b387e6d4d29.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1158?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T23:35:18Z",
+          "tree_id": "b2cd7305cccb67268ffdcc037ab3079172dd5477",
+          "url": "https://github.com/andymai/brepkit/commit/51d7d8f9965ebe213895b6a2352ed3135a0258f1"
+        },
+        "date": 1784677060676,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 874373,
+            "range": "± 1962",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 965319,
+            "range": "± 28531",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12162,
+            "range": "± 120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 609863,
+            "range": "± 1688",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26601999,
+            "range": "± 294421",
             "unit": "ns/iter"
           }
         ]
