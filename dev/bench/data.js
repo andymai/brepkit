@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784615089461,
+  "lastUpdate": 1784617192000,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -7775,6 +7775,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23474649,
             "range": "± 338440",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f5ef4df7f3490bdfb993e3024c1220409c7282b6",
+          "message": "fix(operations): fold a multi-component fuse tool in piece by piece (#1138)\n\n## Root\n\nFollow-up to #1136. The lite base's 64 magnet pads arrive at the fuse as\nONE 64-component union; feeding the whole thing to GFA collapses the\noperands (the pavefiller mishandles many-piece operands, same class as\nthe existing multi-piece-input Cut limitation) and the entire fuse falls\nback to mesh — flattening every analytic socket and poisoning the\ndownstream drills (the lightweight `4×4 stress` chain).\n\n## Fix\n\nFuse distributes over a disjoint-union tool. When GFA has already failed\nand the tool splits into 2+ disjoint components, fold them into the\ntarget one at a time through the full `boolean()` entry — after #1136,\neach per-piece pad fuse is exactly the configuration the engine handles\nanalytically. Mirrors the existing `cut_multi_region_input` precedent\n(including the fresh per-component deep copy). Gated strictly behind the\nexisting GFA failure path, so nothing changes for single-piece tools.\n\n## Result on the captured lite 4×4 chain\n\n- 64-pad fuse export mesh: 18 non-manifold edges → **watertight (bd=0\nnm=0)**; pad-wall cylinders survive analytically; F 15648 → 1753.\n- Known residual (tracked as follow-up): one per-piece pad fuse against\nthe accumulated base still hits a pathological GFA case (87 faces out\nafter 169 s) and mesh-falls-back, taking its foot's cones with it — the\nfold contains the damage to that piece instead of the whole base.\n\n## Verification\n\n- Foils green: ops lib 772, algo 169, wasm gridfinity canary 27/27, full\nio fixture suite (including the #1136 `lite_pad_graze_fuse_inmem`\nfixture), clippy/fmt clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes fuse with multi-piece tools by folding each disjoint component one\nat a time when GFA fails, preserving analytic geometry and preventing\nwhole-model mesh fallback. On the lite 4×4 chain, the 64‑pad fuse\nbecomes watertight and keeps pad-wall cylinders analytic.\n\n- **Bug Fixes**\n- Only for `Fuse` after GFA failure when the tool splits into 2+\ndisjoint components and has no inner shells.\n- Builds per-piece solids from face components, deep-copies them, and\nfuses sequentially via `boolean()`.\n- Exact result (fuse distributes over disjoint union); mirrors\n`cut_multi_region_input`; single-piece tools unchanged; includes a unit\ntest folding a two-post tool into a slab (volume + manifold).\n- Result: non-manifold edges 18 → 0; faces 15648 → 1753. One per-piece\nfallback remains and is tracked separately.\n\n<sup>Written for commit de8df0ae4b8b89a14eef9a70a8b734a7b943e9ed.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1138?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T06:57:29Z",
+          "tree_id": "a2f550c86e79cd068d16e2d980168c2cc6b2e018",
+          "url": "https://github.com/andymai/brepkit/commit/f5ef4df7f3490bdfb993e3024c1220409c7282b6"
+        },
+        "date": 1784617191471,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 935294,
+            "range": "± 2081",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1037949,
+            "range": "± 1751",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13034,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 652647,
+            "range": "± 2249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28399277,
+            "range": "± 60137",
             "unit": "ns/iter"
           }
         ]
