@@ -17,4 +17,4 @@
 # It never parses untrusted fonts at runtime in this workspace. Drop when the
 # winit decoration chain moves to a maintained font parser (e.g. skrifa).
 [advisories]
-ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195", "RUSTSEC-2026-0192"]
+ignore = ["RUSTSEC-2026-0192", "RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
