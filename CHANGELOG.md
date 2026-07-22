@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.22](https://github.com/andymai/brepkit/compare/v2.127.21...v2.127.22) (2026-07-22)
+
+
+### Bug Fixes
+
+* **algo:** skip point-tangency sections instead of aborting the boolean ([#1172](https://github.com/andymai/brepkit/issues/1172)) ([1105412](https://github.com/andymai/brepkit/commit/11054124f54e3692ca1fd07e090e7fb52e405d41))
+
 ## [2.127.21](https://github.com/andymai/brepkit/compare/v2.127.20...v2.127.21) (2026-07-22)
 
 
