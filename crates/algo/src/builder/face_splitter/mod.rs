@@ -39,7 +39,8 @@ use edge_splitting::{
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic, sample_wire_loop_uv_via_frame};
 use special_cases::{
     split_face_with_internal_loops, split_noseam_face_direct, split_periodic_face_into_bands,
-    split_torus_band_by_arrangement, try_split_crossing_plane_face, try_split_disk_by_chords,
+    split_periodic_face_into_sectors, split_torus_band_by_arrangement,
+    try_split_crossing_plane_face, try_split_disk_by_chords,
 };
 
 /// Number of probe points (plus one for the closing sample) walked along a
@@ -4928,6 +4929,30 @@ fn split_face_2d_impl(
     let greedy_broken = wire_loops_self_cross(&loops, tol.linear)
         || greedy_outer_loops_nested(&loops, cw_loops)
         || wire_loops_have_degenerate_area(&loops, tol.linear);
+    // Sector rescue for an UNDER-split u-periodic lateral: one full-height
+    // ruling plus the glued seam should sector the strip, but to the glued
+    // walker an annulus cut once is a single wrapped region (the mid-wall
+    // pad whose second wall crossing rides the seam). Fires only when the
+    // greedy produced no split at all, so configs the greedy handles (all
+    // rulings in-face) never take this path.
+    if u_periodic
+        && !v_periodic
+        && loops.len() <= 1
+        && !sections.is_empty()
+        && matches!(&surface, FaceSurface::Cylinder(_))
+        && original_inner_wires.is_empty()
+        && let Some(sectors) = split_periodic_face_into_sectors(
+            &surface,
+            &all_edges[..n_boundary_edges],
+            sections,
+            rank,
+            reversed,
+            face_id,
+            tol.linear,
+        )
+    {
+        return sectors;
+    }
     if u_periodic
         && !v_periodic
         && !sections.is_empty()
