@@ -840,23 +840,33 @@ pub fn compound_cut(
     tools: &[SolidId],
     opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
-    // Batched fast path for pairwise-DISJOINT tools (a drill pattern): merge
-    // them into one multi-piece tool (the disjoint-shell merge shortcut makes
-    // that free) and cut ONCE. Sequential cutting re-runs the full GFA
-    // against the whole target per tool — O(target × tools); the lite
-    // magnet-drill pass was 8.4s sequential vs 0.75s batched for the exact
-    // same result volume. A ∖ (T₁ ∪ T₂ ∪ …) ≡ (A ∖ T₁) ∖ T₂ ∖ …, so the
-    // batch is semantically identical; restricting it to disjoint tools
-    // keeps the merged tool trivial and preserves the sequential path's
-    // behaviour for overlapping-tool inputs. Any failure falls back to the
+    // Batched fast path: merge the tools into one multi-piece solid and cut
+    // ONCE. Sequential cutting re-runs the full boolean pipeline against the
+    // whole target per tool — O(target × tools); the lite magnet-drill pass
+    // was 8.4s sequential vs 0.75s batched for the exact same result volume.
+    // A ∖ (T₁ ∪ T₂ ∪ …) ≡ (A ∖ T₁) ∖ T₂ ∖ …, so the batch is semantically
+    // identical. Tools are first grouped into AABB-overlap clusters
+    // (union-find): tools in one cluster get a real fuse (the coaxial
+    // magnet+screw drill pair), while the pairwise-disjoint cluster
+    // representatives merge via the free disjoint-shell shortcut. Batching
+    // needs ≥2 disjoint clusters — with everything in one overlapping blob
+    // the sequential loop is kept unchanged. Any failure falls back to the
     // sequential loop.
     let mut result = target;
     let mut batched = false;
-    if tools.len() >= 2 && tools_pairwise_disjoint(topo, tools) {
-        let merged = tools[1..]
-            .iter()
-            .try_fold(tools[0], |acc, &t| boolean(topo, BooleanOp::Fuse, acc, t));
-        if let Ok(tool) = merged
+    let clusters = cluster_tools_by_aabb(topo, tools);
+    if tools.len() >= 2 && clusters.as_ref().is_some_and(|c| c.len() >= 2) {
+        let clusters = clusters.unwrap_or_default();
+        let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
+            let fused = cluster[1..]
+                .iter()
+                .try_fold(cluster[0], |a, &t| boolean(topo, BooleanOp::Fuse, a, t))?;
+            match acc {
+                None => Ok(Some(fused)),
+                Some(prev) => boolean(topo, BooleanOp::Fuse, prev, fused).map(Some),
+            }
+        });
+        if let Ok(Some(tool)) = merged
             && let Ok(cut) = boolean(topo, BooleanOp::Cut, target, tool)
         {
             result = cut;
@@ -881,24 +891,40 @@ pub fn compound_cut(
     Ok(result)
 }
 
-/// True when every pair of tool AABBs (tolerance-expanded) is disjoint.
-fn tools_pairwise_disjoint(topo: &Topology, tools: &[SolidId]) -> bool {
+/// Group tools into AABB-overlap clusters (union-find over tolerance-
+/// expanded boxes). Tools within a cluster may interpenetrate; distinct
+/// clusters are pairwise disjoint. `None` when any AABB is unavailable.
+fn cluster_tools_by_aabb(topo: &Topology, tools: &[SolidId]) -> Option<Vec<Vec<SolidId>>> {
+    fn find(parent: &mut Vec<usize>, i: usize) -> usize {
+        if parent[i] != i {
+            let root = find(parent, parent[i]);
+            parent[i] = root;
+        }
+        parent[i]
+    }
     let tol = brepkit_math::tolerance::Tolerance::new().linear;
     let mut boxes = Vec::with_capacity(tools.len());
     for &t in tools {
-        match crate::measure::solid_bounding_box(topo, t) {
-            Ok(bb) => boxes.push(bb),
-            Err(_) => return false,
-        }
+        boxes.push(crate::measure::solid_bounding_box(topo, t).ok()?);
     }
+    let mut parent: Vec<usize> = (0..tools.len()).collect();
     for i in 0..boxes.len() {
         for j in (i + 1)..boxes.len() {
             if boxes[i].expanded(tol).intersects(boxes[j]) {
-                return false;
+                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                if ri != rj {
+                    parent[ri] = rj;
+                }
             }
         }
     }
-    true
+    let mut clusters: std::collections::BTreeMap<usize, Vec<SolidId>> =
+        std::collections::BTreeMap::new();
+    for i in 0..tools.len() {
+        let root = find(&mut parent, i);
+        clusters.entry(root).or_default().push(tools[i]);
+    }
+    Some(clusters.into_values().collect())
 }
 
 /// Perform a boolean operation and return an [`crate::evolution::EvolutionMap`]
