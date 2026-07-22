@@ -53,7 +53,12 @@ fn halfsockets_export_fuse_is_analytic_and_watertight() {
         }
     }
     let free = uses.values().filter(|&&c| c == 1).count();
+    let over = uses.values().filter(|&&c| c > 2).count();
     assert_eq!(free, 0, "export fuse must be closed, got {free} free edges");
+    assert_eq!(
+        over, 0,
+        "export fuse must be manifold, got {over} over-shared"
+    );
 
     // The fallback tell: the mesh path re-emits everything as planes
     // (~17k facets); the analytic path keeps the cups' cylinders/cones.

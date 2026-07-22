@@ -3000,7 +3000,10 @@ fn plane_analytic_intersection(
                         pts_dedup.push(p);
                     }
                 }
-                if pts_dedup.len() < 2 {
+                // Fewer than 3 distinct survivors from a dense sample means
+                // the whole "curve" spans tolerance scale — a chord through
+                // 2 barely-distinct points would only mint micro edges.
+                if pts_dedup.len() < 3 {
                     continue;
                 }
                 let pts = pts_dedup;
