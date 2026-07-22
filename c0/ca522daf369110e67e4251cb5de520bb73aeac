@@ -1,0 +1,22 @@
+crates/operations/src/loft.rs
+  s_100d196bea722f::t_5b846f93844048 514,519-524,1180,1266
+crates/geometry/src/convert/curve_to_nurbs.rs
+  s_100d196bea722f::t_5b846f93844048 39-51,83-88
+  s_100d196bea722f::t_869933dd758098 89-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "c0ca522daf369110e67e4251cb5de520bb73aeac",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
