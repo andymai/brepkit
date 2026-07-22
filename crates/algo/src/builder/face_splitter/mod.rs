@@ -4686,6 +4686,50 @@ fn split_face_2d_impl(
             .collect()
     };
 
+    // Drop boundary-collinear section edges on plane faces: a section whose
+    // whole UV image lies ON the boundary polyline cannot partition the face
+    // interior (its endpoints already split the boundary edges), but its twin
+    // pair double-covers the boundary segment and derails the angular walker
+    // (the pad bottom-cap chord riding the inset wall's bottom edge left the
+    // wall unsplit at both true crossings).
+    let all_edges: Vec<OrientedPCurveEdge> = if is_plane && !u_periodic && !v_periodic {
+        // Via-frame sampling: stored pcurves fold on reversed boundary arcs
+        // (two orientation conventions coexist), which would corrupt the
+        // polygon and mis-measure every distance below.
+        let boundary_poly = sample_wire_loop_uv_via_frame(&all_edges[..n_boundary_edges], frame);
+        let eps = tol.linear * 10.0;
+        let n_b = n_boundary_edges;
+        all_edges
+            .into_iter()
+            .enumerate()
+            .filter(|(i, e)| {
+                if *i < n_b {
+                    return true;
+                }
+                // Only straight (Line-pcurve) sections can be fully
+                // boundary-collinear without interior evidence; arcs bulge
+                // and are kept. Probe nine points along the chord — a
+                // splitter across a concave region keeps interior evidence
+                // at some interior fraction.
+                if !matches!(e.pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
+                    return true;
+                }
+                let (s, t) = (e.start_uv, e.end_uv);
+                !(0..=8).all(|k| {
+                    let f = f64::from(k) / 8.0;
+                    let p = Point2::new(
+                        f.mul_add(t.x() - s.x(), s.x()),
+                        f.mul_add(t.y() - s.y(), s.y()),
+                    );
+                    super::classify_2d::distance_to_polygon_boundary(p, &boundary_poly) <= eps
+                })
+            })
+            .map(|(_, e)| e)
+            .collect()
+    } else {
+        all_edges
+    };
+
     // Build wire loops via angular-sorting traversal.
     let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
 

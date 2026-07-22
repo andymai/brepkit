@@ -727,8 +727,10 @@ pub fn boolean(
                 }
             }
             log::warn!(
-                "GFA result failed validation in {:.1}ms (faces={result_faces}), falling back",
-                timer_elapsed_ms(gfa_start)
+                "GFA result not accepted in {:.1}ms (faces={result_faces}, \
+                 validate={:?}), falling back",
+                timer_elapsed_ms(gfa_start),
+                validate_boolean_result(topo, result).err()
             );
         }
         Err(e) => {
