@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.17](https://github.com/andymai/brepkit/compare/v2.127.16...v2.127.17) (2026-07-22)
+
+
+### Bug Fixes
+
+* **operations:** imprint grazing edge contacts in the mesh boolean co-refinement ([#1162](https://github.com/andymai/brepkit/issues/1162)) ([8eafbe0](https://github.com/andymai/brepkit/commit/8eafbe0966ef3ff3526cf15f8cdf4f4f198ea825))
+
 ## [2.127.16](https://github.com/andymai/brepkit/compare/v2.127.15...v2.127.16) (2026-07-22)
 
 
