@@ -1854,11 +1854,14 @@ fn split_arc_edges_at_collinear_vertices(
 
     let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
     for (eid, sv, ev, sp, ep, curve) in arc_edges {
-        // Skip closed (full) arcs: start ≈ end means the whole circle/ellipse,
-        // which has no proper interior to cut and is handled elsewhere.
-        if (ep - sp).length() < snap {
-            continue;
-        }
+        // A closed (full) circle/ellipse CAN be refined — at global vertices
+        // that lie on it — but only into 3+ sub-arcs. With a single interior
+        // cut the two halves share BOTH endpoints, and the endpoint-keyed
+        // duplicate merge below would conflate them into one arc. The mate
+        // side of a full rim is typically already split at the crossing
+        // vertices (e.g. a pad bore poking through inset walls), so matching
+        // its partition here is what lets the flood-fill pair the shells.
+        let is_closed = (ep - sp).length() < snap;
         // `snap` is a LINEAR tolerance (model units); the span / branch tests
         // below are in the curve's ANGULAR domain (radians). Convert via the
         // curve's radius scale (arc length ≈ radius·angle) so the angular guard
@@ -1935,7 +1938,7 @@ fn split_arc_edges_at_collinear_vertices(
             }
             cuts.push((a_branch, vid));
         }
-        if cuts.is_empty() {
+        if cuts.is_empty() || (is_closed && cuts.len() < 2) {
             continue;
         }
         // Total order: angle then vertex index (the `vert_at` HashMap iteration
@@ -2627,6 +2630,122 @@ mod tests {
             Some(true),
             "a standard outward cube shell must read outward (growth)"
         );
+    }
+
+    #[test]
+    fn closed_circle_splits_at_matching_mate_vertices() {
+        // A full-circle rim on one face vs the SAME circle split into three
+        // arcs on the mate face (a pad bore whose rim crosses other faces).
+        // The refinement must split the full circle at the mate's vertices so
+        // the duplicate merge can pair the two partitions.
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::wire::Wire;
+
+        let mut topo = Topology::new();
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+
+        // Face A: disc bounded by the full circle (one closed edge).
+        let seam = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(0.0),
+            1e-7,
+        ));
+        let full = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Circle(circle.clone())));
+        let wire_a = topo.add_wire(Wire::new(vec![OrientedEdge::new(full, true)], true).unwrap());
+        let face_a = topo.add_face(Face::new(wire_a, vec![], plane.clone()));
+
+        // Face B: the same circle as three arcs split at 0, 2π/3, 4π/3.
+        let thirds = std::f64::consts::TAU / 3.0;
+        let v0 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(0.0),
+            1e-7,
+        ));
+        let v1 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(thirds),
+            1e-7,
+        ));
+        let v2 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(2.0 * thirds),
+            1e-7,
+        ));
+        let mut oes = Vec::new();
+        for (a, b) in [(v0, v1), (v1, v2), (v2, v0)] {
+            let e = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle.clone())));
+            oes.push(OrientedEdge::new(e, true));
+        }
+        let wire_b = topo.add_wire(Wire::new(oes, true).unwrap());
+        let face_b = topo.add_face(Face::new(wire_b, vec![], plane));
+
+        let mut face_ids = vec![face_a, face_b];
+        split_arc_edges_at_collinear_vertices(&mut topo, &mut face_ids).unwrap();
+        merge_duplicate_edges(&mut topo, &mut face_ids).unwrap();
+
+        let keys_a = face_edge_keys(&topo, face_ids[0]).unwrap();
+        let keys_b = face_edge_keys(&topo, face_ids[1]).unwrap();
+        assert_eq!(keys_a.len(), 3, "full circle must split into 3 arcs");
+        let mut ka = keys_a;
+        let mut kb = keys_b;
+        ka.sort_unstable();
+        kb.sort_unstable();
+        assert_eq!(ka, kb, "the two partitions must pair edge-for-edge");
+    }
+
+    #[test]
+    fn closed_circle_with_single_cut_vertex_stays_whole() {
+        // One interior cut would produce two arcs sharing BOTH endpoints —
+        // the endpoint-keyed merge would conflate them. The refinement must
+        // leave the circle whole in that case.
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::wire::Wire;
+
+        let mut topo = Topology::new();
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let seam = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(0.0),
+            1e-7,
+        ));
+        let full = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Circle(circle.clone())));
+        let wire_a = topo.add_wire(Wire::new(vec![OrientedEdge::new(full, true)], true).unwrap());
+        let face_a = topo.add_face(Face::new(wire_a, vec![], plane.clone()));
+
+        // A lone vertex on the circle, referenced by an unrelated line edge.
+        let v_on = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(std::f64::consts::PI),
+            1e-7,
+        ));
+        let v_off = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            Point3::new(5.0, 5.0, 0.0),
+            1e-7,
+        ));
+        let line = topo.add_edge(Edge::new(v_on, v_off, EdgeCurve::Line));
+        let back = topo.add_edge(Edge::new(v_off, v_on, EdgeCurve::Line));
+        let wire_b = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(line, true), OrientedEdge::new(back, true)],
+                true,
+            )
+            .unwrap(),
+        );
+        let face_b = topo.add_face(Face::new(wire_b, vec![], plane));
+
+        let mut face_ids = vec![face_a, face_b];
+        split_arc_edges_at_collinear_vertices(&mut topo, &mut face_ids).unwrap();
+
+        let keys_a = face_edge_keys(&topo, face_ids[0]).unwrap();
+        assert_eq!(keys_a.len(), 1, "single-cut circle must stay whole");
     }
 
     #[test]
