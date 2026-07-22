@@ -6265,3 +6265,60 @@ fn fuse_corner_poking_cylinder_stays_analytic() {
     );
     assert_eq!(count_non_manifold_edges(&topo, fused), 0);
 }
+
+#[test]
+fn compound_cut_coaxial_pair_clusters_match_sequential() {
+    // The magnet+screw drill pattern: per position a wide shallow bore and a
+    // narrow through bore share an axis (they interpenetrate), and the four
+    // positions are disjoint from each other. The cluster-batched path must
+    // fuse each coaxial pair, cut once, and match the sequential volume with
+    // analytic bores.
+    use crate::measure::solid_volume;
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    let make = |topo: &mut Topology| -> (SolidId, Vec<SolidId>) {
+        let base = crate::primitives::make_box(topo, 20.0, 20.0, 6.0).unwrap();
+        let mut drills = Vec::new();
+        for (x, y) in [(4.0, 4.0), (16.0, 4.0), (4.0, 16.0), (16.0, 16.0)] {
+            let magnet = crate::primitives::make_cylinder(topo, 2.0, 3.0).unwrap();
+            transform_solid(topo, magnet, &Mat4::translation(x, y, -1.0)).unwrap();
+            drills.push(magnet);
+            let screw = crate::primitives::make_cylinder(topo, 0.8, 8.0).unwrap();
+            transform_solid(topo, screw, &Mat4::translation(x, y, -1.0)).unwrap();
+            drills.push(screw);
+        }
+        (base, drills)
+    };
+
+    let mut topo_seq = Topology::new();
+    let (base, drills) = make(&mut topo_seq);
+    let mut seq = base;
+    for &d in &drills {
+        seq = boolean(&mut topo_seq, BooleanOp::Cut, seq, d).unwrap();
+    }
+    let vol_seq = solid_volume(&topo_seq, seq, 0.05).unwrap();
+
+    let opts = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let mut topo = Topology::new();
+    let (base, drills) = make(&mut topo);
+    let result = crate::boolean::compound_cut(&mut topo, base, &drills, opts).unwrap();
+    let vol = solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - vol_seq).abs() < 0.05,
+        "cluster-batched volume {vol} must match sequential {vol_seq}"
+    );
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let cylinders = faces
+        .iter()
+        .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == "cylinder")
+        .count();
+    assert!(
+        cylinders >= 8,
+        "each stepped bore keeps both cylinder walls, got {cylinders}"
+    );
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+}
