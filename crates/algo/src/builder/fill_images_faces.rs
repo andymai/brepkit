@@ -1453,6 +1453,46 @@ fn build_section_edges(
                     None => (curve_ds.curve.clone(), start, end),
                 };
 
+                // A closed circle section that CROSSES this plane face's
+                // boundary is not an internal loop: half of it lies outside
+                // the face, and carving a full disc from it fabricates area
+                // beyond the face (the mid-wall pad's rim on the box bottom).
+                // Clip it to the face: split at the boundary crossings and
+                // emit only in-face arcs (their endpoints are pave-minted
+                // boundary vertices, so the ladder machinery takes over).
+                // Gated to all-straight boundaries so chord containment is
+                // exact.
+                if let EdgeCurve::Circle(c) = &curve_3d
+                    && matches!(face.surface(), FaceSurface::Plane { .. })
+                    && !circle_inside_face(topo, face_id, &curve_3d, tol)
+                    && let Some(arcs) = clip_circle_to_straight_boundary(topo, face_id, c, tol)
+                {
+                    for (a_start, a_end) in arcs {
+                        let arc_pc = super::pcurve_compute::compute_pcurve_on_surface(
+                            &curve_3d,
+                            a_start,
+                            a_end,
+                            face.surface(),
+                            &wire_pts,
+                            None,
+                        );
+                        sections.push(SectionEdge {
+                            curve_3d: curve_3d.clone(),
+                            pcurve_a: arc_pc.clone(),
+                            pcurve_b: arc_pc,
+                            start: a_start,
+                            end: a_end,
+                            start_uv_a: None,
+                            end_uv_a: None,
+                            start_uv_b: None,
+                            end_uv_b: None,
+                            target_face: None,
+                            pave_block_id: None,
+                        });
+                    }
+                    continue;
+                }
+
                 let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
                     &curve_3d,
                     start,
@@ -1713,6 +1753,72 @@ fn build_section_edges(
 /// circle fits the wall → redundant, skip-safe) from a rim that extends
 /// beyond a smaller partner face (e.g. a cylinder rim slicing a narrower
 /// cylinder's cap → a real section that must split the partner, never skip).
+/// Clip a closed circle to a plane face whose outer wire is ALL straight
+/// edges. Returns the in-face arcs as `(start, end)` point pairs (CCW in the
+/// circle's own frame), or `None` when the face has curved boundary edges,
+/// fewer than 2 crossings exist, or a lookup fails — callers fall back to
+/// the unclipped path.
+fn clip_circle_to_straight_boundary(
+    topo: &Topology,
+    face_id: FaceId,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: f64,
+) -> Option<Vec<(Point3, Point3)>> {
+    use brepkit_math::traits::ParametricCurve;
+
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+
+    let mut poly: Vec<Point3> = Vec::with_capacity(wire.edges().len());
+    let mut crossings: Vec<f64> = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            return None;
+        }
+        let sp = topo.vertex(oe.oriented_start(edge)).ok()?.point();
+        let ep = topo.vertex(oe.oriented_end(edge)).ok()?.point();
+        poly.push(sp);
+        for (_, angle) in circle.intersect_segment(sp, ep, tol * 100.0) {
+            crossings.push(angle);
+        }
+    }
+    crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    crossings.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    if crossings.len() < 2 {
+        return None;
+    }
+
+    // 2D containment in the plane: project through a frame from the face.
+    let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() else {
+        return None;
+    };
+    let frame = crate::builder::plane_frame::PlaneFrame::from_plane_face(*normal, &poly);
+    let poly_2d: Vec<brepkit_math::vec::Point2> = poly.iter().map(|&p| frame.project(p)).collect();
+
+    let tau = std::f64::consts::TAU;
+    let mut arcs = Vec::new();
+    for i in 0..crossings.len() {
+        let a = crossings[i];
+        let b = if i + 1 < crossings.len() {
+            crossings[i + 1]
+        } else {
+            crossings[0] + tau
+        };
+        if b - a < 1e-9 {
+            continue;
+        }
+        let mid = ParametricCurve::evaluate(circle, f64::midpoint(a, b).rem_euclid(tau));
+        if crate::builder::classify_2d::point_in_polygon_2d(frame.project(mid), &poly_2d) {
+            arcs.push((
+                ParametricCurve::evaluate(circle, a.rem_euclid(tau)),
+                ParametricCurve::evaluate(circle, b.rem_euclid(tau)),
+            ));
+        }
+    }
+    (!arcs.is_empty()).then_some(arcs)
+}
+
 fn circle_inside_face(
     topo: &Topology,
     face_id: FaceId,
