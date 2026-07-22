@@ -10,5 +10,11 @@
 # time and never touches runtime input. wayland-scanner pins quick-xml ^0.39, so
 # this copy cannot advance until that upstream chain updates. Re-check and drop
 # these entries when winit/wayland-scanner move off quick-xml 0.39.
+#
+# RUSTSEC-2026-0192 is an informational "unmaintained" advisory against
+# ttf-parser, which enters solely through sctk-adwaita -> ab_glyph (winit's
+# Wayland client-side decorations, behind brepkit-render's `window` feature).
+# It never parses untrusted fonts at runtime in this workspace. Drop when the
+# winit decoration chain moves to a maintained font parser (e.g. skrifa).
 [advisories]
-ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
+ignore = ["RUSTSEC-2026-0192", "RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
