@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784690961888,
+  "lastUpdate": 1784695093440,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9287,6 +9287,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27168581,
             "range": "± 179824",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d222c85cf90632c20122910cdb3daf5e08f85980",
+          "message": "fix(algo): refine closed circle rims at mate-partition vertices in assembly (#1166)\n\n## Summary\n\nFound while digging the `2×2 lite solid bin + magnet` export failure\n(bd=92 — newly *visible* because #1164 removed the timeout that used to\nmask it; the batched and sequential cut paths produce identical results,\nso this is a pre-existing chain failure, not a regression).\n\nThe chain's degrading op is the pad fuse: `fuse(hollowed cups F=236,\nmagnet pad)`. The GFA aborted analytic assembly with **\"open growth\nshell with 60 faces would be dropped\"**. Root: the pad bore's bottom rim\nis a **full-circle edge** on the pad wall, while the mate side (the\nbore's bottom cap, where the pad pokes through the foot's inset walls)\ncarries the *same* circle **already split into arcs** at 4 wall-crossing\nvertices. The assembly-stage arc refinement\n(`split_arc_edges_at_collinear_vertices`) skipped closed edges entirely,\nso the partitions never matched, `merge_duplicate_edges`\n(endpoint-keyed) couldn't pair them, and the flood-fill isolated the\nbottom-cap fragment in its own shell → open growth shell → mesh\nfallback.\n\n## Fix\n\nClosed circles/ellipses are now refined at global vertices lying on them\n— **but only into 3+ sub-arcs**. With a single interior cut, the two\nhalves would share BOTH endpoints and the endpoint-keyed duplicate merge\nwould conflate them into one arc, so that case keeps the existing skip.\n(Circle arcs evaluate CCW-from-start, not shorter-arc, so sub-arcs over\nπ are safe.)\n\n## Verified on the captured repro\n\n- Before: assembly aborts (open 60-face growth shell), mesh fallback.\n- After: the z=-5 bore rim pairs (4 crossing vertices), the isolated\nbottom-cap fragment merges into its growth shell, and assembly completes\nanalytically. (The fuse still falls back at final validation for a\n*different*, downstream root — an unsplit periodic pad wall, the known\ncylinder-arrangement-rescue item — tracked separately with a 290ms\ncaptured repro.)\n\n## Tests\n\n- `closed_circle_splits_at_matching_mate_vertices` — full circle vs\n3-arc mate: refinement + merge must pair the partitions edge-for-edge\n(fails without the fix).\n- `closed_circle_with_single_cut_vertex_stays_whole` — the conflation\nguard: one on-circle vertex must NOT split.\n- Full workspace tests + gridfinity canary green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRefines closed circle/ellipse rim edges at mate-partition vertices so\nanalytic assembly can align arc partitions and keep shells connected.\nAnchors closed-rim cut ordering at the seam vertex to prevent\noverlapping sub-arcs when the seam is offset; avoids open-growth-shell\naborts seen in the 2×2 lite solid bin + magnet fuse while preserving the\nsingle-cut case.\n\n- **Bug Fixes**\n- Split closed circle/ellipse rims at on-curve vertices into 3+ arcs;\nskip the single-cut case.\n- Anchor the angular span at the edge’s seam angle so sub-arcs sweep one\nrevolution and pair with the mate partition.\n- Added tests for 3-arc pairing, single-cut guard, offset-seam circles,\nand closed-ellipse splits.\n\n<sup>Written for commit 37110e172fbc4d4d9fedfb606d0ae9065339742d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1166?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T04:35:51Z",
+          "tree_id": "de26aab8c0dba2f16ed23c99cf0879d9a65a9870",
+          "url": "https://github.com/andymai/brepkit/commit/d222c85cf90632c20122910cdb3daf5e08f85980"
+        },
+        "date": 1784695092835,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 912999,
+            "range": "± 8363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1001943,
+            "range": "± 2292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12097,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 652395,
+            "range": "± 11056",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27404858,
+            "range": "± 349721",
             "unit": "ns/iter"
           }
         ]
