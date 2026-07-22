@@ -1,0 +1,26 @@
+crates/geometry/src/convert/mod.rs
+  s_100d196bea722f::t_d5484ee6364c27 21-23
+crates/operations/src/loft.rs
+  s_100d196bea722f::t_f091816aa4d246 515-523
+  s_100d196bea722f::t_e9d910d59f0688 1175-1274,1277-1281
+  s_100d196bea722f::t_d5484ee6364c27 1275-1276
+crates/geometry/src/convert/curve_to_nurbs.rs
+  s_100d196bea722f::t_f091816aa4d246 39-43
+  s_100d196bea722f::t_a3c907011cfe87 54-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6c3b3a8fb6b9d4538457ee184dbf28924f0204cb",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
