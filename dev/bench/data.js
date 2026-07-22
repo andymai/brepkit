@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784704706444,
+  "lastUpdate": 1784707317049,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9719,6 +9719,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21452128,
             "range": "± 34592",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f39e8430f28b2659e4224619789277c85703e1d5",
+          "message": "fix(algo): drop boundary-collinear line sections on plane faces (#1174)\n\n## Summary\n\nStep 3 of the solid-bin+magnet pad-fuse dig (after #1166, #1168). The\nfoot inset wall faces (1.4mm bands the magnet pad pokes through) receive\nthree sections: two legitimate vertical splitters and the pad bottom-cap\n**chord that rides exactly ON the wall's bottom boundary edge**. The\nboundary-collinear twin pair double-covers that boundary segment and\nderails the angular wire walker: both walls stayed UNSPLIT at their true\ncrossings (3 sections → 1 sub-face).\n\n## Fix\n\nIn `split_face_2d` on plane (non-periodic) faces, drop section edges\nwhose whole UV image lies on the boundary polyline — their endpoints\nalready split the boundary edges, so they carry no partition\ninformation. Guard rails:\n\n- **Line-pcurve sections only**: an arc between boundary-collinear\nendpoints bulges into the interior and is kept.\n- Probes = both UV endpoints **and the chord midpoint** (a\nboundary-to-boundary splitter has both endpoints on the boundary; the\nmidpoint is its interior evidence).\n\nVerified on the captured repro: both inset walls now split into the\ncorrect 3-rung ladder (`3 sections → 3 sub-faces`). The overall pad fuse\nstill falls back on the remaining curved-face roots (unsplit pad\ncylinder wall + corner NURBS web — 11 free edges, tracked as the\nsplitter frontier with a fresh minimal repro: `box ∪ mid-wall-poking\ncylinder`), so no end-to-end scenario flips yet; this removes one of the\nthree stacked roots.\n\nAlso: the GFA fallback warn now includes the `validate_boolean_result`\nerror detail — \"failed validation\" alone hid which gate (free edges vs\nnon-manifold vs Euler) rejected the result.\n\n## Tests\n\nalgo 189 / ops 779 / gridfinity canary / io fixture tests / clippy green\n(filter is regression-neutral across all suites; corner-poking and\nsocket-loft fuses unchanged).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes face splitting on plane faces by dropping boundary‑collinear line\nsections so boundary segments aren’t double‑covered. This restores\ncorrect partitioning in the magnet pad fuse; the inset walls now split\ninto the expected three sub‑faces.\n\n- **Bug Fixes**\n- On plane, non‑periodic faces, filter section edges whose UV chord lies\nentirely on the boundary polygon (Line p‑curves only). The boundary is\nsampled via the plane frame, and nine chord fractions are probed to keep\nsplitters with interior evidence over concave regions.\n- GFA fallback log now says \"not accepted\" and includes\n`validate_boolean_result` error details for faster diagnosis.\n\n<sup>Written for commit 79bb1417fceb9c56254c09a7300d595caad8c42b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1174?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T07:59:31Z",
+          "tree_id": "d18970acc64309238d19ae7c6ab261360c622e5f",
+          "url": "https://github.com/andymai/brepkit/commit/f39e8430f28b2659e4224619789277c85703e1d5"
+        },
+        "date": 1784707315937,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 823643,
+            "range": "± 2384",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 926010,
+            "range": "± 53125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13023,
+            "range": "± 51",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 653674,
+            "range": "± 1952",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22593652,
+            "range": "± 29782",
             "unit": "ns/iter"
           }
         ]
