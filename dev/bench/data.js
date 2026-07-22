@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784704275939,
+  "lastUpdate": 1784704706444,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9665,6 +9665,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21522077,
             "range": "± 1077109",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "62faf63df3b6dd2917a95f5c6c0e66264a460d57",
+          "message": "chore(main): release 2.127.22 (#1173)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.22](https://github.com/andymai/brepkit/compare/v2.127.21...v2.127.22)\n(2026-07-22)\n\n\n### Bug Fixes\n\n* **algo:** skip point-tangency sections instead of aborting the boolean\n([#1172](https://github.com/andymai/brepkit/issues/1172))\n([1105412](https://github.com/andymai/brepkit/commit/11054124f54e3692ca1fd07e090e7fb52e405d41))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.22 for `brepkit-wasm`, improving boolean operation\nstability by skipping point‑tangency sections instead of aborting. This\nreduces failures on edge cases.\n\n- **Bug Fixes**\n- Boolean algorithm now skips point‑tangency segments to avoid premature\naborts and improve robustness.\n\n<sup>Written for commit 44e9b5d415ce1128f440213a668eccd132c8767b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1173?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-22T07:16:04Z",
+          "tree_id": "c0e287db54a7ad5a04b8ab10ced46716e764a390",
+          "url": "https://github.com/andymai/brepkit/commit/62faf63df3b6dd2917a95f5c6c0e66264a460d57"
+        },
+        "date": 1784704705740,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 793423,
+            "range": "± 4105",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 884516,
+            "range": "± 2766",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11910,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 644242,
+            "range": "± 1246",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21452128,
+            "range": "± 34592",
             "unit": "ns/iter"
           }
         ]
