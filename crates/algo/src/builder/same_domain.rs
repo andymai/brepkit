@@ -104,7 +104,14 @@ type QVert = (i64, i64, i64);
 ///
 /// Each edge is stored as a sorted quantized vertex pair `(min, max)`.
 /// The set of pairs is sorted for deterministic comparison.
-type EdgeSet = Vec<(QVert, QVert)>;
+// Endpoint pair + weld-quantized curve midpoint. The midpoint discriminates
+// co-endpoint edges with different geometry: the two halves of a chord-split
+// cap disc share BOTH vertices (chord + arc), and endpoint-only sets made
+// them false within-rank duplicates — the outside half was silently dropped
+// as "SD residue". The midpoint bucket is 100x coarser than the endpoint
+// bucket so marched/fitted geometry (~1e-6 off exact) cannot split a true
+// duplicate pair across buckets.
+type EdgeSet = Vec<(QVert, QVert, QVert)>;
 
 /// Detect same-domain face pairs using edge-set hashing.
 ///
@@ -483,7 +490,7 @@ fn compute_edge_set_quantized(
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
 
-    let mut pairs: Vec<(QVert, QVert)> = Vec::with_capacity(wire.edges().len());
+    let mut pairs: Vec<(QVert, QVert, QVert)> = Vec::with_capacity(wire.edges().len());
 
     // Cache resolved vertex positions to avoid redundant resolve_vertex() calls
     // when the same vertex appears in multiple edges.
@@ -505,8 +512,20 @@ fn compute_edge_set_quantized(
         let qs = resolve_and_quantize(edge.start())?;
         let qe = resolve_and_quantize(edge.end())?;
 
+        let sp = topo
+            .vertex(arena.resolve_vertex(edge.start()))
+            .ok()?
+            .point();
+        let ep = topo.vertex(arena.resolve_vertex(edge.end())).ok()?.point();
+        let mid = crate::builder::pcurve_compute::evaluate_edge_at_t(edge.curve(), sp, ep, 0.5);
+        let qmid = quantize_point(mid, scale * 100.0);
+
         // Canonical ordering: smaller first
-        let pair = if qs <= qe { (qs, qe) } else { (qe, qs) };
+        let pair = if qs <= qe {
+            (qs, qe, qmid)
+        } else {
+            (qe, qs, qmid)
+        };
         pairs.push(pair);
     }
 
