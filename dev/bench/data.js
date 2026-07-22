@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784700872474,
+  "lastUpdate": 1784704275939,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9611,6 +9611,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21578592,
             "range": "± 451587",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "11054124f54e3692ca1fd07e090e7fb52e405d41",
+          "message": "fix(algo): skip point-tangency sections instead of aborting the boolean (#1172)\n\n## Summary\n\nRoot cause of the `2×2 lite + half sockets` export timeout (190s vs 30s\nbudget — the last-but-one lightweight failure).\n\nThe export fuse (bin body + deferred 16-cup lite base) hit repeated GFA\naborts: **\"intersection failed: NURBS fit failed: singular matrix cannot\nbe inverted\"**. Instrumented, the failing fits received **one point\nrepeated N times** (e.g. 511 points, 510 duplicates, all equal to a\nsingle corner-contact point): adjacent half-socket corner geometry meets\nthe body in POINT tangencies, and the exact-intersection sampler returns\nthose as a constant Points list. Degree-3 interpolation through\nduplicates has identical chord-length parameters → singular matrix → the\nerror propagated up and aborted the ENTIRE boolean into a ~5s mesh\nfallback, once per component — 65s native, ~190s in the tool.\n\n## Fix\n\nAt the fit site in phase FF: deduplicate the sampled points at linear\ntolerance first. Fewer than two distinct points is a point contact, not\na section curve — `continue` (point interferences are EE/EF/VF\nterritory). Degree also clamps to the deduplicated count (matching the\nexisting seg-fit call above).\n\n## Measured (captured operands, native release)\n\n| | before | after |\n|---|---|---|\n| export fuse | 66.2s, mesh fallback (F=17258, 0 curved) | **0.49s,\nanalytic (F=1270, 612 curved)** |\n| watertight | free=0 | free=0 |\n| volume | 23241.20 (mesh deflection) | 23241.32 (analytic) |\n\n## Tests\n\n- `halfsockets_export_fuse_is_analytic_and_watertight` — committed\ncaptured-operand fixtures (813KB); asserts closed + ≥400 curved faces of\n<2500 + volume band. Fails on main (mesh fallback: 0 curved).\n- algo 189 / ops 779 / gridfinity canary / clippy green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix boolean aborts from point-tangency intersections by deduplicating\nsampled points and skipping single-point contacts and two-point micro\nspans. Restores analytic fuse for the “2×2 lite + half sockets” export\n(~0.5s vs ~65s mesh fallback), watertight, manifold, and volume-stable.\n\n- **Bug Fixes**\n- Deduplicate sampled points at linear tolerance before NURBS fitting;\nif fewer than 3 distinct points, skip the section (point contacts and\nmicro edges are handled elsewhere).\n- Clamp interpolation degree to `min(3, points_len - 1)` to avoid\nsingular matrices.\n\n- **Tests**\n- Added captured fixtures and regression test\n`halfsockets_export_fuse_is_analytic_and_watertight` asserting closed\nresult, manifold (no over-shared edges), ≥400 curved faces, and expected\nvolume band.\n\n<sup>Written for commit b48526dbeb42c926020310a7cc05057eb2f07d9e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1172?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T07:08:52Z",
+          "tree_id": "dfe69d08a54e87bc9a2b185ba23bfc072132a3b8",
+          "url": "https://github.com/andymai/brepkit/commit/11054124f54e3692ca1fd07e090e7fb52e405d41"
+        },
+        "date": 1784704275052,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 796686,
+            "range": "± 12364",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 884469,
+            "range": "± 1303",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11989,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 654619,
+            "range": "± 70413",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21522077,
+            "range": "± 1077109",
             "unit": "ns/iter"
           }
         ]
