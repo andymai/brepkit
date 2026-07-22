@@ -214,22 +214,44 @@ fn intersect_triangles(
     b2: Point3,
     tolerance: f64,
 ) -> Vec<IsectSegment> {
-    // Classify vertices of B against the plane of A.
-    let db0 = orient3d(a0, a1, a2, b0);
-    let db1 = orient3d(a0, a1, a2, b1);
-    let db2 = orient3d(a0, a1, a2, b2);
+    // Classify vertices of B against the plane of A. orient3d scales with
+    // the host triangle's area, so normalize to a distance before comparing
+    // against the linear tolerance — otherwise a large host makes on-plane
+    // vertices read as genuinely off-plane (skipping the grazing imprint) and
+    // a tiny host makes off-plane vertices read as touching.
+    let na_pre = (a1 - a0).cross(a2 - a0);
+    let nb_pre = (b1 - b0).cross(b2 - b0);
+    let na_len = na_pre.length().max(1e-30);
+    let nb_len = nb_pre.length().max(1e-30);
+    let db0 = orient3d(a0, a1, a2, b0) / na_len;
+    let db1 = orient3d(a0, a1, a2, b1) / na_len;
+    let db2 = orient3d(a0, a1, a2, b2) / na_len;
 
     if all_same_sign(db0, db1, db2, tolerance) {
-        return Vec::new();
+        // Grazing contact: B lies on one side but touches A's plane along an
+        // edge (two on-plane vertices). That edge is a region boundary for
+        // the coincident-band classification — without imprinting it, A's
+        // triangles straddle the boundary and the kept/dropped halves of one
+        // quad leave open edges (a stacking lip's bottom annulus grazing the
+        // body wall plane at z=13.3 was the lite fallback's bd=103).
+        return grazing_imprint([a0, a1, a2], [b0, b1, b2], [db0, db1, db2], true, tolerance);
     }
 
-    // Classify vertices of A against the plane of B.
-    let da0 = orient3d(b0, b1, b2, a0);
-    let da1 = orient3d(b0, b1, b2, a1);
-    let da2 = orient3d(b0, b1, b2, a2);
+    // Classify vertices of A against the plane of B (distance-normalized,
+    // as above).
+    let da0 = orient3d(b0, b1, b2, a0) / nb_len;
+    let da1 = orient3d(b0, b1, b2, a1) / nb_len;
+    let da2 = orient3d(b0, b1, b2, a2) / nb_len;
 
     if all_same_sign(da0, da1, da2, tolerance) {
-        return Vec::new();
+        // Mirror grazing case: A touches B's plane along an edge.
+        return grazing_imprint(
+            [b0, b1, b2],
+            [a0, a1, a2],
+            [da0, da1, da2],
+            false,
+            tolerance,
+        );
     }
 
     let na = (a1 - a0).cross(a2 - a0);
@@ -284,6 +306,72 @@ fn intersect_triangles(
     vec![IsectSegment {
         p0,
         p1,
+        tri_a: 0,
+        tri_b: 0,
+        apply_a: true,
+        apply_b: true,
+    }]
+}
+
+/// Imprint a grazing contact: `touching`'s edge that lies in `host`'s plane
+/// (both endpoint orientations within tolerance) is clipped to `host`'s
+/// triangle and emitted as a MUTUAL constraint — the host splits its
+/// interior along it, and the touching mesh splits its own on-plane edge at
+/// the same canonical points, so the coincident-band classification boundary
+/// falls on welded triangle edges instead of cutting through interiors.
+fn grazing_imprint(
+    host: [Point3; 3],
+    touching: [Point3; 3],
+    touching_orients: [f64; 3],
+    host_is_a: bool,
+    tolerance: f64,
+) -> Vec<IsectSegment> {
+    // `touching_orients` arrive distance-normalized from the caller.
+    let n = (host[1] - host[0]).cross(host[2] - host[0]);
+    if n.length() < 1e-30 {
+        return Vec::new();
+    }
+    let on_plane: Vec<usize> = (0..3)
+        .filter(|&i| touching_orients[i].abs() <= tolerance)
+        .collect();
+    if on_plane.len() != 2 {
+        return Vec::new();
+    }
+    let p0 = touching[on_plane[0]];
+    let p1 = touching[on_plane[1]];
+
+    // Project into the host plane's dominant axes and clip to the host
+    // triangle (the same frame `coplanar_corefine_segments` uses).
+    let nax = n.x().abs();
+    let nay = n.y().abs();
+    let naz = n.z().abs();
+    let to_2d = |p: Point3| -> Point2 {
+        if naz >= nax && naz >= nay {
+            Point2::new(p.x(), p.y())
+        } else if nay >= nax {
+            Point2::new(p.x(), p.z())
+        } else {
+            Point2::new(p.y(), p.z())
+        }
+    };
+    let host2d = [to_2d(host[0]), to_2d(host[1]), to_2d(host[2])];
+    let Some((t0, t1)) = clip_segment_to_triangle_2d(to_2d(p0), to_2d(p1), &host2d, tolerance)
+    else {
+        return Vec::new();
+    };
+    let e = p1 - p0;
+    if (t1 - t0) * e.length() < tolerance * 2.0 {
+        return Vec::new();
+    }
+    // Mutual: the host splits its interior along the segment, and the
+    // touching mesh splits its own on-plane edge at the same canonical clip
+    // points (via the splitter's global on-edge point map) — one-sided
+    // imprinting leaves fresh T-junctions between the host's new vertices
+    // and the touching edge's own subdivision.
+    let _ = host_is_a;
+    vec![IsectSegment {
+        p0: lerp_point(p0, p1, t0),
+        p1: lerp_point(p0, p1, t1),
         tri_a: 0,
         tri_b: 0,
         apply_a: true,
@@ -1868,5 +1956,37 @@ mod tests {
             result.is_err(),
             "intersection of disjoint meshes should error"
         );
+    }
+
+    /// A grazing contact (one triangle's edge lying in the other's plane,
+    /// both triangles otherwise on one side) must imprint that edge into
+    /// BOTH meshes: without it the host's triangles straddle the coincident-band
+    /// classification boundary and the kept/dropped halves of a quad
+    /// leave open edges (the stacking-lip bottom annulus grazing the body
+    /// wall plane — the lite fallback's bd=103).
+    #[test]
+    fn grazing_edge_contact_emits_mutual_imprint() {
+        // Host triangle in the z=0 plane.
+        let a0 = Point3::new(0.0, 0.0, 0.0);
+        let a1 = Point3::new(10.0, 0.0, 0.0);
+        let a2 = Point3::new(0.0, 10.0, 0.0);
+        // Touching triangle: edge (b0,b1) lies in z=0, apex above.
+        let b0 = Point3::new(1.0, 1.0, 0.0);
+        let b1 = Point3::new(5.0, 1.0, 0.0);
+        let b2 = Point3::new(3.0, 1.0, 4.0);
+
+        let segs = intersect_triangles(a0, a1, a2, b0, b1, b2, 1e-7);
+        assert_eq!(segs.len(), 1, "grazing edge must imprint one segment");
+        let s = &segs[0];
+        assert!(
+            s.apply_a && s.apply_b,
+            "the imprint must constrain both meshes"
+        );
+        let len = (s.p1 - s.p0).length();
+        assert!(
+            (len - 4.0).abs() < 1e-6,
+            "imprint must span the touching edge, got {len}"
+        );
+        assert!(s.p0.z().abs() < 1e-9 && s.p1.z().abs() < 1e-9);
     }
 }
