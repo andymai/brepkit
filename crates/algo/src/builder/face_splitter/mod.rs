@@ -25,6 +25,9 @@ use super::pcurve_compute::{
 use super::plane_frame::PlaneFrame;
 use super::split_types::{OrientedPCurveEdge, SectionEdge, SplitSubFace, SurfaceInfo};
 use super::wire_builder::{build_wire_loops, build_wire_loops_dcel, build_wire_loops_with_winding};
+
+/// Quantized 3D endpoint pair key for loop-geometry equality tests.
+type QKey3 = ((i64, i64, i64), (i64, i64, i64));
 use crate::ds::Rank;
 
 use containment::{find_point_outside_holes, is_inside_any_hole};
@@ -5301,10 +5304,40 @@ fn split_face_2d_impl(
     // dropping such holes were each tried; all three regress
     // gridfinity_d4_full_1x1_bin). The first-vertex probe lands those loops in
     // the surrounding region, threading their edges through the rebuild.
+    let loop_key = |wl: &[OrientedPCurveEdge]| -> Vec<QKey3> {
+        let q = |p: Point3| -> (i64, i64, i64) {
+            (
+                (p.x() * 1e7).round() as i64,
+                (p.y() * 1e7).round() as i64,
+                (p.z() * 1e7).round() as i64,
+            )
+        };
+        let mut keys: Vec<_> = wl
+            .iter()
+            .map(|e| {
+                let (a, b) = (q(e.start_3d), q(e.end_3d));
+                if a <= b { (a, b) } else { (b, a) }
+            })
+            .collect();
+        keys.sort_unstable();
+        keys
+    };
     for hole in holes {
         if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
+            let hole_key = loop_key(&hole);
             let mut assigned = false;
             for sf in &mut sub_faces {
+                // Never attach a hole to the sub-face whose outer wire IS the
+                // hole's own geometry (the reversed twin of a section loop):
+                // the first-vertex probe sits exactly ON that boundary and
+                // float jitter in the strict ray-cast can land it "inside",
+                // pairing the outline with itself as a zero-area bubble (the
+                // custom-shape lip ring lost its cap this way). Skipping the
+                // twin sends the hole to the true enclosing region, which is the
+                // documented intent of the first-vertex probe.
+                if loop_key(&sf.outer_wire) == hole_key {
+                    continue;
+                }
                 let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
                 if super::classify_2d::point_in_polygon_2d(first_pt, &outer_pts) {
                     sf.inner_wires.push(hole.clone());
@@ -5312,7 +5345,11 @@ fn split_face_2d_impl(
                     break;
                 }
             }
-            if !assigned && let Some(sf) = sub_faces.first_mut() {
+            if !assigned
+                && let Some(sf) = sub_faces
+                    .iter_mut()
+                    .find(|sf| loop_key(&sf.outer_wire) != hole_key)
+            {
                 sf.inner_wires.push(hole);
             }
         }
