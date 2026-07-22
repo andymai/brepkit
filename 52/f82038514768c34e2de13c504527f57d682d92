@@ -1,0 +1,26 @@
+crates/io/tests/data/halfsockets_export_deferred.bin
+  s_100d196bea722f::t_e3d662b79e27bb 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_100d196bea722f::t_59d11c07e8b0d7 2988-2998,3000-3003,3006,3008-3011
+  s_100d196bea722f::t_21674f979477b1 2999
+crates/io/tests/data/halfsockets_export_body.bin
+  s_100d196bea722f::t_e3d662b79e27bb 1
+crates/io/tests/halfsockets_export_inmem.rs
+  s_100d196bea722f::t_e3d662b79e27bb 1-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "52f82038514768c34e2de13c504527f57d682d92",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
