@@ -119,10 +119,15 @@ fn compound_cut_disjoint_drills_matches_sequential() {
     }
     let vol_seq = solid_volume(&topo_seq, seq, 0.05).unwrap();
 
+    // unify_faces off so the differential compares the raw cut paths, not
+    // the trailing unification pass.
+    let opts = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
     let mut topo = Topology::new();
     let (base, drills) = make(&mut topo);
-    let result =
-        crate::boolean::compound_cut(&mut topo, base, &drills, BooleanOptions::default()).unwrap();
+    let result = crate::boolean::compound_cut(&mut topo, base, &drills, opts).unwrap();
 
     let vol = solid_volume(&topo, result, 0.05).unwrap();
     assert!(
