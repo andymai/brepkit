@@ -517,8 +517,17 @@ fn compute_edge_set_quantized(
             .ok()?
             .point();
         let ep = topo.vertex(arena.resolve_vertex(edge.end())).ok()?.point();
+        // The midpoint is evaluated in STORED order deliberately: arcs
+        // follow the CCW start-to-end convention, so (A,B) and (B,A) are
+        // complementary arcs — different geometry that must hash apart
+        // (they are exactly the two halves this discriminator separates).
+        // Identical geometry always stores identical direction under that
+        // convention, so a true duplicate pair cannot hash apart here.
         let mid = crate::builder::pcurve_compute::evaluate_edge_at_t(edge.curve(), sp, ep, 0.5);
-        let qmid = quantize_point(mid, scale * 100.0);
+        // quantize_point MULTIPLIES by the scale, so the 100x-coarser
+        // midpoint bucket (fit-error tolerance for marched geometry) needs
+        // scale / 100, not scale * 100.
+        let qmid = quantize_point(mid, scale / 100.0);
 
         // Canonical ordering: smaller first
         let pair = if qs <= qe {

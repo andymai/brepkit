@@ -1144,9 +1144,13 @@ pub(super) fn split_periodic_face_into_sectors(
     // Vertical edge (ruling or seam) at relative angle `u_rel`, oriented
     // bottom -> top when `up`, top -> bottom otherwise.
     let mk_vertical = |u_rel: f64, up: bool| -> Option<OrientedPCurveEdge> {
-        let u = (seam_u + u_rel).rem_euclid(TAU);
-        let pa = surface.evaluate(u, v_bot)?;
-        let pb = surface.evaluate(u, v_top)?;
+        // 3D evaluation wraps the angle; the UV coordinate stays UNWRAPPED
+        // (seam_u + u_rel) so it agrees with the rim arcs' monotone pcurves
+        // at the u_rel = TAU boundary.
+        let u3 = (seam_u + u_rel).rem_euclid(TAU);
+        let u = seam_u + u_rel;
+        let pa = surface.evaluate(u3, v_bot)?;
+        let pb = surface.evaluate(u3, v_top)?;
         let (s3, e3, vs, ve) = if up {
             (pa, pb, v_bot, v_top)
         } else {
@@ -1193,6 +1197,16 @@ pub(super) fn split_periodic_face_into_sectors(
         let (from, to) = if ccw { (a_rel, b_rel) } else { (b_rel, a_rel) };
         let pa = surface.evaluate((seam_u + from).rem_euclid(TAU), v)?;
         let pb = surface.evaluate((seam_u + to).rem_euclid(TAU), v)?;
+        // A stored arc edge spans the CCW range of ITS OWN circle frame from
+        // start to end; a traversal running against that frame must carry
+        // forward=false so emission un-swaps the vertices (otherwise the
+        // edge flips to the complementary arc). The rims' circle frames need
+        // not agree with the surface +u direction, so compare tangents.
+        let step = if to > from { 1e-4 } else { -1e-4 };
+        let near = surface.evaluate((seam_u + from + step).rem_euclid(TAU), v)?;
+        let traversal_tan = near - pa;
+        let circle_tan = circle.tangent(circle.project(pa));
+        let forward = traversal_tan.dot(circle_tan) > 0.0;
         let dir = Vec2::new(if to > from { 1.0 } else { -1.0 }, 0.0);
         let pcurve = Curve2D::Line(Line2D::new(Point2::new(seam_u + from, v), dir).ok()?);
         Some(OrientedPCurveEdge {
@@ -1202,7 +1216,7 @@ pub(super) fn split_periodic_face_into_sectors(
             end_uv: Point2::new(seam_u + to, v),
             start_3d: pa,
             end_3d: pb,
-            forward: true,
+            forward,
             source_edge_idx: None,
             pave_block_id: None,
         })
