@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784707770213,
+  "lastUpdate": 1784712697895,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9827,6 +9827,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21937163,
             "range": "± 60426",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b7abf6bbd72298e3e6ce434b66a798fa53b57033",
+          "message": "fix(algo): keep chord crossings at a closed rim's seam angle (#1176)\n\n## Summary\n\nFound while digging the last lightweight failure's frontier (the\nmid-wall poking-cylinder repro). `arc_segment_crossings` classifies\ncircle-line hits against the boundary arc's angular span. For a **CLOSED\nrim edge** (start == end at the seam vertex) the span is zero, the\nmidpoint lands on the \"complement\" branch, and the major-arc filter —\n`dsa + dae > 1e-9` — excludes any hit landing **exactly at the seam\nangle** (its angular distance sum is 0).\n\nConsequence: a cap disc crossed by a chord passing through its seam\npoint lost one of its two rim crossings, `clip_line_to_face_boundary`\nsaw a single-crossing miss and returned `None`, and the cap never split\ninto its half-discs — one of the stacked roots that keeps the box ∪\nmid-wall-cylinder fuse (and the solid-bin magnet-pad fuse family) on the\nmesh-fallback path.\n\n## Fix\n\nA closed rim covers the whole circle, so every intersection is on the\narc: detect the closed case (coincident endpoints + zero angular span)\nand return the hits unfiltered.\n\n## Tests\n\n- `closed_rim_chord_crossing_keeps_seam_angle_hit` — diameter chord\nthrough the seam of a closed r=3 rim must yield BOTH crossings (x=7 and\nx=13). Fails on main (1 hit).\n- algo 190 / ops 779 / gridfinity canary / io fixture tests / clippy\ngreen.\n\nNote: the mid-wall repro still falls back overall (the cylinder-strip\nsector split is the remaining frontier, tracked in the state notes with\na parked WIP branch) — but it now fails SAFE with the caps correctly\nsplit, and the fix applies engine-wide to every cap-chord configuration.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes chord/arc intersections on closed rim edges so seam-angle hits are\nkept. Uses topological closedness to keep both crossings and restore\ncorrect cap splitting when a chord passes through a closed rim’s seam.\n\n- **Bug Fixes**\n- In `arc_segment_crossings`, take a `closed` flag from the caller and,\nwhen true, return hits unfiltered; short open arcs with near-coincident\nendpoints still use angular-span filtering.\n- Threaded `closed` through boundary clipping and added\n`closed_rim_chord_crossing_keeps_seam_angle_hit` to verify both\ncrossings are preserved.\n\n<sup>Written for commit 1d02de45d739046e69c5763dbf17bca19c926a75.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1176?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T09:29:07Z",
+          "tree_id": "6a3401926d8eeeb399711752f5f211f62735033c",
+          "url": "https://github.com/andymai/brepkit/commit/b7abf6bbd72298e3e6ce434b66a798fa53b57033"
+        },
+        "date": 1784712696637,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 795512,
+            "range": "± 2741",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 890445,
+            "range": "± 25271",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12142,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 647744,
+            "range": "± 1563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21598268,
+            "range": "± 280414",
             "unit": "ns/iter"
           }
         ]
