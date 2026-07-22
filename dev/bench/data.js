@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784721935919,
+  "lastUpdate": 1784736419213,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10043,6 +10043,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21837240,
             "range": "± 57224",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8bb1e8fa4b5c1dd4601dbe7fe6bb5d4b1c63fbc6",
+          "message": "fix(geometry,operations): stabilize arc segmentation for ruled loft pairing (#1180)\n\n## Summary\n\nRoot of the **22-scenario custom-shape export-integrity family** (all\nL/T/U/O \"with lip\" bins, bd 28–142).\n\nChain of custody from the 3×3-L capture: the bin body is clean; the lip\nsolid out of the multi-section frustum loft arrives **faceted** (82\nplanes) even though the tool's profiles carry real arcs; the faceted lip\nthen drives the frustum cut and the body fuse into open mesh fallbacks\nthat poison the export (bd=40 at STL).\n\nThe loft's curve-preserving path declined because `ruled_arc_surface`\nfailed its control-net pairing: `circle_to_nurbs` segments an arc with\n`ceil(span/(π/2))`, and a span that is an **exact multiple of π/2**\nstraddles the ceil boundary on float jitter — two same-shape arcs\nconverted to 2 vs 3 Bezier segments (5 vs 7 control points; observed\nlive: `span0=3.142 span1=3.142 cps 5/7`). The concave corner of an L\noutline is exactly this case: its arc centres drift with the inset\n(non-coaxial across sections), so those bands need the ruled-NURBS\npairing.\n\n## Fix (two layers)\n\n1. `circle_to_nurbs`: epsilon inside the ceil so exact π/2 multiples\nsegment consistently.\n2. `ruled_arc_surface`: when counts still disagree, re-convert the\nsecond arc with the first one's segment count via the new\n`circle_to_nurbs_with_segments`.\n\n## Result\n\nThe native rounded-L 3-section loft (reconstructed from the tool's\ncorner-tangent math) goes **curved=0 → curved=12 of 26 faces** — fully\nanalytic. New regression test\n`rounded_l_multi_section_loft_stays_analytic` builds that loft and pins\ncurved=12 (fails on main).\n\ngeometry 101 / ops 780 / algo 191 / gridfinity canary / clippy green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nStabilizes arc-to-NURBS segmentation at π/2 multiples so ruled lofts\npair correctly and stay analytic, fixing faceted lip frustums in\ncustom-shape exports. Multi‑section lofts (e.g., rounded L) remain\ncurved instead of falling back to planes.\n\n- **Bug Fixes**\n- In `circle_to_nurbs`, snap `span/(π/2)` to the nearest integer when\nwithin float jitter so exact multiples segment consistently;\nnon‑multiples still round up (≤ π/2 per segment preserved).\n- Added `circle_to_nurbs_with_segments` with guards (rejects zero\nsegments and per‑segment span > π/2) and updated `ruled_arc_surface` to\nre‑convert both arcs at the larger segment count when they differ.\n- Updated regression:\n`rounded_l_multi_section_loft_stays_curve_preserving` (curved 12/26\nfaces; previously 0/26).\n\n<sup>Written for commit c0ca522daf369110e67e4251cb5de520bb73aeac.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1180?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T16:04:53Z",
+          "tree_id": "8f144e9c7af743bd0ef1ba9820b39faf3a534a7f",
+          "url": "https://github.com/andymai/brepkit/commit/8bb1e8fa4b5c1dd4601dbe7fe6bb5d4b1c63fbc6"
+        },
+        "date": 1784736418520,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 645047,
+            "range": "± 6209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 717956,
+            "range": "± 6966",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10373,
+            "range": "± 183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 520886,
+            "range": "± 11815",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17769476,
+            "range": "± 127178",
             "unit": "ns/iter"
           }
         ]
