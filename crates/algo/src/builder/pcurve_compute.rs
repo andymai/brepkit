@@ -238,6 +238,61 @@ pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, 
     }
 }
 
+/// Uniformly sample an edge curve at `n` points (`t = k/n`, `k` in `0..n`),
+/// honouring the wire traversal direction (`forward = false` samples
+/// `1 - k/n`).
+///
+/// Matches [`evaluate_edge_at_t`]'s conventions per curve arm but hoists the
+/// per-arm setup OUT of the sample loop: `evaluate_edge_at_t` re-derives
+/// `domain_with_endpoints` on every call, and for a trimmed NURBS sub-span
+/// that is two iterative point-to-curve projections per sample — the
+/// same-domain samplers over spline-carrying faces paid hundreds of
+/// milliseconds per boolean for it.
+pub(super) fn sample_edge_uniform(
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    n: usize,
+    forward: bool,
+    out: &mut Vec<Point3>,
+) {
+    #[allow(clippy::cast_precision_loss)]
+    let frac_at = |k: usize| -> f64 {
+        let f = k as f64 / n as f64;
+        if forward { f } else { 1.0 - f }
+    };
+    match curve {
+        EdgeCurve::Line => {
+            let d = end - start;
+            for k in 0..n {
+                let t = frac_at(k);
+                out.push(start + d * t);
+            }
+        }
+        EdgeCurve::Circle(c) if (start - end).length() > 1e-12 => {
+            let t0 = c.project(start);
+            let d = shorter_arc_delta(c.project(end) - t0);
+            for k in 0..n {
+                out.push(ParametricCurve::evaluate(c, frac_at(k).mul_add(d, t0)));
+            }
+        }
+        EdgeCurve::Ellipse(e) if (start - end).length() > 1e-12 => {
+            let t0 = e.project(start);
+            let d = shorter_arc_delta(e.project(end) - t0);
+            for k in 0..n {
+                out.push(ParametricCurve::evaluate(e, frac_at(k).mul_add(d, t0)));
+            }
+        }
+        _ => {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            let span = t1 - t0;
+            for k in 0..n {
+                out.push(curve.evaluate_with_endpoints(frac_at(k).mul_add(span, t0), start, end));
+            }
+        }
+    }
+}
+
 /// Wrap an angular difference into (-pi, pi] — the shorter way around.
 pub(super) fn shorter_arc_delta(d: f64) -> f64 {
     let w = d.rem_euclid(TAU);
