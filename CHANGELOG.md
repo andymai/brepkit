@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.26](https://github.com/andymai/brepkit/compare/v2.127.25...v2.127.26) (2026-07-22)
+
+
+### Bug Fixes
+
+* **geometry:** document the per-segment span invariant on arc conversion ([#1183](https://github.com/andymai/brepkit/issues/1183)) ([cd8b757](https://github.com/andymai/brepkit/commit/cd8b7576a2ad466693727abca7d9a6716e16e905))
+
 ## [2.127.25](https://github.com/andymai/brepkit/compare/v2.127.24...v2.127.25) (2026-07-22)
 
 
