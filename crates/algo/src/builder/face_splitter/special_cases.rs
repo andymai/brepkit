@@ -1027,6 +1027,240 @@ pub(super) fn split_periodic_face_into_bands(
     Some(bands)
 }
 
+/// Split a u-periodic face (cylinder lateral) into angular SECTORS at its
+/// full-height ruling sections (u = const lines from rim to rim).
+///
+/// The dual of [`split_periodic_face_into_bands`]: rulings partition the
+/// strip angularly, with the seam as one more cut (a wall plane crossing the
+/// cylinder yields two rulings; when one of them coincides with the seam its
+/// per-face section copy is boundary-collinear and dropped, and the seam
+/// itself supplies that cut). Each sector is bounded by a bottom rim arc, a
+/// ruling (or seam) up, a top rim arc back, and a ruling (or seam) down. Rim
+/// arcs are emitted as sub-arcs of the boundary circles; the assembly-stage
+/// closed-rim refinement pairs them with the cap sides.
+///
+/// Preconditions (returns `None` so the caller can fall back otherwise):
+/// - surface is a cylinder
+/// - boundary is exactly 2 closed circle edges plus seam Line edges at one u
+/// - every section is a straight Line with one endpoint on each rim at the
+///   same u (a ruling); at least one ruling not coincident with the seam
+#[allow(clippy::too_many_lines)]
+pub(super) fn split_periodic_face_into_sectors(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+    use std::f64::consts::{PI, TAU};
+
+    if !matches!(surface, FaceSurface::Cylinder(_)) {
+        return None;
+    }
+    let close_tol = tol * 100.0;
+
+    let mut boundary_circles: Vec<&OrientedPCurveEdge> = Vec::new();
+    let mut seam_edges: Vec<&OrientedPCurveEdge> = Vec::new();
+    for e in boundary_edges {
+        let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
+        match (&e.curve_3d, is_closed) {
+            (EdgeCurve::Circle(_), true) => boundary_circles.push(e),
+            (EdgeCurve::Line, false) => seam_edges.push(e),
+            _ => return None,
+        }
+    }
+    if boundary_circles.len() != 2 || seam_edges.is_empty() {
+        return None;
+    }
+
+    let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
+    for e in &seam_edges {
+        for p in [e.start_3d, e.end_3d] {
+            let (u, _) = surface.project_point(p)?;
+            let du = (u - seam_u + PI).rem_euclid(TAU) - PI;
+            if du.abs() > 1e-6 {
+                return None;
+            }
+        }
+    }
+
+    let rim_v = |e: &OrientedPCurveEdge| -> Option<f64> {
+        let (_, v) = surface.project_point(e.start_3d)?;
+        Some(v)
+    };
+    let v0 = rim_v(boundary_circles[0])?;
+    let v1 = rim_v(boundary_circles[1])?;
+    let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {
+        (v0, boundary_circles[0], v1, boundary_circles[1])
+    } else {
+        (v1, boundary_circles[1], v0, boundary_circles[0])
+    };
+    if v_top - v_bot < close_tol {
+        return None;
+    }
+
+    // Collect the rulings: each section must be a Line from one rim to the
+    // other at a single u — stored as (u relative to the seam, section).
+    let mut rulings: Vec<(f64, SectionEdge)> = Vec::new();
+    for sec in sections {
+        if !matches!(sec.curve_3d, EdgeCurve::Line) {
+            return None;
+        }
+        let (us, vs) = surface.project_point(sec.start)?;
+        let (ue, ve) = surface.project_point(sec.end)?;
+        let du = (us - ue + PI).rem_euclid(TAU) - PI;
+        if du.abs() > 1e-6 {
+            return None;
+        }
+        let (v_lo, v_hi) = if vs < ve { (vs, ve) } else { (ve, vs) };
+        if (v_lo - v_bot).abs() > close_tol || (v_hi - v_top).abs() > close_tol {
+            return None;
+        }
+        let u_rel = (us - seam_u).rem_euclid(TAU);
+        // A ruling riding the seam adds no cut beyond the seam itself.
+        if u_rel < 1e-6 || (TAU - u_rel) < 1e-6 {
+            continue;
+        }
+        rulings.push((u_rel, sec.clone()));
+    }
+    if rulings.is_empty() {
+        return None;
+    }
+    rulings.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    if rulings.windows(2).any(|w| w[1].0 - w[0].0 < 1e-6) {
+        return None;
+    }
+
+    // Cut positions CCW from the seam (u_rel = 0), wrapping back to TAU.
+    let mut cuts: Vec<f64> = Vec::with_capacity(rulings.len() + 2);
+    cuts.push(0.0);
+    cuts.extend(rulings.iter().map(|r| r.0));
+    cuts.push(TAU);
+
+    // Vertical edge (ruling or seam) at relative angle `u_rel`, oriented
+    // bottom -> top when `up`, top -> bottom otherwise.
+    let mk_vertical = |u_rel: f64, up: bool| -> Option<OrientedPCurveEdge> {
+        let u = (seam_u + u_rel).rem_euclid(TAU);
+        let pa = surface.evaluate(u, v_bot)?;
+        let pb = surface.evaluate(u, v_top)?;
+        let (s3, e3, vs, ve) = if up {
+            (pa, pb, v_bot, v_top)
+        } else {
+            (pb, pa, v_top, v_bot)
+        };
+        let dir = Vec2::new(0.0, if up { 1.0 } else { -1.0 });
+        let pcurve = Curve2D::Line(Line2D::new(Point2::new(u, vs), dir).ok()?);
+        // Reuse the matching ruling's pave block so cross-face edge sharing
+        // works through resolve_edge_vertices (seam verticals have none).
+        let pb_id = rulings
+            .iter()
+            .find(|r| (r.0 - u_rel).abs() < 1e-9)
+            .and_then(|r| r.1.pave_block_id);
+        Some(OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve,
+            start_uv: Point2::new(u, vs),
+            end_uv: Point2::new(u, ve),
+            start_3d: s3,
+            end_3d: e3,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: pb_id,
+        })
+    };
+
+    // Rim arc between two relative angles at height `v`, traversed CCW when
+    // `ccw` (bottom rim of an outward cylinder) and CW otherwise. UV runs on
+    // the unwrapped angle so each sector's pcurve segment stays monotone.
+    let rim_circle = |e: &OrientedPCurveEdge| -> Option<brepkit_math::curves::Circle3D> {
+        match &e.curve_3d {
+            EdgeCurve::Circle(c) => Some(c.clone()),
+            _ => None,
+        }
+    };
+    let bot_circle = rim_circle(bot_edge)?;
+    let top_circle = rim_circle(top_edge)?;
+    let mk_arc = |circle: &brepkit_math::curves::Circle3D,
+                  v: f64,
+                  a_rel: f64,
+                  b_rel: f64,
+                  ccw: bool|
+     -> Option<OrientedPCurveEdge> {
+        let (from, to) = if ccw { (a_rel, b_rel) } else { (b_rel, a_rel) };
+        let pa = surface.evaluate((seam_u + from).rem_euclid(TAU), v)?;
+        let pb = surface.evaluate((seam_u + to).rem_euclid(TAU), v)?;
+        let dir = Vec2::new(if to > from { 1.0 } else { -1.0 }, 0.0);
+        let pcurve = Curve2D::Line(Line2D::new(Point2::new(seam_u + from, v), dir).ok()?);
+        Some(OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(circle.clone()),
+            pcurve,
+            start_uv: Point2::new(seam_u + from, v),
+            end_uv: Point2::new(seam_u + to, v),
+            start_3d: pa,
+            end_3d: pb,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        })
+    };
+
+    // Sector loop orientation must match the original boundary traversal:
+    // the bottom rim's traversal direction at the seam decides whether the
+    // sector floor runs CCW (+u) or CW (-u).
+    let bot_tangent = {
+        let c = &bot_circle;
+        let t = c.tangent(c.project(bot_edge.start_3d));
+        if bot_edge.forward { t } else { -t }
+    };
+    let du_dir = {
+        // Surface partial in +u at the seam/bottom corner.
+        let p0 = surface.evaluate(seam_u, v_bot)?;
+        let p1 = surface.evaluate(seam_u + 1e-4, v_bot)?;
+        (p1 - p0).normalize().ok()?
+    };
+    let floor_ccw = bot_tangent.dot(du_dir) > 0.0;
+
+    let mut sectors = Vec::with_capacity(cuts.len() - 1);
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        // floor: a->b (CCW) or b->a; then up at the far cut, ceiling back,
+        // down at the near cut. Choose edge order so the loop is connected.
+        let wire = if floor_ccw {
+            vec![
+                mk_arc(&bot_circle, v_bot, a, b, true)?,
+                mk_vertical(b, true)?,
+                mk_arc(&top_circle, v_top, a, b, false)?,
+                mk_vertical(a, false)?,
+            ]
+        } else {
+            vec![
+                mk_arc(&bot_circle, v_bot, a, b, false)?,
+                mk_vertical(a, true)?,
+                mk_arc(&top_circle, v_top, a, b, true)?,
+                mk_vertical(b, false)?,
+            ]
+        };
+        let interior = surface.evaluate(
+            (seam_u + f64::midpoint(a, b)).rem_euclid(TAU),
+            f64::midpoint(v_bot, v_top),
+        )?;
+        sectors.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(interior),
+        });
+    }
+    Some(sectors)
+}
+
 /// Build an `OrientedPCurveEdge` (forward) from a section on this (torus) face.
 fn torus_section_to_edge(
     section: &SectionEdge,

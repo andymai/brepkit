@@ -39,7 +39,8 @@ use edge_splitting::{
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic, sample_wire_loop_uv_via_frame};
 use special_cases::{
     split_face_with_internal_loops, split_noseam_face_direct, split_periodic_face_into_bands,
-    split_torus_band_by_arrangement, try_split_crossing_plane_face, try_split_disk_by_chords,
+    split_periodic_face_into_sectors, split_torus_band_by_arrangement,
+    try_split_crossing_plane_face, try_split_disk_by_chords,
 };
 
 /// Number of probe points (plus one for the closing sample) walked along a
@@ -3847,6 +3848,26 @@ fn split_face_2d_impl(
         )
     {
         return bands;
+    }
+
+    // Sector shortcut: full-height ruling sections (u = const lines) split a
+    // u-periodic lateral into angular sectors, with the seam as one more cut
+    // (a wall plane crossing the cylinder; the ruling that coincides with
+    // the seam is supplied by the seam itself).
+    if u_periodic
+        && !is_plane
+        && original_inner_wires.is_empty()
+        && let Some(sectors) = split_periodic_face_into_sectors(
+            &surface,
+            &boundary_edges,
+            sections,
+            rank,
+            reversed,
+            face_id,
+            tol.linear,
+        )
+    {
+        return sectors;
     }
 
     // Internal section edge shortcut: when section edges form closed loops
