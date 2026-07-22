@@ -589,6 +589,8 @@ pub(super) fn validate_boolean_result(
     // carrying them must fail safe to the mesh fallback.
     let mut unclosed_wires = 0usize;
     let mut edge_uses: HashMap<usize, usize> = HashMap::new();
+    let nm_dump = std::env::var("BK_DUMP_NM").is_ok();
+    let mut edge_by_idx: HashMap<usize, brepkit_topology::edge::EdgeId> = HashMap::new();
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let face = topo.face(fid)?;
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
@@ -598,10 +600,59 @@ pub(super) fn validate_boolean_result(
             }
             for oe in wire.edges() {
                 *edge_uses.entry(oe.edge().index()).or_insert(0) += 1;
+                if nm_dump {
+                    edge_by_idx
+                        .entry(oe.edge().index())
+                        .or_insert_with(|| oe.edge());
+                }
             }
         }
     }
     let non_manifold_edges = edge_uses.values().filter(|&&c| c > 2).count();
+    if non_manifold_edges > 0 && nm_dump {
+        for (&eid, &c) in &edge_uses {
+            if c > 2
+                && let Some(&real_eid) = edge_by_idx.get(&eid)
+                && let Ok(e) = topo.edge(real_eid)
+                && let (Ok(a), Ok(b)) = (topo.vertex(e.start()), topo.vertex(e.end()))
+            {
+                let pa = a.point();
+                let pb = b.point();
+                log::warn!(
+                    "NM edge {eid} x{c} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                    e.curve().type_tag(),
+                    pa.x(),
+                    pa.y(),
+                    pa.z(),
+                    pb.x(),
+                    pb.y(),
+                    pb.z()
+                );
+                for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap_or_default()
+                {
+                    let Ok(f) = topo.face(fid) else { continue };
+                    for wid in
+                        std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied())
+                    {
+                        let Ok(w) = topo.wire(wid) else { continue };
+                        for oe in w.edges() {
+                            if oe.edge() == real_eid {
+                                let n_out = topo
+                                    .wire(f.outer_wire())
+                                    .map(|w| w.edges().len())
+                                    .unwrap_or(0);
+                                log::warn!(
+                                    "  user face {fid:?} ({}) outer_edges={n_out} inners={}",
+                                    f.surface().type_tag(),
+                                    f.inner_wires().len()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     if unclosed_wires > 0 || non_manifold_edges > 0 {
         return Err(crate::OperationsError::InvalidInput {
             reason: format!(
