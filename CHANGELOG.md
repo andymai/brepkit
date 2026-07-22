@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.25](https://github.com/andymai/brepkit/compare/v2.127.24...v2.127.25) (2026-07-22)
+
+
+### Bug Fixes
+
+* **algo:** SD midpoint discriminator + sector rescue for under-split periodic strips ([#1178](https://github.com/andymai/brepkit/issues/1178)) ([2c18ac7](https://github.com/andymai/brepkit/commit/2c18ac79e7c93f8e11bcaa0a31c61b29b375575d))
+
 ## [2.127.24](https://github.com/andymai/brepkit/compare/v2.127.23...v2.127.24) (2026-07-22)
 
 
