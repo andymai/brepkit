@@ -63,7 +63,9 @@ pub fn circle_to_nurbs(
 ///
 /// Ruled-surface construction pairs two arcs' control nets one-to-one; when
 /// float jitter makes two same-span arcs segment differently, the caller
-/// re-converts one with the other's count.
+/// re-converts BOTH at the larger count. Each segment must span at most
+/// π/2 for the rational quadratic construction to be exact — the count is
+/// validated against that invariant.
 ///
 /// # Errors
 ///
