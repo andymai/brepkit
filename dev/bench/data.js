@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784707317049,
+  "lastUpdate": 1784707770213,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9773,6 +9773,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22593652,
             "range": "± 29782",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5f961ffa8681e4f3826b06a7591db6026d69146a",
+          "message": "chore(main): release 2.127.23 (#1175)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.23](https://github.com/andymai/brepkit/compare/v2.127.22...v2.127.23)\n(2026-07-22)\n\n\n### Bug Fixes\n\n* **algo:** drop boundary-collinear line sections on plane faces\n([#1174](https://github.com/andymai/brepkit/issues/1174))\n([f39e843](https://github.com/andymai/brepkit/commit/f39e8430f28b2659e4224619789277c85703e1d5))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.127.23 with a fix to planar face sectioning\nthat drops boundary‑collinear line segments. This prevents stray or\nduplicate edges in results.\n\n- **Bug Fixes**\n- Drop line segments that lie exactly on plane face boundaries during\nsectioning.\n\n<sup>Written for commit 868cc00192cbb51d988f9ccb32fcd2efac60342b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1175?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-22T08:07:00Z",
+          "tree_id": "4b18e542ccedec240d6aa98f548d288dab2bc8d4",
+          "url": "https://github.com/andymai/brepkit/commit/5f961ffa8681e4f3826b06a7591db6026d69146a"
+        },
+        "date": 1784707768938,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 794797,
+            "range": "± 3453",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 888536,
+            "range": "± 4011",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12081,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650843,
+            "range": "± 1326",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21937163,
+            "range": "± 60426",
             "unit": "ns/iter"
           }
         ]
