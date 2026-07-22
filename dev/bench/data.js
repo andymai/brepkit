@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784677480578,
+  "lastUpdate": 1784680967448,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -8963,6 +8963,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28670669,
             "range": "± 50593",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b517d4fca52269806eff552460c266f66130fa50",
+          "message": "perf(algo): batch edge sampler for the same-domain polygon builders (#1160)\n\n## Root cause\n\nSecond instance of the class #1158 fixed: the four same-domain sampling\nloops (planar overlap polygons, analytic wire points, face AABBs) called\n`evaluate_edge_at_t` **per sample**, re-deriving `domain_with_endpoints`\n— two iterative point-to-curve projections per sample on trimmed NURBS\nsub-span edges. Every face carrying rescue-spline boundary edges (all\npost-pad-fuse lite geometry) paid it on every boolean's same-domain\npass.\n\n## Fix\n\n`sample_edge_uniform` hoists the per-arm setup out of the sample loop\n(shorter-arc origin for open circle/ellipse, domain for NURBS/closed)\nand matches `evaluate_edge_at_t`'s conventions arm for arm; all four\nloops converted.\n\n## Measurements (captured lite magnet operands, native)\n\n| | before | after |\n|---|---|---|\n| `detect_same_domain` per drill cut | ~500 ms | **78 ms** |\n| `analytic_faces_overlap` (32 tests) | 244 ms | 36 ms |\n| 16-drill `compound_cut` | 17.2 s | **8.9 s** |\n| 16-pad fuse | 7.0 s | 6.4 s |\n\nCombined with #1158, the tool-side `2×2 lite + magnet pads` scenario\nprojects from 65 s (pre-wave) → ~29 s, at the 30 s export cap.\n\n## Verification\n\n- `brepkit-algo` 184/184, `brepkit-operations` full (no failures),\n`brepkit-io` full, d4 canary 27/27, full workspace via pre-push. The\nsame-domain foils (coaxial band pairing, planar containment,\ncomplementary-split guards) all exercise the converted samplers.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBatch edge sampling for same-domain polygon builders to avoid per-sample\ndomain recomputation; adds differential tests to pin parity with\n`evaluate_edge_at_t`. detect_same_domain drops ~500 ms → 78 ms per drill\ncut; 16‑drill compound_cut 17.2 s → 8.9 s; pad fuse 7.0 s → 6.4 s.\n\n- **Refactors**\n- Added `sample_edge_uniform` to precompute per-curve setup and sample n\npoints honoring wire direction.\n- Replaced per-sample `evaluate_edge_at_t` loops in planar overlap\npolygons, planar face area, wire points (3D), and face outer AABB.\n- Keeps shorter-arc sampling for circles/ellipses and uses endpoint\ndomains for NURBS/closed curves.\n- Added differential tests to ensure the sampler matches\n`evaluate_edge_at_t` for line, open/closed circle, ellipse, and trimmed\nNURBS in both directions.\n\n<sup>Written for commit 465733ca9a8b57f87fe10bb207d609d4635252b3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1160?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T00:40:27Z",
+          "tree_id": "4e5392fa4e6ab936fa61e588a8889e3f616b790b",
+          "url": "https://github.com/andymai/brepkit/commit/b517d4fca52269806eff552460c266f66130fa50"
+        },
+        "date": 1784680966914,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 952915,
+            "range": "± 15363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1042906,
+            "range": "± 4465",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12978,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 654129,
+            "range": "± 4730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28700787,
+            "range": "± 35704",
             "unit": "ns/iter"
           }
         ]
