@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784739759337,
+  "lastUpdate": 1784741937610,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10151,6 +10151,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17898780,
             "range": "± 152082",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e9eb8bf160859fe2bbd5ec344907a160ad8d682a",
+          "message": "fix(geometry): mark the arc segmentation stabilization releasable (#1182)\n\nEmpty commit. PR #1180 landed with the multi-scope header\n`fix(geometry,operations)`, which release-please's conventional-commit\nparser does not treat as user-facing — both Release Please runs since\nv2.127.25 skipped release-PR creation (\"No user facing commits found\"),\nso the loft fix is stranded unreleased. This properly-scoped empty\n`fix:` commit lets release-please cut 2.127.26. (Durable note: avoid\ncomma multi-scopes in squash titles.)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMake the loft arc segmentation stabilization releasable by adding a\nproperly scoped `fix(geometry)` commit. This triggers Release Please to\ncut the next patch release and ship the custom-shape export\nimprovements.\n\n<sup>Written for commit c20fd20c3657a96f5bc11153e0c7ebf4f3feffdc.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1182?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T10:36:28-07:00",
+          "tree_id": "85a22ef975d3e8994bee021f2d43d72f8d6bd322",
+          "url": "https://github.com/andymai/brepkit/commit/e9eb8bf160859fe2bbd5ec344907a160ad8d682a"
+        },
+        "date": 1784741936774,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 808998,
+            "range": "± 2147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 897574,
+            "range": "± 2111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11991,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 655296,
+            "range": "± 2431",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21920630,
+            "range": "± 87984",
             "unit": "ns/iter"
           }
         ]
