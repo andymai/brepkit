@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.24](https://github.com/andymai/brepkit/compare/v2.127.23...v2.127.24) (2026-07-22)
+
+
+### Bug Fixes
+
+* **algo:** keep chord crossings at a closed rim's seam angle ([#1176](https://github.com/andymai/brepkit/issues/1176)) ([b7abf6b](https://github.com/andymai/brepkit/commit/b7abf6bbd72298e3e6ce434b66a798fa53b57033))
+
 ## [2.127.23](https://github.com/andymai/brepkit/compare/v2.127.22...v2.127.23) (2026-07-22)
 
 
