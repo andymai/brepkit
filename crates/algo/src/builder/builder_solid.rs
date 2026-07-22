@@ -1880,8 +1880,18 @@ fn split_arc_edges_at_collinear_vertices(
             continue;
         }
         let angular_eps = snap / radius_scale;
-        // The arc's CCW angular span [a0, a1] with a1 > a0.
-        let (a0, a1) = curve.domain_with_endpoints(sp, ep);
+        // The arc's CCW angular span [a0, a1] with a1 > a0. For a CLOSED edge
+        // the endpoint-derived domain is the curve's intrinsic 0..TAU, but the
+        // replacement chain below starts at the edge's seam vertex — anchor
+        // the span at the seam's angle instead, or cuts sort in the intrinsic
+        // frame and the sub-arcs overlap past one revolution (seam at pi with
+        // cuts at pi/2 and 3pi/2 would sweep 4pi total).
+        let (a0, a1) = if is_closed {
+            let seam = project_angle_on_curve(&curve, sp);
+            (seam, seam + std::f64::consts::TAU)
+        } else {
+            curve.domain_with_endpoints(sp, ep)
+        };
         let span = a1 - a0;
         if span < angular_eps {
             continue;
@@ -2746,6 +2756,125 @@ mod tests {
 
         let keys_a = face_edge_keys(&topo, face_ids[0]).unwrap();
         assert_eq!(keys_a.len(), 1, "single-cut circle must stay whole");
+    }
+
+    #[test]
+    fn closed_circle_with_offset_seam_splits_into_single_revolution() {
+        // Seam at pi, cuts at pi/2 and 3pi/2: the sub-arc spans must be
+        // anchored at the seam, or they overlap past one revolution. The
+        // three arcs must partition the rim exactly (total sweep TAU) and
+        // pair with the mate's partition, which shares the seam vertex.
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::wire::Wire;
+
+        let mut topo = Topology::new();
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let pi = std::f64::consts::PI;
+        let seam = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(pi),
+            1e-7,
+        ));
+        let full = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Circle(circle.clone())));
+        let wire_a = topo.add_wire(Wire::new(vec![OrientedEdge::new(full, true)], true).unwrap());
+        let face_a = topo.add_face(Face::new(wire_a, vec![], plane.clone()));
+
+        let vs = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(pi),
+            1e-7,
+        ));
+        let v1 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(pi / 2.0),
+            1e-7,
+        ));
+        let v2 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            circle.evaluate(3.0 * pi / 2.0),
+            1e-7,
+        ));
+        let mut oes = Vec::new();
+        for (a, b) in [(vs, v2), (v2, v1), (v1, vs)] {
+            let e = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle.clone())));
+            oes.push(OrientedEdge::new(e, true));
+        }
+        let wire_b = topo.add_wire(Wire::new(oes, true).unwrap());
+        let face_b = topo.add_face(Face::new(wire_b, vec![], plane));
+
+        let mut face_ids = vec![face_a, face_b];
+        split_arc_edges_at_collinear_vertices(&mut topo, &mut face_ids).unwrap();
+        merge_duplicate_edges(&mut topo, &mut face_ids).unwrap();
+
+        let mut ka = face_edge_keys(&topo, face_ids[0]).unwrap();
+        let mut kb = face_edge_keys(&topo, face_ids[1]).unwrap();
+        assert_eq!(ka.len(), 3, "offset-seam circle must split into 3 arcs");
+        ka.sort_unstable();
+        kb.sort_unstable();
+        assert_eq!(ka, kb, "seam-anchored partitions must pair edge-for-edge");
+    }
+
+    #[test]
+    fn closed_ellipse_splits_at_matching_mate_vertices() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::wire::Wire;
+
+        let mut topo = Topology::new();
+        let ellipse = Ellipse3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            1.5,
+        )
+        .unwrap();
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let seam = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            ellipse.evaluate(0.0),
+            1e-7,
+        ));
+        let full = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Ellipse(ellipse.clone())));
+        let wire_a = topo.add_wire(Wire::new(vec![OrientedEdge::new(full, true)], true).unwrap());
+        let face_a = topo.add_face(Face::new(wire_a, vec![], plane.clone()));
+
+        let thirds = std::f64::consts::TAU / 3.0;
+        let v0 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            ellipse.evaluate(0.0),
+            1e-7,
+        ));
+        let v1 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            ellipse.evaluate(thirds),
+            1e-7,
+        ));
+        let v2 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            ellipse.evaluate(2.0 * thirds),
+            1e-7,
+        ));
+        let mut oes = Vec::new();
+        for (a, b) in [(v0, v1), (v1, v2), (v2, v0)] {
+            let e = topo.add_edge(Edge::new(a, b, EdgeCurve::Ellipse(ellipse.clone())));
+            oes.push(OrientedEdge::new(e, true));
+        }
+        let wire_b = topo.add_wire(Wire::new(oes, true).unwrap());
+        let face_b = topo.add_face(Face::new(wire_b, vec![], plane));
+
+        let mut face_ids = vec![face_a, face_b];
+        split_arc_edges_at_collinear_vertices(&mut topo, &mut face_ids).unwrap();
+        merge_duplicate_edges(&mut topo, &mut face_ids).unwrap();
+
+        let mut ka = face_edge_keys(&topo, face_ids[0]).unwrap();
+        let mut kb = face_edge_keys(&topo, face_ids[1]).unwrap();
+        assert_eq!(ka.len(), 3, "full ellipse must split into 3 arcs");
+        ka.sort_unstable();
+        kb.sort_unstable();
+        assert_eq!(ka, kb, "ellipse partitions must pair edge-for-edge");
     }
 
     #[test]
