@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.19](https://github.com/andymai/brepkit/compare/v2.127.18...v2.127.19) (2026-07-22)
+
+
+### Bug Fixes
+
+* **algo:** refine closed circle rims at mate-partition vertices in assembly ([#1166](https://github.com/andymai/brepkit/issues/1166)) ([d222c85](https://github.com/andymai/brepkit/commit/d222c85cf90632c20122910cdb3daf5e08f85980))
+
 ## [2.127.18](https://github.com/andymai/brepkit/compare/v2.127.17...v2.127.18) (2026-07-22)
 
 
