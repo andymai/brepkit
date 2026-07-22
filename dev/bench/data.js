@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784699089971,
+  "lastUpdate": 1784700412506,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9503,6 +9503,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21387507,
             "range": "± 263533",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c577faab5c02c5dacb4aab6257f426e5c9afee8b",
+          "message": "perf(operations): cluster-batch overlapping compound_cut tools (#1170)\n\n## Summary\n\nFollow-up to #1164. The batched `compound_cut` path required ALL tools\npairwise disjoint, so the magnet-and-screw lite pattern — 32 drills\nforming 16 disjoint **coaxial pairs** (wide shallow magnet bore + narrow\nthrough screw bore per position) — declined batching entirely and paid\n32 sequential full-pipeline cuts. That scenario currently misses its 30s\nbudget by ~6s (36.1s on 2.127.20).\n\nThis generalizes the gate to **AABB-overlap clusters** (union-find over\ntolerance-expanded boxes):\n- tools within a cluster get a real fuse (coaxial pair → stepped bore),\n- the cluster results are pairwise disjoint by construction and merge\nvia the free disjoint-shell shortcut,\n- one cut against the target.\n\nBatching still requires ≥2 disjoint clusters (a single all-overlapping\nblob keeps the sequential loop), and any failure along the batched path\nfalls back to sequential, as before.\n\n## Tests\n\n- `compound_cut_coaxial_pair_clusters_match_sequential` (new) — 4\ncoaxial magnet+screw pairs: batched volume matches sequential, all 8\nbore walls stay cylinders, manifold.\n- All 15 existing compound_cut tests pass (the disjoint-drill\ndifferential and overlapping-tool cases now route through the cluster\ngate).\n- ops 779 / algo 189 / gridfinity canary green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nGeneralizes `compound_cut` batching to support overlapping tools by\nclustering them via AABB overlap. This enables batching for magnet+screw\ndrill patterns (coaxial pairs), avoiding 32 sequential cuts.\n\n- **New Features**\n- Group tools into tolerance-expanded AABB clusters (union-find); fuse\nwithin each cluster, merge disjoint cluster results, then cut once.\n- Batching runs only with 2+ disjoint clusters; single-cluster inputs or\nany failure fall back to the sequential path.\n\n<sup>Written for commit 1cddb8dbcf45f2778cc0d4826743f03f4e391c0b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1170?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-21T23:04:28-07:00",
+          "tree_id": "e481c752f825dee1eabc767866b8b31f96861499",
+          "url": "https://github.com/andymai/brepkit/commit/c577faab5c02c5dacb4aab6257f426e5c9afee8b"
+        },
+        "date": 1784700411912,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 794140,
+            "range": "± 4775",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 880024,
+            "range": "± 795",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11958,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 647759,
+            "range": "± 3061",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21574111,
+            "range": "± 174854",
             "unit": "ns/iter"
           }
         ]
