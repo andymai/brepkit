@@ -1,0 +1,26 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_100d196bea722f::t_1941accb022fd9 28-30,5307
+  s_100d196bea722f::t_52b8da8ed3f4e5 5308-5324,5327,5330-5340,5348-5352
+crates/io/tests/data/lship_lip_innerfrustum.bin
+  s_100d196bea722f::t_79ed6687e0e1f8 1
+crates/io/tests/data/lship_lip_outerfrustum.bin
+  s_100d196bea722f::t_4a82b7b9870095 1
+crates/io/tests/lship_lipcut_inmem.rs
+  s_100d196bea722f::t_ac305253656021 1-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3706282ef0676d28d75a64239433ef5514290803",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
