@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.23](https://github.com/andymai/brepkit/compare/v2.127.22...v2.127.23) (2026-07-22)
+
+
+### Bug Fixes
+
+* **algo:** drop boundary-collinear line sections on plane faces ([#1174](https://github.com/andymai/brepkit/issues/1174)) ([f39e843](https://github.com/andymai/brepkit/commit/f39e8430f28b2659e4224619789277c85703e1d5))
+
 ## [2.127.22](https://github.com/andymai/brepkit/compare/v2.127.21...v2.127.22) (2026-07-22)
 
 
