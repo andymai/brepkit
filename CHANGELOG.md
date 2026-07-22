@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.28](https://github.com/andymai/brepkit/compare/v2.127.27...v2.127.28) (2026-07-22)
+
+
+### Bug Fixes
+
+* **algo:** excise out-and-back spurs and slit faces before assembly ([#1187](https://github.com/andymai/brepkit/issues/1187)) ([83ca006](https://github.com/andymai/brepkit/commit/83ca006154e0d0b9f7ae1bf108dc6a30aae0f33e))
+
 ## [2.127.27](https://github.com/andymai/brepkit/compare/v2.127.26...v2.127.27) (2026-07-22)
 
 
