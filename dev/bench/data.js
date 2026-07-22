@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784686461400,
+  "lastUpdate": 1784686824900,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9125,6 +9125,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28470884,
             "range": "± 49836",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "12ff3d11de0636eb5a190468c0d23563a1d54477",
+          "message": "chore(main): release 2.127.17 (#1163)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.17](https://github.com/andymai/brepkit/compare/v2.127.16...v2.127.17)\n(2026-07-22)\n\n\n### Bug Fixes\n\n* **operations:** imprint grazing edge contacts in the mesh boolean\nco-refinement ([#1162](https://github.com/andymai/brepkit/issues/1162))\n([8eafbe0](https://github.com/andymai/brepkit/commit/8eafbe0966ef3ff3526cf15f8cdf4f4f198ea825))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.17 of `brepkit-wasm` with a fix that correctly imprints\ngrazing edge contacts during mesh boolean co-refinement. This improves\nrobustness of boolean ops in near-tangent cases and reduces topology\nartifacts.\n\n- **Bug Fixes**\n- Imprint grazing edge contacts in co-refinement to avoid missed\nintersections and sliver gaps in mesh booleans.\n\n<sup>Written for commit 95dbdf61eba13efe6577f3c8630c1d3702627ba8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1163?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-22T02:18:06Z",
+          "tree_id": "98e6e7fcbe8e065f07a8494cbcffff1299cf124e",
+          "url": "https://github.com/andymai/brepkit/commit/12ff3d11de0636eb5a190468c0d23563a1d54477"
+        },
+        "date": 1784686823666,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 911443,
+            "range": "± 12270",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 985657,
+            "range": "± 1981",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12172,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 656010,
+            "range": "± 5067",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26820055,
+            "range": "± 46510",
             "unit": "ns/iter"
           }
         ]
