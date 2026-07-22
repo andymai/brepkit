@@ -214,10 +214,18 @@ fn intersect_triangles(
     b2: Point3,
     tolerance: f64,
 ) -> Vec<IsectSegment> {
-    // Classify vertices of B against the plane of A.
-    let db0 = orient3d(a0, a1, a2, b0);
-    let db1 = orient3d(a0, a1, a2, b1);
-    let db2 = orient3d(a0, a1, a2, b2);
+    // Classify vertices of B against the plane of A. orient3d scales with
+    // the host triangle's area, so normalize to a distance before comparing
+    // against the linear tolerance — otherwise a large host makes on-plane
+    // vertices read as genuinely off-plane (skipping the grazing imprint) and
+    // a tiny host makes off-plane vertices read as touching.
+    let na_pre = (a1 - a0).cross(a2 - a0);
+    let nb_pre = (b1 - b0).cross(b2 - b0);
+    let na_len = na_pre.length().max(1e-30);
+    let nb_len = nb_pre.length().max(1e-30);
+    let db0 = orient3d(a0, a1, a2, b0) / na_len;
+    let db1 = orient3d(a0, a1, a2, b1) / na_len;
+    let db2 = orient3d(a0, a1, a2, b2) / na_len;
 
     if all_same_sign(db0, db1, db2, tolerance) {
         // Grazing contact: B lies on one side but touches A's plane along an
@@ -229,10 +237,11 @@ fn intersect_triangles(
         return grazing_imprint([a0, a1, a2], [b0, b1, b2], [db0, db1, db2], true, tolerance);
     }
 
-    // Classify vertices of A against the plane of B.
-    let da0 = orient3d(b0, b1, b2, a0);
-    let da1 = orient3d(b0, b1, b2, a1);
-    let da2 = orient3d(b0, b1, b2, a2);
+    // Classify vertices of A against the plane of B (distance-normalized,
+    // as above).
+    let da0 = orient3d(b0, b1, b2, a0) / nb_len;
+    let da1 = orient3d(b0, b1, b2, a1) / nb_len;
+    let da2 = orient3d(b0, b1, b2, a2) / nb_len;
 
     if all_same_sign(da0, da1, da2, tolerance) {
         // Mirror grazing case: A touches B's plane along an edge.
@@ -306,10 +315,10 @@ fn intersect_triangles(
 
 /// Imprint a grazing contact: `touching`'s edge that lies in `host`'s plane
 /// (both endpoint orientations within tolerance) is clipped to `host`'s
-/// triangle and emitted as a constraint for the HOST mesh only. The touching
-/// mesh keeps its own edge; the host must split along it so the coincident
-/// -band classification boundary falls on triangle edges instead of cutting
-/// through triangle interiors.
+/// triangle and emitted as a MUTUAL constraint — the host splits its
+/// interior along it, and the touching mesh splits its own on-plane edge at
+/// the same canonical points, so the coincident-band classification boundary
+/// falls on welded triangle edges instead of cutting through interiors.
 fn grazing_imprint(
     host: [Point3; 3],
     touching: [Point3; 3],
@@ -317,15 +326,13 @@ fn grazing_imprint(
     host_is_a: bool,
     tolerance: f64,
 ) -> Vec<IsectSegment> {
-    // The orient3d values scale with the host triangle's area; normalize to a
-    // distance-like quantity so the on-plane test matches `tolerance`.
+    // `touching_orients` arrive distance-normalized from the caller.
     let n = (host[1] - host[0]).cross(host[2] - host[0]);
-    let n_len = n.length();
-    if n_len < 1e-30 {
+    if n.length() < 1e-30 {
         return Vec::new();
     }
     let on_plane: Vec<usize> = (0..3)
-        .filter(|&i| (touching_orients[i] / n_len).abs() <= tolerance)
+        .filter(|&i| touching_orients[i].abs() <= tolerance)
         .collect();
     if on_plane.len() != 2 {
         return Vec::new();
@@ -1953,8 +1960,8 @@ mod tests {
 
     /// A grazing contact (one triangle's edge lying in the other's plane,
     /// both triangles otherwise on one side) must imprint that edge into
-    /// BOTH meshes: without it the host's triangles straddle the coincident
-    /// -band classification boundary and the kept/dropped halves of a quad
+    /// BOTH meshes: without it the host's triangles straddle the coincident-band
+    /// classification boundary and the kept/dropped halves of a quad
     /// leave open edges (the stacking-lip bottom annulus grazing the body
     /// wall plane — the lite fallback's bd=103).
     #[test]
