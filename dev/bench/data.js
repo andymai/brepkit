@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784698661899,
+  "lastUpdate": 1784699089971,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9449,6 +9449,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21582499,
             "range": "± 505109",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bc58422095f761675e2193f490502413bcf675a0",
+          "message": "chore(main): release 2.127.20 (#1169)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.20](https://github.com/andymai/brepkit/compare/v2.127.19...v2.127.20)\n(2026-07-22)\n\n\n### Bug Fixes\n\n* **algo:** gate EF-IN pave blocks on surface deviation vs chord\n([#1168](https://github.com/andymai/brepkit/issues/1168))\n([0535912](https://github.com/andymai/brepkit/commit/0535912c844f3d11e2e6a6885eb0238d5c60f8d6))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.127.20 with a fix to the EF–IN paving\nalgorithm: blocks are now gated by surface deviation, not chord length.\nThis improves geometric accuracy and reduces invalid blocks on curved\nfaces.\n\n<sup>Written for commit 7b7fbe0f955c4db79dbcd85dbd97f97c2c608928.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1169?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-22T05:42:24Z",
+          "tree_id": "85c909e69dcb69d595baa47bfbb1e4e82c83ca1a",
+          "url": "https://github.com/andymai/brepkit/commit/bc58422095f761675e2193f490502413bcf675a0"
+        },
+        "date": 1784699088690,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 785122,
+            "range": "± 10113",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 877782,
+            "range": "± 28092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11837,
+            "range": "± 445",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 627809,
+            "range": "± 13670",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21387507,
+            "range": "± 263533",
             "unit": "ns/iter"
           }
         ]
