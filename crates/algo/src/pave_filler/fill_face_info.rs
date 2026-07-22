@@ -23,6 +23,18 @@ use crate::error::AlgoError;
 /// just outside an adjacent block; this widens each interval by that much.
 const LEAF_PARAM_REL_EPS: f64 = 1e-9;
 
+/// Weld-band multiple of the arena tolerance for the EF-IN on-surface test
+/// (marched/fitted geometry sits up to ~100x linear tolerance off exact).
+const ON_SURFACE_BAND_FACTOR: f64 = 100.0;
+
+/// Maximum surface deviation of an EF-IN leaf as a fraction of its chord —
+/// a dimensionless crossing-angle gate. A grazing (near-tangential) contact
+/// hugs the surface (socket-loft corner arcs on box walls: 2-18% measured);
+/// a transversal crossing's adjacent leaves swing away linearly (corner-pad
+/// cap rims on the walls: 24-58% measured). Scale-free by design: absolute
+/// bands cannot separate the two classes.
+const IN_FACE_MAX_DEVIATION_RATIO: f64 = 0.2;
+
 /// Populate [`FaceInfo`] for all faces with their classified pave blocks.
 ///
 /// - `pave_blocks_on`: split boundary edges of each face
@@ -35,7 +47,7 @@ const LEAF_PARAM_REL_EPS: f64 = 1e-9;
 pub fn perform(topo: &Topology, arena: &mut GfaArena) -> Result<(), AlgoError> {
     fill_boundary_on(topo, arena)?;
     fill_section_sc(arena);
-    fill_ef_in(arena);
+    fill_ef_in(topo, arena);
     Ok(())
 }
 
@@ -128,7 +140,24 @@ fn fill_section_sc(arena: &mut GfaArena) {
 /// Only the leaf pave blocks adjacent to the crossing parameter are
 /// inserted — the rest of the edge lies outside the face and would feed
 /// out-of-face fragments into the splitter as degenerate inner wires.
-fn fill_ef_in(arena: &mut GfaArena) {
+/// Distance from `p` to the face's underlying surface (infinite extent).
+fn dist_to_surface(
+    surface: &brepkit_topology::face::FaceSurface,
+    p: brepkit_math::vec::Point3,
+) -> f64 {
+    use brepkit_topology::face::FaceSurface;
+    match surface {
+        FaceSurface::Plane { normal, d } => {
+            (normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs()
+        }
+        other => other
+            .project_point(p)
+            .and_then(|(u, v)| other.evaluate(u, v))
+            .map_or(f64::INFINITY, |q| (q - p).length()),
+    }
+}
+
+fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
     // Snapshot EF data
     let ef_data: Vec<_> = arena
         .interference
@@ -178,8 +207,51 @@ fn fill_ef_in(arena: &mut GfaArena) {
                 }
                 None => leaves,
             };
+            // A leaf adjacent to a TRANSVERSAL crossing only touches the
+            // face at the crossing point — it does not "lie in" the face,
+            // and feeding it to the splitter plants off-surface section
+            // edges whose pcurves collapse onto the boundary (the corner-
+            // poking pad's cap-rim arcs on the wall planes). Keep a leaf
+            // only when it actually hugs the face's surface: both pave
+            // endpoints AND the curve midpoint within the weld band.
+            let on_band = ON_SURFACE_BAND_FACTOR * brepkit_math::tolerance::Tolerance::new().linear;
+            let surface = match topo.face(face_id) {
+                Ok(f) => f.surface().clone(),
+                Err(_) => continue,
+            };
+            let fi_selected: Vec<PaveBlockId> = selected
+                .into_iter()
+                .filter(|&leaf_id| {
+                    let Some(pb) = arena.pave_blocks.get(leaf_id) else {
+                        return false;
+                    };
+                    let Ok(edge) = topo.edge(pb.original_edge) else {
+                        return false;
+                    };
+                    let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                    else {
+                        return false;
+                    };
+                    let (osp, oep) = (sv.point(), ev.point());
+                    let (Ok(psv), Ok(pev)) =
+                        (topo.vertex(pb.start.vertex), topo.vertex(pb.end.vertex))
+                    else {
+                        return false;
+                    };
+                    let (t0, t1) = pb.parameter_range();
+                    let mid = edge
+                        .curve()
+                        .evaluate_with_endpoints(f64::midpoint(t0, t1), osp, oep);
+                    let ds = dist_to_surface(&surface, psv.point());
+                    let de = dist_to_surface(&surface, pev.point());
+                    let dm = dist_to_surface(&surface, mid);
+                    let chord = (pev.point() - psv.point()).length();
+                    let dev = ds.max(de).max(dm);
+                    dev <= on_band.max(IN_FACE_MAX_DEVIATION_RATIO * chord)
+                })
+                .collect();
             let fi = arena.face_info_mut(face_id);
-            for leaf_id in selected {
+            for leaf_id in fi_selected {
                 fi.pave_blocks_in.insert(leaf_id);
             }
         }
