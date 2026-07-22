@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784686824900,
+  "lastUpdate": 1784690523160,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9179,6 +9179,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26820055,
             "range": "± 46510",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7c7a49ffb781b3361b939a3f2f9681d04d1bf1b9",
+          "message": "perf(operations): batch pairwise-disjoint compound_cut tools into one cut (#1164)\n\n## Summary\n\n`compound_cut` runs the full boolean pipeline against the whole target\nonce per tool — O(target × tools). For **pairwise-disjoint** tools (the\ngridfinity magnet / screw drill patterns: 16–32 disjoint cylinders cut\nfrom one base plate) this is almost all redundant work: every cut\nre-paves and re-splits the same untouched base faces.\n\nThis PR adds a batched fast path: when every pair of tool AABBs\n(tolerance-expanded) is disjoint, merge the tools into one multi-piece\nsolid (the disjoint-shell merge shortcut makes that essentially free —\nsub-millisecond) and cut **once**. Set-theoretically identical: A ∖ (T₁\n∪ T₂ ∪ …) ≡ (A ∖ T₁) ∖ T₂ ∖ ….\n\nGuard rails:\n- Tools whose AABBs touch or overlap each other keep the sequential loop\n(the merge there is a real fuse, and sequential behaviour is preserved\nbit-for-bit).\n- Any failure in the merge or the batched cut falls back to the\nsequential loop (`log::debug` breadcrumb).\n- The trailing `unify_faces` pass is unchanged and runs on either path's\nresult.\n\n## Measured\n\nCaptured 16-drill lite magnet pad (native, release):\n\n| path | time | volume | free edges |\n|---|---|---|---|\n| sequential (before) | 8.41s | 11214.8185 | 0 |\n| batched (after) | **0.71s** | 11214.8185 (exact match) | 0 |\n\nDrilled bores stay analytic (cylinder walls preserved); trailing unify\nproduces the same F=380 face census.\n\n## Tests\n\n- `compound_cut_disjoint_drills_matches_sequential` — differential:\nbatched volume must equal the sequential loop's, bores stay cylinders.\n- `compound_cut_overlapping_tools_stays_sequential_correct` —\noverlapping tools: exact union-cut volume (400 − 28·4).\n- Existing `compound_cut_matches_sequential_4x4_grid` /\n`compound_cut_shelled_target_many_tools` now exercise the batched path\nand still pass.\n- Full workspace tests + gridfinity canary green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBatch pairwise-disjoint tools in `compound_cut` into a single cut to\navoid repeated boolean passes. Results match the sequential path;\n16-drill case drops from 8.41s to 0.71s.\n\n- **Performance**\n- Merge tools with disjoint AABBs, then cut once (A \\ (T1 ∪ T2 …)\nequivalence).\n- Eliminates O(target × tools) work; disjoint-shell merge is near-free.\n  - Verified identical volume and preserved analytic cylinder walls.\n\n- **Safety**\n- Tolerance-expanded AABB check; touching/overlapping tools stay\nsequential (bit-for-bit).\n- Any merge/cut failure falls back to sequential; `unify_faces`\nunchanged.\n- Tests include disjoint-drill and overlap cases; differential compares\nraw cut paths with `unify_faces` off.\n\n<sup>Written for commit 77753776ddc50904a6a26fd97310711e0ae5f04d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1164?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T03:19:44Z",
+          "tree_id": "2d881c9ba7089ea3f5aa187c2e87fd64fa33707e",
+          "url": "https://github.com/andymai/brepkit/commit/7c7a49ffb781b3361b939a3f2f9681d04d1bf1b9"
+        },
+        "date": 1784690521855,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 895107,
+            "range": "± 2931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 986702,
+            "range": "± 4656",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11945,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 643537,
+            "range": "± 781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26874421,
+            "range": "± 60721",
             "unit": "ns/iter"
           }
         ]
