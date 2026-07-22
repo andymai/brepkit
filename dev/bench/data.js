@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784721502828,
+  "lastUpdate": 1784721935919,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9989,6 +9989,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22808534,
             "range": "± 24377",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "05938bdfdbd880ea0bde3fc6488976bceb12029d",
+          "message": "chore(main): release 2.127.25 (#1179)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.25](https://github.com/andymai/brepkit/compare/v2.127.24...v2.127.25)\n(2026-07-22)\n\n\n### Bug Fixes\n\n* **algo:** SD midpoint discriminator + sector rescue for under-split\nperiodic strips\n([#1178](https://github.com/andymai/brepkit/issues/1178))\n([2c18ac7](https://github.com/andymai/brepkit/commit/2c18ac79e7c93f8e11bcaa0a31c61b29b375575d))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` v2.127.25. Fixes SD midpoint discrimination and\nsector rescue so under-split periodic strips are handled correctly.\n\n- **Bug Fixes**\n- Corrected SD midpoint discriminator and added sector rescue to prevent\nmissed splits on periodic strips.\n\n<sup>Written for commit c522e4eacfe3f151f95b487afbe085cae2df557f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1179?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-22T12:03:09Z",
+          "tree_id": "495e3e0b4dbf536059bbab9b975a3841e761bbc6",
+          "url": "https://github.com/andymai/brepkit/commit/05938bdfdbd880ea0bde3fc6488976bceb12029d"
+        },
+        "date": 1784721934588,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 805630,
+            "range": "± 1819",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 891613,
+            "range": "± 1599",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11937,
+            "range": "± 1195",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 653979,
+            "range": "± 4173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21837240,
+            "range": "± 57224",
             "unit": "ns/iter"
           }
         ]
