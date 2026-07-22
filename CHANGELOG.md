@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.21](https://github.com/andymai/brepkit/compare/v2.127.20...v2.127.21) (2026-07-22)
+
+
+### Performance
+
+* **operations:** cluster-batch overlapping compound_cut tools ([#1170](https://github.com/andymai/brepkit/issues/1170)) ([c577faa](https://github.com/andymai/brepkit/commit/c577faab5c02c5dacb4aab6257f426e5c9afee8b))
+
 ## [2.127.20](https://github.com/andymai/brepkit/compare/v2.127.19...v2.127.20) (2026-07-22)
 
 
