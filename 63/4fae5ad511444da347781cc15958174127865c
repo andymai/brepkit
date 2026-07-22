@@ -1,0 +1,22 @@
+crates/operations/src/mesh_boolean.rs
+  s_100d196bea722f::t_dd501fed68c1d2 353-358,364-365
+  s_100d196bea722f::t_029e0c33c18bd0 1953-1978
+  s_100d196bea722f::t_8b2e4a284b3dc7 223-229,238-245,307-352,359-363
+  s_100d196bea722f::t_42b55b52da36c2 366-374,1979-1984
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "634fae5ad511444da347781cc15958174127865c",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
