@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784743664066,
+  "lastUpdate": 1784744161689,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10259,6 +10259,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21255237,
             "range": "± 70224",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1de18cbaeac36edace7651c8d0b94179e223aaea",
+          "message": "chore(main): release 2.127.26 (#1184)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.26](https://github.com/andymai/brepkit/compare/v2.127.25...v2.127.26)\n(2026-07-22)\n\n\n### Bug Fixes\n\n* **geometry:** document the per-segment span invariant on arc\nconversion ([#1183](https://github.com/andymai/brepkit/issues/1183))\n([cd8b757](https://github.com/andymai/brepkit/commit/cd8b7576a2ad466693727abca7d9a6716e16e905))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.26 for `brepkit-wasm` with a documentation fix clarifying\nthe per-segment span invariant in arc conversion. Includes version bump\nand changelog update.\n\n<sup>Written for commit ec21a4c4e3308ef27b203fe2509b436f5a5b4bfa.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1184?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-22T18:13:36Z",
+          "tree_id": "64ba9aa14da8a823614242f88a34e9a5edbada94",
+          "url": "https://github.com/andymai/brepkit/commit/1de18cbaeac36edace7651c8d0b94179e223aaea"
+        },
+        "date": 1784744161066,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 856488,
+            "range": "± 7203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 926007,
+            "range": "± 4664",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13399,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 658122,
+            "range": "± 1592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22938566,
+            "range": "± 68042",
             "unit": "ns/iter"
           }
         ]
