@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.16](https://github.com/andymai/brepkit/compare/v2.127.15...v2.127.16) (2026-07-22)
+
+
+### Performance
+
+* **algo:** batch edge sampler for the same-domain polygon builders ([#1160](https://github.com/andymai/brepkit/issues/1160)) ([b517d4f](https://github.com/andymai/brepkit/commit/b517d4fca52269806eff552460c266f66130fa50))
+
 ## [2.127.15](https://github.com/andymai/brepkit/compare/v2.127.14...v2.127.15) (2026-07-21)
 
 
