@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784755087924,
+  "lastUpdate": 1784755795798,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10367,6 +10367,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17697487,
             "range": "± 16002",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ca7da0b929a54d43850cd6ff610c56b93b2dd1ca",
+          "message": "chore(main): release 2.127.27 (#1186)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.27](https://github.com/andymai/brepkit/compare/v2.127.26...v2.127.27)\n(2026-07-22)\n\n\n### Bug Fixes\n\n* **algo:** never attach a hole to its own reversed-twin outline\n([#1185](https://github.com/andymai/brepkit/issues/1185))\n([9bf9d1f](https://github.com/andymai/brepkit/commit/9bf9d1f30f3e4a71cc03c9331d9b5a79448ed8b2))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.27 of `brepkit-wasm` fixes a hole-to-outline attachment\nbug. This prevents invalid contours and improves geometric robustness.\n\n- **Bug Fixes**\n- Disallow attaching a hole to its own reversed-twin outline in the\noutline algorithm.\n\n<sup>Written for commit 22847e7c7641b84b77c2b03ea7b0ac221f180c3e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1186?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-22T21:25:47Z",
+          "tree_id": "2f741936038d4671b1dd1ac234988732867baa0f",
+          "url": "https://github.com/andymai/brepkit/commit/ca7da0b929a54d43850cd6ff610c56b93b2dd1ca"
+        },
+        "date": 1784755794785,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 803652,
+            "range": "± 2950",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 891267,
+            "range": "± 1827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12053,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 648529,
+            "range": "± 1636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21796051,
+            "range": "± 92493",
             "unit": "ns/iter"
           }
         ]
