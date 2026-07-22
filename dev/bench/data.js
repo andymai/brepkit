@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784736419213,
+  "lastUpdate": 1784739759337,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10097,6 +10097,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17769476,
             "range": "± 127178",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5fc5fab01c624e5be2d7980ed455b3b98a16123a",
+          "message": "chore(deps): resolve new RustSec advisories (#1181)\n\n## Summary\n\nMain's CI went red this morning on the Security Audit job — a new\nupstream advisory, unrelated to the code changes it landed on:\n\n- **RUSTSEC-2026-0192** (informational, `ttf-parser` unmaintained):\nenters solely through winit's Wayland client-side decorations\n(`sctk-adwaita` → `ab_glyph`) behind brepkit-render's `window` feature;\nno untrusted font parsing at runtime. Added to the cargo-audit ignore\nlist with rationale, same class as the existing quick-xml entries\n(cargo-deny does not flag it, so deny.toml is unchanged).\n- **RUSTSEC-2026-0204** (`crossbeam-epoch` invalid pointer deref in\n`fmt::Pointer`, dev-dependency path via criterion): resolved locally by\n`cargo update -p crossbeam-epoch` (0.9.18 → 0.9.20; Cargo.lock is not\ntracked, so CI resolves the patched version on its own).\n\n`cargo deny check advisories` and the ops suite green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUnblocks the Security Audit job by resolving two new RustSec advisories.\nUpdates `crossbeam-epoch` and ignores an informational `ttf-parser`\nadvisory limited to Wayland decorations.\n\n- **Dependencies**\n- Updated `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204).\nDev-only via `criterion`; `Cargo.lock` untracked so CI pulls the patched\nversion.\n- Added RUSTSEC-2026-0192 to the `cargo-audit` ignore list and sorted\nentries (`ttf-parser` unmaintained). Path: `sctk-adwaita` → `ab_glyph`\n(winit Wayland CSD) behind `brepkit-render` `window`; no untrusted font\nparsing at runtime.\n\n<sup>Written for commit 4d0727c5974a52d72d32837844d760ac835ca462.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1181?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T17:00:26Z",
+          "tree_id": "85a22ef975d3e8994bee021f2d43d72f8d6bd322",
+          "url": "https://github.com/andymai/brepkit/commit/5fc5fab01c624e5be2d7980ed455b3b98a16123a"
+        },
+        "date": 1784739758623,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 642997,
+            "range": "± 13691",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 718047,
+            "range": "± 2296",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10229,
+            "range": "± 138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 511271,
+            "range": "± 2264",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17898780,
+            "range": "± 152082",
             "unit": "ns/iter"
           }
         ]
