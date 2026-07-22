@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784755795798,
+  "lastUpdate": 1784761251569,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10421,6 +10421,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21796051,
             "range": "± 92493",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "83ca006154e0d0b9f7ae1bf108dc6a30aae0f33e",
+          "message": "fix(algo): excise out-and-back spurs and slit faces before assembly (#1187)\n\n## Summary\n\nThe final blocker of the L-shape custom-shape family (with #1180 + #1185\nmerged, the loft and frustum cut are already analytic; this is the\nbody+lip **fuse**).\n\nBK_DUMP_NM on the captured fuse: the 124-face analytic candidate carries\nexactly **one** non-manifold edge — the L's concave-corner arc at the\nbody/lip interface (z=13.3), used **four times by two faces**: a wall\nwire traversing it forward-then-backward (an out-and-back spur woven\nfrom a coincident-ring re-trace) and a two-edge slit face over the same\narc. Assembly rejects on that single edge and every L-variant bin falls\nto an open mesh fallback (the constant bd=32).\n\n## Fix\n\nNew prep pass after doubled-face removal: remove cyclically-adjacent\nsame-edge opposite-direction pairs from every face wire — a zero-width\nexcursion never bounds area — and drop faces whose outer wire collapses\nbelow 3 edges (they consisted only of the excursion). Plus env-gated\n`BK_DUMP_NM` diagnostics in `validate_boolean_result` (lists each\nover-shared edge and its user faces — this is how the root was found in\none run).\n\n## Measured (captured operands, native)\n\n| | before | after |\n|---|---|---|\n| 3×3-L body+lip fuse | open mesh fallback: F=901, 0 curved, 32 free |\n**analytic: F=123, 59 curved, free=0** |\n| time | 271ms | 93ms |\n\n## Tests\n\n- `l_lip_fuse_is_analytic_and_watertight` — committed captured-operand\nfixtures (75KB); closed + manifold + ≥40 curved + volume band. Fails on\nmain.\n- gridfinity canary / ops 780 / algo 191 / all io fixture tests / full\nworkspace sweep / clippy green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRemoves out-and-back spur edges and slit faces during solid prep to\neliminate a non‑manifold arc in the L‑shape body/lip fuse. The fuse is\nnow analytic, watertight, and faster, avoiding the open-mesh fallback.\n\n- Bug Fixes\n- Excise adjacent same-edge opposite-direction pairs in face wires; drop\ncollapsed slit faces (outer<3) and slit holes (inner<3).\n- Add env-gated `BK_DUMP_NM` diagnostics to list each over‑shared edge\nand its user faces during validation.\n- Add captured-operand regression for the 3×3 L fuse to assert\nclosed/manifold geometry, analytic surfaces, and volume band.\n- Result: 3×3 L body+lip fuse goes from an open 901-face mesh fallback\nto analytic (F=123, 59 curved); time 271ms → 93ms.\n\n<sup>Written for commit be04a86b35e2ed35dfd205f488480c6073c6d0bc.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1187?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T22:58:27Z",
+          "tree_id": "c8457e1f3763955a6bcde0c4b1d64f5e27915f84",
+          "url": "https://github.com/andymai/brepkit/commit/83ca006154e0d0b9f7ae1bf108dc6a30aae0f33e"
+        },
+        "date": 1784761250523,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 801072,
+            "range": "± 4923",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 889348,
+            "range": "± 1941",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11906,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 653985,
+            "range": "± 2208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21644039,
+            "range": "± 36138",
             "unit": "ns/iter"
           }
         ]
