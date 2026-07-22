@@ -153,6 +153,14 @@ pub fn build_solid_with_origins(
     // coincident faces with one identical boundary cancel.
     remove_doubled_faces(topo, &mut face_ids, &mut sources);
 
+    // Step 0b3: Excise out-and-back spurs — the same edge traversed forward
+    // then immediately backward is a zero-width excursion contributing two
+    // uses of one edge to a single face (a coincident-ring re-trace woven
+    // through a wall's wire at a concave corner). Removing the pair never
+    // changes the enclosed region. A face whose outer wire collapses below
+    // 3 edges was ONLY the excursion (a slit) and is dropped entirely.
+    excise_out_and_back_spurs(topo, &mut face_ids, &mut sources);
+
     if face_ids.is_empty() {
         return Err(AlgoError::AssemblyFailed(
             "all faces avoided (all have free edges)".into(),
@@ -843,6 +851,90 @@ fn has_repeated_oriented_edge(oes: &[OrientedEdge]) -> bool {
 /// closed wire every endpoint position has even degree >= 2, so an edge with
 /// a degree-1 endpoint is dangling debris (e.g. a stray section edge left in
 /// a face wire by coplanar splitting). Returns `true` if any edge was removed.
+/// Remove cyclically-adjacent (edge, +dir)/(edge, -dir) pairs from every
+/// face wire; drop faces whose outer wire collapses below 3 edges.
+fn excise_out_and_back_spurs(
+    topo: &mut Topology,
+    face_ids: &mut Vec<FaceId>,
+    sources: &mut Vec<Option<FaceId>>,
+) {
+    let excise = |oes: &mut Vec<OrientedEdge>| -> bool {
+        let mut changed = false;
+        loop {
+            let n = oes.len();
+            if n < 2 {
+                return changed;
+            }
+            let mut removed = false;
+            for i in 0..n {
+                let j = (i + 1) % n;
+                if i != j
+                    && oes[i].edge() == oes[j].edge()
+                    && oes[i].is_forward() != oes[j].is_forward()
+                {
+                    let (hi, lo) = if i > j { (i, j) } else { (j, i) };
+                    oes.remove(hi);
+                    oes.remove(lo);
+                    removed = true;
+                    changed = true;
+                    break;
+                }
+            }
+            if !removed {
+                return changed;
+            }
+        }
+    };
+
+    let mut drop: Vec<usize> = Vec::new();
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let Ok(face) = topo.face(fid) else { continue };
+        let outer_wid = face.outer_wire();
+        let inner_wids: Vec<WireId> = face.inner_wires().to_vec();
+
+        let mut outer = match topo.wire(outer_wid) {
+            Ok(w) => w.edges().to_vec(),
+            Err(_) => continue,
+        };
+        if excise(&mut outer) {
+            if outer.len() < 3 {
+                drop.push(fi);
+                continue;
+            }
+            let closed = oriented_edges_form_closed_loop(topo, &outer);
+            if let (Ok(new_wire), Ok(slot)) = (
+                brepkit_topology::wire::Wire::new(outer, closed),
+                topo.wire_mut(outer_wid),
+            ) {
+                *slot = new_wire;
+            }
+        }
+        for wid in inner_wids {
+            let mut inner = match topo.wire(wid) {
+                Ok(w) => w.edges().to_vec(),
+                Err(_) => continue,
+            };
+            if excise(&mut inner) && inner.len() >= 3 {
+                let closed = oriented_edges_form_closed_loop(topo, &inner);
+                if let (Ok(new_wire), Ok(slot)) = (
+                    brepkit_topology::wire::Wire::new(inner, closed),
+                    topo.wire_mut(wid),
+                ) {
+                    *slot = new_wire;
+                }
+            }
+        }
+    }
+    for &fi in drop.iter().rev() {
+        log::debug!(
+            "excise_out_and_back_spurs: dropping slit face {:?}",
+            face_ids[fi]
+        );
+        face_ids.remove(fi);
+        sources.remove(fi);
+    }
+}
+
 fn prune_dangling_edges(topo: &Topology, oes: &mut Vec<OrientedEdge>) -> bool {
     let mut changed = false;
     loop {
