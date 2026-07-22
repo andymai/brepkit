@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.20](https://github.com/andymai/brepkit/compare/v2.127.19...v2.127.20) (2026-07-22)
+
+
+### Bug Fixes
+
+* **algo:** gate EF-IN pave blocks on surface deviation vs chord ([#1168](https://github.com/andymai/brepkit/issues/1168)) ([0535912](https://github.com/andymai/brepkit/commit/0535912c844f3d11e2e6a6885eb0238d5c60f8d6))
+
 ## [2.127.19](https://github.com/andymai/brepkit/compare/v2.127.18...v2.127.19) (2026-07-22)
 
 
