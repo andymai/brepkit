@@ -4932,7 +4932,12 @@ fn split_face_2d_impl(
         && !v_periodic
         && !sections.is_empty()
         && matches!(&surface, FaceSurface::Cylinder(_))
-        && greedy_broken
+        // A single clean loop with interior sections present is an
+        // UNDER-split (the cuts didn't take — e.g. one wall-crossing ruling
+        // plus the glued seam should sector the strip): give the arrangement
+        // and DCEL a shot. Their adoption bars (strictly more loops, no new
+        // broken flags) keep correctly-split faces unchanged.
+        && (greedy_broken || loops.len() <= 1)
     {
         if let Some(result) = split_cylinder_band_by_arrangement(
             &surface,

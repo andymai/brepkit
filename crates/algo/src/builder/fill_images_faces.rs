@@ -2389,6 +2389,39 @@ fn clip_line_to_face_boundary(
         && face.inner_wires().is_empty()
         && matches!(face.surface(), FaceSurface::Plane { .. });
     if crossings.len() < 2 && !single_crossing_ok {
+        // A section whose BOTH endpoints already sit on the face boundary
+        // needs no trimming at all — the pave machinery split it there. The
+        // crossing scan can come up empty for such a section: a ruling that
+        // rides a periodic face's seam is parallel to every seam segment
+        // (skipped) and meets the rim circles end-on (no transversal
+        // crossing), yet it is exactly the cut the splitter needs (the
+        // mid-wall pad's second wall-crossing coincides with the seam).
+        let on_boundary = |p: Point3| -> bool {
+            for (seg_idx, (sp, ep)) in boundary_segments.iter().enumerate() {
+                if let Some((curve, ..)) = &boundary_arcs[seg_idx] {
+                    if let brepkit_topology::edge::EdgeCurve::Circle(c) = curve {
+                        let foot = brepkit_math::traits::ParametricCurve::evaluate(c, c.project(p));
+                        if (foot - p).length() <= tol * 100.0 {
+                            return true;
+                        }
+                    }
+                    continue;
+                }
+                let seg = *ep - *sp;
+                let len2 = seg.dot(seg);
+                if len2 < tol * tol {
+                    continue;
+                }
+                let t = ((p - *sp).dot(seg) / len2).clamp(0.0, 1.0);
+                if (*sp + seg * t - p).length() <= tol * 100.0 {
+                    return true;
+                }
+            }
+            false
+        };
+        if on_boundary(line_start) && on_boundary(line_end) {
+            return Some(vec![(line_start, line_end)]);
+        }
         return None;
     }
 
