@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.27](https://github.com/andymai/brepkit/compare/v2.127.26...v2.127.27) (2026-07-22)
+
+
+### Bug Fixes
+
+* **algo:** never attach a hole to its own reversed-twin outline ([#1185](https://github.com/andymai/brepkit/issues/1185)) ([9bf9d1f](https://github.com/andymai/brepkit/commit/9bf9d1f30f3e4a71cc03c9331d9b5a79448ed8b2))
+
 ## [2.127.26](https://github.com/andymai/brepkit/compare/v2.127.25...v2.127.26) (2026-07-22)
 
 
