@@ -135,28 +135,34 @@ fn fill_section_sc(arena: &mut GfaArena) {
     }
 }
 
+/// Distance from `p` to the face's underlying surface (infinite extent).
+///
+/// Returns `None` when the measurement is not trustworthy: NURBS
+/// projection can silently fall back to a domain-midpoint guess on
+/// convergence failure, which would read as a huge distance and falsely
+/// reject a leaf that genuinely hugs the surface.
+fn dist_to_surface(
+    surface: &brepkit_topology::face::FaceSurface,
+    p: brepkit_math::vec::Point3,
+) -> Option<f64> {
+    use brepkit_topology::face::FaceSurface;
+    match surface {
+        FaceSurface::Plane { normal, d } => {
+            Some((normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs())
+        }
+        FaceSurface::Nurbs(_) => None,
+        other => other
+            .project_point(p)
+            .and_then(|(u, v)| other.evaluate(u, v))
+            .map(|q| (q - p).length()),
+    }
+}
+
 /// Edges from EF interference go into the face's `pave_blocks_in`.
 ///
 /// Only the leaf pave blocks adjacent to the crossing parameter are
 /// inserted — the rest of the edge lies outside the face and would feed
 /// out-of-face fragments into the splitter as degenerate inner wires.
-/// Distance from `p` to the face's underlying surface (infinite extent).
-fn dist_to_surface(
-    surface: &brepkit_topology::face::FaceSurface,
-    p: brepkit_math::vec::Point3,
-) -> f64 {
-    use brepkit_topology::face::FaceSurface;
-    match surface {
-        FaceSurface::Plane { normal, d } => {
-            (normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs()
-        }
-        other => other
-            .project_point(p)
-            .and_then(|(u, v)| other.evaluate(u, v))
-            .map_or(f64::INFINITY, |q| (q - p).length()),
-    }
-}
-
 fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
     // Snapshot EF data
     let ef_data: Vec<_> = arena
@@ -212,8 +218,9 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
             // and feeding it to the splitter plants off-surface section
             // edges whose pcurves collapse onto the boundary (the corner-
             // poking pad's cap-rim arcs on the wall planes). Keep a leaf
-            // only when it actually hugs the face's surface: both pave
-            // endpoints AND the curve midpoint within the weld band.
+            // only when it actually hugs the face's surface: the pave
+            // endpoints and interior curve samples must all sit within
+            // max(weld band, deviation-ratio × chord).
             let on_band = ON_SURFACE_BAND_FACTOR * brepkit_math::tolerance::Tolerance::new().linear;
             let surface = match topo.face(face_id) {
                 Ok(f) => f.surface().clone(),
@@ -239,14 +246,26 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                         return false;
                     };
                     let (t0, t1) = pb.parameter_range();
-                    let mid = edge
-                        .curve()
-                        .evaluate_with_endpoints(f64::midpoint(t0, t1), osp, oep);
-                    let ds = dist_to_surface(&surface, psv.point());
-                    let de = dist_to_surface(&surface, pev.point());
-                    let dm = dist_to_surface(&surface, mid);
+                    let span = t1 - t0;
+                    let interior = [0.25_f64, 0.5, 0.75].map(|f| {
+                        edge.curve()
+                            .evaluate_with_endpoints(f.mul_add(span, t0), osp, oep)
+                    });
+                    let mut dev: f64 = 0.0;
+                    for p in std::iter::once(psv.point())
+                        .chain(std::iter::once(pev.point()))
+                        .chain(interior)
+                    {
+                        match dist_to_surface(&surface, p) {
+                            Some(d) => dev = dev.max(d),
+                            // Untrustworthy measurement (NURBS projection can
+                            // silently return a wrong foot): keep the leaf —
+                            // the pre-gate behavior — rather than risk a
+                            // false drop.
+                            None => return true,
+                        }
+                    }
                     let chord = (pev.point() - psv.point()).length();
-                    let dev = ds.max(de).max(dm);
                     dev <= on_band.max(IN_FACE_MAX_DEVIATION_RATIO * chord)
                 })
                 .collect();
