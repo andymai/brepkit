@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784680967448,
+  "lastUpdate": 1784681355198,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9017,6 +9017,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28700787,
             "range": "± 35704",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "98a533be3a19e7b134f5e3357606e8bd1a494d11",
+          "message": "chore(main): release 2.127.16 (#1161)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.16](https://github.com/andymai/brepkit/compare/v2.127.15...v2.127.16)\n(2026-07-22)\n\n\n### Performance\n\n* **algo:** batch edge sampler for the same-domain polygon builders\n([#1160](https://github.com/andymai/brepkit/issues/1160))\n([b517d4f](https://github.com/andymai/brepkit/commit/b517d4fca52269806eff552460c266f66130fa50))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.127.16 with a performance boost for polygon\nbuilding. Adds a batch edge sampler for same-domain polygon builders to\nreduce sampling overhead.\n\n- **Performance**\n- Batches edge sampling when polygons share the same domain to avoid\nduplicate work.\n  - No API changes. Behavior is the same, just faster.\n\n<sup>Written for commit d3c99b7fd8473b43daef08763496039941cdca2f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1161?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-22T00:46:58Z",
+          "tree_id": "ef7285106291b51c7fa5cb3a3e177649470a7695",
+          "url": "https://github.com/andymai/brepkit/commit/98a533be3a19e7b134f5e3357606e8bd1a494d11"
+        },
+        "date": 1784681354364,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 904890,
+            "range": "± 12217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 993116,
+            "range": "± 1259",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11958,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 643714,
+            "range": "± 20402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26956901,
+            "range": "± 31015",
             "unit": "ns/iter"
           }
         ]
