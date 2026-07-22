@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784681355198,
+  "lastUpdate": 1784686461400,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9071,6 +9071,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26956901,
             "range": "± 31015",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8eafbe0966ef3ff3526cf15f8cdf4f4f198ea825",
+          "message": "fix(operations): imprint grazing edge contacts in the mesh boolean co-refinement (#1162)\n\n## Root cause\n\nA triangle pair where one triangle merely **touches** the other's plane\nalong an edge (all vertices otherwise on one side) produced no\nintersection segments — `all_same_sign` discarded the contact entirely.\nBut that touching edge is a **region boundary** for the coincident-band\nclassification: without imprinting it, the host mesh's triangles\nstraddle the boundary, one half of a quad classifies `Inside` while its\ntwin classifies `Outside`, and the kept/dropped split leaves open edges.\n\nThe stacking-lip bottom annulus grazing the body wall plane exactly this\nway was the direct source of the mesh fallback's **open output on clean\nwatertight inputs** (bd=103) — the terminal sink behind the roadmap's\nopen-mesh-consumption row: any scenario whose chain still falls back\nover stacked/lipped geometry exported open.\n\nDiagnosis chain (all on the committed `midcell_lipfuse` fixtures, ~1 s\nrepro): classification exonerated (zero ambiguous windings, zero\ncos-fails) → drop decisions individually correct → kept/dropped autopsy\nshowed a kept `Outside` triangle (centroid z=11) and its dropped\n`Inside` quad twin (centroid z=14.5) sharing the un-split diagonal\nacross the z=13.3 lip-bottom boundary.\n\n## Fix\n\n`grazing_imprint`: when `all_same_sign` fires but two of the touching\ntriangle's vertices lie on the host's plane (orientation normalized by\nthe host normal's magnitude), clip that edge to the host triangle and\nemit it as a **mutual** constraint — the host splits its interior along\nit, and the touching mesh splits its own on-plane edge at the same\ncanonical points via the splitter's global on-edge map. (One-sided\nimprinting was tried first and measured **worse** — bd 103→124 — it just\nrelocates the T-junctions.)\n\n## Results (lipfuse fixture tessellations, both inputs bd=0 nm=0)\n\n| | before | after |\n|---|---|---|\n| fuse output | bd=103 nm=0 | **bd=2 nm=4** |\n\nThe residual pair sits on the imprint line at the divider-gap\nsubdivision and has a named follow-up; this PR is a strict ~50×\nreduction of the open-output class.\n\n## Verification\n\n- New unit test `grazing_edge_contact_emits_mutual_imprint` (host +\nedge-touching triangle → exactly one mutual segment spanning the\ntouching edge).\n- `brepkit-operations` full (0 failures, includes the 10 mesh_boolean\nunit tests and the #1061 conforming co-refinement fixtures),\n`brepkit-io` full, `brepkit-algo` 185/185, d4 canary 27/27, full\nworkspace via pre-push.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nImprints grazing edge contacts in mesh boolean co-refinement and hardens\nplane gating. Splits the touching edge in both meshes and removes most\nopen outputs (lipfuse: bd 103 → 2).\n\n- **Bug Fixes**\n- Detect grazing contacts with distance‑normalized plane tests (robust\nacross scale).\n- Clip the touching edge to the host triangle and emit a mutual\nconstraint segment (both meshes).\n  - Add unit test for the grazing case; full workspace tests pass.\n\n<sup>Written for commit 28e2b0d0c218828c2bf8fa1ca2c7b726cfc71894.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1162?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T02:11:52Z",
+          "tree_id": "a461cde1644cec0c4f55e031100742c2c4ed7f7c",
+          "url": "https://github.com/andymai/brepkit/commit/8eafbe0966ef3ff3526cf15f8cdf4f4f198ea825"
+        },
+        "date": 1784686460342,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 937577,
+            "range": "± 5771",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1033885,
+            "range": "± 1636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13131,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 647447,
+            "range": "± 2440",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28470884,
+            "range": "± 49836",
             "unit": "ns/iter"
           }
         ]
