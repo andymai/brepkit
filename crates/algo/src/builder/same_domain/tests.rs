@@ -1031,3 +1031,73 @@ fn coaxial_cylinder_opposite_sides_do_not_pair() {
         result.pairs.len()
     );
 }
+
+/// The two halves of a chord-split disc share BOTH vertices (chord + arc per
+/// half): with endpoint-only edge sets they hash identically and one half was
+/// silently marked a within-rank duplicate of the other (the mid-wall pad's
+/// outside cap half dropped from the fuse). The curve-midpoint discriminator
+/// must keep them distinct.
+#[test]
+fn chord_split_disc_halves_are_not_duplicates() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let circle =
+        Circle3D::new(Point3::new(10.0, 10.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let va = topo.add_vertex(Vertex::new(Point3::new(7.0, 10.0, 0.0), 1e-7));
+    let vb = topo.add_vertex(Vertex::new(Point3::new(13.0, 10.0, 0.0), 1e-7));
+
+    let half = |topo: &mut Topology, arc_fwd: bool| {
+        let chord = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+        let (s, e) = if arc_fwd { (vb, va) } else { (va, vb) };
+        let arc = topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle.clone())));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(chord, true), OrientedEdge::new(arc, true)],
+                true,
+            )
+            .unwrap(),
+        );
+        topo.add_face(Face::new(wire, vec![], plane.clone()))
+    };
+    let inside = half(&mut topo, true);
+    let outside = half(&mut topo, false);
+
+    let sub_faces = vec![
+        SubFace {
+            face_id: inside,
+            source_face: inside,
+            classification: FaceClass::Unknown,
+            rank: Rank::B,
+            interior_point: Some(Point3::new(10.0, 8.5, 0.0)),
+        },
+        SubFace {
+            face_id: outside,
+            source_face: outside,
+            classification: FaceClass::Unknown,
+            rank: Rank::B,
+            interior_point: Some(Point3::new(10.0, 11.5, 0.0)),
+        },
+    ];
+    let arena = GfaArena::new();
+    let ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &ranks, Tolerance::new());
+    assert!(
+        result.within_rank_dups.is_empty(),
+        "chord/arc co-endpoint halves must not conflate: {:?}",
+        result
+            .within_rank_dups
+            .iter()
+            .map(|d| (d.representative, d.duplicate))
+            .collect::<Vec<_>>()
+    );
+    assert!(result.pairs.is_empty());
+}

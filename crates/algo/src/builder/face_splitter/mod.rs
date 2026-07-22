@@ -3850,26 +3850,6 @@ fn split_face_2d_impl(
         return bands;
     }
 
-    // Sector shortcut: full-height ruling sections (u = const lines) split a
-    // u-periodic lateral into angular sectors, with the seam as one more cut
-    // (a wall plane crossing the cylinder; the ruling that coincides with
-    // the seam is supplied by the seam itself).
-    if u_periodic
-        && !is_plane
-        && original_inner_wires.is_empty()
-        && let Some(sectors) = split_periodic_face_into_sectors(
-            &surface,
-            &boundary_edges,
-            sections,
-            rank,
-            reversed,
-            face_id,
-            tol.linear,
-        )
-    {
-        return sectors;
-    }
-
     // Internal section edge shortcut: when section edges form closed loops
     // entirely within the face (not connecting to boundary edges), the wire
     // builder struggles with periodic UV and 4-way junctions. Instead, group
@@ -4949,6 +4929,30 @@ fn split_face_2d_impl(
     let greedy_broken = wire_loops_self_cross(&loops, tol.linear)
         || greedy_outer_loops_nested(&loops, cw_loops)
         || wire_loops_have_degenerate_area(&loops, tol.linear);
+    // Sector rescue for an UNDER-split u-periodic lateral: one full-height
+    // ruling plus the glued seam should sector the strip, but to the glued
+    // walker an annulus cut once is a single wrapped region (the mid-wall
+    // pad whose second wall crossing rides the seam). Fires only when the
+    // greedy produced no split at all, so configs the greedy handles (all
+    // rulings in-face) never take this path.
+    if u_periodic
+        && !v_periodic
+        && loops.len() <= 1
+        && !sections.is_empty()
+        && matches!(&surface, FaceSurface::Cylinder(_))
+        && original_inner_wires.is_empty()
+        && let Some(sectors) = split_periodic_face_into_sectors(
+            &surface,
+            &all_edges[..n_boundary_edges],
+            sections,
+            rank,
+            reversed,
+            face_id,
+            tol.linear,
+        )
+    {
+        return sectors;
+    }
     if u_periodic
         && !v_periodic
         && !sections.is_empty()
