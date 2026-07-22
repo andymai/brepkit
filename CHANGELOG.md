@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.18](https://github.com/andymai/brepkit/compare/v2.127.17...v2.127.18) (2026-07-22)
+
+
+### Performance
+
+* **operations:** batch pairwise-disjoint compound_cut tools into one cut ([#1164](https://github.com/andymai/brepkit/issues/1164)) ([7c7a49f](https://github.com/andymai/brepkit/commit/7c7a49ffb781b3361b939a3f2f9681d04d1bf1b9))
+
 ## [2.127.17](https://github.com/andymai/brepkit/compare/v2.127.16...v2.127.17) (2026-07-22)
 
 

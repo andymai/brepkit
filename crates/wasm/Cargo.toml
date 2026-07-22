@@ -7,7 +7,7 @@ license.workspace = true
 name = "brepkit-wasm"
 repository.workspace = true
 rust-version.workspace = true
-version = "2.127.17"
+version = "2.127.18"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
