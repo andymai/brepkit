@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784744161689,
+  "lastUpdate": 1784755087924,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10313,6 +10313,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22938566,
             "range": "± 68042",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9bf9d1f30f3e4a71cc03c9331d9b5a79448ed8b2",
+          "message": "fix(algo): never attach a hole to its own reversed-twin outline (#1185)\n\n## Summary\n\nThe final root of the **22-scenario custom-shape export family** (with\n#1180's loft fix already merged).\n\nOn the L-lip frustum cut, the coincident bottom cap splits into the\nsection loop's two orientations plus the outer boundary. The\nhole-matching pass probes each hole's **first vertex** against sub-face\noutlines — but a section loop's reversed twin has that vertex exactly ON\nits own outline, and float jitter in the strict ray-cast lands it\n\"inside\": the outline pairs with ITSELF as a zero-area bubble. The true\nenclosing region (the 62.75-outline ring cap) never receives its 61.55\nhole, both rims stay unpaired, assembly aborts on the open growth shell,\nand the cut falls to an **open** mesh fallback that poisons every\ndownstream boolean (bd 28–142 at export across all L/T/U/O lip bins).\n\nThe existing comment on this block already documents self-attachment as\nthe known failure mode (\"pairs the outline with itself as a zero-area\nannulus\") and notes three alternative matching criteria each regressed\nthe shelled-cup lip fuse — so the fix is surgical: **skip candidates\nwhose outer wire is geometry-equal to the hole** (sorted quantized 3D\nendpoint pairs), in both the probe loop and the unassigned fallback.\nSame-geometry self-attach becomes impossible; everything else is\nunchanged.\n\n## Measured (captured operands, native)\n\n| | before | after |\n|---|---|---|\n| L-lip frustum cut | open mesh fallback: F=765, 0 curved, 12 free edges\n| **analytic: F=74, 36 curved, free=0, over=0** |\n| time | 122ms (60ms GFA abort + fallback) | 65ms |\n\n## Tests\n\n- `l_lip_frustum_cut_is_analytic_and_watertight` — committed\ncaptured-operand fixtures (51KB total); closed + manifold + ≥30 curved +\nvolume band. Fails on main.\n- gridfinity canary (covers the d4 shelled-cup lip-fuse regression the\nblock's comment warns about) / ops 780 / algo 191 / io fixture tests /\nclippy green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix hole matching in the face splitter so a hole never attaches to its\nown reversed-twin outline. Hardens the first-vertex probe and restores\nlip frustum cuts to analytic, watertight results.\n\n- **Bug Fixes**\n- Skip sub-face candidates whose outer wire geometry equals the hole\n(quantized 3D endpoint pairs using `1/tol.linear`), in both the probe\nand the fallback.\n- Record the first non-twin candidate during the scan and reuse it for\nfallback (single pass, no key recomputation). Outcome: analytic cut\n(F=74, 36 curved), no free/over edges, 65ms vs 122ms.\n\n- **Tests**\n- Added captured-operand regression\n`l_lip_frustum_cut_is_analytic_and_watertight` with fixtures; asserts\nclosed manifold, ≥30 curved faces, and ring volume band.\n\n<sup>Written for commit cd17a045c26fa99794dfced43b19ecd92d036f12.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1185?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T21:16:07Z",
+          "tree_id": "a70df4f9be5131eebdd976e9731b913953ede8d3",
+          "url": "https://github.com/andymai/brepkit/commit/9bf9d1f30f3e4a71cc03c9331d9b5a79448ed8b2"
+        },
+        "date": 1784755086453,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 638515,
+            "range": "± 2935",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 715275,
+            "range": "± 1150",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10279,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 509993,
+            "range": "± 886",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17697487,
+            "range": "± 16002",
             "unit": "ns/iter"
           }
         ]
