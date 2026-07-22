@@ -6229,3 +6229,39 @@ fn fuse_multi_component_tool_folds_each_piece() {
     );
     assert_eq!(count_non_manifold_edges(&topo, result), 0);
 }
+
+#[test]
+fn fuse_corner_poking_cylinder_stays_analytic() {
+    // A cylinder overlapping a box corner: its cap rims cross both wall
+    // planes, and phase EF used to plant the crossing-adjacent rim arcs as
+    // "IN" pave blocks on the walls. Those off-surface sections (their
+    // pcurves collapse onto the wall boundary) broke one wall's greedy
+    // trace and the fuse fell back to the mesh path (all planes).
+    use crate::measure::solid_volume;
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let plate = crate::primitives::make_box(&mut topo, 10.0, 10.0, 5.0).unwrap();
+    let pad = crate::primitives::make_cylinder(&mut topo, 3.0, 5.0).unwrap();
+    transform_solid(&mut topo, pad, &Mat4::translation(9.0, 9.0, 0.0)).unwrap();
+    let fused = boolean(&mut topo, BooleanOp::Fuse, plate, pad).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
+    let curved = faces
+        .iter()
+        .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == "cylinder")
+        .count();
+    assert!(
+        curved >= 2,
+        "the pad wall must stay a cylinder, got {curved} curved of {} faces",
+        faces.len()
+    );
+    let vol = solid_volume(&topo, fused, 0.05).unwrap();
+    // 500 (box) + the cylinder volume outside the box; analytic reference.
+    assert!(
+        (vol - 571.58).abs() < 0.5,
+        "union volume out of band: got {vol}"
+    );
+    assert_eq!(count_non_manifold_edges(&topo, fused), 0);
+}
