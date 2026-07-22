@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784713143365,
+  "lastUpdate": 1784721502828,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9935,6 +9935,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15036992,
             "range": "± 101121",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2c18ac79e7c93f8e11bcaa0a31c61b29b375575d",
+          "message": "fix(algo): SD midpoint discriminator + sector rescue for under-split periodic strips (#1178)\n\n## Summary\n\nTwo stacked hardening fixes from the last-lightweight-failure frontier\ndig (the mid-wall poking-cylinder repro), plus their tests. No\nend-to-end scenario flips yet — the repro's remaining root (A-side\nboundary-crossing circle treated as an internal loop) is tracked\nseparately — but both fixes remove real, empirically confirmed defects\nand the repro now fails SAFE with more of its topology correct (F=9→10,\noutside cap halves restored).\n\n### 1. Same-domain edge sets: curve-midpoint discriminator\n\nThe SD edge-set hash keyed on quantized endpoint pairs only. The two\nhalves of a chord-split cap disc share BOTH vertices (chord + arc each),\nso they hashed identically and one half was silently marked a\nwithin-rank duplicate of the other — **the outside cap half-disc dropped\nfrom the fuse as \"SD residue\"** (empirically: `sd_within_rank_dups =\n[11,12,14]` on the repro, all legitimate distinct faces). Each edge's\nkey now includes its curve midpoint, quantized 100× coarser than the\nendpoints so marched/fitted geometry (~1e-6 off exact) cannot split a\ntrue duplicate pair across buckets.\n\n### 2. Sector rescue for under-split u-periodic laterals\n\nNew `split_periodic_face_into_sectors` (the dual of the band splitter):\nfull-height ruling sections + the seam partition a cylinder strip into\nangular sectors with per-sector interior points. **Fires only when the\ngreedy walker produced no split at all** (≤1 loop): an annulus cut once\nis a single wrapped region to the glued walker (the pad whose second\nwall crossing rides the seam), while configs with all rulings in-face\nsplit fine via the greedy and never take this path — that gate is\nload-bearing (an earlier ungated version regressed\n`fuse_corner_poking_cylinder_stays_analytic`; the gated version keeps it\ngreen).\n\n## Tests\n\n- `chord_split_disc_halves_are_not_duplicates` — co-endpoint chord/arc\nhalves must not conflate (the exact repro geometry).\n- `fuse_corner_poking_cylinder_stays_analytic` — guards the sector gate\n(fails on the ungated version).\n- algo 191 / ops 779 / gridfinity canary / full workspace / clippy\ngreen.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes same-domain duplicate detection and adds a gated sector splitter\nfor under‑split u‑periodic cylinder faces. Hardens midpoint hashing and\nsector edges to avoid duplicate drops and rim/vertical mismatches while\nkeeping corner-cylinder cases green.\n\n- **Bug Fixes**\n- Same-domain edge sets now include a weld-quantized curve midpoint\n(100× coarser than endpoints, evaluated in stored curve direction) to\ndistinguish co-endpoint chord/arc halves. Prevents dropping the outside\ncap half; adds a unit test.\n- Added `split_periodic_face_into_sectors`, gated to u-periodic cylinder\nlaterals when the greedy walker produced no split (≤1 loop) and\nfull-height rulings exist. Uses rulings + seam to partition into angular\nsectors, reuses ruling pave block IDs, computes circle-frame arc\ndirection to avoid complementary arcs, and keeps UV angles unwrapped to\nalign at TAU. Keeps `fuse_corner_poking_cylinder_stays_analytic` green.\n\n<sup>Written for commit f885e680c0c1b650efdb4b97f83523193d528ad9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1178?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T11:55:54Z",
+          "tree_id": "2ec20614c869c430c2515a5cc0795f5f1e9a71ab",
+          "url": "https://github.com/andymai/brepkit/commit/2c18ac79e7c93f8e11bcaa0a31c61b29b375575d"
+        },
+        "date": 1784721501397,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 829022,
+            "range": "± 1700",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 927092,
+            "range": "± 1415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13133,
+            "range": "± 302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 658555,
+            "range": "± 1163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22808534,
+            "range": "± 24377",
             "unit": "ns/iter"
           }
         ]
