@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784695556691,
+  "lastUpdate": 1784698661899,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -9395,6 +9395,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27453245,
             "range": "± 102831",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0535912c844f3d11e2e6a6885eb0238d5c60f8d6",
+          "message": "fix(algo): gate EF-IN pave blocks on surface deviation vs chord (#1168)\n\n## Summary\n\nSecond root from the `2×2 lite solid bin + magnet` dig (after #1166).\n`fill_ef_in` inserted the leaves adjacent to every edge-face crossing\ninto the face's `pave_blocks_in` unconditionally. For a **transversal**\ncrossing those leaves only touch the face at the crossing point — they\ndo not lie in it. The splitter then receives off-surface section edges\nwhose pcurves collapse onto the face boundary, and the greedy wire trace\nbreaks.\n\nMinimal repro (now a regression test): `box(10,10,5) ∪\ncylinder(r=3,h=5)` overlapping the corner. The cylinder's cap-rim\ncircles cross both wall planes; the crossing-adjacent rim arcs\n(including one entirely outside the box, through (12,9,0)) were planted\non the walls as sections. One wall failed to split, and the fuse\n**silently degraded to the mesh path (all planes)**.\n\n## Fix\n\nKeep an EF-IN leaf only when it hugs the face surface: max deviation of\nits pave endpoints and true curve midpoint ≤ max(weld band, **20% of\nchord**). The ratio gate is dimensionless — a crossing-angle test:\n\n| class | measured deviation/chord | verdict |\n|---|---|---|\n| grazing contacts the splitter needs (socket-loft corner arcs on box\nwalls) | 2–18% | kept |\n| transversal rim leaves (corner-pad case) | 24–58% | dropped |\n\nAn absolute band cannot separate these (the load-bearing grazing arcs\nsit 1.8e-2 off-plane; the bogus rim arcs 1.4–3.1): the first cut of this\nfix used a pure weld band and broke `fuse_shelled_box_with_socket_loft`,\nwhich is how both populations were measured.\n\n## Results\n\n- `fuse_corner_poking_cylinder_stays_analytic` (new): faces=12,\ncurved=2, analytic volume 571.58, manifold — previously all-planes mesh\nfallback.\n- `fuse_shelled_box_with_socket_loft` still analytic (the grazing class\nis preserved).\n- Same mechanism confirmed on the captured solid-bin magnet-pad fuse:\nwall faces now receive only the true FF section (remaining pad-fuse\nfallback is the separate splitter-frontier item).\n- ops 778 / algo 189 / gridfinity canary / full workspace green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nGate EF-IN pave blocks using a surface deviation-to-chord check to drop\nleaves from transversal crossings. Hardened the gate to avoid false\ndrops and keep unions analytic.\n\n- **Bug Fixes**\n- Gate now measures endpoints and interior curve samples (25%, 50%, 75%)\nand keeps the leaf only if all are within max(weld band ×100, 20% of\nchord); distance is exact for planes, projected for other surfaces, and\nNURBS reads are treated as untrustworthy so the leaf is kept to avoid\nfalse drops.\n- Adds regression test `fuse_corner_poking_cylinder_stays_analytic`;\n`fuse_shelled_box_with_socket_loft` stays analytic.\n\n<sup>Written for commit 994bfe7c72e296c1d861b4aa741aa926bfb40b2e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1168?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T05:35:19Z",
+          "tree_id": "bde5fac6e0f6b42014711c9f711f2d35c551cf7b",
+          "url": "https://github.com/andymai/brepkit/commit/0535912c844f3d11e2e6a6885eb0238d5c60f8d6"
+        },
+        "date": 1784698661324,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 799171,
+            "range": "± 15185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 879985,
+            "range": "± 2497",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12044,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650715,
+            "range": "± 5025",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21582499,
+            "range": "± 505109",
             "unit": "ns/iter"
           }
         ]
