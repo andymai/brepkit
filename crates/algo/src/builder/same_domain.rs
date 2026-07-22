@@ -571,17 +571,14 @@ fn planar_faces_overlap(
             // parameterization, and domain-based sampling would then trace
             // the complementary (long-way) arc, corrupting the polygon used
             // for the containment tests below.
-            for k in 0..samples_per_edge {
-                #[allow(clippy::cast_precision_loss)]
-                let frac = k as f64 / samples_per_edge as f64;
-                let frac = if oe.is_forward() { frac } else { 1.0 - frac };
-                pts.push(super::pcurve_compute::evaluate_edge_at_t(
-                    edge.curve(),
-                    sp,
-                    ep,
-                    frac,
-                ));
-            }
+            super::pcurve_compute::sample_edge_uniform(
+                edge.curve(),
+                sp,
+                ep,
+                samples_per_edge,
+                oe.is_forward(),
+                &mut pts,
+            );
         }
         pts
     };
@@ -791,17 +788,14 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
         let (sp, ep) = (sv.point(), ev.point());
         // Sample each edge so arc boundaries contribute their true swept area,
         // mirroring `planar_faces_overlap`'s shorter-arc sampling.
-        for k in 0..SD_EDGE_SAMPLES {
-            #[allow(clippy::cast_precision_loss)]
-            let frac = k as f64 / SD_EDGE_SAMPLES as f64;
-            let frac = if oe.is_forward() { frac } else { 1.0 - frac };
-            pts.push(super::pcurve_compute::evaluate_edge_at_t(
-                edge.curve(),
-                sp,
-                ep,
-                frac,
-            ));
-        }
+        super::pcurve_compute::sample_edge_uniform(
+            edge.curve(),
+            sp,
+            ep,
+            SD_EDGE_SAMPLES,
+            oe.is_forward(),
+            &mut pts,
+        );
     }
     if pts.len() < 3 {
         return None;
@@ -836,17 +830,14 @@ fn wire_points_3d(topo: &Topology, face_id: FaceId) -> Option<Vec<brepkit_math::
         let sv = topo.vertex(edge.start()).ok()?;
         let ev = topo.vertex(edge.end()).ok()?;
         let (sp, ep) = (sv.point(), ev.point());
-        for k in 0..SD_EDGE_SAMPLES {
-            #[allow(clippy::cast_precision_loss)]
-            let frac = k as f64 / SD_EDGE_SAMPLES as f64;
-            let frac = if oe.is_forward() { frac } else { 1.0 - frac };
-            pts.push(super::pcurve_compute::evaluate_edge_at_t(
-                edge.curve(),
-                sp,
-                ep,
-                frac,
-            ));
-        }
+        super::pcurve_compute::sample_edge_uniform(
+            edge.curve(),
+            sp,
+            ep,
+            SD_EDGE_SAMPLES,
+            oe.is_forward(),
+            &mut pts,
+        );
     }
     if pts.len() < 3 {
         return None;
@@ -1144,17 +1135,14 @@ fn face_outer_aabb(topo: &Topology, face_id: FaceId) -> Option<brepkit_math::aab
         // `planar_faces_overlap` / `planar_face_area` polygons exactly: the next
         // edge's `frac=0` already covers each shared vertex, so this drops the
         // redundant per-vertex duplicate without changing the AABB.
-        for k in 0..SD_EDGE_SAMPLES {
-            #[allow(clippy::cast_precision_loss)]
-            let frac = k as f64 / SD_EDGE_SAMPLES as f64;
-            let frac = if oe.is_forward() { frac } else { 1.0 - frac };
-            pts.push(super::pcurve_compute::evaluate_edge_at_t(
-                edge.curve(),
-                sp,
-                ep,
-                frac,
-            ));
-        }
+        super::pcurve_compute::sample_edge_uniform(
+            edge.curve(),
+            sp,
+            ep,
+            SD_EDGE_SAMPLES,
+            oe.is_forward(),
+            &mut pts,
+        );
     }
     brepkit_math::aabb::Aabb3::try_from_points(pts)
 }

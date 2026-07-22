@@ -238,6 +238,61 @@ pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, 
     }
 }
 
+/// Uniformly sample an edge curve at `n` points (`t = k/n`, `k` in `0..n`),
+/// honouring the wire traversal direction (`forward = false` samples
+/// `1 - k/n`).
+///
+/// Matches [`evaluate_edge_at_t`]'s conventions per curve arm but hoists the
+/// per-arm setup OUT of the sample loop: `evaluate_edge_at_t` re-derives
+/// `domain_with_endpoints` on every call, and for a trimmed NURBS sub-span
+/// that is two iterative point-to-curve projections per sample — the
+/// same-domain samplers over spline-carrying faces paid hundreds of
+/// milliseconds per boolean for it.
+pub(super) fn sample_edge_uniform(
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    n: usize,
+    forward: bool,
+    out: &mut Vec<Point3>,
+) {
+    #[allow(clippy::cast_precision_loss)]
+    let frac_at = |k: usize| -> f64 {
+        let f = k as f64 / n as f64;
+        if forward { f } else { 1.0 - f }
+    };
+    match curve {
+        EdgeCurve::Line => {
+            let d = end - start;
+            for k in 0..n {
+                let t = frac_at(k);
+                out.push(start + d * t);
+            }
+        }
+        EdgeCurve::Circle(c) if (start - end).length() > 1e-12 => {
+            let t0 = c.project(start);
+            let d = shorter_arc_delta(c.project(end) - t0);
+            for k in 0..n {
+                out.push(ParametricCurve::evaluate(c, frac_at(k).mul_add(d, t0)));
+            }
+        }
+        EdgeCurve::Ellipse(e) if (start - end).length() > 1e-12 => {
+            let t0 = e.project(start);
+            let d = shorter_arc_delta(e.project(end) - t0);
+            for k in 0..n {
+                out.push(ParametricCurve::evaluate(e, frac_at(k).mul_add(d, t0)));
+            }
+        }
+        _ => {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            let span = t1 - t0;
+            for k in 0..n {
+                out.push(curve.evaluate_with_endpoints(frac_at(k).mul_add(span, t0), start, end));
+            }
+        }
+    }
+}
+
 /// Wrap an angular difference into (-pi, pi] — the shorter way around.
 pub(super) fn shorter_arc_delta(d: f64) -> f64 {
     let w = d.rem_euclid(TAU);
@@ -588,5 +643,89 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(surface_periods(&torus), (Some(TAU), Some(TAU)));
+    }
+
+    /// The batch sampler must agree with per-sample `evaluate_edge_at_t` on
+    /// every curve arm and both traversal directions — it exists only to
+    /// hoist the per-arm setup, never to change the sampled points.
+    #[test]
+    fn sample_edge_uniform_matches_evaluate_edge_at_t() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use brepkit_math::nurbs::fitting::interpolate;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::EdgeCurve;
+
+        let circle = Circle3D::new_with_ref(
+            Point3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.5,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let ellipse = Ellipse3D::new(
+            Point3::new(-1.0, 0.5, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            3.0,
+            1.5,
+        )
+        .unwrap();
+        let nurbs = {
+            let pts: Vec<Point3> = (0..=6)
+                .map(|k| {
+                    let x = f64::from(k) * 0.5;
+                    Point3::new(x, x * x * 0.2, 0.1 * x)
+                })
+                .collect();
+            interpolate(&pts, 3).unwrap()
+        };
+        let nurbs_mid_a = ParametricCurve::evaluate(&nurbs, 0.2);
+        let nurbs_mid_b = ParametricCurve::evaluate(&nurbs, 0.75);
+
+        let cases: Vec<(EdgeCurve, Point3, Point3)> = vec![
+            (
+                EdgeCurve::Line,
+                Point3::new(0.0, 1.0, 2.0),
+                Point3::new(3.0, -1.0, 0.5),
+            ),
+            (
+                EdgeCurve::Circle(circle.clone()),
+                circle.evaluate(0.3),
+                circle.evaluate(2.1),
+            ),
+            // Closed circle (start == end): domain-based arm.
+            (
+                EdgeCurve::Circle(circle.clone()),
+                circle.evaluate(0.3),
+                circle.evaluate(0.3),
+            ),
+            (
+                EdgeCurve::Ellipse(ellipse.clone()),
+                ellipse.evaluate(1.0),
+                ellipse.evaluate(2.4),
+            ),
+            // NURBS trimmed sub-span: the arm whose per-call domain
+            // re-derivation the sampler exists to hoist.
+            (EdgeCurve::NurbsCurve(nurbs), nurbs_mid_a, nurbs_mid_b),
+        ];
+
+        for (curve, start, end) in cases {
+            for forward in [true, false] {
+                let n = 7usize;
+                let mut batch = Vec::new();
+                sample_edge_uniform(&curve, start, end, n, forward, &mut batch);
+                assert_eq!(batch.len(), n);
+                for (k, got) in batch.iter().enumerate() {
+                    #[allow(clippy::cast_precision_loss)]
+                    let frac = k as f64 / n as f64;
+                    let frac = if forward { frac } else { 1.0 - frac };
+                    let want = evaluate_edge_at_t(&curve, start, end, frac);
+                    assert!(
+                        (*got - want).length() < 1e-12,
+                        "{} fwd={forward} k={k}: {got:?} vs {want:?}",
+                        curve.type_tag()
+                    );
+                }
+            }
+        }
     }
 }
