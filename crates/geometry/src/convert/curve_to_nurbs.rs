@@ -36,12 +36,45 @@ pub fn circle_to_nurbs(
         return Err(GeomError::DegenerateInput("arc span is zero".to_owned()));
     }
 
-    // Split the angular range into arcs of at most π/2.
-    let n_arcs = ((span.abs() / FRAC_PI_2).ceil() as usize).max(1);
+    // Split the angular range into arcs of at most π/2. The epsilon keeps a
+    // span that is an exact multiple of π/2 (a quarter/half/full circle) from
+    // straddling the ceil boundary on float jitter — two same-span arcs
+    // converting to different segment counts breaks ruled-surface pairing.
+    let n_arcs = (((span.abs() / FRAC_PI_2) - 1e-9).ceil() as usize).max(1);
     #[allow(clippy::cast_precision_loss)]
     let delta = span / n_arcs as f64;
 
     arc_segments_to_nurbs(n_arcs, t_start, delta, |t| {
+        let p = circle.evaluate(t);
+        let tangent = circle.tangent(t);
+        (p, tangent * circle.radius())
+    })
+}
+
+/// Convert a [`Circle3D`] arc to NURBS with a CALLER-CHOSEN segment count.
+///
+/// Ruled-surface construction pairs two arcs' control nets one-to-one; when
+/// float jitter makes two same-span arcs segment differently, the caller
+/// re-converts one with the other's count.
+///
+/// # Errors
+///
+/// Returns an error for a zero span or `segments == 0`.
+pub fn circle_to_nurbs_with_segments(
+    circle: &Circle3D,
+    t_start: f64,
+    t_end: f64,
+    segments: usize,
+) -> Result<NurbsCurve, GeomError> {
+    let span = t_end - t_start;
+    if span.abs() < 1e-15 || segments == 0 {
+        return Err(GeomError::DegenerateInput(
+            "arc span is zero or no segments".to_owned(),
+        ));
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let delta = span / segments as f64;
+    arc_segments_to_nurbs(segments, t_start, delta, |t| {
         let p = circle.evaluate(t);
         let tangent = circle.tangent(t);
         (p, tangent * circle.radius())

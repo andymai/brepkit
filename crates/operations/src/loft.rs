@@ -512,7 +512,15 @@ fn ruled_arc_surface(
     let (a0, a0e) = EdgeCurve::Circle(c0.clone()).domain_with_endpoints(p0s, p0e);
     let (a1, a1e) = EdgeCurve::Circle(c1.clone()).domain_with_endpoints(p1s, p1e);
     let nc0 = brepkit_geometry::convert::circle_to_nurbs(c0, a0, a0e).ok()?;
-    let nc1 = brepkit_geometry::convert::circle_to_nurbs(c1, a1, a1e).ok()?;
+    let mut nc1 = brepkit_geometry::convert::circle_to_nurbs(c1, a1, a1e).ok()?;
+    if nc0.control_points().len() != nc1.control_points().len() {
+        // Same-shape arcs can still segment differently when their spans sit
+        // on opposite sides of the π/2-multiple ceil boundary (float jitter);
+        // re-convert the second arc with the first one's segment count so the
+        // ruled pairing survives.
+        let segs = (nc0.control_points().len() - 1) / 2;
+        nc1 = brepkit_geometry::convert::circle_to_nurbs_with_segments(c1, a1, a1e, segs).ok()?;
+    }
     if nc0.degree() != nc1.degree() || nc0.control_points().len() != nc1.control_points().len() {
         return None;
     }
@@ -1164,3 +1172,110 @@ pub fn loft_smooth(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod l_loft_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceId, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    fn rounded_l_face(topo: &mut Topology, inset: f64, r: f64, z: f64) -> FaceId {
+        let i = inset;
+        let vs = [
+            (i, i, false),
+            (126.0 - i, i, false),
+            (126.0 - i, 42.0 - i, false),
+            (42.0 - i, 42.0 - i, true),
+            (42.0 - i, 126.0 - i, false),
+            (i, 126.0 - i, false),
+        ];
+        let n = vs.len();
+        let mut t_in = Vec::new();
+        let mut t_out = Vec::new();
+        let mut centers = Vec::new();
+        for k in 0..n {
+            let (px, py, _) = vs[(k + n - 1) % n];
+            let (vx, vy, concave) = vs[k];
+            let (nx, ny, _) = vs[(k + 1) % n];
+            let din = ((vx - px).signum(), (vy - py).signum());
+            let dout = ((nx - vx).signum(), (ny - vy).signum());
+            let ti = (vx - din.0 * r, vy - din.1 * r);
+            let to = (vx + dout.0 * r, vy + dout.1 * r);
+            let c = if concave {
+                (
+                    vx + dout.0.abs() * r + if din.0 == 0.0 { 0.0 } else { -din.0 * r },
+                    vy + if din.1 == 0.0 { 0.0 } else { -din.1 * r } + dout.1.abs() * r,
+                )
+            } else {
+                (ti.0 + (to.0 - vx), ti.1 + (to.1 - vy))
+            };
+            t_in.push(ti);
+            t_out.push(to);
+            centers.push(c);
+        }
+        let mut oes = Vec::new();
+        let vid_at = |topo: &mut Topology, p: (f64, f64)| {
+            topo.add_vertex(Vertex::new(Point3::new(p.0, p.1, z), 1e-7))
+        };
+        let mut prev_out = vid_at(topo, t_out[n - 1]);
+        for k in 0..n {
+            let in_vid = vid_at(topo, t_in[k]);
+            let line = topo.add_edge(Edge::new(prev_out, in_vid, EdgeCurve::Line));
+            oes.push(OrientedEdge::new(line, true));
+            let out_vid = vid_at(topo, t_out[k]);
+            let c = Circle3D::new(
+                Point3::new(centers[k].0, centers[k].1, z),
+                Vec3::new(0.0, 0.0, 1.0),
+                r,
+            )
+            .unwrap();
+            if vs[k].2 {
+                let arc = topo.add_edge(Edge::new(out_vid, in_vid, EdgeCurve::Circle(c)));
+                oes.push(OrientedEdge::new(arc, false));
+            } else {
+                let arc = topo.add_edge(Edge::new(in_vid, out_vid, EdgeCurve::Circle(c)));
+                oes.push(OrientedEdge::new(arc, true));
+            }
+            prev_out = out_vid;
+        }
+        let wire = topo.add_wire(Wire::new(oes, true).unwrap());
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    }
+
+    /// A multi-section rounded-L loft (the gridfinity custom-shape lip
+    /// frustum) must stay curve-preserving. The concave corner's arc centres
+    /// drift with the inset, so its bands are ruled NURBS — and the two
+    /// semicircle-span conversions used to segment differently on float
+    /// jitter at the pi/2-multiple ceil boundary, failing the pairing and
+    /// faceting the whole lip (the 22-scenario custom-shape export family).
+    #[test]
+    fn rounded_l_multi_section_loft_stays_analytic() {
+        let mut topo = Topology::new();
+        let f0 = rounded_l_face(&mut topo, 2.15, 3.75 - 2.15, 0.0);
+        let f1 = rounded_l_face(&mut topo, 1.6, 3.75 - 1.6, 0.7);
+        let f2 = rounded_l_face(&mut topo, 1.0, 3.75 - 1.0, 4.4);
+        let solid = loft(&mut topo, &[f0, f1, f2]).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let curved = faces
+            .iter()
+            .filter(|&&f| topo.face(f).unwrap().surface().type_tag() != "plane")
+            .count();
+        assert_eq!(
+            curved,
+            12,
+            "6 corners x 2 bands must stay curved, got {curved} of {}",
+            faces.len()
+        );
+    }
+}

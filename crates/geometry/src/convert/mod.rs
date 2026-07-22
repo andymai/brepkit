@@ -18,7 +18,9 @@ pub mod recognize_curve;
 pub mod recognize_surface;
 pub mod surface_to_nurbs;
 
-pub use curve_to_nurbs::{circle_to_nurbs, ellipse_to_nurbs, line_to_nurbs};
+pub use curve_to_nurbs::{
+    circle_to_nurbs, circle_to_nurbs_with_segments, ellipse_to_nurbs, line_to_nurbs,
+};
 pub use recognize_curve::{DetectedCurveKind, RecognizedCurve, detect_curve_kind, recognize_curve};
 pub use recognize_surface::{
     DetectedSurfaceKind, RecognizedSurface, detect_surface_kind, recognize_surface,
