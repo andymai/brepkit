@@ -847,12 +847,9 @@ fn has_repeated_oriented_edge(oes: &[OrientedEdge]) -> bool {
     false
 }
 
-/// Iteratively remove edges that cannot belong to any closed loop: in a
-/// closed wire every endpoint position has even degree >= 2, so an edge with
-/// a degree-1 endpoint is dangling debris (e.g. a stray section edge left in
-/// a face wire by coplanar splitting). Returns `true` if any edge was removed.
 /// Remove cyclically-adjacent (edge, +dir)/(edge, -dir) pairs from every
-/// face wire; drop faces whose outer wire collapses below 3 edges.
+/// face wire; drop faces whose outer wire collapses below 3 edges and inner
+/// wires that collapse entirely.
 fn excise_out_and_back_spurs(
     topo: &mut Topology,
     face_ids: &mut Vec<FaceId>,
@@ -909,12 +906,22 @@ fn excise_out_and_back_spurs(
                 *slot = new_wire;
             }
         }
+        let mut kept_inners: Vec<WireId> = Vec::with_capacity(inner_wids.len());
+        let mut inners_changed = false;
         for wid in inner_wids {
-            let mut inner = match topo.wire(wid) {
-                Ok(w) => w.edges().to_vec(),
-                Err(_) => continue,
+            let Ok(inner_wire) = topo.wire(wid) else {
+                kept_inners.push(wid);
+                continue;
             };
-            if excise(&mut inner) && inner.len() >= 3 {
+            let mut inner = inner_wire.edges().to_vec();
+            if excise(&mut inner) {
+                if inner.len() < 3 {
+                    // The hole WAS the excursion (a zero-width slit): dropping
+                    // it entirely is the only consistent outcome — writing the
+                    // shrunken (or original) wire back would leave the spur.
+                    inners_changed = true;
+                    continue;
+                }
                 let closed = oriented_edges_form_closed_loop(topo, &inner);
                 if let (Ok(new_wire), Ok(slot)) = (
                     brepkit_topology::wire::Wire::new(inner, closed),
@@ -923,6 +930,10 @@ fn excise_out_and_back_spurs(
                     *slot = new_wire;
                 }
             }
+            kept_inners.push(wid);
+        }
+        if inners_changed && let Ok(f) = topo.face_mut(fid) {
+            *f.inner_wires_mut() = kept_inners;
         }
     }
     for &fi in drop.iter().rev() {
@@ -935,6 +946,10 @@ fn excise_out_and_back_spurs(
     }
 }
 
+/// Iteratively remove edges that cannot belong to any closed loop: in a
+/// closed wire every endpoint position has even degree >= 2, so an edge with
+/// a degree-1 endpoint is dangling debris (e.g. a stray section edge left in
+/// a face wire by coplanar splitting). Returns `true` if any edge was removed.
 fn prune_dangling_edges(topo: &Topology, oes: &mut Vec<OrientedEdge>) -> bool {
     let mut changed = false;
     loop {
