@@ -511,14 +511,17 @@ fn ruled_arc_surface(
 ) -> Option<NurbsSurface> {
     let (a0, a0e) = EdgeCurve::Circle(c0.clone()).domain_with_endpoints(p0s, p0e);
     let (a1, a1e) = EdgeCurve::Circle(c1.clone()).domain_with_endpoints(p1s, p1e);
-    let nc0 = brepkit_geometry::convert::circle_to_nurbs(c0, a0, a0e).ok()?;
+    let mut nc0 = brepkit_geometry::convert::circle_to_nurbs(c0, a0, a0e).ok()?;
     let mut nc1 = brepkit_geometry::convert::circle_to_nurbs(c1, a1, a1e).ok()?;
     if nc0.control_points().len() != nc1.control_points().len() {
         // Same-shape arcs can still segment differently when their spans sit
         // on opposite sides of the π/2-multiple ceil boundary (float jitter);
-        // re-convert the second arc with the first one's segment count so the
-        // ruled pairing survives.
-        let segs = (nc0.control_points().len() - 1) / 2;
+        // re-convert BOTH arcs at the larger segment count so the ruled
+        // pairing survives. Splitting finer never violates the ≤ π/2
+        // per-segment invariant; the conversion itself rejects a count too
+        // small for either span.
+        let segs = ((nc0.control_points().len() - 1) / 2).max((nc1.control_points().len() - 1) / 2);
+        nc0 = brepkit_geometry::convert::circle_to_nurbs_with_segments(c0, a0, a0e, segs).ok()?;
         nc1 = brepkit_geometry::convert::circle_to_nurbs_with_segments(c1, a1, a1e, segs).ok()?;
     }
     if nc0.degree() != nc1.degree() || nc0.control_points().len() != nc1.control_points().len() {
@@ -1174,7 +1177,7 @@ pub fn loft_smooth(
 mod tests;
 
 #[cfg(test)]
-mod l_loft_tests {
+mod rounded_l_loft_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use brepkit_math::curves::Circle3D;
@@ -1260,7 +1263,7 @@ mod l_loft_tests {
     /// jitter at the pi/2-multiple ceil boundary, failing the pairing and
     /// faceting the whole lip (the 22-scenario custom-shape export family).
     #[test]
-    fn rounded_l_multi_section_loft_stays_analytic() {
+    fn rounded_l_multi_section_loft_stays_curve_preserving() {
         let mut topo = Topology::new();
         let f0 = rounded_l_face(&mut topo, 2.15, 3.75 - 2.15, 0.0);
         let f1 = rounded_l_face(&mut topo, 1.6, 3.75 - 1.6, 0.7);
