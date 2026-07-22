@@ -4693,7 +4693,10 @@ fn split_face_2d_impl(
     // (the pad bottom-cap chord riding the inset wall's bottom edge left the
     // wall unsplit at both true crossings).
     let all_edges: Vec<OrientedPCurveEdge> = if is_plane && !u_periodic && !v_periodic {
-        let boundary_poly = sample_wire_loop_uv(&all_edges[..n_boundary_edges]);
+        // Via-frame sampling: stored pcurves fold on reversed boundary arcs
+        // (two orientation conventions coexist), which would corrupt the
+        // polygon and mis-measure every distance below.
+        let boundary_poly = sample_wire_loop_uv_via_frame(&all_edges[..n_boundary_edges], frame);
         let eps = tol.linear * 10.0;
         let n_b = n_boundary_edges;
         all_edges
@@ -4705,15 +4708,19 @@ fn split_face_2d_impl(
                 }
                 // Only straight (Line-pcurve) sections can be fully
                 // boundary-collinear without interior evidence; arcs bulge
-                // and are kept. Probe endpoints + chord midpoint.
+                // and are kept. Probe nine points along the chord — a
+                // splitter across a concave region keeps interior evidence
+                // at some interior fraction.
                 if !matches!(e.pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
                     return true;
                 }
-                let mid = Point2::new(
-                    f64::midpoint(e.start_uv.x(), e.end_uv.x()),
-                    f64::midpoint(e.start_uv.y(), e.end_uv.y()),
-                );
-                ![e.start_uv, e.end_uv, mid].iter().all(|&p| {
+                let (s, t) = (e.start_uv, e.end_uv);
+                !(0..=8).all(|k| {
+                    let f = f64::from(k) / 8.0;
+                    let p = Point2::new(
+                        f.mul_add(t.x() - s.x(), s.x()),
+                        f.mul_add(t.y() - s.y(), s.y()),
+                    );
                     super::classify_2d::distance_to_polygon_boundary(p, &boundary_poly) <= eps
                 })
             })
