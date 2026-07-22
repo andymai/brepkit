@@ -1,0 +1,24 @@
+crates/operations/src/boolean/mod.rs
+  s_100d196bea722f::t_86d2329ac5d183 730
+  s_100d196bea722f::t_eaa24916be9bb7 731-733
+crates/algo/src/builder/face_splitter/mod.rs
+  s_100d196bea722f::t_3590760e3ab54d 4715
+  s_100d196bea722f::t_252c05dbd4b433 4706-4714,4716,4718
+  s_100d196bea722f::t_fe39e491b8bc1e 4689-4705,4717,4719-4725
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "e2bb647af0dc2c944424b1c3ad885f984643353a",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
