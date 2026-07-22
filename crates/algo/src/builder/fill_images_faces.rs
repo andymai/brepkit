@@ -2187,6 +2187,7 @@ fn arc_segment_crossings(
     curve: &EdgeCurve,
     edge_start: Point3,
     edge_end: Point3,
+    closed: bool,
     line_start: Point3,
     line_end: Point3,
     tol: f64,
@@ -2216,11 +2217,12 @@ fn arc_segment_crossings(
         d.min(std::f64::consts::TAU - d)
     };
     let span = ang_dist(a_start, a_end);
-    // A CLOSED rim edge covers the whole circle: every hit is on the arc.
-    // Without this, the major-arc complement filter below excludes a hit
-    // that lands exactly at the seam angle (dsa + dae = 0), losing one of a
-    // cap disc's two chord crossings and with it the cap's half-disc split.
-    if (edge_start - edge_end).length() < tol * 100.0 && span < 1e-6 {
+    // A CLOSED rim edge (vertex identity, per the caller) covers the whole
+    // circle: every hit is on the arc. Without this, the major-arc
+    // complement filter below excludes a hit that lands exactly at the seam
+    // angle (dsa + dae = 0), losing one of a cap disc's two chord crossings
+    // and with it the cap's half-disc split.
+    if closed {
         return hits;
     }
     // `a` is on the arc iff dist(start,a)+dist(a,end) ≈ the arc span that
@@ -2307,7 +2309,7 @@ fn clip_line_to_face_boundary(
         // chord crossing the existing cases rely on — it only reaches farther
         // out when the arc genuinely does. Arcs the line misses contribute
         // nothing (the lip-cut sections that graze a corner chord keep working).
-        if let Some((curve, asp, aep, _)) = &boundary_arcs[seg_idx] {
+        if let Some((curve, asp, aep, closed)) = &boundary_arcs[seg_idx] {
             // Intersect the arc with the EXTENDED line, not just the segment: a
             // section whose FF-clipped endpoint lies in the sliver between a
             // convex arc and its chord (the slot walls crossing a socket-edge
@@ -2318,7 +2320,8 @@ fn clip_line_to_face_boundary(
             // original segment, so extension can never grow the section.
             let ext_start = line_start - line_dir;
             let ext_end = line_end + line_dir;
-            let arc_hits = arc_segment_crossings(curve, *asp, *aep, ext_start, ext_end, tol);
+            let arc_hits =
+                arc_segment_crossings(curve, *asp, *aep, *closed, ext_start, ext_end, tol);
             for (p, _) in arc_hits {
                 let t = (p - line_start).dot(line_dir) / (line_len * line_len);
                 crossings_ext.push(t);
@@ -3189,6 +3192,7 @@ mod tests {
             &EdgeCurve::Circle(circle),
             seam,
             seam,
+            true,
             Point3::new(20.0, 10.0, 0.0),
             Point3::new(0.0, 10.0, 0.0),
             1e-7,
