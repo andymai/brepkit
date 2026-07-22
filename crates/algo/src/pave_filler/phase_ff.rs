@@ -2985,12 +2985,33 @@ fn plane_analytic_intersection(
                 });
             }
             analytic_intersection::ExactIntersectionCurve::Points(pts) => {
-                if pts.len() < 2 {
+                // A tangential contact can sample as one point repeated N
+                // times (adjacent half-socket corner cylinders touching the
+                // body wall): interpolation through duplicate points is
+                // singular and used to abort the whole boolean into the mesh
+                // fallback. Deduplicate first; fewer than 2 distinct points
+                // is a point contact, not a section curve — skip it (point
+                // interferences are EE/EF/VF territory).
+                let mut pts_dedup: Vec<Point3> = Vec::with_capacity(pts.len());
+                for &p in &pts {
+                    if pts_dedup.last().is_none_or(|&q| {
+                        (p - q).length() > brepkit_math::tolerance::Tolerance::new().linear
+                    }) {
+                        pts_dedup.push(p);
+                    }
+                }
+                // Fewer than 3 distinct survivors from a dense sample means
+                // the whole "curve" spans tolerance scale — a chord through
+                // 2 barely-distinct points would only mint micro edges.
+                if pts_dedup.len() < 3 {
                     continue;
                 }
+                let pts = pts_dedup;
                 // Fit a degree-3 NURBS curve through the sampled points
-                let nurbs = brepkit_math::nurbs::fitting::interpolate(&pts, 3)
-                    .map_err(|e| AlgoError::IntersectionFailed(format!("NURBS fit failed: {e}")))?;
+                let nurbs = brepkit_math::nurbs::fitting::interpolate(&pts, 3.min(pts.len() - 1))
+                    .map_err(|e| {
+                    AlgoError::IntersectionFailed(format!("NURBS fit failed: {e}"))
+                })?;
                 let t_range = nurbs.domain();
                 let bbox = Aabb3::try_from_points(pts.iter().copied()).ok_or_else(|| {
                     AlgoError::IntersectionFailed("empty points for NURBS fit".into())
