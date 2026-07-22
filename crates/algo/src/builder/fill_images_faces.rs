@@ -2187,6 +2187,7 @@ fn arc_segment_crossings(
     curve: &EdgeCurve,
     edge_start: Point3,
     edge_end: Point3,
+    closed: bool,
     line_start: Point3,
     line_end: Point3,
     tol: f64,
@@ -2216,6 +2217,14 @@ fn arc_segment_crossings(
         d.min(std::f64::consts::TAU - d)
     };
     let span = ang_dist(a_start, a_end);
+    // A CLOSED rim edge (vertex identity, per the caller) covers the whole
+    // circle: every hit is on the arc. Without this, the major-arc
+    // complement filter below excludes a hit that lands exactly at the seam
+    // angle (dsa + dae = 0), losing one of a cap disc's two chord crossings
+    // and with it the cap's half-disc split.
+    if closed {
+        return hits;
+    }
     // `a` is on the arc iff dist(start,a)+dist(a,end) ≈ the arc span that
     // contains the midpoint. Validate the midpoint satisfies this first so a
     // degenerate (near-full) circle doesn't admit everything.
@@ -2300,7 +2309,7 @@ fn clip_line_to_face_boundary(
         // chord crossing the existing cases rely on — it only reaches farther
         // out when the arc genuinely does. Arcs the line misses contribute
         // nothing (the lip-cut sections that graze a corner chord keep working).
-        if let Some((curve, asp, aep, _)) = &boundary_arcs[seg_idx] {
+        if let Some((curve, asp, aep, closed)) = &boundary_arcs[seg_idx] {
             // Intersect the arc with the EXTENDED line, not just the segment: a
             // section whose FF-clipped endpoint lies in the sliver between a
             // convex arc and its chord (the slot walls crossing a socket-edge
@@ -2311,7 +2320,8 @@ fn clip_line_to_face_boundary(
             // original segment, so extension can never grow the section.
             let ext_start = line_start - line_dir;
             let ext_end = line_end + line_dir;
-            let arc_hits = arc_segment_crossings(curve, *asp, *aep, ext_start, ext_end, tol);
+            let arc_hits =
+                arc_segment_crossings(curve, *asp, *aep, *closed, ext_start, ext_end, tol);
             for (p, _) in arc_hits {
                 let t = (p - line_start).dot(line_dir) / (line_len * line_len);
                 crossings_ext.push(t);
@@ -3159,5 +3169,40 @@ mod clip_tests {
             1e-7,
         );
         assert!(out.is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::Vec3;
+
+    #[test]
+    fn closed_rim_chord_crossing_keeps_seam_angle_hit() {
+        // A diameter chord of a closed cap rim crosses it twice; one of the
+        // crossings lands exactly at the rim's seam angle. The closed-rim
+        // path must keep BOTH (the major-arc complement filter used to drop
+        // the seam-angle hit, costing the cap its half-disc split).
+        let circle =
+            Circle3D::new(Point3::new(10.0, 10.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let seam = brepkit_math::traits::ParametricCurve::evaluate(&circle, 0.0);
+        let hits = arc_segment_crossings(
+            &EdgeCurve::Circle(circle),
+            seam,
+            seam,
+            true,
+            Point3::new(20.0, 10.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+            1e-7,
+        );
+        assert_eq!(hits.len(), 2, "both chord crossings must survive");
+        let xs: Vec<f64> = hits.iter().map(|(p, _)| p.x()).collect();
+        assert!(
+            xs.iter().any(|&x| (x - 13.0).abs() < 1e-6)
+                && xs.iter().any(|&x| (x - 7.0).abs() < 1e-6),
+            "expected crossings at x=7 and x=13, got {xs:?}"
+        );
     }
 }
