@@ -92,6 +92,84 @@ fn intersect_multi_piece_operand_keeps_disjoint_chunks() {
 }
 
 #[test]
+fn compound_cut_disjoint_drills_matches_sequential() {
+    // The magnet-drill pattern: many disjoint cylindrical tools cut from one
+    // base. The batched path (merge tools, cut once) must produce the same
+    // volume as the sequential loop and keep the drilled walls analytic.
+    use crate::measure::solid_volume;
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    let make = |topo: &mut Topology| -> (SolidId, Vec<SolidId>) {
+        let base = crate::primitives::make_box(topo, 20.0, 20.0, 5.0).unwrap();
+        let mut drills = Vec::new();
+        for (x, y) in [(4.0, 4.0), (16.0, 4.0), (4.0, 16.0), (16.0, 16.0)] {
+            let d = crate::primitives::make_cylinder(topo, 1.5, 3.0).unwrap();
+            transform_solid(topo, d, &Mat4::translation(x, y, -1.0)).unwrap();
+            drills.push(d);
+        }
+        (base, drills)
+    };
+
+    let mut topo_seq = Topology::new();
+    let (base, drills) = make(&mut topo_seq);
+    let mut seq = base;
+    for &d in &drills {
+        seq = boolean(&mut topo_seq, BooleanOp::Cut, seq, d).unwrap();
+    }
+    let vol_seq = solid_volume(&topo_seq, seq, 0.05).unwrap();
+
+    let mut topo = Topology::new();
+    let (base, drills) = make(&mut topo);
+    let result =
+        crate::boolean::compound_cut(&mut topo, base, &drills, BooleanOptions::default()).unwrap();
+
+    let vol = solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - vol_seq).abs() < 0.05,
+        "batched volume {vol} must match sequential {vol_seq}"
+    );
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let cylinders = faces
+        .iter()
+        .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == "cylinder")
+        .count();
+    assert!(
+        cylinders >= 4,
+        "each drilled bore must keep its cylinder wall, got {cylinders}"
+    );
+}
+
+#[test]
+fn compound_cut_overlapping_tools_stays_sequential_correct() {
+    // Two tools that overlap EACH OTHER must not take the batched shortcut's
+    // disjoint-merge assumption; whatever path runs, the result must equal
+    // the union-cut volume.
+    use crate::measure::solid_volume;
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let base = crate::primitives::make_box(&mut topo, 10.0, 10.0, 4.0).unwrap();
+    let t1 = crate::primitives::make_box(&mut topo, 4.0, 4.0, 6.0).unwrap();
+    transform_solid(&mut topo, t1, &Mat4::translation(2.0, 2.0, -1.0)).unwrap();
+    let t2 = crate::primitives::make_box(&mut topo, 4.0, 4.0, 6.0).unwrap();
+    transform_solid(&mut topo, t2, &Mat4::translation(4.0, 4.0, -1.0)).unwrap();
+
+    let result =
+        crate::boolean::compound_cut(&mut topo, base, &[t1, t2], BooleanOptions::default())
+            .unwrap();
+    let vol = solid_volume(&topo, result, 0.05).unwrap();
+    // Union of the two 4×4 pockets overlapping in a 2×2 square: 16+16-4 = 28
+    // removed from the 10×10×4 slab (pockets span full height inside).
+    let expected = 400.0 - 28.0 * 4.0;
+    assert!(
+        (vol - expected).abs() < 0.1,
+        "expected {expected}, got {vol}"
+    );
+}
+
+#[test]
 fn fuse_six_disjoint_boxes_2x3_grid() {
     // Mirrors brepjs's `rectangularPattern() > creates a 2x3 grid` test:
     // 6 boxes of 5×5×5 at (col*10, row*10, 0), fused pairwise via
