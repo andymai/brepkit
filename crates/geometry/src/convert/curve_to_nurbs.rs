@@ -36,12 +36,61 @@ pub fn circle_to_nurbs(
         return Err(GeomError::DegenerateInput("arc span is zero".to_owned()));
     }
 
-    // Split the angular range into arcs of at most π/2.
-    let n_arcs = ((span.abs() / FRAC_PI_2).ceil() as usize).max(1);
+    // Split the angular range into arcs of at most π/2. Snap the ratio to the
+    // nearest integer when it is within float jitter of one, so a span that is
+    // an exact multiple of π/2 (quarter/half/full circle) cannot straddle the
+    // ceil boundary — two same-span arcs converting to different segment
+    // counts breaks ruled-surface pairing. Spans genuinely above a multiple
+    // still round up, preserving the ≤ π/2 per-segment invariant.
+    let ratio = span.abs() / FRAC_PI_2;
+    let snapped = if (ratio - ratio.round()).abs() < 1e-9 {
+        ratio.round()
+    } else {
+        ratio
+    };
+    let n_arcs = (snapped.ceil() as usize).max(1);
     #[allow(clippy::cast_precision_loss)]
     let delta = span / n_arcs as f64;
 
     arc_segments_to_nurbs(n_arcs, t_start, delta, |t| {
+        let p = circle.evaluate(t);
+        let tangent = circle.tangent(t);
+        (p, tangent * circle.radius())
+    })
+}
+
+/// Convert a [`Circle3D`] arc to NURBS with a CALLER-CHOSEN segment count.
+///
+/// Ruled-surface construction pairs two arcs' control nets one-to-one; when
+/// float jitter makes two same-span arcs segment differently, the caller
+/// re-converts one with the other's count.
+///
+/// # Errors
+///
+/// Returns an error for a zero span or `segments == 0`.
+pub fn circle_to_nurbs_with_segments(
+    circle: &Circle3D,
+    t_start: f64,
+    t_end: f64,
+    segments: usize,
+) -> Result<NurbsCurve, GeomError> {
+    let span = t_end - t_start;
+    if span.abs() < 1e-15 || segments == 0 {
+        return Err(GeomError::DegenerateInput(
+            "arc span is zero or no segments".to_owned(),
+        ));
+    }
+    // The rational quadratic construction needs each segment ≤ π/2 (jitter
+    // margin for snapped exact multiples).
+    #[allow(clippy::cast_precision_loss)]
+    if span.abs() / segments as f64 > FRAC_PI_2 + 1e-6 {
+        return Err(GeomError::DegenerateInput(
+            "segment span exceeds pi/2".to_owned(),
+        ));
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let delta = span / segments as f64;
+    arc_segments_to_nurbs(segments, t_start, delta, |t| {
         let p = circle.evaluate(t);
         let tangent = circle.tangent(t);
         (p, tangent * circle.radius())
