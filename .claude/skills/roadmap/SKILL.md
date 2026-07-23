@@ -579,8 +579,25 @@ analogous z=16 top `Id(23)` is a correct ring (`inners=1`). This is the "ring lo
 its hole" / L-bubble class, occurring UPSTREAM rather than in this fuse; the 28
 triple-shared z=13.3 interface edges are both discs' images surviving together.
 Do NOT keep digging `perform_areas` / shell-orientation voting — that is the
-symptom. NEXT: capture one stage earlier in the tool chain to find which operation
-emits the split ring (needs tool + overlay).
+symptom.
+**PRODUCING OPERATION FOUND AND COMMITTED AS A READY-REPRO — no tool needed
+(2026-07-23, fixture `crates/io/tests/lipband_cut_inmem.rs`, 86ms).** The lip band
+is `cut(outer T-prism, inner T-frustum)`; both operands are well-formed solids
+(outer constant ±62.75; inner widening ±61.55 → ±62.75 so the laterals meet exactly
+at the top rim). Correct result: a band tapering to zero thickness at the top whose
+bottom is ONE ring face. Actual: the target's bottom passes through UNSPLIT (16
+edges, full ±62.75 outline) with the inner ±61.55 26-edge disc added alongside,
+both `inners=0`, same orientation. Volume 20108.8 vs the true 60735.9 − 54643.9 =
+6092.0. TWO HYPOTHESES RULED OUT by synthetic controls that are CORRECT today —
+do not re-derive them: (1) nested coplanar bottoms alone (box minus nested box
+sharing the bottom plane → one ring face, volume 3400.000 exact); (2) the
+zero-thickness pinch alone (cylinder r=10 minus cone r 9→10 same height → one ring
+face, volume 303.687 exact). Remaining differentiator: the non-convex T outline
+with arc corners, matching this family's earlier layer map (a concave corner
+appearing as chord segments on one operand against a true arc on the other).
+NEXT: dig the coplanar FF phase on the T bottoms — why the target's bottom is never
+split by the tool's nested boundary. Per doctrine, suspect classification before SD
+detection.
 TWO DURABLE BLIND SPOTS, both live on main and both worth their own work item:
 (1) `validate_solid` reports ZERO issues on this operand — edge-use counts, wire
 closure and Euler all pass, because two nested faces of the SAME orientation
