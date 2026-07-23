@@ -1,0 +1,22 @@
+crates/io/tests/lipband_cut_inmem.rs
+  s_0d544b8727eb96::t_16566a87eb4cd7 16,19-27
+  s_0d544b8727eb96::t_bbb1ece238498f 28
+.claude/skills/roadmap/SKILL.md
+  s_0d544b8727eb96::t_0f951ab55139d0 606-621
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "8795dc876f226dfd48e24a797e99ce7a3422cdd7",
+  "prompts": {},
+  "sessions": {
+    "s_0d544b8727eb96": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a83d6e58-79a3-46d1-ab8b-79dfbbccdffa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
