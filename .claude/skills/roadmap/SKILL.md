@@ -579,19 +579,46 @@ analogous z=16 top `Id(23)` is a correct ring (`inners=1`). This is the "ring lo
 its hole" / L-bubble class, occurring UPSTREAM rather than in this fuse; the 28
 triple-shared z=13.3 interface edges are both discs' images surviving together.
 Do NOT keep digging `perform_areas` / shell-orientation voting — that is the
-symptom. NEXT: capture one stage earlier in the tool chain to find which operation
-emits the split ring (needs tool + overlay).
+symptom.
+**PRODUCING OPERATION FOUND AND COMMITTED AS A READY-REPRO — no tool needed
+(2026-07-23, fixture `crates/io/tests/lipband_cut_inmem.rs`, 86ms).** The lip band
+is `cut(outer T-prism, inner T-frustum)`; both operands are well-formed solids
+(outer constant ±62.75; inner widening ±61.55 → ±62.75 so the laterals meet exactly
+at the top rim). Correct result: a band tapering to zero thickness at the top whose
+bottom is ONE ring face. Actual: the target's bottom passes through UNSPLIT (16
+edges, full ±62.75 outline) with the inner ±61.55 26-edge disc added alongside,
+both `inners=0`, same orientation. Volume 20108.8 vs the true 60735.9 − 54643.9 =
+6092.0. TWO HYPOTHESES RULED OUT by synthetic controls that are CORRECT today —
+do not re-derive them: (1) nested coplanar bottoms alone (box minus nested box
+sharing the bottom plane → one ring face, volume 3400.000 exact); (2) the
+zero-thickness pinch alone (cylinder r=10 minus cone r 9→10 same height → one ring
+face, volume 303.687 exact). Remaining differentiator: the non-convex T outline
+with arc corners, matching this family's earlier layer map (a concave corner
+appearing as chord segments on one operand against a true arc on the other).
+NEXT: dig the coplanar FF phase on the T bottoms — why the target's bottom is never
+split by the tool's nested boundary. Per doctrine, suspect classification before SD
+detection.
 TWO DURABLE BLIND SPOTS, both live on main and both worth their own work item:
 (1) `validate_solid` reports ZERO issues on this operand — edge-use counts, wire
 closure and Euler all pass, because two nested faces of the SAME orientation
 violate none of them. Any "validated OK" claim is blind to this class, exactly as
 the by-edge-id gate is blind to position-duplicate free edges.
-(2) The oracles DISAGREE by ~15x and only one is right: `classify_point` maps the
-true band, while `solid_volume` reports 65641 — the FULL PRISM (8666 x 7.57).
-A doubled boundary gives EVEN ray crossings, so parity accidentally lands on the
-correct answer while signed-volume integration double-counts. Fresh evidence for
-"volume is never ground truth"; a volume/classification disagreement is itself a
-cheap detector for this malformation.
+(2) The oracles DISAGREE and only one is right: `classify_point` maps the true
+band, while `solid_volume` over-counts badly. A doubled boundary gives EVEN ray
+crossings, so parity accidentally lands on the correct answer while signed-volume
+integration double-counts. Fresh evidence for "volume is never ground truth".
+(3) **The SHARPEST detector of this class — `solid_volume` is TRANSLATION-VARIANT
+on a malformed solid.** The two volume figures in this family are the SAME SHAPE:
+the `tship` frustum-cut band (F=98 curved=48, bbox z[-2.60,4.40]) measures
+20111.8, and `tship29/lipfuse-top.bin` (F=98 curved=48, bbox z[13.30,20.30] — the
+identical shape after the +15.90 z-translate this family is captured with)
+measures 65641.2. Same XY bbox ±62.75, same 7.0 height, 3.26x apart. For a
+well-formed closed boundary the z-dependent terms of the signed-volume integral
+cancel exactly, so volume MUST be translation-invariant; it is not here. This
+needs no second oracle — translate a solid, re-measure, and a changed volume
+proves an inconsistent boundary. Prefer it over the volume/classification
+disagreement. (Quote either number only WITH its z-range; they are not rival
+measurements of different objects.)
 
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
