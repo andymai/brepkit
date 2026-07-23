@@ -1,0 +1,26 @@
+crates/operations/src/boolean/assembly.rs
+  s_100d196bea722f::t_dbdc79802eb27a 656-664,667-669
+crates/io/tests/data/labeltab_attach_bin.bin
+  s_100d196bea722f::t_893e71f22bf0d0 1
+crates/io/tests/labeltab_attach_inmem.rs
+  s_100d196bea722f::t_a06dc43e946e11 1-69
+  s_100d196bea722f::t_3e236e2c691ab0 70-72
+crates/io/tests/data/labeltab_attach_tab.bin
+  s_100d196bea722f::t_893e71f22bf0d0 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "598d028dce8bd269a05253880c15434564a530cb",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
