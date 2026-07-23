@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784783008697,
+  "lastUpdate": 1784838964438,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10799,6 +10799,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22857200,
             "range": "± 55664",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c775c0e6bddf6a8d03127c6de0278dc0a117f4db",
+          "message": "fix(algo): assemble the label-tab attach fuse analytically (#1194)\n\n## What\n\nThe label-tab attach fuse never assembled analytically — it aborted with\n`open hole shell with 97 faces would be dropped` and fell back to a\ntessellated result. This was the remaining analytic root recorded when\nthe free-edge gate leak was fixed in #1192.\n\n## Root\n\nThe tab's square top corners overhang the cavity's rounded corners, and\nthe tab's back-plane chord **rides the cavity's collinear back line for\nmost of its span while jutting ~2.55mm into each corner crescent**.\n\nThe boundary re-trace test decides a section's fate by sampling interior\npoints. All of those samples land on the covered middle, so the whole\nsection read as a re-trace and was dropped — and the crescents were\nnever split off.\n\n## Fixes\n\n**`line_section_boundary_extensions`** (`fill_images_faces.rs`) recovers\nthe sub-intervals of a straight section not covered by any collinear\nboundary Line edge. Coverage is computed with exact interval arithmetic\nrather than sampling, because the uncovered fraction can be arbitrarily\nsmall. Extensions are re-queued through the interval loop; this\nterminates because an extension's own coverage set is empty.\n\n**`loops_have_out_and_back`** (`face_splitter/mod.rs`) adds a third\narrangement entry condition. Rather than predicting when the greedy\nangular walker will fail, it detects the walker's own signature of\nhaving already failed: an edge immediately followed by its exact UV\nreverse, which is what weaving the crescent's twin section edges into\none loop produces. A clean partition never emits that, so the trigger\ncannot demote a working case — and it is purely additive (the\narrangement returns `Option` and falls through to greedy).\n\nLoops of two edges are exempt. Consecutive loop edges always share a\nvertex, so at `n == 2` closure alone forces the reverse pattern and\n**every lens region** (an arc plus its co-endpoint chord) matches.\nWithout the exemption this fired on the honeycomb cap arrangement's\nlegitimate lens and cost `pcut3` its zero free-edge pin.\n\n## Verification\n\n- `labeltab_attach_inmem` strengthened from watertight-only to asserting\nthe analytic result: curved faces present, volume against the\ninclusion-exclusion truth `17421.32 + 3046.86 − 5.71 = 20462.5`.\nFixtures were already committed in #1192.\n- Full workspace suite green (`--no-fail-fast`). The one failing target,\n`brepkit-render --test compute_mesh_render`, segfaults identically on a\nclean stashed tree — a sandbox GPU/wgpu limitation, not a regression.\n- `cargo test -p brepkit-wasm --lib gridfinity` — 27/27, including the\nd4 full-bin canary.\n- Calibrated foils green, including the honeycomb `pcut1/2/3` residual\npins that caught the 2-edge lens false positive during bisection.\n- fmt, workspace clippy, and `scripts/check-boundaries.sh` clean.\n\n## Notes\n\nBisection showed the honeycomb regression came from the arrangement\ntrigger, not the extension salvage. Both changes are load-bearing:\ndisabling the trigger alone drops the fuse back to 0 curved faces (full\nmesh fallback).\n\nRoadmap skill updated with the label-sockets closure per its own\nmaintenance rule.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the label-tab attach fuse so it assembles analytically instead of\nfalling back to a mesh. The result is watertight with curved faces and\nthe correct fused volume.\n\n- **Bug Fixes**\n- `line_section_boundary_extensions` in `fill_images_faces.rs`: recovers\nstraight-section ends that extend past a collinear boundary edge using\nexact interval math, then queues those extensions for splitting.\n- `loops_have_out_and_back` in `face_splitter/mod.rs`: adds a safe\narrangement entry when a loop contains an edge immediately followed by\nits UV reverse (excludes 2-edge lenses), catching the crescent weave\ncase.\n- Strengthened `labeltab_attach_inmem` to assert an analytic result\n(curved faces present) and pin the fused volume to 20462.5 by\ninclusion–exclusion.\n\n<sup>Written for commit 77ee00b46ed7a4b2b001305179afcf591e9f65e9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1194?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-23T20:33:53Z",
+          "tree_id": "6f87c6697fd9cbc0d7447d518b37bedc552e25a0",
+          "url": "https://github.com/andymai/brepkit/commit/c775c0e6bddf6a8d03127c6de0278dc0a117f4db"
+        },
+        "date": 1784838962981,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 810752,
+            "range": "± 1097",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 901168,
+            "range": "± 5009",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11815,
+            "range": "± 112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 660034,
+            "range": "± 3441",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21878548,
+            "range": "± 25879",
             "unit": "ns/iter"
           }
         ]
