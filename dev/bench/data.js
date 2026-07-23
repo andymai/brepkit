@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784768688725,
+  "lastUpdate": 1784782514047,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10691,6 +10691,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21684188,
             "range": "± 26764",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "69fd392066f6d342ee4b5570ded2ac1ae9f4df0b",
+          "message": "fix(operations): hard-fail free boundary edges in the strict boolean gate (#1192)\n\n## Summary\n\n`validate_boolean_result` — the strict acceptance gate for GFA results\nthat still have the mesh fallback available — hard-failed on unclosed\nwires and non-manifold edges (`c > 2`) but never on **free boundary\nedges** (`c == 1`). A fuse that drops whole faces can leave every\nremaining wire closed (endpoints still chain) and balance the Euler gate\nby accident, so an open shell with 8 boundary edges was accepted and\nexported with holes instead of failing safe to the watertight mesh path.\n\n## Root cause chain (gridfinity label-socket family, bd=24/14)\n\nThe \"3×1 socket auto-quantizes to 3U\" scenario passed solo but failed\nafter any earlier scenario warmed the per-cell socket loft template\ncache:\n\n- Cold build: the tab-attach fuse aborts inside assembly (\"open hole\nshell with 97 faces would be dropped\") → mesh fallback → watertight.\n**Passes.**\n- Warm build: the cloned template shifts the bin body by float jitter;\nthe same fuse now *completes* GFA with 8 free edges, all wires closed,\nEuler balanced by accident → accepted → STL with 24 boundary edges.\n**Fails.**\n\nThe finished label tab and rib operands were byte-identical between the\ntwo runs; only the bin body differed. Free edges break watertight export\nexactly like over-shared edges do, and this gate has a fallback\navailable — so they must be equally fatal.\n\n## Changes\n\n- `validate_boolean_result`: count `c == 1` edge uses and hard-fail\nalongside unclosed wires / non-manifold edges. Seam edges on periodic\nfaces appear twice in the same wire (count 2) and are unaffected. The\nlenient terminal gate (mesh output, no fallback left) is unchanged.\n- Committed the captured warm-run operands as `labeltab_attach_inmem`\nregression: fuse must be closed, manifold, and at the correct fused\nvolume (the open-shell result measured +16.6 mm³ high with faces\nmissing).\n\n## Testing\n\n- New regression test passes (falls back to watertight mesh path).\n- `cargo test -p brepkit-operations --release`: 780 passed, 0 failed.\n- `cargo test -p brepkit-algo --release`: 191 passed, 0 failed.\n- `cargo test -p brepkit-io --release`: all fixture suites pass.\n- Gridfinity canary (`cargo test -p brepkit-wasm --lib gridfinity`): 27\npassed.\n\nZero existing tests relied on free-edged results being accepted. The GFA\nassembly root (why the tab-attach fuse drops the hole shell at all) is\ntracked separately as the analytic follow-up.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nStrict boolean validation now fails on free boundary edges to prevent\nopen shells from passing and exporting holes. GFA results with dropped\nfaces now fall back to the watertight mesh path instead of producing\ninvalid STL.\n\n- **Bug Fixes**\n- `validate_boolean_result` (strict gate) now counts edge uses and\nhard-fails on free edges (`c == 1`), alongside unclosed wires and\nnon‑manifold edges; seam edges on periodic faces remain counted as 2.\nThe lenient terminal gate is unchanged.\n- Added `labeltab_attach_inmem` regression using captured gridfinity\nbin/tab operands to assert the fuse is closed, manifold, and near the\ncorrect fused volume; fixtures included.\n\n<sup>Written for commit 598d028dce8bd269a05253880c15434564a530cb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1192?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T21:52:56-07:00",
+          "tree_id": "43b68a64bcb33ce242e371c9c2626217617eef49",
+          "url": "https://github.com/andymai/brepkit/commit/69fd392066f6d342ee4b5570ded2ac1ae9f4df0b"
+        },
+        "date": 1784782513030,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 853502,
+            "range": "± 11936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 929328,
+            "range": "± 2855",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13044,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 657606,
+            "range": "± 1451",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23073433,
+            "range": "± 296439",
             "unit": "ns/iter"
           }
         ]
