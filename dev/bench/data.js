@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784839924573,
+  "lastUpdate": 1784841937842,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10961,6 +10961,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21852463,
             "range": "± 289799",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "017643b86db72d5986012fedc0ec0a010b808f47",
+          "message": "test(io): add a ready repro for the lip band cut's doubled bottom (#1197)\n\n## What\n\nCommits a `#[ignore]`d ready-repro for the operation that **produces**\nthe malformed lip operand behind the custom-shape T body+lip fuse\nfailure. Follows #1196, which relocated that root from the assembler to\nthe input operand.\n\nNo engine change — this converts a cache-dependent, tool-blocked case\ninto a committed 0.10s repro.\n\n## The blocker is gone\n\n#1196's next step was \"capture one stage earlier in the tool chain\n(needs tool + overlay)\". It turned out the capture directory already\nheld the upstream operands next to the fuse operands from the same\nsession, so the producing operation replays natively:\n\n```\nOUTER: F=18 curved=8  free=0 over=0 vol=60735.88\nINNER: F=82 curved=40 free=0 over=0 vol=54643.88\nlip cut took 86ms\nLIP:   F=98 curved=48 free=0 over=0 vol=20108.78\n```\n\n`F=98 curved=48` is the same shape as `lipfuse-top.bin`, confirming this\nis the producing op.\n\n## The defect\n\nThe lip band is `cut(outer T-prism, inner T-frustum)`. Both operands are\nwell-formed — outer `free=0 over=0`; inner verified a genuine solid by\nclassification scan, not assumed. The outer is a constant ±62.75 prism;\nthe inner widens ±61.55 → ±62.75 so the laterals meet exactly at the top\nrim.\n\nCorrect result: a band tapering to zero thickness at the top, bottom a\n**single ring face**. Actual bottom:\n\n```\n[(Id(101), 16, 0), (Id(183), 26, 0)]     (face, outer_edges, inner_wires)\n```\n\nThe target's bottom passes through **unsplit** (16 edges, full ±62.75\noutline) with the tool's ±61.55 26-edge disc added alongside — two\nhole-less discs of the same orientation. The doubled boundary keeps ray\nparity *even*, so `classify_point` still maps the band correctly, while\nsigned-volume integration double-counts: **20108.8** against the true\n`60735.9 − 54643.9 = 6092.0`.\n\n## Two hypotheses ruled out\n\nBoth recorded in the test's doc comment so a later pass doesn't\nre-derive them. Each is a synthetic control that is **correct today**:\n\n| Control | Result |\n|---|---|\n| Nested coplanar bottoms alone — box 20×20×10 minus nested box 10×10×6\nsharing z=0 | one ring face, volume **3400.000** exact |\n| Zero-thickness pinch alone — cylinder r=10 minus cone r 9→10, laterals\nmeeting at the top rim | one ring face, volume **303.687** exact |\n\nThe remaining differentiator is the non-convex T outline with arc\ncorners, matching this family's earlier layer map (a concave corner\nappearing as chord segments on one operand against a true arc on the\nother).\n\n## Verification\n\n- The repro fails with the documented signature in 0.10s under\n`--ignored`, and is skipped in the default run (`0 passed; 0 failed; 1\nignored`).\n- `cargo test --release -p brepkit-io` fully green.\n- fmt + clippy clean (the pre-commit hook caught a doc-list\ncontinuation, fixed).\n\n## Next\n\nDig the coplanar FF phase on the two T bottoms — why the target's bottom\nis never split by the tool's nested boundary. Per the debugging\ndoctrine, suspect classification before same-domain detection.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an ignored ready‑repro test for the T lip band cut that produces\nthe malformed lip operand (doubled bottom), and records\ntranslate‑and‑remeasure volume as the preferred detector in the roadmap.\nNo engine changes; operands are committed, so it replays locally in\n~0.1s.\n\n- **New Features**\n- Added `crates/io/tests/lipband_cut_inmem.rs` (ignored): builds\n`cut(outer T‑prism, inner T‑frustum)` from fixtures, asserts the bottom\nis a single ring, and checks volume equals outer − inner with a 0.1%\ntolerance; currently fails to document the defect.\n- Added fixtures `crates/io/tests/data/lipband_outerprism.bin` and\n`crates/io/tests/data/lipband_innerfrustum.bin`.\n\n<sup>Written for commit ad3628540efaeb081bdcb285c049b4d460085fae.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1197?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-23T21:23:15Z",
+          "tree_id": "af1ab2212760556c5088288db10a16fe32187b61",
+          "url": "https://github.com/andymai/brepkit/commit/017643b86db72d5986012fedc0ec0a010b808f47"
+        },
+        "date": 1784841937106,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 806276,
+            "range": "± 1271",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 899263,
+            "range": "± 1325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12014,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 657784,
+            "range": "± 1347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21709034,
+            "range": "± 21375",
             "unit": "ns/iter"
           }
         ]
