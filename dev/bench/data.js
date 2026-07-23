@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784761767358,
+  "lastUpdate": 1784768133768,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10529,6 +10529,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21793209,
             "range": "± 59014",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "03c0a9aa9559b7714d82eade829cf39f825264c7",
+          "message": "fix(algo): prefer deeper interior samples on plane faces (#1189)\n\n## Summary\n\nThe T-shape branch of the custom-shape family (with the L family closed\nby #1180+#1185+#1187).\n\nOn the T lip frustum cut, the classify trace shows **mirror-image stem\nwalls getting opposite verdicts** — `pt=(-20.75,-20.75,-2.592) → Inside`\n(dropped, WRONG) vs `pt=(+20.75,-20.75,-2.592) → Outside` (kept). The\nsample sits only ~8µm above the coincident bottom-cap plane:\n`sample_face_interior` offsets from the longest boundary edge's midpoint\nby diag·1e-4, and for these walls the longest edge IS the bottom edge\nlying on the shared cap plane — exactly where the ray-cast classifier is\nleast stable. One wall drops, the shell opens (18 bd), and the cut falls\nto an open 1204-face mesh fallback (the T export failures, bd=88).\n\n## Fix\n\nThe plane-face path already verifies each candidate against the boundary\npolygon, so the offset search now starts at **64×** and shrinks: a\ndeeper sample is strictly better whenever containment admits it (the\nwall sample moves ~0.5mm off the coincident plane), and thin slivers\nreject the large candidates and fall through to the fine scales exactly\nas before.\n\n## Measured (captured operands, native)\n\n| | before | after |\n|---|---|---|\n| 3×3-T lip frustum cut | open mesh fallback: F=1204, 0 curved, 24 free\n| **analytic: F=98, 48 curved, free=0** |\n\n## Tests\n\n- `t_lip_frustum_cut_is_analytic_and_watertight` — committed\ncaptured-operand fixtures; closed + manifold + ≥40 curved + volume band.\nFails on main.\n- All L/half-sockets/midcell fixture tests, gridfinity canary, ops 780 /\nalgo 191, full workspace sweep, clippy — green (the deeper-first search\nis containment-guarded, so every previously-working sample either stays\nor moves strictly interior).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPrefer deeper interior samples for plane faces to stabilize\nclassification near coincident planes and prevent open mesh fallbacks.\nThe T-shape lip frustum cut now builds analytically and is watertight\ninstead of falling back to a 1204-face open mesh.\n\n- Bug Fixes\n- Start plane-face interior sampling at 64× the base offset and shrink\n(28 halvings), keeping candidates containment-checked; avoids near-plane\nray-cast instability that misclassified mirror walls.\n- Captured-operand regression for the 3×3 T lip frustum cut: now\nanalytic and closed (F=98, 48 curved, free=0) vs before open fallback\n(F=1204).\n\n<sup>Written for commit 4388bf644a44da8030814f35f659d3be5e8df7a7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1189?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-22T17:52:34-07:00",
+          "tree_id": "42903e327c7b5577d35f09aab3a685e409dad1a6",
+          "url": "https://github.com/andymai/brepkit/commit/03c0a9aa9559b7714d82eade829cf39f825264c7"
+        },
+        "date": 1784768132653,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 851708,
+            "range": "± 7111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 939131,
+            "range": "± 3249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12426,
+            "range": "± 84",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 693301,
+            "range": "± 3443",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23262133,
+            "range": "± 690400",
             "unit": "ns/iter"
           }
         ]
