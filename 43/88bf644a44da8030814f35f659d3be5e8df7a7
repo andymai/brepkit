@@ -1,0 +1,26 @@
+crates/io/tests/data/tship_lip_innerfrustum.bin
+  s_100d196bea722f::t_b1fae096270be8 1
+crates/algo/src/builder/mod.rs
+  s_100d196bea722f::t_923ca23a210ed9 592-605
+crates/io/tests/data/tship_lip_outerfrustum.bin
+  s_100d196bea722f::t_b1fae096270be8 1
+crates/io/tests/tship_lipcut_inmem.rs
+  s_100d196bea722f::t_b1fae096270be8 1-66,68-70
+  s_100d196bea722f::t_81820433be3180 67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "4388bf644a44da8030814f35f659d3be5e8df7a7",
+  "prompts": {},
+  "sessions": {
+    "s_100d196bea722f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da446227-6be1-4c2b-9ff1-db2f2d211969",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
