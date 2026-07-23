@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784839442866,
+  "lastUpdate": 1784839924573,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10907,6 +10907,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22845996,
             "range": "± 45256",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59d83b9143575ed61930892a7bb1e3797366a0d8",
+          "message": "docs(roadmap): relocate the T fuse root to the input operand (#1196)\n\n## What\n\nRelocates the custom-shape **T lip fuse** root. Docs only — no engine\nchange.\n\n## The dig\n\nThe trail ended at \"face 463 provenance next\". `builder_solid.rs`\nalready builds a `face_source: HashMap<FaceId, Option<FaceId>>` (result\nface → input face) just before `perform_loops`, so one `eprintln!` over\nit at the `growth.is_empty()` bail answered it:\n\n```\nPROBE: 1 shells\n  shell[0]: 169 faces signed_vol=-12177.290\n    face Id(463) z=13.300 outer_edges=28 inners=0 src=Some(Id(50))\n```\n\n**Face 463 is spurious because its parent is.** `lipfuse-top.bin` is\nmalformed on arrival.\n\n## Evidence\n\nThe lip is a thin-walled **band**. Classification scan lines at z=15\nshow material only in the rim and the two stem walls:\n\n```\ny=20..63 at x=0:    .................................#####.\nx=-25..25 at y=-40: .........#####...................#####.....\n```\n\nSo its bottom at z=13.3 must be **one ring face** (outer 62.75-T + inner\n61.55-T hole). Instead it carries **two nested same-orientation\ndown-facing discs** — `Id(50)` (16 edges, ±62.75, `inners=0`, `nz=-1`)\nand `Id(132)` (26 edges, ±61.55, `inners=0`, `nz=-1`) — both in the same\nsingle outer shell. The body proves the contrast: its analogous z=16 top\n`Id(23)` is a correct ring (`inners=1`).\n\nThe 28 triple-shared z=13.3 interface edges are both discs' images\nsurviving together. This is the \"ring lost its hole\" class occurring\n*upstream*, so `perform_areas` / shell-orientation voting is the symptom\nlayer.\n\n## Two blind spots this exposed\n\nBoth live on main, both recorded as work items:\n\n1. **`validate_solid` returns zero issues on this operand.** Edge-use\ncounts, wire closure and Euler are all satisfied by two nested\nsame-orientation faces. Same family as the by-edge-id gate being blind\nto position-duplicate free edges — these validators check topology\nbookkeeping, not geometric consistency.\n\n2. **The oracles disagree by ~15×.** `classify_point` maps the true\nband; `solid_volume` reports 65641, the full prism (8666 × 7.57). A\ndoubled boundary yields *even* ray crossings, so parity accidentally\nreads correctly while signed-volume integration double-counts. A\nvolume-vs-classification disagreement is therefore a cheap detector for\nthis malformation class.\n\n## Verification\n\nRepro `~/.cache/brepkit-parity-captures/2026-07-22/tship29/` +\n`replay_lipfuse_t29.rs` reproduces on post-#1194 main with the same\n162ms GFA failure. All probe instrumentation was reverted; the diff is\nthe roadmap skill only.\n\n## Next\n\nCapture one stage earlier in the tool chain to find which operation\nemits the split ring (needs tool + overlay). Custom-shape standings\nunchanged: 6 fail (T ×2, O ×3, mixed-detail ×1).\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocs-only: Update the roadmap to move the custom‑shape T lip fuse’s root\ncause to the input operand. Notes the operand is malformed (split ring\ninto two same‑orientation discs), highlights blind spots in\n`validate_solid` and `solid_volume` vs `classify_point`, and sets the\nnext step to capture one stage earlier in the toolchain.\n\n<sup>Written for commit 6d6906a81ecee0b73c4f9e0f47d3bd6f2c300086.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1196?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-23T20:49:47Z",
+          "tree_id": "7aa762210c21cd6c902f36cf53c1edbb126a1fe9",
+          "url": "https://github.com/andymai/brepkit/commit/59d83b9143575ed61930892a7bb1e3797366a0d8"
+        },
+        "date": 1784839923734,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 810716,
+            "range": "± 2427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 898285,
+            "range": "± 1481",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11966,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 654292,
+            "range": "± 858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21852463,
+            "range": "± 289799",
             "unit": "ns/iter"
           }
         ]
