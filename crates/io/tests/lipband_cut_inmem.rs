@@ -3,7 +3,9 @@
 //! fuse failure ("assembly failed: no outer shell found").
 //!
 //! The lip band is `cut(outer prism, inner frustum)`. Both operands are
-//! well-formed solids: the outer is a T-outline prism (constant ±62.75), the
+//! well-formed solids: the outer is a T-outline prism (constant ±62.75 — the
+//! capture calls it `lip-outerfrustum`, but its walls are vertical and its
+//! corners are cylinders, so the fixture here is named for the geometry), the
 //! inner a T-outline frustum widening ±61.55 → ±62.75 so that the two lateral
 //! surfaces meet exactly at the top rim. The correct result is a band that
 //! tapers to zero thickness at the top, with its z=-2.6 bottom a single RING
@@ -97,7 +99,7 @@ type SolidFace = brepkit_topology::face::FaceId;
             bottom discs instead of one ring face"]
 fn lipband_cut_bottom_is_a_single_ring() {
     let mut topo = Topology::new();
-    let outer = load("lipband_outerfrustum.bin", &mut topo);
+    let outer = load("lipband_outerprism.bin", &mut topo);
     let inner = load("lipband_innerfrustum.bin", &mut topo);
 
     let v_outer = brepkit_operations::measure::solid_volume(&topo, outer, 0.005).unwrap();
@@ -120,11 +122,16 @@ fn lipband_cut_bottom_is_a_single_ring() {
         bottom[0].2
     );
 
-    // Volume follows from the two operands; the doubled bottom over-counts it.
+    // Volume follows from the two operands; the doubled bottom over-counts it
+    // roughly 3.3x, so the band only has to be tight enough to separate the two
+    // regimes. All three measurements are tessellation-based over the same
+    // cylindrical corner faces, so their chording errors largely cancel in the
+    // difference; 0.1% of the expected value leaves ample room for what does
+    // not, without admitting the defect.
     let v_band = brepkit_operations::measure::solid_volume(&topo, band, 0.005).unwrap();
     let expected = v_outer - v_inner;
     assert!(
-        (v_band - expected).abs() < 1.0,
+        (v_band - expected).abs() < expected * 1e-3,
         "band volume {v_band:.2} should equal outer {v_outer:.2} - inner {v_inner:.2} = {expected:.2}"
     );
 }
