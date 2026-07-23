@@ -589,12 +589,20 @@ fn sample_face_interior(
             let frame = plane_frame::PlaneFrame::from_plane_face(*normal, &poly);
             let poly2d: Vec<_> = poly.iter().map(|p| frame.project(*p)).collect();
             let eps = classify_2d::boundary_eps(&poly2d);
-            // Halve the offset until a candidate lands strictly inside. 24
-            // halvings reach scale ~6e-8 (min offset ~diag·6e-12), below any
-            // physically meaningful strip width, so the loop only exits to the
-            // fallback for a near-zero-area (degenerate) face.
-            let mut scale = 1.0_f64;
-            for _ in 0..24 {
+            // Try LARGE offsets first, then shrink. The base offset is
+            // diag·1e-4 — a sample that close to the boundary edge can hug a
+            // coincident interface plane of the opposing solid (a frustum
+            // wall's longest edge lies ON the coincident bottom cap), where
+            // the ray-cast classifier turns unstable and mirror-image walls
+            // classify differently. A deeper sample is strictly better
+            // whenever the polygon containment check admits it; thin slivers
+            // reject the large candidates and fall through to the fine
+            // scales. 24 halvings from 64 reach scale ~4e-6 (min offset
+            // ~diag·4e-10), below any physically meaningful strip width, so
+            // the loop only exits to the fallback for a near-zero-area
+            // (degenerate) face.
+            let mut scale = 64.0_f64;
+            for _ in 0..28 {
                 for sign in [1.0_f64, -1.0] {
                     let cand = mid_pt + base_offset * (sign * scale);
                     let c2 = frame.project(cand);
