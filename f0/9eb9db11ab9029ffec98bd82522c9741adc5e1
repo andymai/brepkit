@@ -1,0 +1,20 @@
+crates/io/tests/lipband_cut_inmem.rs
+  s_0d544b8727eb96::t_3bb1317701cc11 6-8
+  s_0d544b8727eb96::t_f1a95863133e88 102,125-130,134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f09eb9db11ab9029ffec98bd82522c9741adc5e1",
+  "prompts": {},
+  "sessions": {
+    "s_0d544b8727eb96": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a83d6e58-79a3-46d1-ab8b-79dfbbccdffa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
