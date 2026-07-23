@@ -562,6 +562,37 @@ prefer exact interval math wherever the salvageable fraction can be arbitrarily 
 and an arrangement trigger keyed to a post-hoc failure signature cannot demote a
 working case, which is the cheap way past this splitter's web of mutual calibrations.
 
+Custom-shape T fuse — ROOT RELOCATED TO THE INPUT OPERAND (2026-07-23; repro
+`~/.cache/brepkit-parity-captures/2026-07-22/tship29/` + `replay_lipfuse_t29.rs`,
+162ms GFA fail, reproduces on post-#1194 main). The dig had localized "assembly
+failed: no outer shell found (all shells classified as holes)" down to a spurious
+hole-less interface face `Id(463)` at z=13.3. Provenance probe (the `face_source`
+map already built in `builder_solid.rs` gives result-face → input-face directly):
+463's parent is **input face `Id(50)` of the LIP operand**, so 463 is spurious
+because its PARENT is. **`lipfuse-top.bin` is malformed on arrival.** The lip is a
+thin-walled BAND — classification scan lines at z=15 show material only in the
+~1.2mm rim and the two stem walls, interior empty — so its bottom at z=13.3 must be
+ONE RING face (outer 62.75-T + inner 61.55-T hole). Instead it is TWO nested
+same-orientation down-facing discs: `Id(50)` (16 edges, ±62.75, inners=0) and
+`Id(132)` (26 edges, ±61.55, inners=0). The body proves the contrast — its
+analogous z=16 top `Id(23)` is a correct ring (`inners=1`). This is the "ring lost
+its hole" / L-bubble class, occurring UPSTREAM rather than in this fuse; the 28
+triple-shared z=13.3 interface edges are both discs' images surviving together.
+Do NOT keep digging `perform_areas` / shell-orientation voting — that is the
+symptom. NEXT: capture one stage earlier in the tool chain to find which operation
+emits the split ring (needs tool + overlay).
+TWO DURABLE BLIND SPOTS, both live on main and both worth their own work item:
+(1) `validate_solid` reports ZERO issues on this operand — edge-use counts, wire
+closure and Euler all pass, because two nested faces of the SAME orientation
+violate none of them. Any "validated OK" claim is blind to this class, exactly as
+the by-edge-id gate is blind to position-duplicate free edges.
+(2) The oracles DISAGREE by ~15x and only one is right: `classify_point` maps the
+true band, while `solid_volume` reports 65641 — the FULL PRISM (8666 x 7.57).
+A doubled boundary gives EVEN ray crossings, so parity accidentally lands on the
+correct answer while signed-volume integration double-counts. Fresh evidence for
+"volume is never ground truth"; a volume/classification disagreement is itself a
+cheap detector for this malformation.
+
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
 106s) and "handle holes" (86s) — the 2026-07-08 swallowed-panic/borrow-poisoning
