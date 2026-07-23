@@ -1400,6 +1400,17 @@ fn build_section_edges(
                     Some((start, end)),
                     tol,
                 ) {
+                    // Salvage the parts of a straight section that extend past
+                    // the collinear boundary edge it rides — see the PaveBlock
+                    // arm below for the full rationale (label-tab corner
+                    // crescents).
+                    if matches!(curve_ds.curve, EdgeCurve::Line) {
+                        for (es, ee) in
+                            line_section_boundary_extensions(topo, face_id, start, end, tol)
+                        {
+                            push_plain_line_section(&mut sections, face, es, ee);
+                        }
+                    }
                     continue;
                 }
 
@@ -1599,7 +1610,11 @@ fn build_section_edges(
                     } else {
                         vec![(raw_start, raw_end)]
                     };
-                for (start, end) in intervals {
+                let mut work: Vec<(Point3, Point3)> = intervals;
+                let mut work_i = 0;
+                while work_i < work.len() {
+                    let (start, end) = work[work_i];
+                    work_i += 1;
                     // Skip a degenerate curved section: a Circle/Ellipse PaveBlock
                     // fragment whose arc has collapsed to a point (3D chord below
                     // tolerance AND a near-zero parametric span). A coincident-edge
@@ -1654,6 +1669,23 @@ fn build_section_edges(
                         Some((start, end)),
                         tol,
                     ) {
+                        // A straight section can ride a collinear boundary edge
+                        // for most of its span yet extend past it at one or both
+                        // ends (the label-tab corner: the tab's back-plane chord
+                        // rides the cavity's back line but juts 2.55mm into each
+                        // rounded-corner crescent). The interior samples all land
+                        // on the covered middle, so the whole section reads as a
+                        // re-trace and the crescent is never split off. Salvage
+                        // the uncovered extensions — they carry the genuine
+                        // interior split. Exact interval math, not sampling: the
+                        // extension fraction can be arbitrarily small.
+                        if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                            for ext in
+                                line_section_boundary_extensions(topo, face_id, start, end, tol)
+                            {
+                                work.push(ext);
+                            }
+                        }
                         continue;
                     }
 
@@ -2075,6 +2107,121 @@ fn curve_endpoints(
         }
     }
     (Some(start_3d), Some(end_3d))
+}
+
+/// Sub-intervals of the straight section `start..end` NOT covered by any
+/// collinear boundary Line edge of `face_id` (outer or inner wires).
+///
+/// A section flagged as a boundary re-trace can still extend past the edge it
+/// rides at one or both ends; those extensions are genuine interior splitters
+/// (the label-tab back-plane chord riding the cavity back line but jutting
+/// into each rounded-corner crescent). Coverage is computed with exact
+/// interval arithmetic so an arbitrarily small extension survives. Extensions
+/// shorter than the weld band (100·tol) are noise and skipped.
+fn line_section_boundary_extensions(
+    topo: &Topology,
+    face_id: FaceId,
+    start: Point3,
+    end: Point3,
+    tol: f64,
+) -> Vec<(Point3, Point3)> {
+    let weld = tol * 100.0;
+    let dir = end - start;
+    let len = dir.length();
+    if len <= weld {
+        return Vec::new();
+    }
+    let u = dir * (1.0 / len);
+    let Ok(face) = topo.face(face_id) else {
+        return Vec::new();
+    };
+    let mut cover: Vec<(f64, f64)> = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let Ok(wire) = topo.wire(wid) else { continue };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                continue;
+            }
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (bs, be) = (sv.point(), ev.point());
+            let off0 = ((bs - start) - u * (bs - start).dot(u)).length();
+            let off1 = ((be - start) - u * (be - start).dot(u)).length();
+            if off0 > weld || off1 > weld {
+                continue;
+            }
+            let t0 = (bs - start).dot(u);
+            let t1 = (be - start).dot(u);
+            let (lo, hi) = (t0.min(t1).max(0.0), t0.max(t1).min(len));
+            if hi - lo > tol {
+                cover.push((lo, hi));
+            }
+        }
+    }
+    if cover.is_empty() {
+        return Vec::new();
+    }
+    cover.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut exts = Vec::new();
+    let mut cur = 0.0_f64;
+    for &(lo, hi) in &cover {
+        if lo > cur + weld {
+            exts.push((cur, lo));
+        }
+        cur = cur.max(hi);
+    }
+    if len > cur + weld {
+        exts.push((cur, len));
+    }
+    exts.into_iter()
+        .map(|(a, b)| (start + u * a, start + u * b))
+        .collect()
+}
+
+/// Push a plain straight section with a Line2D pcurve (the PaveBlock-arm
+/// construction) — used for salvaged boundary-extension segments.
+fn push_plain_line_section(
+    sections: &mut Vec<SectionEdge>,
+    face: &brepkit_topology::face::Face,
+    start: Point3,
+    end: Point3,
+) {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+
+    let start_uv = face.surface().project_point(start);
+    let end_uv = face.surface().project_point(end);
+    let s2 = start_uv.map_or(Point2::new(0.0, 0.0), |(u, v)| Point2::new(u, v));
+    let e2 = end_uv.map_or(Point2::new(1.0, 0.0), |(u, v)| Point2::new(u, v));
+    let d = e2 - s2;
+    let dl = d.length();
+    let direction = if dl > 1e-12 {
+        Vec2::new(d.x() / dl, d.y() / dl)
+    } else {
+        Vec2::new(1.0, 0.0)
+    };
+    let Ok(line) = Line2D::new(s2, direction).or_else(|_| Line2D::new(s2, Vec2::new(1.0, 0.0)))
+    else {
+        return;
+    };
+    let pcurve = Curve2D::Line(line);
+    sections.push(SectionEdge {
+        curve_3d: brepkit_topology::edge::EdgeCurve::Line,
+        pcurve_a: pcurve.clone(),
+        pcurve_b: pcurve,
+        start,
+        end,
+        start_uv_a: start_uv.map(|(u, v)| Point2::new(u, v)),
+        end_uv_a: end_uv.map(|(u, v)| Point2::new(u, v)),
+        start_uv_b: start_uv.map(|(u, v)| Point2::new(u, v)),
+        end_uv_b: end_uv.map(|(u, v)| Point2::new(u, v)),
+        target_face: None,
+        pave_block_id: None,
+    });
 }
 
 /// Remove section edges that are subsets of longer collinear edges.
