@@ -1,0 +1,26 @@
+crates/io/tests/data/lipband_innerfrustum.bin
+  s_0d544b8727eb96::t_47d6fc87aebb60 1
+crates/io/tests/lipband_cut_inmem.rs
+  s_0d544b8727eb96::t_8a17fecf9b19ad 25
+  s_0d544b8727eb96::t_dd2f9500e7ef87 1-24,26-120
+.claude/skills/roadmap/SKILL.md
+  s_0d544b8727eb96::t_d03237ec5b2ee8 582-600
+crates/io/tests/data/lipband_outerfrustum.bin
+  s_0d544b8727eb96::t_47d6fc87aebb60 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "acb250a02ac928079f0cae9e225849796adddc0b",
+  "prompts": {},
+  "sessions": {
+    "s_0d544b8727eb96": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a83d6e58-79a3-46d1-ab8b-79dfbbccdffa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
