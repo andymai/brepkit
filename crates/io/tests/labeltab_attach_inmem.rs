@@ -11,9 +11,14 @@
 //! be dropped"), which is why the scenario passed solo but failed after a
 //! 1×1 scenario warmed the cell-socket template cache.
 //!
-//! With the free-edge hard-fail in the strict gate, both variants reach the
-//! watertight fallback. The assertion is watertightness, not analyticity —
-//! the GFA assembly root (the dropped hole shell) is tracked separately.
+//! With the free-edge hard-fail in the strict gate, both variants reached the
+//! watertight mesh fallback. The corner-crescent fixes (boundary-extension
+//! salvage in `fill_images_faces` + the woven-spur arrangement trigger in the
+//! face splitter) then made the fuse assemble analytically: the tab's square
+//! top corners overhang the cavity's rounded corners, and the bin's top ring
+//! must re-square there. The volume pin is calibrated by inclusion-exclusion
+//! (bin + tab − intersect = 20462.5); the coarse-deflection measurement of
+//! the analytic result reads a few mm³ low from chording its cylinder faces.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -62,11 +67,21 @@ fn labeltab_attach_fuse_is_watertight() {
         "tab attach must be manifold, got {over} over-shared"
     );
 
-    let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.05).unwrap();
-    // bin 17421.29 + tab 3046.86 minus their overlap; the open-shell result
-    // measured 20483.12 with faces missing. Pin near the correct fused value.
+    let curved = faces
+        .iter()
+        .filter(|&&fid| topo.face(fid).unwrap().surface().type_tag() != "plane")
+        .count();
     assert!(
-        (vol - 20466.5).abs() < 5.0,
+        curved >= 12,
+        "expected an analytic result with the pocket/cavity cylinders, got {curved} curved faces"
+    );
+
+    let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.005).unwrap();
+    // Truth by inclusion-exclusion: 17421.32 + 3046.86 − 5.71 = 20462.5.
+    // The band covers coarse-tessellation error on the curved faces; the bad
+    // open-shell result measured ~20483 with faces missing and stays outside.
+    assert!(
+        (vol - 20462.5).abs() < 15.0,
         "fused volume {vol:.2} out of range"
     );
 }

@@ -534,6 +534,33 @@ against the real honeycomb+funnel operands first (the roadmap's own warning). Th
 did NOT move tool parity; the headline failing families (scoop #11, screw base #12, solid
 cutouts #13, honeycomb-cut) remain open.
 
+Label-sockets family — BOTH roots CLOSED (fixture
+`crates/io/tests/labeltab_attach_inmem.rs`, one test covering both). (1) The bd=24/14
+export was a GATE LEAK, not a build defect: `validate_boolean_result` checked unclosed
+wires and c>2 non-manifold but never c==1 FREE edges, so a warm-cache run whose GFA
+happened to complete with 8 free edges and an accidentally-balanced Euler was accepted
+(#1192, free_edges>0 now hard-fails; the cold run aborted to the fallback and passed —
+which is why the scenarios passed solo and failed only after an earlier scenario warmed
+`getCellSocketTemplate`). (2) The remaining analytic root — the tab-attach fuse itself
+never assembling ("open hole shell with 97 faces would be dropped", both variants) —
+was the CORNER CRESCENT: the tab's square top corners overhang the cavity's rounded
+corners, and the tab's back-plane chord RIDES the cavity's collinear back line for most
+of its span while jutting ~2.55mm into each crescent. Two coordinated fixes: (a)
+`line_section_boundary_extensions` in `fill_images_faces.rs` — the boundary re-trace
+test samples interior points, all of which land on the covered middle, so the whole
+section read as a re-trace and the crescents were never split off; the uncovered
+extensions are now recovered by exact interval arithmetic (NOT sampling — the extension
+fraction can be arbitrarily small) and re-queued through the interval loop, which
+terminates because an extension's own coverage set is empty. (b) A third arrangement
+entry condition in `face_splitter/mod.rs` keyed to a DEMONSTRATED failure rather than a
+predicted one: `loops_have_out_and_back` detects the angular walker's own signature of
+having woven twin section edges into a single loop (an edge immediately followed by its
+exact UV reverse). Result: analytic fuse, watertight, volume 20462.5 by
+inclusion-exclusion (17421.32 + 3046.86 − 5.71). DURABLE: any coverage/containment test
+that decides a section's fate by INTERIOR SAMPLING is blind to overhang at the ends —
+prefer exact interval math wherever the salvageable fraction can be arbitrarily small;
+and an arrangement trigger keyed to a post-hoc failure signature cannot demote a
+working case, which is the cheap way past this splitter's web of mutual calibrations.
 
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,

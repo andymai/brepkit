@@ -3151,6 +3151,37 @@ fn clip_sections_to_outer_region(
     (kept, anchors)
 }
 
+/// Whether any greedy loop contains an out-and-back spur: an edge immediately
+/// followed (cyclically) by its exact UV reverse. The angular walker emits
+/// this signature only when it has woven twin section edges into one loop
+/// instead of closing a region between them; a clean partition never does.
+///
+/// Loops of two edges are exempt: consecutive edges always share a vertex, so
+/// for `n == 2` closure alone forces the reverse pattern and every lens region
+/// (an arc plus its co-endpoint chord) matches. Only at three or more edges
+/// does the pattern actually mean the walker doubled back — at two it fired on
+/// the honeycomb cap arrangement's legitimate lens and cost `pcut3` its zero
+/// free-edge pin.
+fn loops_have_out_and_back(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
+    for lp in loops {
+        let n = lp.len();
+        if n < 3 {
+            continue;
+        }
+        for i in 0..n {
+            let a = &lp[i];
+            let b = &lp[(i + 1) % n];
+            if (a.start_uv - a.end_uv).length() > tol
+                && (a.start_uv - b.end_uv).length() < tol
+                && (a.end_uv - b.start_uv).length() < tol
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Split a face by its section edges, producing sub-faces.
 ///
 /// If there are no section edges, returns a single sub-face covering
@@ -4811,9 +4842,22 @@ fn split_face_2d_impl(
     } else {
         &all_edges
     };
+    // Third entry condition: the angular walker demonstrably WOVE the greedy
+    // loops — some loop contains an edge immediately followed by its exact
+    // reverse (an out-and-back spur, the label-tab corner-crescent weave where
+    // both twins of a salvaged corner chord ride one loop instead of closing
+    // the crescent). A clean partition never produces that signature, so this
+    // trigger cannot demote a correctly-split single-hole cap; it only engages
+    // the arrangement where the calibrated wire-builder path has already
+    // failed.
+    let woven_spur = is_plane
+        && holes_integrated
+        && !woven_inner_wires.is_empty()
+        && loops_have_out_and_back(&loops, tol.linear);
     if is_plane
         && ((holes_integrated && original_inner_wires.len() >= 2 && !woven_inner_wires.is_empty())
-            || bay_mouth_arrangement)
+            || bay_mouth_arrangement
+            || woven_spur)
         && let Some(mut result) = arrangement_regions_from_combined(
             &surface,
             arr_input,
