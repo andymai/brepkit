@@ -603,12 +603,22 @@ TWO DURABLE BLIND SPOTS, both live on main and both worth their own work item:
 closure and Euler all pass, because two nested faces of the SAME orientation
 violate none of them. Any "validated OK" claim is blind to this class, exactly as
 the by-edge-id gate is blind to position-duplicate free edges.
-(2) The oracles DISAGREE by ~15x and only one is right: `classify_point` maps the
-true band, while `solid_volume` reports 65641 — the FULL PRISM (8666 x 7.57).
-A doubled boundary gives EVEN ray crossings, so parity accidentally lands on the
-correct answer while signed-volume integration double-counts. Fresh evidence for
-"volume is never ground truth"; a volume/classification disagreement is itself a
-cheap detector for this malformation.
+(2) The oracles DISAGREE and only one is right: `classify_point` maps the true
+band, while `solid_volume` over-counts badly. A doubled boundary gives EVEN ray
+crossings, so parity accidentally lands on the correct answer while signed-volume
+integration double-counts. Fresh evidence for "volume is never ground truth".
+(3) **The SHARPEST detector of this class — `solid_volume` is TRANSLATION-VARIANT
+on a malformed solid.** The two volume figures in this family are the SAME SHAPE:
+the `tship` frustum-cut band (F=98 curved=48, bbox z[-2.60,4.40]) measures
+20111.8, and `tship29/lipfuse-top.bin` (F=98 curved=48, bbox z[13.30,20.30] — the
+identical shape after the +15.90 z-translate this family is captured with)
+measures 65641.2. Same XY bbox ±62.75, same 7.0 height, 3.26x apart. For a
+well-formed closed boundary the z-dependent terms of the signed-volume integral
+cancel exactly, so volume MUST be translation-invariant; it is not here. This
+needs no second oracle — translate a solid, re-measure, and a changed volume
+proves an inconsistent boundary. Prefer it over the volume/classification
+disagreement. (Quote either number only WITH its z-range; they are not rival
+measurements of different objects.)
 
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,

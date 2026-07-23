@@ -13,8 +13,18 @@
 //! orientation — a ±62.75 16-edge disc (the target's bottom, passed through
 //! UNSPLIT) alongside a ±61.55 26-edge disc — each with `inners = 0`. The
 //! doubled boundary makes ray parity even, so `classify_point` still maps the
-//! band correctly, while signed-volume integration double-counts: 20108.8
+//! band correctly, while signed-volume integration double-counts: 20111.8
 //! against the true 60735.9 − 54643.9 = 6092.0.
+//!
+//! The doubled boundary also makes the measured volume TRANSLATION-VARIANT,
+//! which is the sharpest available detector for this class: this band
+//! (bbox `z[-2.60, 4.40]`) measures 20111.8, while the identical shape after
+//! the +15.90 z-translate the downstream fuse is captured with —
+//! `lipfuse-top.bin`, same `F=98 curved=48`, same ±62.75 XY bbox, same 7.0
+//! height — measures 65641.2. For a well-formed closed boundary the
+//! z-dependent terms of the signed-volume integral cancel, so volume cannot
+//! depend on position. Unlike a volume-vs-classification disagreement, this
+//! check needs no second oracle: translate and re-measure.
 //!
 //! Two hypotheses are RULED OUT by synthetic controls, both of which are
 //! correct today (single ring face, exact volume):
