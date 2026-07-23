@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.31](https://github.com/andymai/brepkit/compare/v2.127.30...v2.127.31) (2026-07-23)
+
+
+### Bug Fixes
+
+* **algo:** assemble the label-tab attach fuse analytically ([#1194](https://github.com/andymai/brepkit/issues/1194)) ([c775c0e](https://github.com/andymai/brepkit/commit/c775c0e6bddf6a8d03127c6de0278dc0a117f4db))
+
 ## [2.127.30](https://github.com/andymai/brepkit/compare/v2.127.29...v2.127.30) (2026-07-23)
 
 
