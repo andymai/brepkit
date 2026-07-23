@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.30](https://github.com/andymai/brepkit/compare/v2.127.29...v2.127.30) (2026-07-23)
+
+
+### Bug Fixes
+
+* **operations:** hard-fail free boundary edges in the strict boolean gate ([#1192](https://github.com/andymai/brepkit/issues/1192)) ([69fd392](https://github.com/andymai/brepkit/commit/69fd392066f6d342ee4b5570ded2ac1ae9f4df0b))
+
 ## [2.127.29](https://github.com/andymai/brepkit/compare/v2.127.28...v2.127.29) (2026-07-23)
 
 
