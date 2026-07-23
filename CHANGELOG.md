@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.29](https://github.com/andymai/brepkit/compare/v2.127.28...v2.127.29) (2026-07-23)
+
+
+### Bug Fixes
+
+* **algo:** prefer deeper interior samples on plane faces ([#1189](https://github.com/andymai/brepkit/issues/1189)) ([03c0a9a](https://github.com/andymai/brepkit/commit/03c0a9aa9559b7714d82eade829cf39f825264c7))
+
 ## [2.127.28](https://github.com/andymai/brepkit/compare/v2.127.27...v2.127.28) (2026-07-22)
 
 
