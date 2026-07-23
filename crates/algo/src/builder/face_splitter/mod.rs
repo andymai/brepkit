@@ -3162,6 +3162,96 @@ fn clip_sections_to_outer_region(
 /// does the pattern actually mean the walker doubled back — at two it fired on
 /// the honeycomb cap arrangement's legitimate lens and cost `pcut3` its zero
 /// free-edge pin.
+/// Signed UV area and centroid of a traced loop, from its edge start points.
+fn loop_area_centroid(lp: &[OrientedPCurveEdge]) -> (f64, Point2) {
+    let n = lp.len();
+    let mut area2 = 0.0;
+    let (mut cx, mut cy) = (0.0, 0.0);
+    for i in 0..n {
+        let a = lp[i].start_uv;
+        let b = lp[(i + 1) % n].start_uv;
+        let cross = a.x().mul_add(b.y(), -(b.x() * a.y()));
+        area2 += cross;
+        cx += (a.x() + b.x()) * cross;
+        cy += (a.y() + b.y()) * cross;
+    }
+    if area2.abs() < f64::EPSILON {
+        return (0.0, lp[0].start_uv);
+    }
+    (
+        area2 / 2.0,
+        Point2::new(cx / (3.0 * area2), cy / (3.0 * area2)),
+    )
+}
+
+/// Whether a loop is built purely from section edges — no edge of it coincides
+/// with one of the face's own boundary edges.
+fn loop_is_section_only(
+    lp: &[OrientedPCurveEdge],
+    boundary: &[OrientedPCurveEdge],
+    tol: f64,
+) -> bool {
+    let mid = |e: &OrientedPCurveEdge| {
+        Point2::new(
+            (e.start_uv.x() + e.end_uv.x()) * 0.5,
+            (e.start_uv.y() + e.end_uv.y()) * 0.5,
+        )
+    };
+    lp.iter().all(|e| {
+        let m = mid(e);
+        !boundary.iter().any(|b| (mid(b) - m).length() < tol)
+    })
+}
+
+/// Whether the greedy loops contain an orientation TWIN pair: two section-only
+/// loops covering the same UV footprint in opposite directions.
+///
+/// A closed section loop lying strictly inside a face — touching neither the
+/// boundary nor any other section — is a disconnected component of the trace
+/// graph, so the walker traces its cycle once per orientation instead of
+/// treating it as a hole in the surrounding region. Two loops of equal extent,
+/// coincident centroid and equal-but-opposite signed area can only be that
+/// duplicate: a valid partition never covers one footprint twice.
+///
+/// Both loops must be section-only. The face's own boundary can be re-traced
+/// by an exact whole-edge duplicate section, and that pair is load-bearing —
+/// threading it is what aligns coincident-face partitions in the shelled-cup
+/// lip fuses — so a boundary/re-trace pair must not trigger the arrangement.
+fn loops_have_orientation_twin(
+    loops: &[Vec<OrientedPCurveEdge>],
+    boundary: &[OrientedPCurveEdge],
+    tol: f64,
+) -> bool {
+    let stats: Vec<Option<(f64, Point2)>> = loops
+        .iter()
+        .map(|lp| {
+            (lp.len() >= 2 && loop_is_section_only(lp, boundary, tol))
+                .then(|| loop_area_centroid(lp))
+        })
+        .collect();
+    for i in 0..loops.len() {
+        let Some((area_i, c_i)) = stats[i] else {
+            continue;
+        };
+        for j in (i + 1)..loops.len() {
+            let Some((area_j, c_j)) = stats[j] else {
+                continue;
+            };
+            if loops[i].len() != loops[j].len() {
+                continue;
+            }
+            let scale = area_i.abs().max(area_j.abs());
+            if scale <= tol * tol {
+                continue;
+            }
+            if (area_i + area_j).abs() <= 1e-6 * scale && (c_i - c_j).length() < tol {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn loops_have_out_and_back(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
     for lp in loops {
         let n = lp.len();
@@ -4854,10 +4944,21 @@ fn split_face_2d_impl(
         && holes_integrated
         && !woven_inner_wires.is_empty()
         && loops_have_out_and_back(&loops, tol.linear);
+    // Fourth entry condition: the hole is SECTION-BORN. The three conditions
+    // above all require the face to already carry inner wires, so a face whose
+    // only hole is cut by its own sections (a coplanar partner's boundary
+    // landing strictly inside it — the lip band's bottom) never reached the
+    // arrangement, even though flat emission's twin-cycle resolution is written
+    // for exactly this defect. Trigger on the walker's own signature instead.
+    let section_born_hole = is_plane
+        && !holes_integrated
+        && original_inner_wires.is_empty()
+        && loops_have_orientation_twin(&loops, &all_edges[..n_boundary_edges], tol.linear);
     if is_plane
         && ((holes_integrated && original_inner_wires.len() >= 2 && !woven_inner_wires.is_empty())
             || bay_mouth_arrangement
-            || woven_spur)
+            || woven_spur
+            || section_born_hole)
         && let Some(mut result) = arrangement_regions_from_combined(
             &surface,
             arr_input,
