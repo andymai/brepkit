@@ -653,11 +653,20 @@ pub(super) fn validate_boolean_result(
             }
         }
     }
-    if unclosed_wires > 0 || non_manifold_edges > 0 {
+    // Free (boundary) edges are just as fatal as non-manifold ones: an edge
+    // used by a single face means the shell is open, which breaks watertight
+    // export exactly like an over-shared edge does. A wire can be closed
+    // (endpoints chained) while every edge in it is used once — so the
+    // unclosed-wire check alone does not catch a dropped face, and the Euler
+    // gate can balance by accident when a face and its edges vanish together.
+    // Seam edges on periodic faces appear twice in the same wire and count 2.
+    let free_edges = edge_uses.values().filter(|&&c| c == 1).count();
+    if unclosed_wires > 0 || non_manifold_edges > 0 || free_edges > 0 {
         return Err(crate::OperationsError::InvalidInput {
             reason: format!(
-                "boolean result has {unclosed_wires} unclosed wire(s) and \
-                 {non_manifold_edges} non-manifold edge(s)"
+                "boolean result has {unclosed_wires} unclosed wire(s), \
+                 {non_manifold_edges} non-manifold edge(s), and \
+                 {free_edges} free boundary edge(s)"
             ),
         });
     }
