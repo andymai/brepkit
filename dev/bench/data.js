@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784782514047,
+  "lastUpdate": 1784783008697,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10745,6 +10745,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23073433,
             "range": "± 296439",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "85476db0c002d1c8ea441dbf2e0aab27f107b49a",
+          "message": "chore(main): release 2.127.30 (#1193)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.30](https://github.com/andymai/brepkit/compare/v2.127.29...v2.127.30)\n(2026-07-23)\n\n\n### Bug Fixes\n\n* **operations:** hard-fail free boundary edges in the strict boolean\ngate ([#1192](https://github.com/andymai/brepkit/issues/1192))\n([69fd392](https://github.com/andymai/brepkit/commit/69fd392066f6d342ee4b5570ded2ac1ae9f4df0b))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.30 for `brepkit-wasm`. The strict boolean gate now\nhard-fails when free boundary edges are detected, preventing unstable\nresults and making failures explicit.\n\n<sup>Written for commit 74fd076c0de18b92f10fca6b6519326ad9ae4f12.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1193?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-23T05:01:13Z",
+          "tree_id": "adeeae7335e905dd82fdcfa6a06e4aaff0354910",
+          "url": "https://github.com/andymai/brepkit/commit/85476db0c002d1c8ea441dbf2e0aab27f107b49a"
+        },
+        "date": 1784783007710,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 829499,
+            "range": "± 2149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 928803,
+            "range": "± 1924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13142,
+            "range": "± 67",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 654064,
+            "range": "± 2738",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22857200,
+            "range": "± 55664",
             "unit": "ns/iter"
           }
         ]
