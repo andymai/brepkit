@@ -597,9 +597,9 @@ fn sample_face_interior(
             // classify differently. A deeper sample is strictly better
             // whenever the polygon containment check admits it; thin slivers
             // reject the large candidates and fall through to the fine
-            // scales. 24 halvings from 64 reach scale ~4e-6 (min offset
-            // ~diag·4e-10), below any physically meaningful strip width, so
-            // the loop only exits to the fallback for a near-zero-area
+            // scales. 28 halvings from 64 reach scale ~2.4e-7 (min offset
+            // ~diag·2.4e-11), below any physically meaningful strip width,
+            // so the loop only exits to the fallback for a near-zero-area
             // (degenerate) face.
             let mut scale = 64.0_f64;
             for _ in 0..28 {
