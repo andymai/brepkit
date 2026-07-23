@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784768542801,
+  "lastUpdate": 1784768688725,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -10637,6 +10637,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21760654,
             "range": "± 72079",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd14115e20ab83005ebd194a8e4c13fa1b710e5e",
+          "message": "docs(algo): correct the offset-search iteration math (#1191)\n\nFollow-up to #1189: the loop runs 28 iterations, not 24 — 28 halvings\nfrom 64 reach scale ~2.4e-7 (min offset ~diag·2.4e-11). The intended fix\nfrom the review round missed the merge window; my reply on #1189\nreferenced a commit that never landed — this PR is the actual fix.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCorrected the offset-search iteration math: the loop runs 28 halvings\nfrom 64, not 24. Comments now match `for _ in 0..28`, and document the\nresulting scale (~2.4e-7) and min offset (~diag·2.4e-11) to clarify when\nthe fallback applies.\n\n<sup>Written for commit 0328d9a80a06cf36ff686530684209fd74584e36.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1191?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-23T01:00:54Z",
+          "tree_id": "402a33cbf015410f196b814abd55880345bc8dcc",
+          "url": "https://github.com/andymai/brepkit/commit/bd14115e20ab83005ebd194a8e4c13fa1b710e5e"
+        },
+        "date": 1784768687494,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 803383,
+            "range": "± 3220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 893343,
+            "range": "± 1869",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12065,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 660107,
+            "range": "± 2105",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21684188,
+            "range": "± 26764",
             "unit": "ns/iter"
           }
         ]
