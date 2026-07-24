@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784924315006,
+  "lastUpdate": 1784924805770,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11825,6 +11825,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21572944,
             "range": "± 505589",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "886535518a7cdc52495e0fd0a7a2b6ffbb02ee2f",
+          "message": "chore(main): release 2.128.4 (#1214)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.4](https://github.com/andymai/brepkit/compare/v2.128.3...v2.128.4)\n(2026-07-24)\n\n\n### Bug Fixes\n\n* **operations:** tessellate nested inner wires by even-odd nesting\ndepth ([#1212](https://github.com/andymai/brepkit/issues/1212))\n([8126072](https://github.com/andymai/brepkit/commit/8126072ccd0ff5add6eeb409a0506ac6397fb375))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.4 for `brepkit-wasm` fixes tessellation of nested inner\nwires using even-odd nesting depth, so complex faces render holes\ncorrectly. Version bump only; no API changes.\n\n- **Bug Fixes**\n- Tessellate nested inner wires by even-odd depth to handle multi-level\nholes and islands reliably.\n\n<sup>Written for commit b6836c322812016bda08275574b1c0ac8de30ca7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1214?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-24T20:24:19Z",
+          "tree_id": "fbb027aaee0d4fa4042f144a68f77dfadf8e0b71",
+          "url": "https://github.com/andymai/brepkit/commit/886535518a7cdc52495e0fd0a7a2b6ffbb02ee2f"
+        },
+        "date": 1784924804374,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 734360,
+            "range": "± 3372",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 823671,
+            "range": "± 8576",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10766,
+            "range": "± 273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 585742,
+            "range": "± 5530",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19562119,
+            "range": "± 147067",
             "unit": "ns/iter"
           }
         ]
