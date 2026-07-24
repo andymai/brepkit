@@ -132,6 +132,83 @@ fn build_honeycomb_grid(
     (topo, target, tools)
 }
 
+/// Build a kumiko-style lattice of thin interpenetrating box "struts": `bars`
+/// horizontal + `bars` vertical bars in one z-slab, crossing and overlapping in
+/// volume so all `2*bars` tools form ONE connected AABB-overlap cluster (the
+/// configuration `compound_cut` fuses via the N-way path). All struts are planar
+/// prisms sharing coplanar top/bottom planes — the coincident-face case the
+/// N-way same-domain pass resolves. Returns (topology, target slab, struts).
+fn build_strut_lattice(
+    bars: usize,
+) -> (
+    Topology,
+    brepkit_topology::solid::SolidId,
+    Vec<brepkit_topology::solid::SolidId>,
+) {
+    let mut topo = Topology::new();
+    let target = primitives::make_box(&mut topo, 100.0, 100.0, 10.0).unwrap();
+
+    let strut_w = 4.0;
+    let spacing = 100.0 / (bars + 1) as f64;
+    let mut tools = Vec::with_capacity(2 * bars);
+
+    for i in 0..bars {
+        let pos = spacing * (i + 1) as f64 - strut_w / 2.0;
+        // Horizontal bar: spans x, thin in y.
+        let h = primitives::make_box(&mut topo, 100.0, strut_w, 10.0).unwrap();
+        transform_solid(&mut topo, h, &Mat4::translation(0.0, pos, 0.0)).unwrap();
+        tools.push(h);
+        // Vertical bar: spans y, thin in x.
+        let v = primitives::make_box(&mut topo, strut_w, 100.0, 10.0).unwrap();
+        transform_solid(&mut topo, v, &Mat4::translation(pos, 0.0, 0.0)).unwrap();
+        tools.push(v);
+    }
+    (topo, target, tools)
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark: N-way vs sequential fuse-then-cut for an interpenetrating lattice
+// ---------------------------------------------------------------------------
+
+/// Isolates this operation's fuse strategy: both arms cut a slab by the union of
+/// a connected strut lattice, differing only in how the tools are combined.
+/// `nway` = `compound_cut` (single GFA arrangement over all struts); `sequential`
+/// = the old accumulate-then-cut (fuse each strut into a growing accumulator,
+/// then one cut).
+fn bench_compound_cut_struts(c: &mut Criterion) {
+    let mut group = c.benchmark_group("compound_cut_struts");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+
+    for &bars in &[3, 5, 7] {
+        let (base_topo, target, tools) = build_strut_lattice(bars);
+        let n = tools.len();
+
+        group.bench_function(format!("nway_N={n}"), |b| {
+            b.iter(|| {
+                let mut topo = base_topo.clone();
+                black_box(
+                    compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap(),
+                );
+            });
+        });
+
+        group.bench_function(format!("sequential_N={n}"), |b| {
+            b.iter(|| {
+                let mut topo = base_topo.clone();
+                let mut fused = tools[0];
+                for &t in &tools[1..] {
+                    fused = boolean(&mut topo, BooleanOp::Fuse, fused, t).unwrap();
+                }
+                black_box(boolean(&mut topo, BooleanOp::Cut, target, fused).unwrap());
+            });
+        });
+    }
+
+    group.finish();
+}
+
 // ---------------------------------------------------------------------------
 // Benchmark: compound_cut vs sequential for cylinder grids
 // ---------------------------------------------------------------------------
@@ -218,6 +295,7 @@ criterion_group!(
     compound_cut_scaling,
     bench_compound_cut_cylinders,
     bench_compound_cut_honeycomb,
+    bench_compound_cut_struts,
 );
 
 criterion_main!(compound_cut_scaling);
