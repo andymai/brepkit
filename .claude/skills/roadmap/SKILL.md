@@ -677,9 +677,17 @@ F=1920 free=723 over=333**. TWO CONCLUSIONS. (a) EVERY result is ALL-PLANAR alth
 goma's cost is not N-way boolean work but fallback meshing that grows superlinearly with tool
 count. The real fix is to stop falling back: find why GFA rejects bin-body x lattice-band. (b) From
 TWO tools on, `compound_cut` returns Ok with a BROKEN solid (756 free, 320 over) — a native repro
-of the open "mesh-boolean fallback emits OPEN meshes that get CONSUMED" row above. NEXT PROBE: the
-GFA rejection reason for base x tool0 (needs an algo-level harness; `brepkit-io` cannot reach
-`brepkit_algo`). TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
+of the open "mesh-boolean fallback emits OPEN meshes that get CONSUMED" row above. (7) ROOT FOUND — it is a GFA CORRECTNESS bug, not a perf bug (`RAW=1` mode in the same
+harness calls `gfa::boolean` directly, bypassing the ops gate; note `brepkit-algo` IS already a
+dev-dependency of `brepkit-io`, so io examples can reach it): **RAW cut 0 = 231ms, F=494,
+{cone:12, cylinder:24, plane:458}, free=30, over=0** versus the ops path's 2824ms/F=1003/all-plane
+for the SAME cut — the analytic engine is 12x faster and keeps every cone and cylinder, but leaves
+**30 free edges**, so `validate_boolean_result` rejects it and the mesh fallback runs. **RAW cut 1
+fails outright: "assembly failed: open growth shell with 20 faces would be dropped; aborting
+analytic assembly".** So the 203s is the CONSEQUENCE of those 30 free edges. THE TARGET IS NOW:
+why does cut 0 leave 30 free edges (F=494), and why does cut 1 drop an open 20-face growth shell?
+Fixing that makes goma analytic AND ~12x faster per cut, and removes the broken-fallback
+consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
 the call path you intend to claim about. REFUTED: the captured goma `compound_cut`

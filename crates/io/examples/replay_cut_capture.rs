@@ -72,6 +72,53 @@ fn main() {
         describe(&topo, t, &format!("tool{i}"));
     }
 
+    // RAW=1: call the analytic GFA directly, bypassing the ops-level gate and
+    // its mesh fallback, to see whether GFA itself produces a usable result.
+    if std::env::var("RAW").is_ok() {
+        let mut acc = base;
+        for (i, &tool) in tools.iter().enumerate() {
+            let t = Instant::now();
+            match brepkit_algo::gfa::boolean(
+                &mut topo,
+                brepkit_algo::bop::BooleanOp::Cut,
+                acc,
+                tool,
+            ) {
+                Ok(next) => {
+                    let faces = solid_faces(&topo, next).expect("faces");
+                    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+                    let mut mix: HashMap<&str, usize> = HashMap::new();
+                    for &fid in &faces {
+                        let f = topo.face(fid).expect("face");
+                        *mix.entry(f.surface().type_tag()).or_default() += 1;
+                        for wid in
+                            std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied())
+                        {
+                            for oe in topo.wire(wid).expect("wire").edges() {
+                                *uses.entry(oe.edge()).or_default() += 1;
+                            }
+                        }
+                    }
+                    let free = uses.values().filter(|&&c| c == 1).count();
+                    let over = uses.values().filter(|&&c| c > 2).count();
+                    let mut mix: Vec<_> = mix.into_iter().collect();
+                    mix.sort_unstable();
+                    println!(
+                        "  RAW cut {i}: {}ms F={} mix={mix:?} free={free} over={over}",
+                        t.elapsed().as_millis(),
+                        faces.len()
+                    );
+                    acc = next;
+                }
+                Err(e) => {
+                    println!("  RAW cut {i}: {}ms ERR {e}", t.elapsed().as_millis());
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
     let t0 = Instant::now();
     let result = compound_cut(&mut topo, base, &tools, BooleanOptions::default());
     let ms = t0.elapsed().as_millis();
