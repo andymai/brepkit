@@ -164,7 +164,7 @@ pub fn classify_coincident_coplanar(
 
         // Wholly-exterior wedge: outside-or-on everywhere, with real exterior
         // extent. A straddler (any strictly-inside vertex) is deferred.
-        let Some((_, tip)) = deepest_outside else {
+        let Some((depth, tip)) = deepest_outside else {
             return Ok(None);
         };
         if any_strictly_inside {
@@ -196,9 +196,38 @@ pub fn classify_coincident_coplanar(
         let inv = 1.0 / sub_verts.len() as f64;
         let centroid = Point3::new(cx * inv, cy * inv, cz * inv);
         let probe = (100.0 * plane_tol).max(1e-3);
-        let mut decided: Option<FaceClass> = None;
+
+        // Candidate probe locations along tip → centroid. The centroid fractions
+        // cover the wedge from rim to interior (a partially-internal coincident
+        // plane can persist at either end — the honeycomb's stacked cap persists
+        // near the RIM); the small ABSOLUTE nudges scaled to the wedge's own
+        // outside-extent `depth` stay near the tip inside the band and are the
+        // ONLY valid probes on a thin annulus (a ~1.2mm lip on a ~125mm face),
+        // where every centroid fraction jumps clear across the band into the hole
+        // (the opposing 2D region) and is rejected — without them the band face
+        // found no valid probe and was dropped.
+        let mut candidates: Vec<Point3> = Vec::with_capacity(6);
         for frac in [0.25_f64, 0.4, 0.55] {
-            let probe_xy = tip + (centroid - tip) * frac;
+            candidates.push(tip + (centroid - tip) * frac);
+        }
+        let dir = centroid - tip;
+        let dl = dir.length();
+        if dl > 1e-12 {
+            let dir_unit = dir * (1.0 / dl);
+            for scale in [0.5_f64, 0.25, 0.1] {
+                candidates.push(tip + dir_unit * (depth * scale).min(0.9 * dl));
+            }
+        }
+
+        // Decide from ALL valid probes, order-independently: if ANY strictly-
+        // outside probe finds the opposing solid persisting on a side, the plane
+        // is internal there → defer (keep). Only when at least one probe is valid
+        // and NONE show persistence is the plane a genuine local outer boundary →
+        // Outside. (A first-valid-wins scan was order-fragile: it could accept a
+        // both-sides-empty rim probe before reaching the honeycomb cap's interior
+        // persistence, or vice-versa.)
+        let mut any_valid = false;
+        for probe_xy in candidates {
             // Must still be strictly outside the opposing region and clear of
             // its boundary, else the probe is meaningless.
             if point_in_planar_region(probe_xy, &outer, &holes, &region_normal)
@@ -206,6 +235,7 @@ pub fn classify_coincident_coplanar(
             {
                 continue;
             }
+            any_valid = true;
             let probe_a = probe_xy + np * probe;
             let probe_b = probe_xy - np * probe;
             let (av, bv) = match geoms {
@@ -218,15 +248,12 @@ pub fn classify_coincident_coplanar(
                     ray_cast_inside_votes(topo, opposing_solid, probe_b)?,
                 ),
             };
-            decided = Some(if av < 2 && bv < 2 {
-                FaceClass::Outside
-            } else {
+            if av >= 2 || bv >= 2 {
                 // Solid persists on a side: internal plane → keep (defer).
                 return Ok(None);
-            });
-            break;
+            }
         }
-        return Ok(decided);
+        return Ok(any_valid.then_some(FaceClass::Outside));
     }
     Ok(None)
 }

@@ -562,63 +562,25 @@ prefer exact interval math wherever the salvageable fraction can be arbitrarily 
 and an arrangement trigger keyed to a post-hoc failure signature cannot demote a
 working case, which is the cheap way past this splitter's web of mutual calibrations.
 
-Custom-shape T fuse — ROOT RELOCATED TO THE INPUT OPERAND (2026-07-23; repro
-`~/.cache/brepkit-parity-captures/2026-07-22/tship29/` + `replay_lipfuse_t29.rs`,
-162ms GFA fail, reproduces on post-#1194 main). The dig had localized "assembly
-failed: no outer shell found (all shells classified as holes)" down to a spurious
-hole-less interface face `Id(463)` at z=13.3. Provenance probe (the `face_source`
-map already built in `builder_solid.rs` gives result-face → input-face directly):
-463's parent is **input face `Id(50)` of the LIP operand**, so 463 is spurious
-because its PARENT is. **`lipfuse-top.bin` is malformed on arrival.** The lip is a
-thin-walled BAND — classification scan lines at z=15 show material only in the
-~1.2mm rim and the two stem walls, interior empty — so its bottom at z=13.3 must be
-ONE RING face (outer 62.75-T + inner 61.55-T hole). Instead it is TWO nested
-same-orientation down-facing discs: `Id(50)` (16 edges, ±62.75, inners=0) and
-`Id(132)` (26 edges, ±61.55, inners=0). The body proves the contrast — its
-analogous z=16 top `Id(23)` is a correct ring (`inners=1`). This is the "ring lost
-its hole" / L-bubble class, occurring UPSTREAM rather than in this fuse; the 28
-triple-shared z=13.3 interface edges are both discs' images surviving together.
-Do NOT keep digging `perform_areas` / shell-orientation voting — that is the
-symptom.
-**PRODUCING OPERATION FOUND AND COMMITTED AS A READY-REPRO — no tool needed
-(2026-07-23, fixture `crates/io/tests/lipband_cut_inmem.rs`, 86ms).** The lip band
-is `cut(outer T-prism, inner T-frustum)`; both operands are well-formed solids
-(outer constant ±62.75; inner widening ±61.55 → ±62.75 so the laterals meet exactly
-at the top rim). Correct result: a band tapering to zero thickness at the top whose
-bottom is ONE ring face. Actual: the target's bottom passes through UNSPLIT (16
-edges, full ±62.75 outline) with the inner ±61.55 26-edge disc added alongside,
-both `inners=0`, same orientation. Volume 20108.8 vs the true 60735.9 − 54643.9 =
-6092.0. TWO HYPOTHESES RULED OUT by synthetic controls that are CORRECT today —
-do not re-derive them: (1) nested coplanar bottoms alone (box minus nested box
-sharing the bottom plane → one ring face, volume 3400.000 exact); (2) the
-zero-thickness pinch alone (cylinder r=10 minus cone r 9→10 same height → one ring
-face, volume 303.687 exact). Remaining differentiator: the non-convex T outline
-with arc corners, matching this family's earlier layer map (a concave corner
-appearing as chord segments on one operand against a true arc on the other).
-NEXT: dig the coplanar FF phase on the T bottoms — why the target's bottom is never
-split by the tool's nested boundary. Per doctrine, suspect classification before SD
-detection.
-TWO DURABLE BLIND SPOTS, both live on main and both worth their own work item:
-(1) `validate_solid` reports ZERO issues on this operand — edge-use counts, wire
-closure and Euler all pass, because two nested faces of the SAME orientation
-violate none of them. Any "validated OK" claim is blind to this class, exactly as
-the by-edge-id gate is blind to position-duplicate free edges.
-(2) The oracles DISAGREE and only one is right: `classify_point` maps the true
-band, while `solid_volume` over-counts badly. A doubled boundary gives EVEN ray
-crossings, so parity accidentally lands on the correct answer while signed-volume
-integration double-counts. Fresh evidence for "volume is never ground truth".
-(3) **The SHARPEST detector of this class — `solid_volume` is TRANSLATION-VARIANT
-on a malformed solid.** The two volume figures in this family are the SAME SHAPE:
-the `tship` frustum-cut band (F=98 curved=48, bbox z[-2.60,4.40]) measures
-20111.8, and `tship29/lipfuse-top.bin` (F=98 curved=48, bbox z[13.30,20.30] — the
-identical shape after the +15.90 z-translate this family is captured with)
-measures 65641.2. Same XY bbox ±62.75, same 7.0 height, 3.26x apart. For a
-well-formed closed boundary the z-dependent terms of the signed-volume integral
-cancel exactly, so volume MUST be translation-invariant; it is not here. This
-needs no second oracle — translate a solid, re-measure, and a changed volume
-proves an inconsistent boundary. Prefer it over the volume/classification
-disagreement. (Quote either number only WITH its z-range; they are not rival
-measurements of different objects.)
+Custom-shape T lip band cut — CLOSED (2026-07-24, fixtures
+`crates/io/tests/lipband_cut_inmem.rs` un-ignored + `tship_lipcut_inmem.rs` corrected).
+The "no outer shell found" T body+lip fuse failure traced to a malformed lip operand:
+`cut(outer T-prism, inner T-frustum)` produced a DOUBLED bottom (outer ±62.75 disc
+unsplit + tool's ±61.55 disc, both same-orientation) instead of one ring. Root was
+CLASSIFICATION not the FF split (doctrine held): the correctly-split band-bottom ring was
+mis-classified Inside and dropped because `classify_coincident_coplanar`'s depth probe
+stepped tip→centroid by fractions that overshoot a ~1.2mm annulus into the hole, finding
+no valid probe → unstable ray-cast → Inside. Fix (`classifier/mod.rs`): deep centroid
+fractions first (honeycomb stacked-cap foil needs them), then a thin-band absolute-nudge
+fallback near the tip. Band now single-covered, translation-invariant, vol 6090.8 (was
+the doubled 20108.8, which `tship_lipcut` had enshrined as "watertight" — its by-edge-id
+gate is blind to position-duplicate doubling). Benign residual: bottom tiles as ring + 2
+tiny T-armpit pieces (3 faces) from redundant FF-coplanar concave-corner sections — exact
+watertight tiling, not the defect. Tool-side fuse re-probe pending release.
+DURABLE detector reaffirmed: `solid_volume` is TRANSLATION-VARIANT on a doubled/malformed
+boundary (a doubled face breaks Σ(area·nz)=0) — translate and re-measure needs no second
+oracle. And `validate_solid` + the by-edge-id manifold gate are both BLIND to nested
+same-orientation / position-duplicate faces.
 
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
