@@ -667,8 +667,19 @@ saw. That hypothesis was untested, not refuted. (5) BISECT TELEMETRY (the right 
 batchSucceeded:1, singletonFallbacks:0, failedInputs:[]}` — **NO thrash**, one attempt, one success. So
 **ONE `cutAll` of just EIGHT tools takes 203.5s**. Those 8 tools are the carved kumiko lattice bands
 (each ~F=1146 per the captured replay), so this is a single honest N-way boolean of the bin body against
-8 very complex solids — squarely a BREPKIT perf defect, not tool-side structure. THE TARGET IS NOW ONE
-CALL WITH NINE OPERANDS: capture body + the 8 pattern solids via serializeSolid and replay natively. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
+8 very complex solids — squarely a BREPKIT perf defect, not tool-side structure. (6) CAPTURED AND REPLAYED NATIVELY (capture
+`~/.cache/brepkit-parity-captures/2026-07-24/goma-bisect/`, harness
+`crates/io/examples/replay_cut_capture.rs`, `CAPTURE_DIR=... [N]`): base is the bin body F=78
+{cone:12, cylinder:24, plane:42}; each tool is a carved lattice band F=663-726 ALL PLANE. Cutting
+N tools: **1 -> 2824ms F=1003 free=0 over=0; 2 -> 6187ms F=1519 free=756 over=320; 3 -> 12659ms
+F=1920 free=723 over=333**. TWO CONCLUSIONS. (a) EVERY result is ALL-PLANAR although the base has
+12 cones + 24 cylinders — the analytic types are destroyed, i.e. this is the MESH FALLBACK, so
+goma's cost is not N-way boolean work but fallback meshing that grows superlinearly with tool
+count. The real fix is to stop falling back: find why GFA rejects bin-body x lattice-band. (b) From
+TWO tools on, `compound_cut` returns Ok with a BROKEN solid (756 free, 320 over) — a native repro
+of the open "mesh-boolean fallback emits OPEN meshes that get CONSUMED" row above. NEXT PROBE: the
+GFA rejection reason for base x tool0 (needs an algo-level harness; `brepkit-io` cannot reach
+`brepkit_algo`). TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
 the call path you intend to claim about. REFUTED: the captured goma `compound_cut`
