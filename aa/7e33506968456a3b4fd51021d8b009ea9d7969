@@ -1,0 +1,24 @@
+crates/operations/src/boolean/tests.rs
+  s_5e1448ca841e6f::t_f5789667d57e1d 6392-6419
+  s_5e1448ca841e6f::t_62bd42986d4f67 6391
+  s_5e1448ca841e6f::t_f4fe00c908d4bd 6420-6422
+  s_5e1448ca841e6f::t_282fdaa6b31599 6423
+.claude/skills/roadmap/SKILL.md
+  s_5e1448ca841e6f::t_66c5e75ec54510 131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "aa7e33506968456a3b4fd51021d8b009ea9d7969",
+  "prompts": {},
+  "sessions": {
+    "s_5e1448ca841e6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d7e78e2c-32c0-4614-8cf0-23c4c356e272",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
