@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.32](https://github.com/andymai/brepkit/compare/v2.127.31...v2.127.32) (2026-07-24)
+
+
+### Performance
+
+* **operations:** batch compound_cut when the tools form one cluster ([#1198](https://github.com/andymai/brepkit/issues/1198)) ([a795086](https://github.com/andymai/brepkit/commit/a79508646899b472a4e79091de0f8b0e96a7c717))
+
 ## [2.127.31](https://github.com/andymai/brepkit/compare/v2.127.30...v2.127.31) (2026-07-23)
 
 
