@@ -6389,6 +6389,39 @@ fn cone_union_box_should_be_analytic() {
 }
 
 #[test]
+#[ignore = "diagnostic — how wide is the tangency failure band?"]
+fn diag_tangency_epsilon_band() {
+    use brepkit_math::mat::Mat4;
+    for &eps in &[-1e-3f64, -1e-5, -1e-7, -1e-9, 0.0, 1e-9, 1e-7, 1e-5, 1e-3] {
+        let d = 8.0 + 2.0 * eps; // half-width 4+eps vs cylinder r=4
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 4.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, d, d, 8.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            b,
+            &Mat4::translation(-d / 2.0, -d / 2.0, 6.0),
+        )
+        .unwrap();
+        let msg =
+            match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cyl, b)
+            {
+                Ok(r) => {
+                    let n = brepkit_topology::explorer::solid_faces(&topo, r)
+                        .unwrap()
+                        .len();
+                    match super::assembly::validate_boolean_result(&topo, r) {
+                        Ok(()) => format!("F={n:3} CLEAN"),
+                        Err(e) => format!("F={n:3} {e}"),
+                    }
+                }
+                Err(e) => format!("GFA ERR {e}"),
+            };
+        eprintln!("eps={eps:+.0e} half={:.9}: {msg}", d / 2.0);
+    }
+}
+
+#[test]
 #[ignore = "diagnostic — is a tangent section circle broken for cylinders too?"]
 fn diag_cylinder_box_tangency() {
     use brepkit_math::mat::Mat4;
