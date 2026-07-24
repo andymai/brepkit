@@ -637,12 +637,16 @@ whose full-suite verdict depends on cache warmth and machine load, not on the ke
 as a correctness bug.
 
 Failure families on that baseline: kumiko 14, permutation matrix 7, custom-shape 6, solid cutouts 3,
-then singles. **Kumiko's 14 are ONE root, not fourteen:** `goma carves a 1x1x6 bin` runs ~48s and then
-throws "recursive use of an object detected which would lead to unsafe aliasing in rust" — wasm borrow
-poisoning — and the following scenarios inherit it (two surface as "Shape handle has been disposed").
-Only `mitsukude bold` (bnd=571) has an independent assertion. **This CORRECTS the row above claiming the
-poisoning class is "NOT REPRODUCIBLE on 2.124.13"** — it reproduces on 2.128.2; use `lastPanicMessage()`
-to name the underlying panic. REFUTED: the captured goma `compound_cut`
+then singles. **Kumiko's 14 are ONE root, and that root is PERF, not a crash.** Isolated probe on
+published 2.128.2: the goma 1x1x6 export SUCCEEDS — 2.7MB of STL, `lastPanicMessage()` returns none, no
+panic anywhere — but it takes **849 SECONDS (14 min)**. The "recursive use of an object detected which
+would lead to unsafe aliasing in rust" seen in the suite is a CONSEQUENCE: the export blows through
+vitest's per-test timeout, the abandoned async generation chain stays pending, and it re-enters the
+kernel concurrently with the next test. The following kumiko scenarios then inherit the poisoned object
+(two surface as "Shape handle has been disposed"); only `mitsukude bold` (bnd=571) has an independent
+assertion. So do NOT chase this as a panic — `catch_unwind`/`lastPanicMessage` have nothing to report.
+Chase the 849s. Native `compound_cut` on the captured operands is only 11.8s, so the time is elsewhere in
+the tool's goma chain and needs a per-stage capture. REFUTED: the captured goma `compound_cut`
 (`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`, replay `crates/io/examples/replay_kumiko_goma.rs`)
 is NOT the culprit — all 180 tools replay in 11.8s with F=1146, free=0, over=0. The poisoning is
 elsewhere in that scenario's chain and needs a fresh capture.
