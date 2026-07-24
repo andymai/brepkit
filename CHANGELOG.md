@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.2](https://github.com/andymai/brepkit/compare/v2.128.1...v2.128.2) (2026-07-24)
+
+
+### Bug Fixes
+
+* **operations:** guard fuse_cluster against empty input ([#1207](https://github.com/andymai/brepkit/issues/1207)) ([4625701](https://github.com/andymai/brepkit/commit/4625701129b132bbeb8f51c8526f12f2e0f2b009))
+
 ## [2.128.1](https://github.com/andymai/brepkit/compare/v2.128.0...v2.128.1) (2026-07-24)
 
 
