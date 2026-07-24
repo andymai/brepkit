@@ -1,0 +1,23 @@
+crates/io/tests/oring_nested_holes.rs
+  s_5e1448ca841e6f::t_f9c4875a9d396f 1-116
+crates/io/tests/data/oring_nested_holes.step
+  s_5e1448ca841e6f::t_daa411975a1ce4 1-1596
+crates/operations/src/tessellate/planar.rs
+  s_5e1448ca841e6f::t_79b50268b58fd9 564,698-739,1047-1048,1163-1164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "1b8fcd162dbb57f42bb9bba5170a0d5091af0cc6",
+  "prompts": {},
+  "sessions": {
+    "s_5e1448ca841e6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d7e78e2c-32c0-4614-8cf0-23c4c356e272",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
