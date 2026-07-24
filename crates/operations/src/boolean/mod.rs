@@ -850,14 +850,20 @@ pub fn compound_cut(
     // identical. Tools are first grouped into AABB-overlap clusters
     // (union-find): tools in one cluster get a real fuse (the coaxial
     // magnet+screw drill pair), while the pairwise-disjoint cluster
-    // representatives merge via the free disjoint-shell shortcut. Batching
-    // needs ≥2 disjoint clusters — with everything in one overlapping blob
-    // the sequential loop is kept unchanged. Any failure falls back to the
-    // sequential loop.
+    // representatives merge via the free disjoint-shell shortcut.
+    //
+    // A SINGLE cluster batches too. That case used to fall through to the
+    // sequential loop on the assumption that fusing one overlapping blob costs
+    // more than it saves, but the kumiko wall lattice refutes it: 180 struts
+    // connected at their crossings are one cluster, and on the captured
+    // operands batching runs 51.1s against 83.7s sequential for an identical
+    // 1146-face result. Fusing scales with the tools (small prisms); the
+    // sequential loop re-cuts the whole target once per tool. Any failure
+    // falls back to the sequential loop.
     let mut result = target;
     let mut batched = false;
     let clusters = cluster_tools_by_aabb(topo, tools);
-    if tools.len() >= 2 && clusters.as_ref().is_some_and(|c| c.len() >= 2) {
+    if tools.len() >= 2 && clusters.as_ref().is_some_and(|c| !c.is_empty()) {
         let clusters = clusters.unwrap_or_default();
         let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
             let fused = cluster[1..]

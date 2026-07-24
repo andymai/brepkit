@@ -146,10 +146,10 @@ fn compound_cut_disjoint_drills_matches_sequential() {
 }
 
 #[test]
-fn compound_cut_overlapping_tools_stays_sequential_correct() {
-    // Two tools that overlap EACH OTHER must not take the batched shortcut's
-    // disjoint-merge assumption; whatever path runs, the result must equal
-    // the union-cut volume.
+fn compound_cut_overlapping_tools_batches_correctly() {
+    // Two tools that overlap EACH OTHER form ONE AABB cluster, so they take the
+    // batched path via a real fuse rather than the disjoint-merge shortcut.
+    // Whichever path runs, the result must equal the union-cut volume.
     use crate::measure::solid_volume;
     use crate::transform::transform_solid;
     use brepkit_math::mat::Mat4;
