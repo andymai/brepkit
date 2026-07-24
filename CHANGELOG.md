@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.3](https://github.com/andymai/brepkit/compare/v2.128.2...v2.128.3) (2026-07-24)
+
+
+### Bug Fixes
+
+* **algo:** classify thin coincident-band ring by absolute-nudge probe ([#1209](https://github.com/andymai/brepkit/issues/1209)) ([0e09413](https://github.com/andymai/brepkit/commit/0e09413d5e3f4c8e7c037fbee66bff32cb88ba90))
+
 ## [2.128.2](https://github.com/andymai/brepkit/compare/v2.128.1...v2.128.2) (2026-07-24)
 
 
