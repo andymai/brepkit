@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784931464189,
+  "lastUpdate": 1784934166178,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11987,6 +11987,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21619093,
             "range": "± 41442",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "433e89d44a1f0e85c6cd89dd45b92e869414a2f6",
+          "message": "test(io): measure region-complexity scaling in the kumiko carve (#1216)\n\nFollow-on to #1215's kumiko root. Adds a `CHUNK=n` mode to the goma\nreplay harness and records what the measurements actually show —\nincluding a hypothesis of mine they refute. No production code.\n\n## cutAll is only 23% of the time\n\nWrapping `cutAll` across a whole goma generation (`vi.mock` +\n`importOriginal`):\n\n```\ngenerateBin total: 911238ms\ncutAll calls: 32   summed: 205715ms (23% of total)   failed: 0\ntool counts: 4,6,7,180,6,3,14,80  ×4\n```\n\n- **Zero failures**, so brepjs's bisecting `cutAll` is **not** thrashing\n— that hypothesis is dead.\n- Structure is 4 chunks × 8 families, matching the source.\n- **~705 s (77%) of generation is not in `cutAll` at all**, and is still\nunlocated.\n\n## Batching is real but secondary\n\n`CHUNK=n` replays the captured 180 tools in n sequential batches:\n\n| batching | total | per-batch |\n|---|---|---|\n| 1 × 180 | **11.7 s** | — |\n| 3 × 60 | 15.8 s | 1.7 → 5.3 → 8.8 |\n| 6 × 30 | 18.6 s | 0.4 → 0.8 → 2.4 → 4.5 → 6.1 → 4.4 |\n\nAll three end at the identical `F=1146`, so this is pure batching cost.\nThe same 30 tools cost **393 ms at F=168 but 6103 ms at F=1131** — cost\ngrows steeply with region complexity, which makes the tool's per-family\nloop over an accumulating region the pessimal shape.\n\n**But that cannot recover the missing 77%.** I previously suggested\nfusing the families into one `cutAll` as the fix; on these numbers that\naddresses part of 23%, not the bulk. Corrected here and in the roadmap.\n\n## Also unexplained\n\nThe 180-tool call takes **33.5 s in-tool vs 11.7 s natively** — 3× on\nidentical work. Not chased yet.\n\nNext probe is to wrap the rest of the brepjs ops rather than just\n`cutAll` — candidates for the 705 s are the per-strut\nsketch/extrude/translate prism construction and `fuseAllOrNull` in\n`wallPatternClips`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a chunked replay mode (`CHUNK=n`) to the kumiko goma harness to\nmeasure how `compound_cut` cost scales with region complexity; also\ncorrects the roadmap by removing a stale claim and recording measured\nresults (cutAll ~23% of total; batching adds overhead). Testing-only; no\nproduction code changes.\n\n- **New Features**\n- `crates/io/examples/replay_kumiko_goma.rs`: support `CHUNK=n` to run\n`compound_cut` in N sequential batches, printing per-batch timing and\nface count; guard `CHUNK=0`/empty tools and surface face-enumeration\nerrors.\n\n<sup>Written for commit b0b98da5c579741c7c786290bf0df42b4ae02d51.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1216?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T16:00:08-07:00",
+          "tree_id": "196b6beb8bd50386cbcc24e8dc0ed6fff10a7f38",
+          "url": "https://github.com/andymai/brepkit/commit/433e89d44a1f0e85c6cd89dd45b92e869414a2f6"
+        },
+        "date": 1784934164622,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 820155,
+            "range": "± 1913",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 909902,
+            "range": "± 2212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12099,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 666765,
+            "range": "± 15849",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21615860,
+            "range": "± 72185",
             "unit": "ns/iter"
           }
         ]
