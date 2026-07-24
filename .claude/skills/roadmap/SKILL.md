@@ -645,10 +645,21 @@ vitest's per-test timeout, the abandoned async generation chain stays pending, a
 kernel concurrently with the next test. The following kumiko scenarios then inherit the poisoned object
 (two surface as "Shape handle has been disposed"); only `mitsukude bold` (bnd=571) has an independent
 assertion. So do NOT chase this as a panic — `catch_unwind`/`lastPanicMessage` have nothing to report.
-Chase the 849s. MEASURED SPLIT: `generateBin` alone is **847s** of the 849 — tessellation and STL are noise, so this is the boolean chain, not the mesher. Native `compound_cut` on the captured operands is only 11.8s (F=1146, clean), so one call is not the story. STRUCTURE (code, `kumikoWrapBuilder.ts` ~line 411): the carve loops `cutAll(region, family)` once PER FAMILY over an ACCUMULATING region, and that whole function runs per perimeter chunk — so there are many such calls, each starting from a more complex region than the capture. NOT YET MEASURED whether the total is simply their sum, or whether brepjs's bisecting `cutAll` (try the whole batch, on failure split and recurse) is thrashing on a failing batch. Next probe: count and time the actual cutAll invocations and their tool counts during one goma generation — do not assume the single capture is representative. REFUTED: the captured goma `compound_cut`
-(`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`, replay `crates/io/examples/replay_kumiko_goma.rs`)
-is NOT the culprit — all 180 tools replay in 11.8s with F=1146, free=0, over=0. The poisoning is
-elsewhere in that scenario's chain and needs a fresh capture.
+Chase the 849s. MEASURED, in order: (1) `generateBin` alone is **847s** of the 849 — tessellation and STL
+are noise, so it is generation, not the mesher. (2) Wrapping `cutAll` across a whole generation (vi.mock)
+gives **32 calls, ZERO failures** — no bisect thrash — in 4 chunks x 8 families (tool counts
+4,6,7,180,6,3,14,80 repeated 4x), summing to only **206s of 911s = 23%**. **So ~705s (77%) is NOT in
+cutAll**, and is still UNLOCATED — do not assume it is the boolean chain. Candidates: the per-strut
+sketch/extrude/translate prism construction (thousands of small kernel ops), `fuseAllOrNull` in
+wallPatternClips, or JS-side lattice work. (3) Batching is real but SECONDARY: native chunked replay
+(`CHUNK=n` in `crates/io/examples/replay_kumiko_goma.rs`) gives 1x180 = 11.7s vs 3x60 = 15.8s vs 6x30 =
+18.6s, and the SAME 30 tools cost 393ms at F=168 vs 6103ms at F=1131 — cost grows steeply with region
+complexity, so the per-family loop over an accumulating region is the pessimal shape, but fixing it
+cannot recover the missing 77%. Also unexplained: that 180-tool call is 33.5s in-tool vs 11.7s natively
+(3x). NEXT PROBE: a V8 `--cpu-prof` of one generation — the wasm-vs-JS self-time split decides whether
+this is brepkit's problem at all. REFUTED: the captured goma `compound_cut`
+(`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`) is NOT the culprit — all 180 tools replay in
+11.8s with F=1146, free=0, over=0.
 
 CAUTION on counting: the baseline's classified kinds (23 boundary-edge, 2 non-manifold, 4 poisoning,
 1 timeout) sum to 30 of 43, so ~13 failures carry no recognised error form — probably cascade
