@@ -9,7 +9,7 @@ use brepkit_topology::solid::SolidId;
 
 use crate::bop::BooleanOp;
 use crate::builder::Builder;
-use crate::ds::GfaArena;
+use crate::ds::{GfaArena, GfaShapeStoreN};
 use crate::error::AlgoError;
 use crate::pave_filler;
 
@@ -100,6 +100,54 @@ pub fn boolean_with_tolerance(
     let result = store.export_solid(topo, store_result)?;
 
     Ok(result)
+}
+
+/// Fuse **N** solids into one via a single GFA arrangement.
+///
+/// One pass over all operands instead of the sequential pairwise fuse's
+/// re-processing of a growing accumulator (O(n²)). Runs the N-way pave filler
+/// (pairwise intersection into one arena, spatially pruned) then the N-way
+/// builder (split once, classify each sub-face against all other sources, keep
+/// the union boundary, resolve coincident faces).
+///
+/// Fuse-only, and currently limited to the planar-coincidence cases the N-way
+/// builder handles — it returns an error (for the caller to fall back to the
+/// sequential fuse) on a non-planar coincident contact or an unresolved
+/// coincidence. `sources` must be non-empty; a single source returns a copy.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if `sources` is empty or any GFA stage fails.
+pub fn fuse_n(topo: &mut Topology, sources: &[SolidId]) -> Result<SolidId, AlgoError> {
+    match sources {
+        [] => Err(AlgoError::AssemblyFailed(
+            "fuse_n needs at least one source solid".into(),
+        )),
+        [only] => {
+            // A copy so the caller owns a distinct result, mirroring the
+            // store round-trip the multi-source path performs.
+            let store = GfaShapeStoreN::new(topo, &[*only])?;
+            store.export_solid(topo, store.sources[0])
+        }
+        _ => {
+            let tol = Tolerance::default();
+            let mut store = GfaShapeStoreN::new(topo, sources)?;
+
+            let mut arena = GfaArena::new();
+            pave_filler::run_pave_filler_n(&mut store.topo, &store.sources, tol, &mut arena)?;
+
+            let (store_topo, store_result) = crate::builder::build_fuse_n(
+                std::mem::take(&mut store.topo),
+                arena,
+                &store.sources,
+                &store.face_source,
+                tol,
+            )?;
+            store.topo = store_topo;
+
+            store.export_solid(topo, store_result)
+        }
+    }
 }
 
 /// Run a GFA boolean, also returning each result face's provenance.

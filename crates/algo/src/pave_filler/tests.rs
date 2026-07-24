@@ -1587,3 +1587,295 @@ fn gfa_cut_shelled_box_through_floor_is_manifold() {
         "closed manifold: every edge shared by exactly two wires"
     );
 }
+
+// ── N-way pave filler (run_pave_filler_n) ───────────────────────────────
+
+#[test]
+fn interacting_pairs_prunes_disjoint_boxes() {
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+    let mut topo = Topology::default();
+    // Unit cubes span [0,1], [0.5,1.5], [1.0,2.0]: 0&1 overlap, 1&2 overlap,
+    // 0&2 only touch at x=1.0 (within tol → still interacting), 0&3 disjoint.
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+    let c = make_unit_cube_manifold_at(&mut topo, 1.0, 0.0, 0.0);
+    let d = make_unit_cube_manifold_at(&mut topo, 3.0, 0.0, 0.0); // far away
+
+    let pairs = super::interacting_pairs(&topo, &[a, b, c, d], tol);
+    assert!(pairs.contains(&(0, 1)), "0&1 overlap");
+    assert!(pairs.contains(&(1, 2)), "1&2 overlap");
+    // 0&3 and 1&3 and 2&3 are far apart and must be pruned.
+    assert!(!pairs.contains(&(0, 3)), "0&3 disjoint, pruned");
+    assert!(!pairs.contains(&(1, 3)), "1&3 disjoint, pruned");
+    assert!(!pairs.contains(&(2, 3)), "2&3 disjoint, pruned");
+}
+
+#[test]
+fn pave_filler_n_empty_sources_errors() {
+    let mut topo = Topology::default();
+    let tol = brepkit_math::tolerance::Tolerance::default();
+    let mut arena = GfaArena::new();
+    assert!(crate::pave_filler::run_pave_filler_n(&mut topo, &[], tol, &mut arena).is_err());
+}
+
+/// For N=2 the N-way pave filler runs the exact same phase sequence as the
+/// two-solid `run_pave_filler`, so the full pipeline (pave filler → builder →
+/// fuse) must produce an identical result. Compare the fused face count.
+#[test]
+fn pave_filler_n_matches_two_solid_for_n2() {
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+
+    let fuse_faces = |use_nway: bool| -> usize {
+        let mut topo = Topology::default();
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+        let mut arena = GfaArena::new();
+        if use_nway {
+            crate::pave_filler::run_pave_filler_n(&mut topo, &[a, b], tol, &mut arena).unwrap();
+        } else {
+            crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+        }
+        let mut builder = crate::builder::Builder::with_tolerance(topo, arena, a, b, tol);
+        builder.perform().unwrap();
+        let (rtopo, result) = builder.build_result(crate::bop::BooleanOp::Fuse).unwrap();
+        solid_faces(&rtopo, result).unwrap().len()
+    };
+
+    let two_solid = fuse_faces(false);
+    let n_way = fuse_faces(true);
+    assert!(two_solid > 0, "2-solid fuse produced faces");
+    assert_eq!(
+        two_solid, n_way,
+        "N=2 n-way pave filler must match the 2-solid fuse face count"
+    );
+}
+
+/// Smoke test that the pairwise accumulation over THREE solids runs and
+/// actually splits shared edges. The middle box overlaps both neighbours, so
+/// the arena must end with at least one edge carrying multiple pave blocks
+/// (i.e. split by an intersection). Proves the phases accumulate into one arena
+/// across pairs without a hidden two-solid assumption.
+#[test]
+fn pave_filler_n_accumulates_three_overlapping_boxes() {
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+    let mut topo = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+    let c = make_unit_cube_manifold_at(&mut topo, 1.0, 0.0, 0.0);
+
+    let mut arena = GfaArena::new();
+    crate::pave_filler::run_pave_filler_n(&mut topo, &[a, b, c], tol, &mut arena).unwrap();
+
+    let split_edges = arena
+        .edge_pave_blocks
+        .values()
+        .filter(|blocks| blocks.len() > 1)
+        .count();
+    assert!(
+        split_edges > 0,
+        "three overlapping boxes must split at least one shared edge \
+         (arena accumulated no splits — pairwise phases did not accumulate)"
+    );
+}
+
+// ── End-to-end N-way fuse (store → pave_filler_n → build_fuse_n) ─────────
+
+/// Count how many distinct edges of a solid are used by exactly two faces
+/// (manifold) vs otherwise, as a watertightness proxy.
+fn edge_face_share(topo: &Topology, solid: brepkit_topology::solid::SolidId) -> (usize, usize) {
+    use std::collections::HashMap;
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *uses.entry(oe.edge().index()).or_default() += 1;
+            }
+        }
+    }
+    let two = uses.values().filter(|&&c| c == 2).count();
+    let other = uses.values().filter(|&&c| c != 2).count();
+    (two, other)
+}
+
+/// N=2: the N-way fuse of two interpenetrating boxes (offset on all three axes,
+/// so no faces are coplanar-coincident) must match the standard two-solid fuse
+/// face count and be watertight.
+#[test]
+fn build_fuse_n_two_interpenetrating_boxes_matches_two_solid() {
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+
+    // Two-solid reference.
+    let two_solid_faces = {
+        let mut topo = Topology::default();
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.5, 0.5);
+        let mut arena = GfaArena::new();
+        crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+        let mut builder = crate::builder::Builder::with_tolerance(topo, arena, a, b, tol);
+        builder.perform().unwrap();
+        let (rtopo, result) = builder.build_result(crate::bop::BooleanOp::Fuse).unwrap();
+        solid_faces(&rtopo, result).unwrap().len()
+    };
+
+    // N-way path.
+    let mut src = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut src, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut src, 0.5, 0.5, 0.5);
+    let mut store = crate::ds::GfaShapeStoreN::new(&src, &[a, b]).unwrap();
+    let mut arena = GfaArena::new();
+    crate::pave_filler::run_pave_filler_n(&mut store.topo, &store.sources, tol, &mut arena)
+        .unwrap();
+    let (topo, result) = crate::builder::build_fuse_n(
+        std::mem::take(&mut store.topo),
+        arena,
+        &store.sources,
+        &store.face_source,
+        tol,
+    )
+    .unwrap();
+
+    let n_faces = solid_faces(&topo, result).unwrap().len();
+    assert_eq!(
+        n_faces, two_solid_faces,
+        "N-way fuse face count must match the two-solid fuse"
+    );
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(
+        two > 0 && other == 0,
+        "N-way fuse must be watertight (every edge shared by 2 faces); got two={two} other={other}"
+    );
+}
+
+/// N=3: three boxes each offset diagonally so consecutive boxes interpenetrate
+/// and none share a coplanar face. The N-way fuse produces one watertight solid
+/// in a single pass.
+#[test]
+fn build_fuse_n_three_interpenetrating_boxes_is_watertight() {
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+
+    let mut src = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut src, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut src, 0.5, 0.5, 0.5);
+    let c = make_unit_cube_manifold_at(&mut src, 1.0, 1.0, 1.0);
+    let mut store = crate::ds::GfaShapeStoreN::new(&src, &[a, b, c]).unwrap();
+    let mut arena = GfaArena::new();
+    crate::pave_filler::run_pave_filler_n(&mut store.topo, &store.sources, tol, &mut arena)
+        .unwrap();
+    let (topo, result) = crate::builder::build_fuse_n(
+        std::mem::take(&mut store.topo),
+        arena,
+        &store.sources,
+        &store.face_source,
+        tol,
+    )
+    .unwrap();
+
+    assert!(
+        !solid_faces(&topo, result).unwrap().is_empty(),
+        "produced a solid"
+    );
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(
+        two > 0 && other == 0,
+        "three-box N-way fuse must be watertight; got two={two} other={other}"
+    );
+}
+
+// ── N-way fuse with coincident faces (cross-source same-domain) ──────────
+
+/// Run the full N-way fuse pipeline for `offsets` unit cubes and return
+/// (result topology, solid, face count).
+fn nway_fuse(offsets: &[[f64; 3]]) -> (Topology, brepkit_topology::solid::SolidId) {
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+    let mut src = Topology::default();
+    let solids: Vec<_> = offsets
+        .iter()
+        .map(|o| make_unit_cube_manifold_at(&mut src, o[0], o[1], o[2]))
+        .collect();
+    let mut store = crate::ds::GfaShapeStoreN::new(&src, &solids).unwrap();
+    let mut arena = GfaArena::new();
+    crate::pave_filler::run_pave_filler_n(&mut store.topo, &store.sources, tol, &mut arena)
+        .unwrap();
+    crate::builder::build_fuse_n(
+        std::mem::take(&mut store.topo),
+        arena,
+        &store.sources,
+        &store.face_source,
+        tol,
+    )
+    .unwrap()
+}
+
+/// Axis-aligned overlapping boxes share coincident coplanar faces (the top,
+/// bottom, front and back planes coincide over the overlap). Cross-source
+/// same-domain must resolve them so the N-way fuse still matches the two-solid
+/// fuse and is watertight — the case that used to bail.
+#[test]
+fn build_fuse_n_axis_aligned_overlap_matches_two_solid() {
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+
+    let two_solid = {
+        let mut topo = Topology::default();
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+        let mut arena = GfaArena::new();
+        crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+        let mut builder = crate::builder::Builder::with_tolerance(topo, arena, a, b, tol);
+        builder.perform().unwrap();
+        let (rtopo, result) = builder.build_result(crate::bop::BooleanOp::Fuse).unwrap();
+        solid_faces(&rtopo, result).unwrap().len()
+    };
+
+    let (topo, result) = nway_fuse(&[[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]]);
+    let n_faces = solid_faces(&topo, result).unwrap().len();
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(two > 0 && other == 0, "watertight; two={two} other={other}");
+    assert_eq!(
+        n_faces, two_solid,
+        "N-way overlap fuse matches the two-solid fuse"
+    );
+}
+
+/// Two boxes abutting face-to-face: the shared wall is an opposite-oriented
+/// coincident pair (material on both sides), so both faces must be dropped,
+/// producing one watertight 2×1×1 bar.
+#[test]
+fn build_fuse_n_abutting_boxes_drop_shared_wall() {
+    use brepkit_topology::explorer::solid_faces;
+    let (topo, result) = nway_fuse(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(
+        two > 0 && other == 0,
+        "abutting fuse watertight; two={two} other={other}"
+    );
+    // The shared x=1 wall (one face from each box) is dropped; a clean bar has
+    // fewer faces than the 12 of two separate boxes.
+    let n = solid_faces(&topo, result).unwrap().len();
+    assert!(n < 12, "shared wall dropped, got {n} faces");
+}
+
+/// Three axis-aligned overlapping boxes fuse to one watertight solid in a single
+/// pass, resolving coincident faces between every interacting pair.
+#[test]
+fn build_fuse_n_three_axis_aligned_row_watertight() {
+    use brepkit_topology::explorer::solid_faces;
+    let (topo, result) = nway_fuse(&[[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+    assert!(!solid_faces(&topo, result).unwrap().is_empty());
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(
+        two > 0 && other == 0,
+        "three-box row watertight; two={two} other={other}"
+    );
+}

@@ -19,6 +19,7 @@ use std::hash::BuildHasher;
 
 use super::SubFace;
 use crate::ds::{GfaArena, Rank};
+use crate::error::AlgoError;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -124,16 +125,33 @@ type EdgeSet = Vec<(QVert, QVert, QVert)>;
 /// Returns a list of SD pairs WITHOUT modifying sub-face classifications.
 /// The BOP selector uses these pairs for operation-specific handling.
 #[allow(clippy::too_many_lines)]
-pub fn detect_same_domain<S: BuildHasher>(
+/// Coincidence grouping shared by the 2-operand and N-way SD emissions.
+///
+/// `sd_groups` maps each union-find root to the coincident sub-face indices in
+/// that group; `pair_data` maps a directly-unioned `(min, max)` pair to whether
+/// the two faces share outward orientation; `geometric_overlap_groups` holds the
+/// roots whose union came from the geometric-containment pass. The grouping is
+/// rank-agnostic — the emission step interprets it per boolean operation.
+struct SdGrouping {
+    sd_groups: HashMap<usize, Vec<usize>>,
+    pair_data: HashMap<(usize, usize), bool>,
+    geometric_overlap_groups: HashSet<usize>,
+}
+
+/// Detect and union all coincident (same-domain) sub-faces.
+fn build_sd_grouping(
     topo: &Topology,
     arena: &GfaArena,
     sub_faces: &[SubFace],
-    _face_ranks: &HashMap<FaceId, Rank, S>,
     tol: Tolerance,
-) -> SameDomainResult {
+) -> SdGrouping {
     let n = sub_faces.len();
     if n < 2 {
-        return SameDomainResult::default();
+        return SdGrouping {
+            sd_groups: HashMap::new(),
+            pair_data: HashMap::new(),
+            geometric_overlap_groups: HashSet::new(),
+        };
     }
 
     // Use quantized vertex positions (not VertexId) so that VV-merged
@@ -386,6 +404,29 @@ pub fn detect_same_domain<S: BuildHasher>(
         }
     }
 
+    SdGrouping {
+        sd_groups,
+        pair_data,
+        geometric_overlap_groups,
+    }
+}
+
+/// Two-operand same-domain detection: split each coincident group into a
+/// cross-rank [`SameDomainPair`] plus within-rank duplicates for the BOP
+/// selector. Behaviour is unchanged from before the grouping was extracted.
+pub fn detect_same_domain<S: BuildHasher>(
+    topo: &Topology,
+    arena: &GfaArena,
+    sub_faces: &[SubFace],
+    _face_ranks: &HashMap<FaceId, Rank, S>,
+    tol: Tolerance,
+) -> SameDomainResult {
+    let SdGrouping {
+        sd_groups,
+        pair_data,
+        geometric_overlap_groups,
+    } = build_sd_grouping(topo, arena, sub_faces, tol);
+
     let mut pairs = Vec::new();
     let mut within_rank_dups = Vec::new();
 
@@ -499,6 +540,90 @@ pub fn detect_same_domain<S: BuildHasher>(
         pairs,
         within_rank_dups,
     }
+}
+
+/// N-way FUSE same-domain decisions over coincident face groups.
+pub struct FuseNSameDomain {
+    /// Every sub-face that belongs to a coincident group. These are handled
+    /// here and excluded from the caller's normal inside/outside classification.
+    pub grouped: HashSet<usize>,
+    /// For each SAME-oriented (shared-exterior) group, its single kept
+    /// representative paired with the set of source indices in that group. The
+    /// caller keeps the representative only if it is also outside every source
+    /// NOT in the group (a third solid could still cover it). Opposite-oriented
+    /// (internal-interface) groups contribute members to `grouped` only — all
+    /// dropped.
+    pub keep_reprs: Vec<(usize, HashSet<usize>)>,
+}
+
+/// Resolve coincident faces for an N-way FUSE.
+///
+/// Reuses the rank-agnostic [`build_sd_grouping`] and decides each group by the
+/// effective outward normals of its members (planar only):
+///
+/// - **All aligned** — the faces bound the union on the same side; it is an
+///   exterior boundary, so keep exactly one (the lowest-indexed member) and drop
+///   the coincident duplicates.
+/// - **Mixed** — material lies on both sides of the shared plane, so the region
+///   is interior to the union; drop every member.
+///
+/// `source[i]` is the global source index of sub-face `i`.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] on a coincident group with a non-planar member, whose
+/// orientation is not a single vector — the caller should fall back to the
+/// sequential path.
+pub fn detect_same_domain_fuse_n(
+    topo: &Topology,
+    arena: &GfaArena,
+    sub_faces: &[SubFace],
+    source: &[usize],
+    tol: Tolerance,
+) -> Result<FuseNSameDomain, AlgoError> {
+    let SdGrouping { sd_groups, .. } = build_sd_grouping(topo, arena, sub_faces, tol);
+
+    let mut grouped = HashSet::new();
+    let mut keep_reprs = Vec::new();
+
+    for members in sd_groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+
+        let mut normals = Vec::with_capacity(members.len());
+        for &m in members {
+            let normal = topo
+                .face(sub_faces[m].face_id)?
+                .effective_plane_normal()
+                .ok_or_else(|| {
+                    AlgoError::AssemblyFailed(
+                        "N-way fuse: non-planar coincident face; sequential fallback".into(),
+                    )
+                })?;
+            normals.push(normal);
+        }
+
+        for &m in members {
+            grouped.insert(m);
+        }
+
+        let reference = normals[0];
+        let all_aligned = normals.iter().all(|n| n.dot(reference) > 0.0);
+        if all_aligned {
+            // Shared exterior boundary — keep exactly one representative.
+            let repr = members.iter().copied().min().unwrap_or(members[0]);
+            let group_sources: HashSet<usize> = members.iter().map(|&m| source[m]).collect();
+            keep_reprs.push((repr, group_sources));
+        }
+        // Mixed orientation → interior interface → drop all (members already in
+        // `grouped`, none pushed to `keep_reprs`).
+    }
+
+    Ok(FuseNSameDomain {
+        grouped,
+        keep_reprs,
+    })
 }
 
 /// Compute the canonical edge set for a face using quantized vertex positions.
