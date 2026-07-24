@@ -81,31 +81,44 @@ fn t_lip_frustum_cut_is_analytic_and_watertight() {
     // horizontal area there equals the outer-minus-inner bottom area — not two
     // nested same-orientation discs (the doubled bottom). A doubled bottom
     // passes the by-edge-id manifold gate above, so it must be caught here.
-    let mut bottom_with_hole = 0usize;
-    for &fid in &faces {
-        let face = topo.face(fid).unwrap();
-        if face.surface().type_tag() != "plane" {
-            continue;
+    let bottom_area = |solid: SolidId| -> (usize, f64) {
+        let mut with_hole = 0usize;
+        let mut area = 0.0;
+        for fid in solid_faces(&topo, solid).unwrap() {
+            let face = topo.face(fid).unwrap();
+            if face.surface().type_tag() != "plane" {
+                continue;
+            }
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            let zs: Vec<f64> = wire
+                .edges()
+                .iter()
+                .flat_map(|oe| {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    [e.start(), e.end()].map(|v| topo.vertex(v).unwrap().point().z())
+                })
+                .collect();
+            let zmin = zs.iter().copied().fold(f64::MAX, f64::min);
+            let zmax = zs.iter().copied().fold(f64::MIN, f64::max);
+            if (zmax - zmin).abs() < 1e-6 && (zmin + 2.6).abs() < 1e-3 {
+                if !face.inner_wires().is_empty() {
+                    with_hole += 1;
+                }
+                area += brepkit_operations::measure::face_area(&topo, fid, 0.01).unwrap();
+            }
         }
-        let wire = topo.wire(face.outer_wire()).unwrap();
-        let zs: Vec<f64> = wire
-            .edges()
-            .iter()
-            .flat_map(|oe| {
-                let e = topo.edge(oe.edge()).unwrap();
-                [e.start(), e.end()].map(|v| topo.vertex(v).unwrap().point().z())
-            })
-            .collect();
-        let zmin = zs.iter().copied().fold(f64::MAX, f64::min);
-        let zmax = zs.iter().copied().fold(f64::MIN, f64::max);
-        if (zmax - zmin).abs() < 1e-6 && (zmin + 2.6).abs() < 1e-3 && !face.inner_wires().is_empty()
-        {
-            bottom_with_hole += 1;
-        }
-    }
+        (with_hole, area)
+    };
+    let (bottom_with_hole, band_bottom_area) = bottom_area(result);
     assert_eq!(
         bottom_with_hole, 1,
         "band bottom must be one ring face carrying the ±61.55 hole, got {bottom_with_hole}"
+    );
+    let expected_bottom_area = bottom_area(outer).1 - bottom_area(inner).1;
+    assert!(
+        (band_bottom_area - expected_bottom_area).abs() < expected_bottom_area * 1e-3,
+        "band bottom area {band_bottom_area:.3} should equal outer-inner bottom \
+         {expected_bottom_area:.3} (a doubled bottom over-covers the inner disc)"
     );
 
     let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.05).unwrap();
