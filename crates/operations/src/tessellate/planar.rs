@@ -722,14 +722,46 @@ pub(super) fn hole_removal_seeds(
         .map(|p| (p.len() >= 3).then(|| find_interior_seed(p)))
         .collect();
 
+    // One wire cannot nest, so skip the containment scan entirely — the common
+    // case, and it keeps this off the hot path for ordinary single-hole faces.
+    if polys.len() < 2 {
+        return seeds.into_iter().flatten().collect();
+    }
+
+    // Bounds gate the winding-number tests: honeycomb faces carry dozens of
+    // disjoint holes whose boxes never overlap, so the scan stays near-linear.
+    let boxes: Vec<Option<(f64, f64, f64, f64)>> = polys
+        .iter()
+        .map(|p| {
+            (p.len() >= 3).then(|| {
+                p.iter().fold(
+                    (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+                    |(x0, y0, x1, y1), q| {
+                        (x0.min(q.x()), y0.min(q.y()), x1.max(q.x()), y1.max(q.y()))
+                    },
+                )
+            })
+        })
+        .collect();
+
     let mut out = Vec::new();
     for (i, seed) in seeds.iter().enumerate() {
         let Some(seed) = *seed else { continue };
-        let depth = 1 + polys
-            .iter()
-            .enumerate()
-            .filter(|&(j, poly)| j != i && poly.len() >= 3 && point_in_polygon(seed, poly))
-            .count();
+        let mut depth = 1;
+        for (j, poly) in polys.iter().enumerate() {
+            if j == i {
+                continue;
+            }
+            let Some((x0, y0, x1, y1)) = boxes[j] else {
+                continue;
+            };
+            if seed.x() < x0 || seed.x() > x1 || seed.y() < y0 || seed.y() > y1 {
+                continue;
+            }
+            if point_in_polygon(seed, poly) {
+                depth += 1;
+            }
+        }
         if depth % 2 == 1 {
             out.push(seed);
         }
