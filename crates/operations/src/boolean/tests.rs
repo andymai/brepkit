@@ -6498,3 +6498,42 @@ fn diag_cone_box_tangency_sweep() {
         }
     }
 }
+
+/// How many tangency points does it take to break the section circle?
+///
+/// One touch-split leaves the closed circle a single closed edge (P->P) and is
+/// handled; two or more split it into a CHAIN of arcs that the quadric side
+/// fails to close — open at 2 walls, over-shared at 4.
+#[test]
+#[ignore = "diagnostic — how many tangency points break the section circle?"]
+fn diag_tangency_count() {
+    use brepkit_math::mat::Mat4;
+    // Cylinder r=4 on the z axis, z 0..12. Box top-face z range 6..14 always.
+    // Vary how many of the box's four walls are tangent to the r=4 circle.
+    for &(label, xlo, xhi, ylo, yhi) in &[
+        ("4 tangent walls", -4.0, 4.0, -4.0, 4.0),
+        ("2 tangent walls (x only)", -4.0, 4.0, -9.0, 9.0),
+        ("1 tangent wall  (x=+4)", -9.0, 4.0, -9.0, 9.0),
+        ("0 tangent walls", -9.0, 9.0, -9.0, 9.0),
+    ] {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 4.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, xhi - xlo, yhi - ylo, 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(xlo, ylo, 6.0)).unwrap();
+        let msg =
+            match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cyl, b)
+            {
+                Ok(r) => {
+                    let n = brepkit_topology::explorer::solid_faces(&topo, r)
+                        .unwrap()
+                        .len();
+                    match super::assembly::validate_boolean_result(&topo, r) {
+                        Ok(()) => format!("F={n:3} CLEAN"),
+                        Err(e) => format!("F={n:3} {e}"),
+                    }
+                }
+                Err(e) => format!("GFA ERR {e}"),
+            };
+        eprintln!("{label}: {msg}");
+    }
+}
