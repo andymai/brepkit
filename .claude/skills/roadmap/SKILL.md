@@ -626,6 +626,31 @@ CLOSED, do not re-open as deferred: honeycomb wall-pattern cut (#925/#928,
 top-face (#932, `extrude_half_*_reversed_edge_volume` pass), multi-arc hemisphere gap
 (#1006).
 
+Export-integrity matrix baseline (2026-07-24, `binGenerator.scenario.export-integrity`, 408 tests
+asserting zero boundary edges + bounded non-manifold on the exported STL — the tool's own version of
+the STL edge-use oracle). Published 2.128.2: **43 failed / 365 passed**. Local main (T-lip #1209 +
+O-ring #1212): **37 failed / 371 passed**. Fixed: both `3x3 T with lip` cases, `3x3 O-shape (ring)
+with lip`, `O-shape + magnet base + lip`, plus pathfinder/permutation/scoop rows. NO regressions —
+the one apparent regression (`wall patterns > slots carves 3x3x5 walls (scale 0.5)`) fails IDENTICALLY
+on both kernels in isolation (63.3s published vs 64.3s main), i.e. it is a timing-borderline scenario
+whose full-suite verdict depends on cache warmth and machine load, not on the kernel. Do not chase it
+as a correctness bug.
+
+Failure families on that baseline: kumiko 14, permutation matrix 7, custom-shape 6, solid cutouts 3,
+then singles. **Kumiko's 14 are ONE root, not fourteen:** `goma carves a 1x1x6 bin` runs ~48s and then
+throws "recursive use of an object detected which would lead to unsafe aliasing in rust" — wasm borrow
+poisoning — and the following scenarios inherit it (two surface as "Shape handle has been disposed").
+Only `mitsukude bold` (bnd=571) has an independent assertion. **This CORRECTS the row above claiming the
+poisoning class is "NOT REPRODUCIBLE on 2.124.13"** — it reproduces on 2.128.2; use `lastPanicMessage()`
+to name the underlying panic. REFUTED: the captured goma `compound_cut`
+(`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`, replay `crates/io/examples/replay_kumiko_goma.rs`)
+is NOT the culprit — all 180 tools replay in 11.8s with F=1146, free=0, over=0. The poisoning is
+elsewhere in that scenario's chain and needs a fresh capture.
+
+CAUTION on counting: the baseline's classified kinds (23 boundary-edge, 2 non-manifold, 4 poisoning,
+1 timeout) sum to 30 of 43, so ~13 failures carry no recognised error form — probably cascade
+casualties, unconfirmed. Never quote the raw failure count as a defect count.
+
 ## Subsystem trap notes (crates without their own skill)
 
 - **heal `fix_duplicate_faces` IS implemented** (solid-scoped, `crates/heal/src/fix/solid.rs`,
