@@ -747,6 +747,15 @@ pub(super) fn hole_removal_seeds(
     let mut out = Vec::new();
     for (i, seed) in seeds.iter().enumerate() {
         let Some(seed) = *seed else { continue };
+        // `find_interior_seed` falls back to the centroid when no vertex
+        // bisector candidate lands inside, and that fallback can sit outside a
+        // sufficiently degenerate wire. Depth measured from a point that is not
+        // in its own wire is meaningless, so drop back to the pre-nesting
+        // behaviour — flood from it unconditionally — rather than guess.
+        if !point_in_polygon(seed, &polys[i]) {
+            out.push(seed);
+            continue;
+        }
         let mut depth = 1;
         for (j, poly) in polys.iter().enumerate() {
             if j == i {
