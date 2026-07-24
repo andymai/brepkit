@@ -66,6 +66,34 @@ fn main() {
         return;
     }
 
+    // XSCAN=<v>: list X-normal planes near v in each operand, to tell whether a
+    // thin slab is pre-existing in the inputs or produced by the boolean.
+    if let Ok(v) = std::env::var("XSCAN") {
+        let target: f64 = v.parse().expect("XSCAN");
+        let report = |label: &str, sid: brepkit_topology::solid::SolidId| {
+            let mut xs: Vec<f64> = Vec::new();
+            for fid in solid_faces(&topo, sid).expect("faces") {
+                if let brepkit_topology::face::FaceSurface::Plane { normal, d } =
+                    topo.face(fid).expect("face").surface()
+                    && normal.x().abs() > 0.99
+                {
+                    let x = d / normal.x();
+                    if (x - target).abs() < 1.0 {
+                        xs.push(x);
+                    }
+                }
+            }
+            xs.sort_by(|a, b| a.partial_cmp(b).expect("cmp"));
+            xs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+            println!("  {label}: X-normal planes near {target}: {xs:?}");
+        };
+        report("base", base);
+        for (i, &t) in tools.iter().enumerate() {
+            report(&format!("tool{i}"), t);
+        }
+        return;
+    }
+
     println!("loaded base + {} tools", tools.len());
     describe(&topo, base, "base");
     for (i, &t) in tools.iter().enumerate() {

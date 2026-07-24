@@ -690,8 +690,14 @@ x = 17.00 or x = 17.05 — a single **0.05mm-thin slab** — with y in [-21.95, 
 the ellipses each BRIDGE the two planes (e.g. (17.00,-20.75,12.34)->(17.05,-20.75,12.37)), so this
 is a sliver between two near-parallel faces 0.05mm apart, where the lattice band's edge meets the
 bin's corner cylinders. 0.05mm is FAR above the 1e-7 linear tolerance, so this is a genuine
-thin-feature failure, not numerical noise. THE TARGET IS NOW that one sliver region: why the
-analytic assembly cannot close a 0.05mm slab there, and whether cut 1's "open growth shell with 20
+thin-feature failure, not numerical noise. ORIGIN OF THE TWO SIDES (`XSCAN=17.0`): the BASE has NO X-normal plane near
+x=17 at all; tool0 has exactly ONE at x=17.05 (its cut plane); tool1 has many including x=17.00.
+Since the 30 free edges come from cut 0 (tool0 only), the x=17.00 side is NOT a plane — the dump
+shows `free line on cylinder (17.00,-19.55,2.70)`, i.e. the base's corner CYLINDER surface. So the
+sliver is between tool0's cut plane at x=17.05 and curved base geometry reaching x~17.00 — a
+plane-vs-cylinder thin sliver, plausibly the same family as the tangency row above, though the
+mechanism is NOT yet proven. THE TARGET IS NOW that one sliver region: why the analytic assembly
+cannot close a 0.05mm plane-vs-cylinder slab there, and whether cut 1's "open growth shell with 20
 faces" is the same region. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
 broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
