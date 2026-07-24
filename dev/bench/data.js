@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784919717399,
+  "lastUpdate": 1784920238505,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11663,6 +11663,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22654142,
             "range": "± 43048",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "70d71cad77405767a31ac6afec475a930f4d9d76",
+          "message": "chore(main): release 2.128.3 (#1210)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.3](https://github.com/andymai/brepkit/compare/v2.128.2...v2.128.3)\n(2026-07-24)\n\n\n### Bug Fixes\n\n* **algo:** classify thin coincident-band ring by absolute-nudge probe\n([#1209](https://github.com/andymai/brepkit/issues/1209))\n([0e09413](https://github.com/andymai/brepkit/commit/0e09413d5e3f4c8e7c037fbee66bff32cb88ba90))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.3 for `brepkit-wasm`, fixing classification of thin\ncoincident-band rings by using an absolute‑nudge probe. Improves\nrobustness on borderline geometries.\n\n<sup>Written for commit fe6f7a6cabc740f0d2e4d8e57123ac58f1662306.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1210?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-24T19:08:16Z",
+          "tree_id": "ca53e0d3078f63bd21a1ea82e223f9dcb25eb2c7",
+          "url": "https://github.com/andymai/brepkit/commit/70d71cad77405767a31ac6afec475a930f4d9d76"
+        },
+        "date": 1784920237348,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 854819,
+            "range": "± 2090",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 949573,
+            "range": "± 7657",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13101,
+            "range": "± 250",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661819,
+            "range": "± 3252",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22622083,
+            "range": "± 30328",
             "unit": "ns/iter"
           }
         ]
