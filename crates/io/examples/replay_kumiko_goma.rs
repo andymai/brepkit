@@ -60,6 +60,38 @@ fn main() {
     }
     println!("loaded region + {} tools", tools.len());
 
+    if let Some(chunks) = std::env::var("CHUNK")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        let per = tools.len().div_ceil(chunks);
+        let mut acc = region;
+        for (i, batch) in tools.chunks(per).enumerate() {
+            let t = Instant::now();
+            match compound_cut(
+                &mut topo,
+                acc,
+                batch,
+                brepkit_operations::boolean::BooleanOptions::default(),
+            ) {
+                Ok(next) => {
+                    let f = solid_faces(&topo, next).map(|v| v.len()).unwrap_or(0);
+                    println!(
+                        "  batch {i}: {} tools {}ms -> F={f}",
+                        batch.len(),
+                        t.elapsed().as_millis()
+                    );
+                    acc = next;
+                }
+                Err(e) => {
+                    println!("  batch {i}: {} tools ERR {e}", batch.len());
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
     let t0 = Instant::now();
     let result = compound_cut(
         &mut topo,
