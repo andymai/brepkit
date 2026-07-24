@@ -6387,3 +6387,48 @@ fn cone_union_box_should_be_analytic() {
     );
     assert_eq!(count_non_manifold_edges(&topo, result), 0);
 }
+
+#[test]
+#[ignore = "diagnostic — is the cone-box fallback caused by the tangency?"]
+fn diag_cone_box_tangency_sweep() {
+    use brepkit_math::mat::Mat4;
+    // cone r=6@z0 -> r=2@z12, so radius at z is 6 - z/3.
+    // Box is d x d centred on the axis, bottom at zb. Tangency iff d/2 == r(zb).
+    for &(label, d, zb) in &[
+        ("tangent      d=8  zb=6", 8.0, 6.0),
+        ("circle inside d=10 zb=6", 10.0, 6.0),
+        ("circle outside d=6 zb=6", 6.0, 6.0),
+        ("tangent      d=6  zb=9", 6.0, 9.0),
+        ("circle inside d=8  zb=9", 8.0, 9.0),
+    ] {
+        let mut topo = Topology::new();
+        let cone = crate::primitives::make_cone(&mut topo, 6.0, 2.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, d, d, 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(-d / 2.0, -d / 2.0, zb))
+            .unwrap();
+        match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cone, b) {
+            Ok(r) => {
+                let faces = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
+                let z0 = faces
+                    .iter()
+                    .filter(|&&fid| {
+                        let f = topo.face(fid).unwrap();
+                        f.surface().type_tag() == "plane"
+                            && topo.wire(f.outer_wire()).unwrap().edges().iter().all(|oe| {
+                                let e = topo.edge(oe.edge()).unwrap();
+                                topo.vertex(e.start()).unwrap().point().z().abs() < 1e-9
+                            })
+                    })
+                    .count();
+                eprintln!(
+                    "{label}: F={:3} z0_discs={z0} validate={:?}",
+                    faces.len(),
+                    super::assembly::validate_boolean_result(&topo, r)
+                        .err()
+                        .map(|e| e.to_string())
+                );
+            }
+            Err(e) => eprintln!("{label}: GFA ERR {e}"),
+        }
+    }
+}
