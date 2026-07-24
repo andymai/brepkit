@@ -442,7 +442,6 @@ impl Builder {
 ///
 /// Returns [`AlgoError`] if a coincident contact is detected, a sub-face cannot
 /// be sampled or classified, or assembly fails.
-#[allow(dead_code)] // Wired into a fuse_n entry point in the next increment.
 pub fn build_fuse_n<S: std::hash::BuildHasher>(
     mut topo: Topology,
     arena: GfaArena,

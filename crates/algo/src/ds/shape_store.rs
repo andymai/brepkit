@@ -99,11 +99,6 @@ impl GfaShapeStore {
 /// solids in one store topology, for the N-way fuse pipeline (one arrangement
 /// over all operands rather than sequential pairwise booleans). The 2-operand
 /// [`GfaShapeStore`] is unchanged; this is additive.
-///
-/// Foundation for the N-way fuse: consumed by the forthcoming
-/// `run_pave_filler_n` orchestration (see `project_nway-gfa-fuse`). Marked
-/// `allow(dead_code)` only until that consumer lands in the next increment.
-#[allow(dead_code)]
 pub struct GfaShapeStoreN {
     /// The store's own topology arena.
     pub topo: Topology,
@@ -112,12 +107,8 @@ pub struct GfaShapeStoreN {
     /// Store-local input face → the source index (position in `sources`) it
     /// belongs to. The basis for per-sub-face source tagging downstream.
     pub face_source: HashMap<FaceId, usize>,
-    /// Store-local input-face index → caller-topology face index, for
-    /// shape-evolution provenance across the copy.
-    pub input_face_to_caller: HashMap<usize, usize>,
 }
 
-#[allow(dead_code)] // Consumed by run_pave_filler_n in the next N-way increment.
 impl GfaShapeStoreN {
     /// Create a store by deep-copying every solid in `origs` into one topology.
     ///
@@ -134,14 +125,12 @@ impl GfaShapeStoreN {
         let mut topo = Topology::default();
         let mut sources = Vec::with_capacity(origs.len());
         let mut face_source = HashMap::new();
-        let mut input_face_to_caller = HashMap::new();
 
         for (src_idx, &orig) in origs.iter().enumerate() {
             let (solid, map) = deep_copy_solid(source, &mut topo, orig)?;
             sources.push(solid);
-            for (caller_idx, store_face) in map {
+            for (_caller_idx, store_face) in map {
                 face_source.insert(store_face, src_idx);
-                input_face_to_caller.insert(store_face.index(), caller_idx);
             }
         }
 
@@ -149,7 +138,6 @@ impl GfaShapeStoreN {
             topo,
             sources,
             face_source,
-            input_face_to_caller,
         })
     }
 

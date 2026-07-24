@@ -185,10 +185,6 @@ pub fn run_pave_filler(
 /// # Errors
 ///
 /// Returns [`AlgoError`] if `sources` is empty or any stage fails.
-// Foundation for the N-way fuse: reached only from tests until the N-way builder
-// wires it into a `fuse_n` entry point (see `project_nway-gfa-fuse`). The
-// dead-code allow comes off with that consumer.
-#[allow(dead_code)]
 pub fn run_pave_filler_n(
     topo: &mut Topology,
     sources: &[SolidId],
@@ -246,7 +242,6 @@ pub fn run_pave_filler_n(
 /// Initialize a pave block for every edge across all `sources`, de-duplicating
 /// edges shared between solids (coincident walls). Mirrors
 /// [`PaveFiller::init_pave_blocks`] but over N solids.
-#[allow(dead_code)] // Foundation for the N-way fuse; consumer lands next.
 fn init_pave_blocks_n(
     topo: &Topology,
     sources: &[SolidId],
@@ -268,7 +263,6 @@ fn init_pave_blocks_n(
 }
 
 /// Axis-aligned bounding box of a solid from its vertices.
-#[allow(dead_code)] // Foundation for the N-way fuse; consumer lands next.
 fn solid_aabb(topo: &Topology, solid: SolidId) -> Option<brepkit_math::aabb::Aabb3> {
     let mut pts = Vec::new();
     for vid in brepkit_topology::explorer::solid_vertices(topo, solid).ok()? {
@@ -282,7 +276,6 @@ fn solid_aabb(topo: &Topology, solid: SolidId) -> Option<brepkit_math::aabb::Aab
 /// with disjoint boxes cannot intersect, so pruning them is result-preserving.
 /// A solid without a computable box is treated as interacting with all others
 /// (conservative — never drops a real interaction).
-#[allow(dead_code)] // Foundation for the N-way fuse; consumer lands next.
 fn interacting_pairs(topo: &Topology, sources: &[SolidId], tol: Tolerance) -> Vec<(usize, usize)> {
     let boxes: Vec<Option<brepkit_math::aabb::Aabb3>> =
         sources.iter().map(|&s| solid_aabb(topo, s)).collect();

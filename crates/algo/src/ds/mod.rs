@@ -24,6 +24,4 @@ pub use pave_vertex_index::PaveVertexIndex;
 #[allow(unused_imports)]
 pub use pave::{CommonBlock, CommonBlockId};
 pub use shape_index::Rank;
-pub use shape_store::GfaShapeStore;
-#[allow(unused_imports)] // Foundation for the N-way fuse; consumer lands next.
-pub use shape_store::GfaShapeStoreN;
+pub use shape_store::{GfaShapeStore, GfaShapeStoreN};

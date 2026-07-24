@@ -868,9 +868,7 @@ pub fn compound_cut(
         && !clusters.is_empty()
     {
         let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
-            let fused = cluster[1..]
-                .iter()
-                .try_fold(cluster[0], |a, &t| boolean(topo, BooleanOp::Fuse, a, t))?;
+            let fused = fuse_cluster(topo, cluster)?;
             match acc {
                 None => Ok(Some(fused)),
                 Some(prev) => boolean(topo, BooleanOp::Fuse, prev, fused).map(Some),
@@ -899,6 +897,30 @@ pub fn compound_cut(
         }
     }
     Ok(result)
+}
+
+/// Fuse one AABB-overlap cluster into a single solid.
+///
+/// For a cluster of 3+ interpenetrating/touching tools, tries the single-pass
+/// N-way GFA fuse (`brepkit_algo::gfa::fuse_n`) — one arrangement over all tools
+/// instead of the sequential pairwise fuse's O(n²) re-processing of a growing
+/// accumulator. Falls back to the sequential fuse when the N-way path errors
+/// (e.g. a non-planar coincident contact it does not yet handle) or yields an
+/// invalid result. Clusters of 1–2 tools go straight to the sequential path,
+/// where the N-way arrangement has nothing to save.
+fn fuse_cluster(
+    topo: &mut Topology,
+    cluster: &[SolidId],
+) -> Result<SolidId, crate::OperationsError> {
+    if cluster.len() >= 3
+        && let Ok(fused) = brepkit_algo::gfa::fuse_n(topo, cluster)
+        && validate_boolean_result(topo, fused).is_ok()
+    {
+        return Ok(fused);
+    }
+    cluster[1..]
+        .iter()
+        .try_fold(cluster[0], |a, &t| boolean(topo, BooleanOp::Fuse, a, t))
 }
 
 /// Group tools into AABB-overlap clusters (union-find over tolerance-
