@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784841937842,
+  "lastUpdate": 1784858373199,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11015,6 +11015,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21709034,
             "range": "± 21375",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a79508646899b472a4e79091de0f8b0e96a7c717",
+          "message": "perf(operations): batch compound_cut when the tools form one cluster (#1198)\n\n## What\n\n`compound_cut` merged its tools and cut once only when they fell into\n**two or more** AABB-disjoint clusters. A single overlapping blob fell\nthrough to the sequential loop, which re-cuts the whole target once per\ntool.\n\n## Why that assumption was wrong\n\nThe kumiko wall lattice refutes it. Its 180 strut prisms are connected\nat their crossings, so union-find puts them in **one** cluster and the\nbatch was declined. On the captured operands:\n\n| path | time | result |\n|---|---|---|\n| sequential (as shipped) | **83.7 s** | F=1146 |\n| batched (this change) | **50.3 s** | F=1146 |\n\nIdentical face count, 1.66× faster. Fusing scales with the tools — small\nprisms — while the sequential loop scales with the target, which grows\nmore fragmented with every cut.\n\n## Repro\n\nCaptured from the tool's `goma carves a 1×1×6 bin` scenario, which traps\nin wasm (`RuntimeError: unreachable` out of `compoundCut`, then poisons\nthe kernel so all 13 kumiko scenarios fail from one root). The same\noperands run to completion **natively**, so the trap is resource\nexhaustion rather than a logic fault — which makes the cost itself the\ndefect.\n\nOperands and driver are cached at\n`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/` +\n`replay_kumiko.rs` (`MODE=fuse|split`, `N=<k>`).\n\n## Refuted while measuring — recorded so it is not retried\n\n**Balanced pairwise fuse.** Replacing the linear `try_fold` with a\nhalving tree looked like the obvious O(n²)→O(n log n) win, since the\nfuse is 80% of the time (39.9 s fuse vs 10.0 s final cut). It measured\n**worse: 69.8 s vs 50.3 s**. Adding one small prism to the accumulator\noften hits the free disjoint-shell shortcut; pairing multi-lump\nintermediates loses it. Reverted.\n\n**An earlier synthetic said the opposite of the truth.** A hand-built\ncrossing-lattice benchmark showed `compound_cut` *faster* than\nfuse-then-cut and nearly linear — it stopped being faithful at n≥120,\nwhere its struts merged and consumed the slab. The ordering reverses on\ncaptured operands. This PR trusts the capture.\n\n## Verification\n\n- Full workspace suite `--no-fail-fast`: green\n- `brepkit-io` fixtures (the calibrated foils): 0 failures\n- `cargo test -p brepkit-wasm --lib gridfinity`: 27/27\n- `compound_cut` unit tests: 8/8, including the disjoint-drill case that\nmotivated batching (unchanged — it already had ≥2 clusters)\n- fmt + clippy clean\n\n## Not sufficient on its own\n\n50 s is a real improvement but still far off the bar — the reference\nkernel completes the entire 13-scenario kumiko suite in 265 s. The\nremaining cost is dominated by the 180-tool fuse (≈40 s of the 50 s).\nClosing that gap needs profiling of the per-fuse GFA cost, not another\nbatching strategy; the two obvious restructurings are now both measured\nand refuted.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBatch `compound_cut` when tools form a single AABB-overlap cluster, not\nonly when there are ≥2 clusters. On the kumiko wall lattice this drops\ntime from 83.7s to ≈50s with the same 1,146-face result.\n\n- **Refactors**\n  - Enable batching for single-cluster tool sets.\n- Use a let-chain to destructure `clusters`; preserve fallback to the\nsequential loop on any failure.\n- Point the source comment to the cached replay instead of exact\ntimings; rename the overlapping-tools test to assert union-cut volume\nand cover the batched path.\n\n<sup>Written for commit 4d00b5b36b137ce63c3f2fc066533032e87a29cd.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1198?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-23T18:57:21-07:00",
+          "tree_id": "f58e9b75c8140caf8a99f47a57adf353da2ef000",
+          "url": "https://github.com/andymai/brepkit/commit/a79508646899b472a4e79091de0f8b0e96a7c717"
+        },
+        "date": 1784858372463,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 832409,
+            "range": "± 1380",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 933134,
+            "range": "± 1064",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13187,
+            "range": "± 57",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661216,
+            "range": "± 2712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22757669,
+            "range": "± 35557",
             "unit": "ns/iter"
           }
         ]
