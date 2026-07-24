@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.127.33](https://github.com/andymai/brepkit/compare/v2.127.32...v2.127.33) (2026-07-24)
+
+
+### Performance
+
+* **algo:** reject coplanar-but-disjoint SD pairs with an oriented box ([#1200](https://github.com/andymai/brepkit/issues/1200)) ([6e28fce](https://github.com/andymai/brepkit/commit/6e28fce6832276bbb1e842e2eaaa888860897bd8))
+
 ## [2.127.32](https://github.com/andymai/brepkit/compare/v2.127.31...v2.127.32) (2026-07-24)
 
 
