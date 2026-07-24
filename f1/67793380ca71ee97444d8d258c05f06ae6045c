@@ -1,0 +1,19 @@
+crates/operations/src/tessellate/planar.rs
+  s_5e1448ca841e6f::t_dfc406b0afccfa 750-758
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "f167793380ca71ee97444d8d258c05f06ae6045c",
+  "prompts": {},
+  "sessions": {
+    "s_5e1448ca841e6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d7e78e2c-32c0-4614-8cf0-23c4c356e272",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
