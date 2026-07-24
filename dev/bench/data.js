@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784913422652,
+  "lastUpdate": 1784919717399,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11609,6 +11609,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22637696,
             "range": "± 66447",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e09413d5e3f4c8e7c037fbee66bff32cb88ba90",
+          "message": "fix(algo): classify thin coincident-band ring by absolute-nudge probe (#1209)\n\n## Problem\n\nThe gridfinity custom-shape (T) lip band cut — `cut(outer T-prism, inner\nT-frustum)` — produced a **doubled bottom**: the outer ±62.75 disc\npassed through unsplit alongside the tool's ±61.55 disc, both\nsame-orientation. This over-counted volume 3.3× (20108.8 vs the true\n6090.8) and made it translation-variant, and was the root of the \"no\nouter shell found\" T body+lip fuse failure (the fuse consumed a\nmalformed lip operand).\n\n## Root cause (classification, not the FF split)\n\nThe bottom **is** split correctly into a ring (outer wire + ±61.55 hole\nwire) plus its inner disc. The ring was then mis-classified `Inside` the\ntool and dropped. `classify_coincident_coplanar`'s depth probe stepped\nfrom the wedge tip toward the face **centroid** by fractions `[0.25,\n0.4, 0.55]` of that distance. On a ~1.2mm annular band of a ~125mm face,\nevery fraction overshoots the thin band into the hole (the opposing 2D\nregion), so no strictly-outside probe was found → `None` → the unstable\nray-cast fallback (the face is coplanar with the tool's bottom cap and\nnear its slanted wall) voted `Inside`.\n\n## Fix\n\nTry the deep centroid fractions **first** (a partially-internal\ncoincident plane such as the honeycomb stacked cap needs the deep probe\nto detect its internal region and defer), then fall back to small\n**absolute** nudges scaled to the wedge's own outside-extent that stay\nnear the tip inside the band. The ring classifies `Outside` and is kept\nas a proper annulus.\n\n## Verification\n\n- Band is single-covered, position-manifold (all mesh edges 2-use), and\n**translation-invariant** (was 3.26× variant).\n- `lipband_cut_inmem` un-ignored; `tship_lipcut_inmem` corrected (it had\nenshrined the doubled 20108.8 as \"watertight\"). Both now assert the\nsingle-covered band (vol 6090.8).\n- Full workspace tests pass; gridfinity d1–d5 and honeycomb_cut foils\ngreen.\n\nBenign residual: the band bottom tiles as ring + 2 tiny T-armpit pieces\n(3 faces) from redundant FF-coplanar concave-corner sections — exact\nwatertight tiling, not the defect.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes misclassification of thin coincident-band rings by updating the\ncoplanar classifier to probe robustly and decide from all valid probes.\nKeeps the band-bottom ring, removes the doubled bottom, and restores the\ncorrect single-covered volume (~6090.8) and translation invariance.\n\n- **Bug Fixes**\n- Updated `classify_coincident_coplanar` to try deep centroid fractions\nfirst, then small absolute “nudge” probes scaled by the wedge’s outside\ndepth; decide order-independently: defer if any valid probe sees\npersistence on a side, return Outside only if at least one probe is\nvalid and none persist.\n- Prevents the doubled bottom (two same-orientation discs) and removes\nthe ~3.3× volume overcount and translation variance.\n- Tests: un-ignored `crates/io/tests/lipband_cut_inmem.rs`; corrected\n`crates/io/tests/tship_lipcut_inmem.rs` to assert a single ring at z =\n-2.6, expected volume (~6090.8), and bottom-area equals outer − inner.\nBenign residual: bottom may tile as ring + 2 tiny concave-corner pieces;\nstill watertight and single-covered.\n\n<sup>Written for commit 68af9434b6d8688f4f1840e7fc591d81780065b2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1209?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T11:59:36-07:00",
+          "tree_id": "75a3ff8f3e823e28ff795842e8860db8d899a46e",
+          "url": "https://github.com/andymai/brepkit/commit/0e09413d5e3f4c8e7c037fbee66bff32cb88ba90"
+        },
+        "date": 1784919714691,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 848990,
+            "range": "± 1077",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 948239,
+            "range": "± 1902",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13059,
+            "range": "± 307",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661101,
+            "range": "± 5863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22654142,
+            "range": "± 43048",
             "unit": "ns/iter"
           }
         ]
