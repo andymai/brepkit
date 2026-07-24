@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784901744879,
+  "lastUpdate": 1784907952450,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11231,6 +11231,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22686377,
             "range": "± 36268",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "679f9de5bb58bf42cdafa872eb90e6065829471a",
+          "message": "feat: N-way GFA fuse — 3.9x faster kumiko compound_cut (#1202)\n\n## What\n\nReplaces `compound_cut`'s sequential pairwise fuse of a tool cluster —\nwhich re-processed a growing accumulator, O(n²) in the whole GFA\npipeline (`detect_same_domain` and beyond) — with a **single GFA\narrangement over all tools**. New `gfa::fuse_n(topo, &[SolidId])` runs\none pass:\n\n1. **`GfaShapeStoreN`** — deep-copies N sources into one store, tags\neach face with its source.\n2. **`run_pave_filler_n`** — the intersection phases are inherently\npairwise and carry no `Rank` (they only deposit geometric split data),\nso they run for each spatially-interacting source pair into **one shared\narena**. A bbox broad-phase keeps this O(n·k) for the sparse interaction\ngraph a lattice produces.\n3. **`build_fuse_n`** — sections are stored *face-relative* (`pcurve_a\n== pcurve_b`), so the face splitter is rank-invariant; every face is\nsplit once and its global source tracked separately. Each sub-face is\nkept iff it is Outside every *other* source (the union boundary).\nCross-source coincident faces are resolved by\n`detect_same_domain_fuse_n` (reuses the rank-agnostic grouping extracted\nfrom `detect_same_domain`): same-oriented groups keep one\nrepresentative, opposite-oriented (internal interface) groups drop all.\n\n`compound_cut` uses it via `fuse_cluster`, which **falls back to the\nsequential fuse** whenever `fuse_n` errors (e.g. a non-planar coincident\ncontact it doesn't yet handle) or returns a result failing\n`validate_boolean_result`. Correct-or-slower, never wrong.\n\n## Results\n\nCaptured 180-strut kumiko `compound_cut`, replayed natively:\n\n| | time | volume | faces | free edges |\n|---|---|---|---|---|\n| sequential (before) | 46.1s | 1198.290 | 1146 | 0 |\n| **N-way (this PR)** | **11.8s** | 1198.290 | 1146 | 0 |\n\n**3.9× faster for a byte-equivalent, watertight result.**\n\n## Safety / scope\n\n- **Fuse-only.** Cut, Intersect, and every other boolean path are\nuntouched.\n- The 2-operand `detect_same_domain` is byte-identical after the\ngrouping extraction.\n- Falls back to the sequential fuse on any error or invalid result.\n- Currently handles the planar-coincidence cases (kumiko struts are\nanalytic planar prisms); non-planar coincident contacts bail to the\nfallback.\n\n## Verification\n\n- New algo tests: N=2 matches the two-solid fuse; interpenetrating +\naxis-aligned-overlap + abutting + 3-box cases all watertight;\nbroad-phase pruning; empty-input errors.\n- Full `brepkit-operations` + `brepkit-io` foil: **1208 tests pass**\n(all gridfinity scenarios) with `fuse_n` active.\n- clippy clean, layer boundaries valid.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd an N-way GFA fuse and use it in `compound_cut` to fuse tool clusters\nin one pass instead of sequential pairwise. This removes the O(n²)\naccumulator reprocessing and delivers a 3.9× speedup on the kumiko case.\n\n- New Features\n- `gfa::fuse_n`: single-pass fuse over N solids with export to caller\ntopology.\n- `GfaShapeStoreN`: deep-copies all sources into one store and tracks\nface→source.\n- `run_pave_filler_n`: runs pairwise phases into one shared arena with\nAABB broad‑phase pruning (O(n·k) on sparse graphs).\n- `build_fuse_n`: splits once, classifies each sub-face against all\nother sources, and resolves cross-source coincident faces; bails to\nfallback on non‑planar coincidences.\n- `compound_cut` uses `fuse_cluster` to try `fuse_n` for clusters of 3+\ntools, with validity checks and fallback to the sequential fuse. Other\nboolean ops are unchanged.\n\n- Performance\n- 180‑strut kumiko `compound_cut`: 46.1s → 11.8s (3.9×), same volume and\nface count, 0 free edges.\n  - Full `brepkit-operations` + `brepkit-io` foil: 1208 tests pass.\n\n<sup>Written for commit 4e14b8ec5e5cab1b0fa40dc6e722f511bee2bb18.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1202?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T08:43:32-07:00",
+          "tree_id": "2e108b4f8a55a0496a587c72cd47e27960926d3e",
+          "url": "https://github.com/andymai/brepkit/commit/679f9de5bb58bf42cdafa872eb90e6065829471a"
+        },
+        "date": 1784907951291,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 819823,
+            "range": "± 2863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 909901,
+            "range": "± 4716",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12021,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663717,
+            "range": "± 1185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21865222,
+            "range": "± 823354",
             "unit": "ns/iter"
           }
         ]
