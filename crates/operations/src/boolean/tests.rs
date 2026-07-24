@@ -6378,6 +6378,7 @@ fn cone_union_box_should_be_analytic() {
                 && topo.wire(f.outer_wire()).unwrap().edges().iter().all(|oe| {
                     let e = topo.edge(oe.edge()).unwrap();
                     topo.vertex(e.start()).unwrap().point().z().abs() < 1e-9
+                        && topo.vertex(e.end()).unwrap().point().z().abs() < 1e-9
                 })
         })
         .count();
@@ -6481,6 +6482,7 @@ fn diag_cone_box_tangency_sweep() {
                             && topo.wire(f.outer_wire()).unwrap().edges().iter().all(|oe| {
                                 let e = topo.edge(oe.edge()).unwrap();
                                 topo.vertex(e.start()).unwrap().point().z().abs() < 1e-9
+                                    && topo.vertex(e.end()).unwrap().point().z().abs() < 1e-9
                             })
                     })
                     .count();
