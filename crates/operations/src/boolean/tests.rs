@@ -6389,6 +6389,37 @@ fn cone_union_box_should_be_analytic() {
 }
 
 #[test]
+#[ignore = "diagnostic — is a tangent section circle broken for cylinders too?"]
+fn diag_cylinder_box_tangency() {
+    use brepkit_math::mat::Mat4;
+    // Cylinder r=4: a d=8 box is tangent to it on all four walls; d=10 is clear.
+    for &(label, d) in &[("cyl tangent  d=8", 8.0), ("cyl clear    d=10", 10.0)] {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 4.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, d, d, 8.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            b,
+            &Mat4::translation(-d / 2.0, -d / 2.0, 6.0),
+        )
+        .unwrap();
+        match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cyl, b) {
+            Ok(r) => {
+                let faces = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
+                eprintln!(
+                    "{label}: F={:3} validate={:?}",
+                    faces.len(),
+                    super::assembly::validate_boolean_result(&topo, r)
+                        .err()
+                        .map(|e| e.to_string())
+                );
+            }
+            Err(e) => eprintln!("{label}: GFA ERR {e}"),
+        }
+    }
+}
+
+#[test]
 #[ignore = "diagnostic — is the cone-box fallback caused by the tangency?"]
 fn diag_cone_box_tangency_sweep() {
     use brepkit_math::mat::Mat4;
