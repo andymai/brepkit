@@ -1,0 +1,31 @@
+crates/io/examples/step_solid_report.rs
+  s_5e1448ca841e6f::t_494e64f0d19432 1,17-19,117
+  s_5e1448ca841e6f::t_4e781f71d62fda 20,23
+  s_5e1448ca841e6f::t_b947bf555e7c0f 68-70,72-87
+  s_5e1448ca841e6f::t_c999883c624597 2-16,21-22,24-67,134-142
+  s_5e1448ca841e6f::t_409189c7429d68 71
+  s_5e1448ca841e6f::t_6234adf634524c 88-103
+  s_5e1448ca841e6f::t_2017fa36c5a645 104-116,118-133
+.claude/skills/parity-benchmarking/SKILL.md
+  s_5e1448ca841e6f::t_71f35d3a6df8c9 83-84
+.claude/skills/roadmap/SKILL.md
+  s_5e1448ca841e6f::t_7374211d498a25 600
+  s_5e1448ca841e6f::t_6a1a5c7770455f 579-581
+  s_5e1448ca841e6f::t_b5829df31e8dda 586-599
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "4b7f231f9726c0193b9672f86cbc1377086a0d17",
+  "prompts": {},
+  "sessions": {
+    "s_5e1448ca841e6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d7e78e2c-32c0-4614-8cf0-23c4c356e272",
+        "model": "claude-opus-5"
+      },
+      "human_author": null
+    }
+  }
+}
