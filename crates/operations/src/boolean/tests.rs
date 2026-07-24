@@ -6333,3 +6333,207 @@ fn compound_cut_coaxial_pair_clusters_match_sequential() {
     );
     assert_eq!(count_non_manifold_edges(&topo, result), 0);
 }
+
+/// Ready-repro for the `cone ∪ box` GFA rejection — the only remaining
+/// primitive-boolean mesh fallback in `approx_census`.
+///
+/// `make_cone(6, 2, 12)` has radius exactly 4 at z=6, where the 8×8 box's
+/// bottom face sits, so the section circle is INSCRIBED in the box square and
+/// TANGENT to all four walls — the recurring tangential-contact class.
+///
+/// Raw GFA very nearly succeeds: F=10, 1 cone + 9 planes, zero free edges. The
+/// box side of the split is CORRECT — the pinched square-minus-inscribed-circle
+/// region becomes 4 curvilinear-triangle faces, and each wall splits at its
+/// tangency point. Two things go wrong on the cone side:
+///
+///   1. Both of the cone solid's PLANE faces vanish. The z=12 top disc is
+///      correctly absorbed (it lies inside the box), but the z=0 base disc
+///      (r=6, nowhere near the box) must survive and does not — all 9 result
+///      planes are box-derived.
+///   2. The cone lateral keeps the z=6 rim TWICE: its outer wire is the four
+///      z=6 arcs and its single inner wire is those same four edge ids, rather
+///      than the z=0 base rim. That is what makes each arc used 3× (twice by
+///      the cone, once by its corner plane) and trips the non-manifold gate.
+///
+/// Both point at the same missing piece — the z=0 base rim — so the cone
+/// remainder is being closed by duplicating the wrong rim.
+#[test]
+#[ignore = "ready-repro — cone∪box falls back to mesh; see doc comment"]
+fn cone_union_box_should_be_analytic() {
+    use brepkit_math::mat::Mat4;
+    let mut topo = Topology::new();
+    let cone = crate::primitives::make_cone(&mut topo, 6.0, 2.0, 12.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 8.0, 8.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(-4.0, -4.0, 6.0)).unwrap();
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cone, b).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let z0_discs = faces
+        .iter()
+        .filter(|&&fid| {
+            let f = topo.face(fid).unwrap();
+            f.surface().type_tag() == "plane"
+                && topo.wire(f.outer_wire()).unwrap().edges().iter().all(|oe| {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    topo.vertex(e.start()).unwrap().point().z().abs() < 1e-9
+                        && topo.vertex(e.end()).unwrap().point().z().abs() < 1e-9
+                })
+        })
+        .count();
+    assert_eq!(
+        z0_discs, 1,
+        "the cone's z=0 base disc must survive the fuse"
+    );
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+}
+
+#[test]
+#[ignore = "diagnostic — how wide is the tangency failure band?"]
+fn diag_tangency_epsilon_band() {
+    use brepkit_math::mat::Mat4;
+    for &eps in &[-1e-3f64, -1e-5, -1e-7, -1e-9, 0.0, 1e-9, 1e-7, 1e-5, 1e-3] {
+        let d = 8.0 + 2.0 * eps; // half-width 4+eps vs cylinder r=4
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 4.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, d, d, 8.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            b,
+            &Mat4::translation(-d / 2.0, -d / 2.0, 6.0),
+        )
+        .unwrap();
+        let msg =
+            match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cyl, b)
+            {
+                Ok(r) => {
+                    let n = brepkit_topology::explorer::solid_faces(&topo, r)
+                        .unwrap()
+                        .len();
+                    match super::assembly::validate_boolean_result(&topo, r) {
+                        Ok(()) => format!("F={n:3} CLEAN"),
+                        Err(e) => format!("F={n:3} {e}"),
+                    }
+                }
+                Err(e) => format!("GFA ERR {e}"),
+            };
+        eprintln!("eps={eps:+.0e} half={:.9}: {msg}", d / 2.0);
+    }
+}
+
+#[test]
+#[ignore = "diagnostic — is a tangent section circle broken for cylinders too?"]
+fn diag_cylinder_box_tangency() {
+    use brepkit_math::mat::Mat4;
+    // Cylinder r=4: a d=8 box is tangent to it on all four walls; d=10 is clear.
+    for &(label, d) in &[("cyl tangent  d=8", 8.0), ("cyl clear    d=10", 10.0)] {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 4.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, d, d, 8.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            b,
+            &Mat4::translation(-d / 2.0, -d / 2.0, 6.0),
+        )
+        .unwrap();
+        match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cyl, b) {
+            Ok(r) => {
+                let faces = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
+                eprintln!(
+                    "{label}: F={:3} validate={:?}",
+                    faces.len(),
+                    super::assembly::validate_boolean_result(&topo, r)
+                        .err()
+                        .map(|e| e.to_string())
+                );
+            }
+            Err(e) => eprintln!("{label}: GFA ERR {e}"),
+        }
+    }
+}
+
+#[test]
+#[ignore = "diagnostic — is the cone-box fallback caused by the tangency?"]
+fn diag_cone_box_tangency_sweep() {
+    use brepkit_math::mat::Mat4;
+    // cone r=6@z0 -> r=2@z12, so radius at z is 6 - z/3.
+    // Box is d x d centred on the axis, bottom at zb. Tangency iff d/2 == r(zb).
+    for &(label, d, zb) in &[
+        ("tangent      d=8  zb=6", 8.0, 6.0),
+        ("circle inside d=10 zb=6", 10.0, 6.0),
+        ("circle outside d=6 zb=6", 6.0, 6.0),
+        ("tangent      d=6  zb=9", 6.0, 9.0),
+        ("circle inside d=8  zb=9", 8.0, 9.0),
+    ] {
+        let mut topo = Topology::new();
+        let cone = crate::primitives::make_cone(&mut topo, 6.0, 2.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, d, d, 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(-d / 2.0, -d / 2.0, zb))
+            .unwrap();
+        match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cone, b) {
+            Ok(r) => {
+                let faces = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
+                let z0 = faces
+                    .iter()
+                    .filter(|&&fid| {
+                        let f = topo.face(fid).unwrap();
+                        f.surface().type_tag() == "plane"
+                            && topo.wire(f.outer_wire()).unwrap().edges().iter().all(|oe| {
+                                let e = topo.edge(oe.edge()).unwrap();
+                                topo.vertex(e.start()).unwrap().point().z().abs() < 1e-9
+                                    && topo.vertex(e.end()).unwrap().point().z().abs() < 1e-9
+                            })
+                    })
+                    .count();
+                eprintln!(
+                    "{label}: F={:3} z0_discs={z0} validate={:?}",
+                    faces.len(),
+                    super::assembly::validate_boolean_result(&topo, r)
+                        .err()
+                        .map(|e| e.to_string())
+                );
+            }
+            Err(e) => eprintln!("{label}: GFA ERR {e}"),
+        }
+    }
+}
+
+/// How many tangency points does it take to break the section circle?
+///
+/// One touch-split leaves the closed circle a single closed edge (P->P) and is
+/// handled; two or more split it into a CHAIN of arcs that the quadric side
+/// fails to close — open at 2 walls, over-shared at 4.
+#[test]
+#[ignore = "diagnostic — how many tangency points break the section circle?"]
+fn diag_tangency_count() {
+    use brepkit_math::mat::Mat4;
+    // Cylinder r=4 on the z axis, z 0..12. Box top-face z range 6..14 always.
+    // Vary how many of the box's four walls are tangent to the r=4 circle.
+    for &(label, xlo, xhi, ylo, yhi) in &[
+        ("4 tangent walls", -4.0, 4.0, -4.0, 4.0),
+        ("2 tangent walls (x only)", -4.0, 4.0, -9.0, 9.0),
+        ("1 tangent wall  (x=+4)", -9.0, 4.0, -9.0, 9.0),
+        ("0 tangent walls", -9.0, 9.0, -9.0, 9.0),
+    ] {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 4.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, xhi - xlo, yhi - ylo, 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(xlo, ylo, 6.0)).unwrap();
+        let msg =
+            match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cyl, b)
+            {
+                Ok(r) => {
+                    let n = brepkit_topology::explorer::solid_faces(&topo, r)
+                        .unwrap()
+                        .len();
+                    match super::assembly::validate_boolean_result(&topo, r) {
+                        Ok(()) => format!("F={n:3} CLEAN"),
+                        Err(e) => format!("F={n:3} {e}"),
+                    }
+                }
+                Err(e) => format!("GFA ERR {e}"),
+            };
+        eprintln!("{label}: {msg}");
+    }
+}
