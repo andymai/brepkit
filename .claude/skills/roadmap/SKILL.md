@@ -684,10 +684,16 @@ dev-dependency of `brepkit-io`, so io examples can reach it): **RAW cut 0 = 231m
 for the SAME cut — the analytic engine is 12x faster and keeps every cone and cylinder, but leaves
 **30 free edges**, so `validate_boolean_result` rejects it and the mesh fallback runs. **RAW cut 1
 fails outright: "assembly failed: open growth shell with 20 faces would be dropped; aborting
-analytic assembly".** So the 203s is the CONSEQUENCE of those 30 free edges. THE TARGET IS NOW:
-why does cut 0 leave 30 free edges (F=494), and why does cut 1 drop an open 20-face growth shell?
-Fixing that makes goma analytic AND ~12x faster per cut, and removes the broken-fallback
-consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
+analytic assembly".** So the 203s is the CONSEQUENCE of those 30 free edges. (8) THE 30 FREE EDGES ARE LOCALIZED (`DUMP_FREE=1`): every one lies at
+x = 17.00 or x = 17.05 — a single **0.05mm-thin slab** — with y in [-21.95, -17.15] and z in
+[2.70, 12.37]. Curve mix is mostly Line plus a few Ellipse/Circle, on plane and cylinder faces;
+the ellipses each BRIDGE the two planes (e.g. (17.00,-20.75,12.34)->(17.05,-20.75,12.37)), so this
+is a sliver between two near-parallel faces 0.05mm apart, where the lattice band's edge meets the
+bin's corner cylinders. 0.05mm is FAR above the 1e-7 linear tolerance, so this is a genuine
+thin-feature failure, not numerical noise. THE TARGET IS NOW that one sliver region: why the
+analytic assembly cannot close a 0.05mm slab there, and whether cut 1's "open growth shell with 20
+faces" is the same region. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
+broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
 the call path you intend to claim about. REFUTED: the captured goma `compound_cut`

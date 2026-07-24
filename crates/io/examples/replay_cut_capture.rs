@@ -108,6 +108,39 @@ fn main() {
                         t.elapsed().as_millis(),
                         faces.len()
                     );
+                    if free > 0 && std::env::var("DUMP_FREE").is_ok() {
+                        for (eid, _) in uses.iter().filter(|&(_, &c)| c == 1) {
+                            let e = topo.edge(*eid).expect("edge");
+                            let a = topo.vertex(e.start()).expect("v").point();
+                            let b = topo.vertex(e.end()).expect("v").point();
+                            // Which face owns it, and what surface is that face?
+                            let owner = faces.iter().find(|&&fid| {
+                                let f = topo.face(fid).expect("face");
+                                std::iter::once(f.outer_wire())
+                                    .chain(f.inner_wires().iter().copied())
+                                    .any(|w| {
+                                        topo.wire(w)
+                                            .expect("wire")
+                                            .edges()
+                                            .iter()
+                                            .any(|oe| oe.edge() == *eid)
+                                    })
+                            });
+                            let tag = owner.map_or("?", |&fid| {
+                                topo.face(fid).expect("face").surface().type_tag()
+                            });
+                            println!(
+                                "    free {} on {tag} ({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2})",
+                                e.curve().type_tag(),
+                                a.x(),
+                                a.y(),
+                                a.z(),
+                                b.x(),
+                                b.y(),
+                                b.z()
+                            );
+                        }
+                    }
                     acc = next;
                 }
                 Err(e) => {
