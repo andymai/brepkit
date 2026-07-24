@@ -907,8 +907,9 @@ pub fn compound_cut(
 /// accumulator. Falls back to the sequential fuse when the N-way path errors
 /// (e.g. a non-planar coincident contact it does not yet handle) or yields an
 /// invalid result. Clusters of 1–2 tools go straight to the sequential path,
-/// where the N-way arrangement has nothing to save.
-fn fuse_cluster(
+/// where the N-way arrangement has nothing to save. The cluster must be
+/// non-empty.
+pub(crate) fn fuse_cluster(
     topo: &mut Topology,
     cluster: &[SolidId],
 ) -> Result<SolidId, crate::OperationsError> {

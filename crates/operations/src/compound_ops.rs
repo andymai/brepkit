@@ -9,8 +9,6 @@ use brepkit_topology::Topology;
 use brepkit_topology::compound::CompoundId;
 use brepkit_topology::solid::SolidId;
 
-use crate::boolean::{BooleanOp, boolean};
-
 /// Extract all solid IDs from a compound.
 ///
 /// # Errors
@@ -72,21 +70,11 @@ pub fn fuse_all(
             group_results.push(group_solids[0]);
             continue;
         }
-        // Pairwise balanced reduction within the overlapping group.
-        let mut current = group_solids;
-        while current.len() > 1 {
-            let mut next = Vec::with_capacity(current.len().div_ceil(2));
-            let mut i = 0;
-            while i + 1 < current.len() {
-                next.push(boolean(topo, BooleanOp::Fuse, current[i], current[i + 1])?);
-                i += 2;
-            }
-            if i < current.len() {
-                next.push(current[i]);
-            }
-            current = next;
-        }
-        group_results.push(current[0]);
+        // Each group is a connected cluster of interpenetrating/touching solids
+        // — fuse it in ONE GFA arrangement (via `fuse_cluster`, N-way with a
+        // sequential fallback) instead of a pairwise reduction that re-processes
+        // a growing accumulator O(n²).
+        group_results.push(crate::boolean::fuse_cluster(topo, &group_solids)?);
     }
 
     if group_results.len() == 1 {
@@ -380,6 +368,51 @@ mod tests {
         assert!(
             vol > 1.0 && vol < 2.0,
             "fused volume should be between 1 and 2, got {vol}"
+        );
+    }
+
+    /// A connected chain of four overlapping unit cubes forms ONE cluster, so
+    /// `fuse_all` fuses it via the N-way path. The result must match a sequential
+    /// fuse of the same boxes: the union is a solid [0,2.5]×[0,1]×[0,1] bar.
+    #[test]
+    fn fuse_all_connected_cluster_matches_sequential() {
+        use brepkit_math::mat::Mat4;
+
+        let offsets = [0.0, 0.5, 1.0, 1.5];
+
+        // fuse_all (N-way) path.
+        let mut topo = Topology::new();
+        let boxes: Vec<SolidId> = offsets
+            .iter()
+            .map(|&dx| {
+                let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+                crate::transform::transform_solid(&mut topo, b, &Mat4::translation(dx, 0.0, 0.0))
+                    .unwrap();
+                b
+            })
+            .collect();
+        let cid = topo.add_compound(Compound::new(boxes));
+        let fused = fuse_all(&mut topo, cid).unwrap();
+        let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+
+        // Every edge of a watertight solid is used by exactly two faces.
+        let mut uses: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for fid in brepkit_topology::explorer::solid_faces(&topo, fused).unwrap() {
+            let face = topo.face(fid).unwrap();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid).unwrap().edges() {
+                    *uses.entry(oe.edge().index()).or_default() += 1;
+                }
+            }
+        }
+        assert!(
+            uses.values().all(|&c| c == 2),
+            "fuse_all cluster result must be watertight"
+        );
+        assert!(
+            (vol - 2.5).abs() < 0.01,
+            "union of the overlapping row is a [0,2.5] bar (vol 2.5), got {vol}"
         );
     }
 
