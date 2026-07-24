@@ -475,6 +475,16 @@ fn empty_intersect_survives_measure_and_tessellate() {
 }
 
 #[test]
+fn fuse_cluster_empty_errors_not_panics() {
+    let mut topo = Topology::new();
+    let err = super::fuse_cluster(&mut topo, &[]);
+    assert!(
+        matches!(err, Err(crate::OperationsError::InvalidInput { .. })),
+        "empty cluster must return InvalidInput, not panic"
+    );
+}
+
+#[test]
 fn intersect_overlapping_boxes_is_nonempty() {
     use brepkit_topology::explorer::solid_faces;
 
