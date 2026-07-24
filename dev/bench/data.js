@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784912285815,
+  "lastUpdate": 1784912769137,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11447,6 +11447,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21631868,
             "range": "± 62548",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd1212f2e224cc7676d78f1827f2368e4f954439",
+          "message": "chore(main): release 2.128.1 (#1206)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.1](https://github.com/andymai/brepkit/compare/v2.128.0...v2.128.1)\n(2026-07-24)\n\n\n### Performance\n\n* **operations:** fuse_all uses the N-way fuse for connected clusters\n([#1205](https://github.com/andymai/brepkit/issues/1205))\n([59c7dec](https://github.com/andymai/brepkit/commit/59c7decbe929ace9d44e17765b3aa96755f802a2))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.1 for `brepkit-wasm`, switching `operations::fuse_all` to\nan N-way fuse for connected clusters to improve performance on larger\nmerges.\n\n<sup>Written for commit d25bd4fbd74000d88b440583048cd8c7949956e1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1206?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-24T17:03:42Z",
+          "tree_id": "b1972ea130ad99a03fe24704e97a94a4956e49bd",
+          "url": "https://github.com/andymai/brepkit/commit/bd1212f2e224cc7676d78f1827f2368e4f954439"
+        },
+        "date": 1784912768384,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 854176,
+            "range": "± 3052",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 955135,
+            "range": "± 1157",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13382,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673125,
+            "range": "± 22121",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22727252,
+            "range": "± 356559",
             "unit": "ns/iter"
           }
         ]
