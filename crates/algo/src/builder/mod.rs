@@ -419,6 +419,107 @@ impl Builder {
     }
 }
 
+/// Build an N-way FUSE result from the shared arena of an N-way pave filler.
+///
+/// Reuses the two-solid Builder machinery, generalized to N sources:
+///
+/// - **Splitting** — sections are stored face-relative (`pcurve_a == pcurve_b`),
+///   so the face splitter is rank-invariant; every face is split with a
+///   constant `Rank::A`. A sub-face's *global* source is tracked separately via
+///   `face_source` (original input face → source index).
+/// - **Classification** — each sub-face is kept iff its interior sample is
+///   OUTSIDE every OTHER source (the union boundary). One `RayCastGeoms` is
+///   built per source and reused across all sub-faces of that source's rivals.
+/// - **Assembly** — the kept faces feed the standard solid assembler.
+///
+/// This slice handles the interpenetrating case (no coincident faces). If a
+/// sub-face classifies `On` against another source — the signature of a
+/// coincident/flush contact that needs cross-source same-domain resolution —
+/// the fuse bails with an error so the caller can fall back to the sequential
+/// path. Coincident-face support is the next increment.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a coincident contact is detected, a sub-face cannot
+/// be sampled or classified, or assembly fails.
+#[allow(dead_code)] // Wired into a fuse_n entry point in the next increment.
+pub fn build_fuse_n<S: std::hash::BuildHasher>(
+    mut topo: Topology,
+    arena: GfaArena,
+    sources: &[SolidId],
+    face_source: &HashMap<FaceId, usize, S>,
+    tol: Tolerance,
+) -> Result<(Topology, SolidId), AlgoError> {
+    // Split every source face. Sections are face-relative, so a constant rank
+    // is correct for all of them (see the doc comment).
+    let edge_images = fill_images::fill_edge_images(&arena);
+    let all_a_ranks: HashMap<FaceId, Rank> = face_source.keys().map(|&f| (f, Rank::A)).collect();
+    let sub_faces =
+        fill_images_faces::fill_images_faces(&mut topo, &arena, &edge_images, &all_a_ranks, tol);
+
+    // The global source of each sub-face is its parent input face's source.
+    let sub_source: Vec<usize> = sub_faces
+        .iter()
+        .map(|sf| {
+            face_source.get(&sf.source_face).copied().ok_or_else(|| {
+                AlgoError::AssemblyFailed(format!(
+                    "sub-face parent {:?} has no source index",
+                    sf.source_face
+                ))
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
+    // One ray-cast geometry per source, reused across every rival sub-face.
+    let geoms: Vec<Option<classifier::RayCastGeoms>> = sources
+        .iter()
+        .map(|&s| classifier::RayCastGeoms::new(&topo, s).ok())
+        .collect();
+
+    let mut selected = Vec::new();
+    for (idx, sf) in sub_faces.iter().enumerate() {
+        let own = sub_source[idx];
+        let sample = match sf.interior_point {
+            Some(pt) => pt,
+            None => sample_face_interior(&topo, sf.face_id, tol)?,
+        };
+
+        // Keep the face iff it is outside EVERY other source. Inside any other
+        // source → interior to the union → drop.
+        let mut inside_any = false;
+        for (j, &other) in sources.iter().enumerate() {
+            if j == own {
+                continue;
+            }
+            match classifier::classify_point_cached(&topo, other, geoms[j].as_ref(), sample)? {
+                FaceClass::Inside => {
+                    inside_any = true;
+                    break;
+                }
+                FaceClass::On | FaceClass::CoplanarSame | FaceClass::CoplanarOpposite => {
+                    return Err(AlgoError::AssemblyFailed(
+                        "N-way fuse hit a coincident face; \
+                         cross-source same-domain not yet supported"
+                            .into(),
+                    ));
+                }
+                FaceClass::Outside | FaceClass::Unknown => {}
+            }
+        }
+
+        if !inside_any {
+            selected.push(bop::SelectedFace {
+                face_id: sf.face_id,
+                source_face: sf.source_face,
+                reversed: false,
+            });
+        }
+    }
+
+    let solid_id = assemble::assemble_solid(&mut topo, &selected, &[])?;
+    Ok((topo, solid_id))
+}
+
 /// Sample a point in the interior of a face.
 ///
 /// Uses the midpoint of the first boundary edge, then offsets slightly

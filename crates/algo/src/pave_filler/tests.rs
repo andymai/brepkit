@@ -1681,3 +1681,111 @@ fn pave_filler_n_accumulates_three_overlapping_boxes() {
          (arena accumulated no splits — pairwise phases did not accumulate)"
     );
 }
+
+// ── End-to-end N-way fuse (store → pave_filler_n → build_fuse_n) ─────────
+
+/// Count how many distinct edges of a solid are used by exactly two faces
+/// (manifold) vs otherwise, as a watertightness proxy.
+fn edge_face_share(topo: &Topology, solid: brepkit_topology::solid::SolidId) -> (usize, usize) {
+    use std::collections::HashMap;
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *uses.entry(oe.edge().index()).or_default() += 1;
+            }
+        }
+    }
+    let two = uses.values().filter(|&&c| c == 2).count();
+    let other = uses.values().filter(|&&c| c != 2).count();
+    (two, other)
+}
+
+/// N=2: the N-way fuse of two interpenetrating boxes (offset on all three axes,
+/// so no faces are coplanar-coincident) must match the standard two-solid fuse
+/// face count and be watertight.
+#[test]
+fn build_fuse_n_two_interpenetrating_boxes_matches_two_solid() {
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+
+    // Two-solid reference.
+    let two_solid_faces = {
+        let mut topo = Topology::default();
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.5, 0.5);
+        let mut arena = GfaArena::new();
+        crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+        let mut builder = crate::builder::Builder::with_tolerance(topo, arena, a, b, tol);
+        builder.perform().unwrap();
+        let (rtopo, result) = builder.build_result(crate::bop::BooleanOp::Fuse).unwrap();
+        solid_faces(&rtopo, result).unwrap().len()
+    };
+
+    // N-way path.
+    let mut src = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut src, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut src, 0.5, 0.5, 0.5);
+    let mut store = crate::ds::GfaShapeStoreN::new(&src, &[a, b]).unwrap();
+    let mut arena = GfaArena::new();
+    crate::pave_filler::run_pave_filler_n(&mut store.topo, &store.sources, tol, &mut arena)
+        .unwrap();
+    let (topo, result) = crate::builder::build_fuse_n(
+        std::mem::take(&mut store.topo),
+        arena,
+        &store.sources,
+        &store.face_source,
+        tol,
+    )
+    .unwrap();
+
+    let n_faces = solid_faces(&topo, result).unwrap().len();
+    assert_eq!(
+        n_faces, two_solid_faces,
+        "N-way fuse face count must match the two-solid fuse"
+    );
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(
+        two > 0 && other == 0,
+        "N-way fuse must be watertight (every edge shared by 2 faces); got two={two} other={other}"
+    );
+}
+
+/// N=3: three boxes each offset diagonally so consecutive boxes interpenetrate
+/// and none share a coplanar face. The N-way fuse produces one watertight solid
+/// in a single pass.
+#[test]
+fn build_fuse_n_three_interpenetrating_boxes_is_watertight() {
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+
+    let mut src = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut src, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut src, 0.5, 0.5, 0.5);
+    let c = make_unit_cube_manifold_at(&mut src, 1.0, 1.0, 1.0);
+    let mut store = crate::ds::GfaShapeStoreN::new(&src, &[a, b, c]).unwrap();
+    let mut arena = GfaArena::new();
+    crate::pave_filler::run_pave_filler_n(&mut store.topo, &store.sources, tol, &mut arena)
+        .unwrap();
+    let (topo, result) = crate::builder::build_fuse_n(
+        std::mem::take(&mut store.topo),
+        arena,
+        &store.sources,
+        &store.face_source,
+        tol,
+    )
+    .unwrap();
+
+    assert!(
+        !solid_faces(&topo, result).unwrap().is_empty(),
+        "produced a solid"
+    );
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(
+        two > 0 && other == 0,
+        "three-box N-way fuse must be watertight; got two={two} other={other}"
+    );
+}

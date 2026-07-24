@@ -109,9 +109,9 @@ pub struct GfaShapeStoreN {
     pub topo: Topology,
     /// Store-local `SolidId` for each deep-copied source, in input order.
     pub sources: Vec<SolidId>,
-    /// Store-local input-face index → the source index (position in `sources`)
-    /// it belongs to. The basis for per-sub-face source tagging downstream.
-    pub face_source: HashMap<usize, usize>,
+    /// Store-local input face → the source index (position in `sources`) it
+    /// belongs to. The basis for per-sub-face source tagging downstream.
+    pub face_source: HashMap<FaceId, usize>,
     /// Store-local input-face index → caller-topology face index, for
     /// shape-evolution provenance across the copy.
     pub input_face_to_caller: HashMap<usize, usize>,
@@ -140,7 +140,7 @@ impl GfaShapeStoreN {
             let (solid, map) = deep_copy_solid(source, &mut topo, orig)?;
             sources.push(solid);
             for (caller_idx, store_face) in map {
-                face_source.insert(store_face.index(), src_idx);
+                face_source.insert(store_face, src_idx);
                 input_face_to_caller.insert(store_face.index(), caller_idx);
             }
         }
@@ -421,7 +421,7 @@ mod tests {
             assert_eq!(faces.len(), 6, "source {src_idx} is a 6-face box");
             for fid in faces {
                 assert_eq!(
-                    store.face_source.get(&fid.index()).copied(),
+                    store.face_source.get(&fid).copied(),
                     Some(src_idx),
                     "face {fid:?} tagged to source {src_idx}"
                 );
