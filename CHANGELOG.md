@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.1](https://github.com/andymai/brepkit/compare/v2.128.0...v2.128.1) (2026-07-24)
+
+
+### Performance
+
+* **operations:** fuse_all uses the N-way fuse for connected clusters ([#1205](https://github.com/andymai/brepkit/issues/1205)) ([59c7dec](https://github.com/andymai/brepkit/commit/59c7decbe929ace9d44e17765b3aa96755f802a2))
+
 ## [2.128.0](https://github.com/andymai/brepkit/compare/v2.127.33...v2.128.0) (2026-07-24)
 
 
