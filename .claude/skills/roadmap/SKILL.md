@@ -645,8 +645,7 @@ vitest's per-test timeout, the abandoned async generation chain stays pending, a
 kernel concurrently with the next test. The following kumiko scenarios then inherit the poisoned object
 (two surface as "Shape handle has been disposed"); only `mitsukude bold` (bnd=571) has an independent
 assertion. So do NOT chase this as a panic — `catch_unwind`/`lastPanicMessage` have nothing to report.
-Chase the 849s. Native `compound_cut` on the captured operands is only 11.8s, so the time is elsewhere in
-the tool's goma chain and needs a per-stage capture. REFUTED: the captured goma `compound_cut`
+Chase the 849s. MEASURED SPLIT: `generateBin` alone is **847s** of the 849 — tessellation and STL are noise, so this is the boolean chain, not the mesher. Native `compound_cut` on the captured operands is only 11.8s (F=1146, clean), so one call is not the story. STRUCTURE (code, `kumikoWrapBuilder.ts` ~line 411): the carve loops `cutAll(region, family)` once PER FAMILY over an ACCUMULATING region, and that whole function runs per perimeter chunk — so there are many such calls, each starting from a more complex region than the capture. NOT YET MEASURED whether the total is simply their sum, or whether brepjs's bisecting `cutAll` (try the whole batch, on failure split and recurse) is thrashing on a failing batch. Next probe: count and time the actual cutAll invocations and their tool counts during one goma generation — do not assume the single capture is representative. REFUTED: the captured goma `compound_cut`
 (`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`, replay `crates/io/examples/replay_kumiko_goma.rs`)
 is NOT the culprit — all 180 tools replay in 11.8s with F=1146, free=0, over=0. The poisoning is
 elsewhere in that scenario's chain and needs a fresh capture.
