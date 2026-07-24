@@ -64,6 +64,12 @@ fn main() {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
     {
+        // A zero CHUNK (or no tools) would make the batch size zero and panic;
+        // this harness exists to produce numbers, so say so and stop.
+        if chunks == 0 || tools.is_empty() {
+            println!("CHUNK={chunks} with {} tools: nothing to do", tools.len());
+            return;
+        }
         let per = tools.len().div_ceil(chunks);
         let mut acc = region;
         for (i, batch) in tools.chunks(per).enumerate() {
@@ -75,7 +81,15 @@ fn main() {
                 brepkit_operations::boolean::BooleanOptions::default(),
             ) {
                 Ok(next) => {
-                    let f = solid_faces(&topo, next).map(|v| v.len()).unwrap_or(0);
+                    // Never report F=0 on an enumeration error — a silent zero
+                    // would corrupt the complexity/timing series this prints.
+                    let f = match solid_faces(&topo, next) {
+                        Ok(v) => v.len(),
+                        Err(e) => {
+                            println!("  batch {i}: face enumeration failed: {e}");
+                            return;
+                        }
+                    };
                     println!(
                         "  batch {i}: {} tools {}ms -> F={f}",
                         batch.len(),
