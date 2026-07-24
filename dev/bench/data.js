@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784901341785,
+  "lastUpdate": 1784901744879,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11177,6 +11177,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23072723,
             "range": "± 63365",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "411a09022a66df20ab6e97870c5e9cdc73a08aaf",
+          "message": "chore(main): release 2.127.33 (#1201)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.127.33](https://github.com/andymai/brepkit/compare/v2.127.32...v2.127.33)\n(2026-07-24)\n\n\n### Performance\n\n* **algo:** reject coplanar-but-disjoint SD pairs with an oriented box\n([#1200](https://github.com/andymai/brepkit/issues/1200))\n([6e28fce](https://github.com/andymai/brepkit/commit/6e28fce6832276bbb1e842e2eaaa888860897bd8))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.127.33 for `brepkit-wasm`. Improves geometry performance by\nskipping coplanar-but-disjoint pairs using an oriented box.\n\n- **Performance**\n- Early-reject coplanar but disjoint shape pairs with an oriented box to\nreduce unnecessary checks.\n\n<sup>Written for commit 39f50933d76cd26d047589b9a5419c09b5ee9afd.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1201?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-24T14:00:02Z",
+          "tree_id": "9969fd0160594f19c13deb5c5c1103dcce9678eb",
+          "url": "https://github.com/andymai/brepkit/commit/411a09022a66df20ab6e97870c5e9cdc73a08aaf"
+        },
+        "date": 1784901743898,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 850544,
+            "range": "± 3334",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 946954,
+            "range": "± 4744",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13114,
+            "range": "± 139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 665599,
+            "range": "± 8556",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22686377,
+            "range": "± 36268",
             "unit": "ns/iter"
           }
         ]
