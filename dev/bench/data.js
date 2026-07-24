@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784923362471,
+  "lastUpdate": 1784924315006,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11771,6 +11771,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22712575,
             "range": "± 303072",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8126072ccd0ff5add6eeb409a0506ac6397fb375",
+          "message": "fix(operations): tessellate nested inner wires by even-odd nesting depth (#1212)\n\nCloses the custom-shape **O-ring** export defect found while re-probing\nthe T-lip fix (#1209). Despite the symptoms, this is **not** a boolean\nbug.\n\n## Symptom and localization\n\nThe tool's `3×3 O-shape (ring)` exported closed-but-non-manifold and\n~24x slower than its L/T/U siblings. Single-variable isolation found the\nminimal broken config is `base=flat, lip=OFF` — **1800 tris, 88 folded\nedges, 64 ms**, far too fast for a mesh fallback. The captured STEP\nreplays faithfully (`tris=1800` matches the tool) and the B-Rep is\n**fine**: `F=47`, 24 cylinder + 23 plane, no free and no over-shared\nedges.\n\nEvery folded edge sat on one face: the `z=21` wall top, whose three\ninner wires **nest** — the cavity opening contains the island band\naround the central 1u hole, which contains that hole.\n\n## Two stacked defects\n\n1. **Colliding seeds.** Both solid tessellation paths seeded hole\nflood-removal at each inner wire's vertex **centroid**. A gridfinity bin\nis centred on the origin, so all three concentric wires share the\ncentroid `(0,0)`: the first flood took the innermost cell and the other\ntwo found it already gone. The 13152-unit cavity was never removed. (The\nnon-shared path already used `find_interior_seed`; only the two solid\npaths used a centroid.)\n2. **Nesting ignored.** Removing one cell per inner wire is wrong\nregardless of seeding — nesting alternates material and void, so only\n**odd-depth** wires bound a hole. Fixing seeding alone erased the island\nband and swung to `boundary=100`.\n\nStored winding cannot classify them (a boolean can emit a hole wound\nlike its outer — the documented hole-winding hazard), so\n`hole_removal_seeds` decides by geometric nesting depth.\n\n## Cell arithmetic (outer ~15736)\n\n| cell | area | |\n|---|---|---|\n| outer..I27 | 595.0 | material |\n| I27..I28 | 13152.7 | void |\n| I28..I29 | 198.1 | material |\n| inside I29 | 1789.8 | void |\n\n| | predicted | measured |\n|---|---|---|\n| before | 13945.8 | **13944.0** |\n| seed fix only | 595.0 | **590.1** |\n| even-odd (this PR) | 793.1 + chord | **799.9** |\n\nBoth failure modes match the model to chord error, so the mechanism is\nconfirmed rather than inferred.\n\n## Result\n\nO-ring: `mesh_bnd 0`, `mesh_nm 88 -> 0`. The no-hole control is\nbyte-identical.\n\n## Verification\n\n- 1413 tests green across `operations` + `io` + `algo`\n- `cargo test -p brepkit-wasm --lib gridfinity` — 27 passed, including\nthe d1-d5 lip canaries\n- New fixture `crates/io/tests/oring_nested_holes.rs` **verified to fail\non the parent commit** with exactly `88 folded edges`, and to pass here.\nIt pins area as well as edge counts, because both failure modes pass an\nedge-use check on their own.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix tessellation for planar faces with nested inner wires by removing\nholes based on even‑odd nesting depth and seeding floods per wire. Adds\na safe fallback when a computed seed lies outside its wire, keeping\nO‑ring exports watertight and manifold while leaving non‑hole cases\nunchanged.\n\n- **Bug Fixes**\n- Classify inner wires by geometric nesting; remove only odd‑depth loops\n(true holes).\n- Use per‑wire `find_interior_seed` to avoid centroid collisions on\nconcentric wires; if a seed is outside its wire, flood from it\nunconditionally to avoid misclassification.\n- Add `hole_removal_seeds(...)` and use it across all planar\ntessellation paths; include a regression test and STEP fixture to pin\narea and edge counts.\n\n- **Performance**\n- Bound containment checks with per‑wire bounding boxes and skip the\nscan when only one inner wire, keeping the pass near‑linear for many\ndisjoint holes.\n\n<sup>Written for commit f167793380ca71ee97444d8d258c05f06ae6045c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1212?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T13:16:24-07:00",
+          "tree_id": "c3771451842191eae40b22ca3ae32a1947e6a40b",
+          "url": "https://github.com/andymai/brepkit/commit/8126072ccd0ff5add6eeb409a0506ac6397fb375"
+        },
+        "date": 1784924314233,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 821925,
+            "range": "± 1000",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 910161,
+            "range": "± 2903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12008,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 664489,
+            "range": "± 9697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21572944,
+            "range": "± 505589",
             "unit": "ns/iter"
           }
         ]
