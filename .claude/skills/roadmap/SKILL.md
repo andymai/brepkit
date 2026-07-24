@@ -656,8 +656,20 @@ wallPatternClips, or JS-side lattice work. (3) Batching is real but SECONDARY: n
 18.6s, and the SAME 30 tools cost 393ms at F=168 vs 6103ms at F=1131 — cost grows steeply with region
 complexity, so the per-family loop over an accumulating region is the pessimal shape, but fixing it
 cannot recover the missing 77%. Also unexplained: that 180-tool call is 33.5s in-tool vs 11.7s natively
-(3x). NEXT PROBE: a V8 `--cpu-prof` of one generation — the wasm-vs-JS self-time split decides whether
-this is brepkit's problem at all. REFUTED: the captured goma `compound_cut`
+(3x). (4) FULL OP ATTRIBUTION at h=4 (wrap every brepjs op; 99.9% accounted, total 292.7s):
+**`cutAllBisect` 1 call / 203.5s / 69.5%**, `cutAll` 32 calls / 88.5s / 30.2%, all else 0.1%. So the bulk
+is ONE call — the step applying the pattern solids to the bin — not the per-family carve. Phase split
+confirms it: `buildKumikoWallPatterns` is only 32.8%, of which prism construction is **322ms (0.1%)**, so
+the "thousands of small sketch/extrude ops" candidate is REFUTED. CORRECTION: an earlier probe wrapped
+`cutAll`, saw 32 calls with zero failures, and concluded there was no bisect thrash — INVALID, because
+`cutAllBisect` is a separate export whose internal retries use an internal ops reference the wrapper never
+saw. That hypothesis was untested, not refuted. NEXT PROBE: read `cutAllBisect`'s own
+`BatchBisectTelemetry` (batchAttempts vs batchSucceeded, pairwise count) — attempts >> successes means a
+FAILING batch whose retry cost is the 203s (a correctness bug wearing a perf costume), one attempt means
+honest N-way work. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
+NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
+idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
+the call path you intend to claim about. REFUTED: the captured goma `compound_cut`
 (`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`) is NOT the culprit — all 180 tools replay in
 11.8s with F=1146, free=0, over=0.
 
