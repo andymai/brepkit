@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784911123946,
+  "lastUpdate": 1784912285815,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11393,6 +11393,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21912024,
             "range": "± 89653",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59c7decbe929ace9d44e17765b3aa96755f802a2",
+          "message": "perf(operations): fuse_all uses the N-way fuse for connected clusters (#1205)\n\n## What\n\nExtends the N-way GFA fuse (#1202) beyond `compound_cut` to `fuse_all`\n(compound union).\n\n`fuse_all` partitions a compound's solids into overlapping/touching\ngroups, then fused each group with a **pairwise balanced reduction**.\nThat re-processes a growing accumulator O(n²), and — as measured on the\nkumiko lattice — a balanced tree is no faster than sequential for a\nconnected cluster. Each group is exactly a connected cluster of\ninterpenetrating/touching solids, so it routes through `fuse_cluster`\n(now `pub(crate)`) instead: the single-pass N-way arrangement, with the\nsame sequential fallback `compound_cut` uses on any error or invalid\nresult.\n\nDisjoint solids still take the free disjoint-shell merge; 1–2-solid\ngroups still go straight to the pairwise path.\n\n## Verification\n\n- New test: `fuse_all` of a connected 4-box chain fuses via the N-way\npath to a watertight `[0,2.5]` bar (vol 2.5).\n- Existing `fuse_all` two-box and honeycomb-stays-disjoint tests\nunchanged.\n- Full `brepkit-operations` foil: 988 tests pass. clippy clean.\n\n## Scope\n\nFuse-only, same planar-coincidence coverage as #1202; non-planar\ncoincident contacts bail cleanly to the pairwise fallback.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUse N‑way GFA fuse in `fuse_all` for connected clusters, replacing the\npairwise reduction to remove O(n²) reprocessing and speed up unions.\nBehavior for disjoint or small groups is unchanged.\n\n- **Performance**\n- Connected groups now route through `fuse_cluster` (now `pub(crate)`):\nsingle‑pass N‑way with sequential fallback (same as `compound_cut`).\n  - Keeps free disjoint‑shell merge; 1–2‑solid groups stay pairwise.\n- Added test: 4‑cube chain fuses via N‑way to a watertight bar (vol\n2.5); existing `fuse_all` tests in `brepkit-operations` unchanged.\n\n<sup>Written for commit b48801a9ba66e560b4973a811108301187d0ea21.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1205?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T16:55:50Z",
+          "tree_id": "bc66db9cc89a7c0ea63e1d6eede889c325c77bd8",
+          "url": "https://github.com/andymai/brepkit/commit/59c7decbe929ace9d44e17765b3aa96755f802a2"
+        },
+        "date": 1784912285081,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 824954,
+            "range": "± 6410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 914439,
+            "range": "± 1744",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12068,
+            "range": "± 73",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 659350,
+            "range": "± 4687",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21631868,
+            "range": "± 62548",
             "unit": "ns/iter"
           }
         ]
