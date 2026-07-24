@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784924805770,
+  "lastUpdate": 1784927886151,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11879,6 +11879,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19562119,
             "range": "± 147067",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "770e5b25ac891bca25dd572f89253fadaf05f3fb",
+          "message": "test(operations): root-map the tangent-section-circle boolean fallback (#1213)\n\nThe census's `cone ∪ box` is the **only remaining primitive-boolean mesh\nfallback**, and it was not root-mapped anywhere. Mapping it showed it is\nnot a cone problem at all. Three `#[ignore]` repros plus a roadmap row;\nno production code changes.\n\n## It is a general tangency defect, not cone-specific\n\n`make_cone(6, 2, 12)` has radius exactly **4** at z=6, where the 8×8\nbox's bottom sits — the section circle is **inscribed in the box square,\ntangent to all four walls**.\n\nA plain **cylinder** reproduces it identically:\n\n| configuration | F | validate |\n|---|---|---|\n| cylinder r=4, tangent d=8 box | 14 | **4 non-manifold** |\n| cylinder r=4, clear d=10 box | 8 | clean |\n\nAnd the cone sweep isolates the same variable:\n\n| configuration | F | z=0 disc | validate |\n|---|---|---|---|\n| tangent, d=8 zb=6 | 10 | **0** | 4 non-manifold |\n| circle strictly inside, d=10 zb=6 | 8 | 1 | **clean** |\n| tangent, d=6 zb=9 | 10 | **0** | 4 non-manifold |\n| circle strictly inside, d=8 zb=9 | 8 | 1 | **clean** |\n| circle crossing walls, d=6 zb=6 | 11 | 1 | 1 free edge |\n\nTwo independently chosen tangent configurations fail *identically*;\nevery non-tangent one is clean. This is the tangential-contact class —\nthe same family as the intwidth-tangency closure — and gridfinity\ngeometry is full of it, so the blast radius is wider than one census\nrow.\n\n## What breaks on the cone case\n\nRaw GFA nearly succeeds: `F=10`, 1 cone + 9 planes, **zero free edges**,\nrejected only for 4 non-manifold edges.\n\nThe **box side is correct** — the pinched square-minus-inscribed-circle\nregion tiles into 4 curvilinear-triangle faces, each wall splitting at\nits tangency point.\n\nThe **cone side loses its z=0 base rim**, two symptoms of one cause:\n\n1. Both cone plane faces vanish. The z=12 top disc correctly (it lies\ninside the box), but the **z=0 base disc (r=6) is nowhere near the box\nand must survive** — all 9 result planes are box-derived.\n2. The cone lateral's inner wire repeats **its own outer wire** — the\nsame four z=6 arc edge ids — instead of the base rim. Hence each arc\nused 3×.\n\nThe remainder is being closed by duplicating the wrong rim. First probe\nfor whoever picks it up: why the z=0 rim/disc is dropped —\nclassification, or never emitted.\n\n## Discovered en route\n\nA section circle **crossing** the walls (rather than tangent or\ninterior) is a *separate* defect — 1 free edge — previously unmapped.\nRecorded alongside.\n\n## Contents\n\n- `cone_union_box_should_be_analytic` — ready-repro asserting the z=0\nbase disc survives and the result is manifold; currently fails on the\nfirst (`left: 0, right: 1`).\n- `diag_cone_box_tangency_sweep`, `diag_cylinder_box_tangency` — the two\ntables above.\n- One roadmap row under \"DEFERRED but ready\".\n\nCI is unaffected: all three are `#[ignore]`d.",
+          "timestamp": "2026-07-24T14:15:50-07:00",
+          "tree_id": "23f570b6529c96c168add6bf9662392318a09ffa",
+          "url": "https://github.com/andymai/brepkit/commit/770e5b25ac891bca25dd572f89253fadaf05f3fb"
+        },
+        "date": 1784927884478,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 815179,
+            "range": "± 3180",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 905220,
+            "range": "± 1560",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11972,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 660959,
+            "range": "± 773",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21537425,
+            "range": "± 626847",
             "unit": "ns/iter"
           }
         ]
