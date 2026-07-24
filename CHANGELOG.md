@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.4](https://github.com/andymai/brepkit/compare/v2.128.3...v2.128.4) (2026-07-24)
+
+
+### Bug Fixes
+
+* **operations:** tessellate nested inner wires by even-odd nesting depth ([#1212](https://github.com/andymai/brepkit/issues/1212)) ([8126072](https://github.com/andymai/brepkit/commit/8126072ccd0ff5add6eeb409a0506ac6397fb375))
+
 ## [2.128.3](https://github.com/andymai/brepkit/compare/v2.128.2...v2.128.3) (2026-07-24)
 
 
