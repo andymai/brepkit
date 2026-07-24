@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784927886151,
+  "lastUpdate": 1784931464189,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11933,6 +11933,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21537425,
             "range": "± 626847",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c5ced2e94f56ad195f2bac80184307b46f5a7da0",
+          "message": "docs(roadmap): record the export-integrity baseline and the kumiko root (#1215)\n\nFirst full before/after over the tool's 408-test `export-integrity`\nmatrix — its own version of the STL edge-use oracle (zero boundary\nedges, bounded non-manifold). Docs plus one diagnostic harness; no\nproduction code.\n\n## Result\n\n| | published 2.128.2 | local main |\n|---|---|---|\n| passed | 365 | **371** |\n| failed | 43 | **37** |\n\nFixed: both `3×3 T with lip` cases (#1209), `3×3 O-shape (ring) with\nlip` and `O-shape + magnet base + lip` (#1212), plus pathfinder /\npermutation-matrix / scoop rows.\n\n**No regressions.** One scenario looked like one — `wall patterns ›\nslots carves 3×3×5 walls (scale 0.5)` passed in the baseline and failed\nafter. Isolated A/B says otherwise: **63.3 s on published, 64.3 s on\nmain**. It is a timing-borderline scenario whose full-suite verdict\ndepends on cache warmth and machine load, not on the kernel. Recorded so\nnobody chases it as a correctness bug.\n\n## Kumiko's 14 failures are ONE root\n\nFamilies: kumiko 14, permutation matrix 7, custom-shape 6, solid cutouts\n3, then singles.\n\n`goma carves a 1×1×6 bin` runs ~48 s and then throws `recursive use of\nan object detected which would lead to unsafe aliasing in rust` — wasm\nborrow poisoning. The scenarios after it inherit the poisoned kernel;\ntwo surface as `Shape handle has been disposed`. Only `mitsukude bold`\n(bnd=571) has an independent assertion.\n\n**This corrects an existing roadmap row** which records that poisoning\nclass as \"NOT REPRODUCIBLE on 2.124.13\". It reproduces on 2.128.2. The\npanic-capture hardening already shipped, so `lastPanicMessage()` should\nname the underlying panic — that is the next probe.\n\n**Refuted en route:** the captured goma `compound_cut` is *not* the\nculprit. All 180 tools replay natively in 11.8 s with `F=1146, free=0,\nover=0` — a clean result. Harness added as\n`crates/io/examples/replay_kumiko_goma.rs` with the refutation in its\ndoc comment, so the next session doesn't burn an iteration replaying it\nexpecting a repro.\n\n## A counting caveat\n\nThe baseline's classified failure kinds (23 boundary-edge, 2\nnon-manifold, 4 poisoning, 1 timeout) sum to **30 of 43** — about a\ndozen failures carry no recognised error form, most likely cascade\ncasualties but unconfirmed. Kumiko already shows how badly the raw\nnumber misleads: 14 failures, one root. The roadmap now says never to\nquote the failure count as a defect count.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRecorded the 408‑test `export-integrity` baseline (2.128.2: 365 pass/43\nfail; local `main`: 371 pass/37 fail) with no regressions. Corrected the\nkumiko root to a generation‑side perf overrun that triggers a test\ntimeout and wasm borrow‑poisoning (not a kernel panic); added\n`crates/io/examples/replay_kumiko_goma.rs` and fixed capture path joins\nwith `PathBuf`.\n\n- **New Findings**\n- The cost is in `generateBin`: ~849 s total, ~847 s in generation;\ntessellation/STL are negligible.\n- Bottleneck is the boolean chain, not the mesher; `compound_cut`\ncapture replays clean in 11.8 s (F=1146, free=0, over=0).\n- Structure: `kumikoWrapBuilder.ts` carves per family over an\naccumulating region, repeating `cutAll`; next step is to count/time\nthose `cutAll` calls during one goma run.\n\n<sup>Written for commit e936ac8e7f77e05d70fc1caae0471c69401ca9ad.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1215?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T15:15:23-07:00",
+          "tree_id": "f0c91a121f1c33f8478e9099fa32841e500512a4",
+          "url": "https://github.com/andymai/brepkit/commit/c5ced2e94f56ad195f2bac80184307b46f5a7da0"
+        },
+        "date": 1784931463469,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 820370,
+            "range": "± 11216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 912924,
+            "range": "± 1322",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12152,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663582,
+            "range": "± 5399",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21619093,
+            "range": "± 41442",
             "unit": "ns/iter"
           }
         ]
