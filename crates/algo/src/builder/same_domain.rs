@@ -244,13 +244,32 @@ pub fn detect_same_domain<S: BuildHasher>(
     // patches that rarely accumulate residue, and a 2D containment test on
     // their parametric domains needs surface-specific handling.
     {
+        // Per planar face, from one outer-wire sampling: an AABB (drives the
+        // grid broad-phase) and a tol-expanded OBB (tighter oriented reject in
+        // the pair loop below). `planar_obbs` is indexed directly by sub-face
+        // index — dense and hasher-free in the hot loop; an entry is `Some`
+        // exactly for the faces that also entered `planar_aabbs`.
         let mut planar_aabbs: Vec<(usize, brepkit_math::aabb::Aabb3)> = Vec::new();
+        let mut planar_obbs: Vec<Option<brepkit_math::obb::Obb3>> = vec![None; n];
         for (idx, surf) in surfaces.iter().enumerate() {
-            if matches!(surf, Some(FaceSurface::Plane { .. }))
-                && let Some(bb) = face_outer_aabb(topo, sub_faces[idx].face_id)
-            {
-                planar_aabbs.push((idx, bb));
+            let Some(FaceSurface::Plane { normal, .. }) = surf else {
+                continue;
+            };
+            let pts = face_outer_wire_points(topo, sub_faces[idx].face_id);
+            if pts.len() < 3 {
+                continue;
             }
+            // Thickness axis pinned to the plane normal, in-plane axes from PCA,
+            // expanded by tol so a boundary-coincident pair still passes.
+            let mut obb = brepkit_math::obb::Obb3::from_slice_with_normal(&pts, *normal);
+            for e in &mut obb.half_extents {
+                *e += tol.linear;
+            }
+            let Some(aabb) = brepkit_math::aabb::Aabb3::try_from_points(pts) else {
+                continue;
+            };
+            planar_aabbs.push((idx, aabb));
+            planar_obbs[idx] = Some(obb);
         }
         // Broad-phase: only test pairs whose AABBs overlap. Two planar faces
         // that don't share 3D space (expanded by tol for boundary-coincident
@@ -266,6 +285,20 @@ pub fn detect_same_domain<S: BuildHasher>(
                 _ => None,
             };
             let Some(same_dir) = same_dir else { continue };
+            // Oriented-bound reject: an OBB conservatively contains its face
+            // (both are tol-expanded), so OBB-disjoint means the faces cannot
+            // share any point — no interior point of one can lie in the other,
+            // so `planar_faces_overlap` would return false. Skipping the pair
+            // is result-preserving and prunes the coplanar-but-disjoint lattice
+            // pairs the axis-aligned box admits — a thin diagonal strut's AABB
+            // is a large square overlapping every lattice member it crosses,
+            // while its OBB hugs the strut. Both `i` and `j` come from
+            // `planar_aabbs`, so their OBB entries are always `Some`.
+            if let (Some(oi), Some(oj)) = (&planar_obbs[i], &planar_obbs[j])
+                && !oi.intersects(oj)
+            {
+                continue;
+            }
             // Complementary partition regions of one split (same source, distinct
             // interiors) are not overlapping duplicates; a coincident same-source
             // duplicate (same interior) still reaches `planar_faces_overlap`.
@@ -1148,9 +1181,21 @@ fn repr_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
 /// `true` when the two faces share real 3D area, which requires their AABBs
 /// (expanded by tolerance for boundary-coincident cases) to intersect.
 fn face_outer_aabb(topo: &Topology, face_id: FaceId) -> Option<brepkit_math::aabb::Aabb3> {
-    let face = topo.face(face_id).ok()?;
-    let wire = topo.wire(face.outer_wire()).ok()?;
-    let mut pts: Vec<brepkit_math::vec::Point3> = Vec::new();
+    brepkit_math::aabb::Aabb3::try_from_points(face_outer_wire_points(topo, face_id))
+}
+
+/// Sample a face's outer wire at [`SD_EDGE_SAMPLES`] points per edge, matching
+/// the polygons the overlap tests build. Samples `0..SD_EDGE_SAMPLES` (not
+/// `..=`) so each shared vertex is covered once, by the next edge's `frac=0`.
+fn face_outer_wire_points(topo: &Topology, face_id: FaceId) -> Vec<brepkit_math::vec::Point3> {
+    let Ok(face) = topo.face(face_id) else {
+        return Vec::new();
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return Vec::new();
+    };
+    let mut pts: Vec<brepkit_math::vec::Point3> =
+        Vec::with_capacity(wire.edges().len() * SD_EDGE_SAMPLES);
     for oe in wire.edges() {
         let Ok(edge) = topo.edge(oe.edge()) else {
             continue;
@@ -1158,21 +1203,16 @@ fn face_outer_aabb(topo: &Topology, face_id: FaceId) -> Option<brepkit_math::aab
         let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
             continue;
         };
-        let (sp, ep) = (sv.point(), ev.point());
-        // Sample `0..SD_EDGE_SAMPLES` (not `..=`) to match the
-        // `planar_faces_overlap` / `planar_face_area` polygons exactly: the next
-        // edge's `frac=0` already covers each shared vertex, so this drops the
-        // redundant per-vertex duplicate without changing the AABB.
         super::pcurve_compute::sample_edge_uniform(
             edge.curve(),
-            sp,
-            ep,
+            sv.point(),
+            ev.point(),
             SD_EDGE_SAMPLES,
             oe.is_forward(),
             &mut pts,
         );
     }
-    brepkit_math::aabb::Aabb3::try_from_points(pts)
+    pts
 }
 
 /// Generate the spatially-overlapping candidate pairs among `indices` using a
