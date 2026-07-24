@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.0](https://github.com/andymai/brepkit/compare/v2.127.33...v2.128.0) (2026-07-24)
+
+
+### Features
+
+* N-way GFA fuse — 3.9x faster kumiko compound_cut ([#1202](https://github.com/andymai/brepkit/issues/1202)) ([679f9de](https://github.com/andymai/brepkit/commit/679f9de5bb58bf42cdafa872eb90e6065829471a))
+
 ## [2.127.33](https://github.com/andymai/brepkit/compare/v2.127.32...v2.127.33) (2026-07-24)
 
 
