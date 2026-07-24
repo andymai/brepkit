@@ -1,0 +1,22 @@
+crates/operations/benches/compound_cut_perf.rs
+  s_0d544b8727eb96::t_e90e314bbd6c6c 182
+  s_0d544b8727eb96::t_8fb352e3068518 179-181
+  s_0d544b8727eb96::t_a0630297e8a186 183-185
+  s_0d544b8727eb96::t_73dafbe2b5f609 135-178,186-211,298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "704e8bd51dd156f603dfd3f287d093efc011f886",
+  "prompts": {},
+  "sessions": {
+    "s_0d544b8727eb96": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a83d6e58-79a3-46d1-ab8b-79dfbbccdffa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
