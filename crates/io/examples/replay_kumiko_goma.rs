@@ -25,12 +25,17 @@ use brepkit_topology::edge::EdgeId;
 use brepkit_topology::explorer::solid_faces;
 
 fn main() {
-    let dir = PathBuf::from(std::env::var("CAPTURE_DIR").unwrap_or_else(|_| {
-        format!(
-            "{}/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma",
-            std::env::var("HOME").expect("HOME")
-        )
-    }));
+    let dir = std::env::var_os("CAPTURE_DIR").map_or_else(
+        || {
+            let mut p = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+            p.push(".cache");
+            p.push("brepkit-parity-captures");
+            p.push("2026-07-23");
+            p.push("kumiko-goma");
+            p
+        },
+        PathBuf::from,
+    );
     let limit: usize = std::env::args()
         .nth(1)
         .and_then(|a| a.parse().ok())
