@@ -470,11 +470,44 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
         })
         .collect::<Result<_, _>>()?;
 
+    // Resolve coincident faces across sources first: opposite-oriented groups
+    // are interior interfaces (all dropped); same-oriented groups keep one
+    // representative (still verified against sources outside the group). The
+    // remaining sub-faces are classified by inside/outside as usual.
+    let sd = same_domain::detect_same_domain_fuse_n(&topo, &arena, &sub_faces, &sub_source, tol)?;
+    let keep_reprs: HashMap<usize, std::collections::HashSet<usize>> =
+        sd.keep_reprs.into_iter().collect();
+
     // One ray-cast geometry per source, reused across every rival sub-face.
     let geoms: Vec<Option<classifier::RayCastGeoms>> = sources
         .iter()
         .map(|&s| classifier::RayCastGeoms::new(&topo, s).ok())
         .collect();
+
+    // Keep a sub-face iff its interior sample is outside every source in
+    // `others`. A coincident `On` against a non-coincident source means the
+    // same-domain pass missed a coincidence — bail to the sequential fallback.
+    let keep_if_outside = |topo: &Topology,
+                           sample: Point3,
+                           own: usize,
+                           others: &dyn Fn(usize) -> bool|
+     -> Result<bool, AlgoError> {
+        for (j, &other) in sources.iter().enumerate() {
+            if j == own || !others(j) {
+                continue;
+            }
+            match classifier::classify_point_cached(topo, other, geoms[j].as_ref(), sample)? {
+                FaceClass::Inside => return Ok(false),
+                FaceClass::On | FaceClass::CoplanarSame | FaceClass::CoplanarOpposite => {
+                    return Err(AlgoError::AssemblyFailed(
+                        "N-way fuse: unresolved coincident face; sequential fallback".into(),
+                    ));
+                }
+                FaceClass::Outside | FaceClass::Unknown => {}
+            }
+        }
+        Ok(true)
+    };
 
     let mut selected = Vec::new();
     for (idx, sf) in sub_faces.iter().enumerate() {
@@ -484,30 +517,21 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
             None => sample_face_interior(&topo, sf.face_id, tol)?,
         };
 
-        // Keep the face iff it is outside EVERY other source. Inside any other
-        // source → interior to the union → drop.
-        let mut inside_any = false;
-        for (j, &other) in sources.iter().enumerate() {
-            if j == own {
-                continue;
-            }
-            match classifier::classify_point_cached(&topo, other, geoms[j].as_ref(), sample)? {
-                FaceClass::Inside => {
-                    inside_any = true;
-                    break;
+        let keep = if sd.grouped.contains(&idx) {
+            // A coincident face: kept only if it is this group's same-oriented
+            // representative AND outside every source not in the group.
+            match keep_reprs.get(&idx) {
+                Some(group_sources) => {
+                    keep_if_outside(&topo, sample, own, &|j| !group_sources.contains(&j))?
                 }
-                FaceClass::On | FaceClass::CoplanarSame | FaceClass::CoplanarOpposite => {
-                    return Err(AlgoError::AssemblyFailed(
-                        "N-way fuse hit a coincident face; \
-                         cross-source same-domain not yet supported"
-                            .into(),
-                    ));
-                }
-                FaceClass::Outside | FaceClass::Unknown => {}
+                None => false,
             }
-        }
+        } else {
+            // A normal sub-face: kept iff outside every other source.
+            keep_if_outside(&topo, sample, own, &|_| true)?
+        };
 
-        if !inside_any {
+        if keep {
             selected.push(bop::SelectedFace {
                 face_id: sf.face_id,
                 source_face: sf.source_face,

@@ -1789,3 +1789,93 @@ fn build_fuse_n_three_interpenetrating_boxes_is_watertight() {
         "three-box N-way fuse must be watertight; got two={two} other={other}"
     );
 }
+
+// ── N-way fuse with coincident faces (cross-source same-domain) ──────────
+
+/// Run the full N-way fuse pipeline for `offsets` unit cubes and return
+/// (result topology, solid, face count).
+fn nway_fuse(offsets: &[[f64; 3]]) -> (Topology, brepkit_topology::solid::SolidId) {
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+    let mut src = Topology::default();
+    let solids: Vec<_> = offsets
+        .iter()
+        .map(|o| make_unit_cube_manifold_at(&mut src, o[0], o[1], o[2]))
+        .collect();
+    let mut store = crate::ds::GfaShapeStoreN::new(&src, &solids).unwrap();
+    let mut arena = GfaArena::new();
+    crate::pave_filler::run_pave_filler_n(&mut store.topo, &store.sources, tol, &mut arena)
+        .unwrap();
+    crate::builder::build_fuse_n(
+        std::mem::take(&mut store.topo),
+        arena,
+        &store.sources,
+        &store.face_source,
+        tol,
+    )
+    .unwrap()
+}
+
+/// Axis-aligned overlapping boxes share coincident coplanar faces (the top,
+/// bottom, front and back planes coincide over the overlap). Cross-source
+/// same-domain must resolve them so the N-way fuse still matches the two-solid
+/// fuse and is watertight — the case that used to bail.
+#[test]
+fn build_fuse_n_axis_aligned_overlap_matches_two_solid() {
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+
+    let two_solid = {
+        let mut topo = Topology::default();
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+        let mut arena = GfaArena::new();
+        crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+        let mut builder = crate::builder::Builder::with_tolerance(topo, arena, a, b, tol);
+        builder.perform().unwrap();
+        let (rtopo, result) = builder.build_result(crate::bop::BooleanOp::Fuse).unwrap();
+        solid_faces(&rtopo, result).unwrap().len()
+    };
+
+    let (topo, result) = nway_fuse(&[[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]]);
+    let n_faces = solid_faces(&topo, result).unwrap().len();
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(two > 0 && other == 0, "watertight; two={two} other={other}");
+    assert_eq!(
+        n_faces, two_solid,
+        "N-way overlap fuse matches the two-solid fuse"
+    );
+}
+
+/// Two boxes abutting face-to-face: the shared wall is an opposite-oriented
+/// coincident pair (material on both sides), so both faces must be dropped,
+/// producing one watertight 2×1×1 bar.
+#[test]
+fn build_fuse_n_abutting_boxes_drop_shared_wall() {
+    use brepkit_topology::explorer::solid_faces;
+    let (topo, result) = nway_fuse(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(
+        two > 0 && other == 0,
+        "abutting fuse watertight; two={two} other={other}"
+    );
+    // The shared x=1 wall (one face from each box) is dropped; a clean bar has
+    // fewer faces than the 12 of two separate boxes.
+    let n = solid_faces(&topo, result).unwrap().len();
+    assert!(n < 12, "shared wall dropped, got {n} faces");
+}
+
+/// Three axis-aligned overlapping boxes fuse to one watertight solid in a single
+/// pass, resolving coincident faces between every interacting pair.
+#[test]
+fn build_fuse_n_three_axis_aligned_row_watertight() {
+    use brepkit_topology::explorer::solid_faces;
+    let (topo, result) = nway_fuse(&[[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [1.0, 0.0, 0.0]]);
+    assert!(!solid_faces(&topo, result).unwrap().is_empty());
+    let (two, other) = edge_face_share(&topo, result);
+    assert!(
+        two > 0 && other == 0,
+        "three-box row watertight; two={two} other={other}"
+    );
+}
