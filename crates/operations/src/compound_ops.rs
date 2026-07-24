@@ -372,10 +372,10 @@ mod tests {
     }
 
     /// A connected chain of four overlapping unit cubes forms ONE cluster, so
-    /// `fuse_all` fuses it via the N-way path. The result must match a sequential
-    /// fuse of the same boxes: the union is a solid [0,2.5]×[0,1]×[0,1] bar.
+    /// `fuse_all` fuses it via the N-way path. The union is a solid
+    /// [0,2.5]×[0,1]×[0,1] bar, so the result must be watertight with volume 2.5.
     #[test]
-    fn fuse_all_connected_cluster_matches_sequential() {
+    fn fuse_all_connected_cluster_is_watertight_bar() {
         use brepkit_math::mat::Mat4;
 
         let offsets = [0.0, 0.5, 1.0, 1.5];

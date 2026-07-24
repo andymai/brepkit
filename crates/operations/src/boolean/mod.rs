@@ -913,15 +913,19 @@ pub(crate) fn fuse_cluster(
     topo: &mut Topology,
     cluster: &[SolidId],
 ) -> Result<SolidId, crate::OperationsError> {
+    let Some((&first, rest)) = cluster.split_first() else {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "fuse_cluster requires a non-empty cluster".into(),
+        });
+    };
     if cluster.len() >= 3
         && let Ok(fused) = brepkit_algo::gfa::fuse_n(topo, cluster)
         && validate_boolean_result(topo, fused).is_ok()
     {
         return Ok(fused);
     }
-    cluster[1..]
-        .iter()
-        .try_fold(cluster[0], |a, &t| boolean(topo, BooleanOp::Fuse, a, t))
+    rest.iter()
+        .try_fold(first, |a, &t| boolean(topo, BooleanOp::Fuse, a, t))
 }
 
 /// Group tools into AABB-overlap clusters (union-find over tolerance-
