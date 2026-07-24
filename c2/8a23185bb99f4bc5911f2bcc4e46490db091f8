@@ -1,0 +1,29 @@
+crates/algo/src/classifier/mod.rs
+  s_e836c6d34a440b::t_e3e1cc4dc9240a 199,215-218,220-225
+  s_e836c6d34a440b::t_bc6d2408930074 200-211,213-214,219
+  s_e836c6d34a440b::t_279a42403262e9 167
+crates/io/tests/lipband_cut_inmem.rs
+  s_e836c6d34a440b::t_9d6dd29decaa84 42-56
+  s_e836c6d34a440b::t_1c0f7efcf1b8a1 120-123,125-126,128-129,131-149,154,158
+crates/io/tests/tship_lipcut_inmem.rs
+  s_e836c6d34a440b::t_34ed036e77cb65 78-110,113-114
+  s_e836c6d34a440b::t_617757c2a1e944 12-24
+.claude/skills/roadmap/SKILL.md
+  s_e836c6d34a440b::t_8891e2aa4973db 565-583
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "c28a23185bb99f4bc5911f2bcc4e46490db091f8",
+  "prompts": {},
+  "sessions": {
+    "s_e836c6d34a440b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f1bf2182-4702-46ff-847f-ece0d3d743de",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
