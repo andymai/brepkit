@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784920238505,
+  "lastUpdate": 1784923362471,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11717,6 +11717,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22622083,
             "range": "± 30328",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3b9b2dcf6aafdf5c7a10e412df07385aa287a1c2",
+          "message": "docs(roadmap): custom-shape re-probe; add STEP solid health example (#1211)\n\nRoadmap maintenance for the custom-shape family, per the skill's own\nrule that a session closing or discovering an item must update it.\n\n## Verified: the T lip band cut reaches the tool\n\nThe entry said \"Tool-side fuse re-probe pending release\". Done, via a\nlocal-build overlay (md5-verified in both `node_modules` resolution\npaths):\n\n| `3x3 T with lip` export | published 2.128.2 | local HEAD (#1209) |\n|---|---|---|\n| boundary edges | 173 | **0** |\n| non-manifold | 6 | **0** |\n| wall-clock | 10.4 s | **0.84 s** |\n\nL and U with lip were already clean and are byte-identical across the\ntwo builds; exactly 1 of the 23 `customShape` triangle counts moved. The\nfix is surgical.\n\n## Discovered and root-localized: the O-ring is a TESSELLATION bug\n\n`3x3 O-shape (ring)` fails on **both** builds, so it is pre-existing\nrather than fallout. Single-variable isolation narrowed it well past\n\"the O-ring export is broken\":\n\n- minimal broken config is `base=flat, lip=OFF` — `bnd=0 nm=88` at 1800\ntris in **64 ms**, far too fast for a boolean fallback;\n- the STEP capture replays faithfully (`tris=1800` matches the tool) and\n**the B-Rep is fine**: `F=47`, 24 cylinder + 23 plane, `brep_free=0\nbrep_over=0`;\n- all 88 folded edges lie on **one** face — the `z=21` top plane\ncarrying 3 inner wires — each used 3x;\n- that face's mesh covers area **13944.0** against a true face area of\n**3207.97** (4.35x over-cover), while the no-hole control matches its\nown area to 0.007%.\n\nSo the planar mesher is not removing that face's hole interiors, and the\n`lip=on` variant's 24 s fallback is downstream consumption of the folded\nmesh rather than a second defect. Synthetic straight-edged multi-hole\nfaces (1-4 holes) are all clean, so the trigger involves the\narc-cornered wires — recorded as the starting point.\n\n## Why the suite missed all of this\n\nEvery custom-shape case is `assert: 'snapshot'` — it pins\n`triangleCount` and never checks validity, so a leaky mesh and a correct\none are indistinguishable to it. The STL edge-use probe that does\ndiscriminate is documented in `parity-benchmarking` (where it is\nreusable) rather than inline in the roadmap.\n\n## Contents\n\n- `.claude/skills/roadmap` — the two entries above (net +14 lines; kept\nto the skill's own one-entry-one-pointer rule).\n- `.claude/skills/parity-benchmarking` — the STL edge-use probe recipe.\n- `crates/io/examples/step_solid_report.rs` — new diagnostic that\nproduced the numbers above: for any STEP file it reports face/surface\nmix, by-edge-id use counts, and position-welded mesh edge use, so\n\"broken B-Rep\" and \"fine B-Rep, folded tessellation\" can be told apart\n(they have identical STL symptoms). `DUMP_NM`, `MESH_AREA_AT`,\n`PLANES_AT` env vars for drill-down.\n\nNo production code paths touched.",
+          "timestamp": "2026-07-24T13:00:23-07:00",
+          "tree_id": "1d8ba67a6b778e65b3eabd948e2205651af42be6",
+          "url": "https://github.com/andymai/brepkit/commit/3b9b2dcf6aafdf5c7a10e412df07385aa287a1c2"
+        },
+        "date": 1784923360892,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 850996,
+            "range": "± 1246",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 951334,
+            "range": "± 13951",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13417,
+            "range": "± 194",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663398,
+            "range": "± 2164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22712575,
+            "range": "± 303072",
             "unit": "ns/iter"
           }
         ]
