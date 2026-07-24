@@ -663,10 +663,12 @@ confirms it: `buildKumikoWallPatterns` is only 32.8%, of which prism constructio
 the "thousands of small sketch/extrude ops" candidate is REFUTED. CORRECTION: an earlier probe wrapped
 `cutAll`, saw 32 calls with zero failures, and concluded there was no bisect thrash — INVALID, because
 `cutAllBisect` is a separate export whose internal retries use an internal ops reference the wrapper never
-saw. That hypothesis was untested, not refuted. NEXT PROBE: read `cutAllBisect`'s own
-`BatchBisectTelemetry` (batchAttempts vs batchSucceeded, pairwise count) — attempts >> successes means a
-FAILING batch whose retry cost is the 203s (a correctness bug wearing a perf costume), one attempt means
-honest N-way work. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
+saw. That hypothesis was untested, not refuted. (5) BISECT TELEMETRY (the right instrument this time): `{totalInputs:8, batchAttempts:1,
+batchSucceeded:1, singletonFallbacks:0, failedInputs:[]}` — **NO thrash**, one attempt, one success. So
+**ONE `cutAll` of just EIGHT tools takes 203.5s**. Those 8 tools are the carved kumiko lattice bands
+(each ~F=1146 per the captured replay), so this is a single honest N-way boolean of the bin body against
+8 very complex solids — squarely a BREPKIT perf defect, not tool-side structure. THE TARGET IS NOW ONE
+CALL WITH NINE OPERANDS: capture body + the 8 pattern solids via serializeSolid and replay natively. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
 the call path you intend to claim about. REFUTED: the captured goma `compound_cut`
