@@ -626,6 +626,34 @@ CLOSED, do not re-open as deferred: honeycomb wall-pattern cut (#925/#928,
 top-face (#932, `extrude_half_*_reversed_edge_volume` pass), multi-arc hemisphere gap
 (#1006).
 
+Export-integrity matrix baseline (2026-07-24, `binGenerator.scenario.export-integrity`, 408 tests
+asserting zero boundary edges + bounded non-manifold on the exported STL — the tool's own version of
+the STL edge-use oracle). Published 2.128.2: **43 failed / 365 passed**. Local main (T-lip #1209 +
+O-ring #1212): **37 failed / 371 passed**. Fixed: both `3x3 T with lip` cases, `3x3 O-shape (ring)
+with lip`, `O-shape + magnet base + lip`, plus pathfinder/permutation/scoop rows. NO regressions —
+the one apparent regression (`wall patterns > slots carves 3x3x5 walls (scale 0.5)`) fails IDENTICALLY
+on both kernels in isolation (63.3s published vs 64.3s main), i.e. it is a timing-borderline scenario
+whose full-suite verdict depends on cache warmth and machine load, not on the kernel. Do not chase it
+as a correctness bug.
+
+Failure families on that baseline: kumiko 14, permutation matrix 7, custom-shape 6, solid cutouts 3,
+then singles. **Kumiko's 14 are ONE root, and that root is PERF, not a crash.** Isolated probe on
+published 2.128.2: the goma 1x1x6 export SUCCEEDS — 2.7MB of STL, `lastPanicMessage()` returns none, no
+panic anywhere — but it takes **849 SECONDS (14 min)**. The "recursive use of an object detected which
+would lead to unsafe aliasing in rust" seen in the suite is a CONSEQUENCE: the export blows through
+vitest's per-test timeout, the abandoned async generation chain stays pending, and it re-enters the
+kernel concurrently with the next test. The following kumiko scenarios then inherit the poisoned object
+(two surface as "Shape handle has been disposed"); only `mitsukude bold` (bnd=571) has an independent
+assertion. So do NOT chase this as a panic — `catch_unwind`/`lastPanicMessage` have nothing to report.
+Chase the 849s. MEASURED SPLIT: `generateBin` alone is **847s** of the 849 — tessellation and STL are noise, so this is the boolean chain, not the mesher. Native `compound_cut` on the captured operands is only 11.8s (F=1146, clean), so one call is not the story. STRUCTURE (code, `kumikoWrapBuilder.ts` ~line 411): the carve loops `cutAll(region, family)` once PER FAMILY over an ACCUMULATING region, and that whole function runs per perimeter chunk — so there are many such calls, each starting from a more complex region than the capture. NOT YET MEASURED whether the total is simply their sum, or whether brepjs's bisecting `cutAll` (try the whole batch, on failure split and recurse) is thrashing on a failing batch. Next probe: count and time the actual cutAll invocations and their tool counts during one goma generation — do not assume the single capture is representative. REFUTED: the captured goma `compound_cut`
+(`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`, replay `crates/io/examples/replay_kumiko_goma.rs`)
+is NOT the culprit — all 180 tools replay in 11.8s with F=1146, free=0, over=0. The poisoning is
+elsewhere in that scenario's chain and needs a fresh capture.
+
+CAUTION on counting: the baseline's classified kinds (23 boundary-edge, 2 non-manifold, 4 poisoning,
+1 timeout) sum to 30 of 43, so ~13 failures carry no recognised error form — probably cascade
+casualties, unconfirmed. Never quote the raw failure count as a defect count.
+
 ## Subsystem trap notes (crates without their own skill)
 
 - **heal `fix_duplicate_faces` IS implemented** (solid-scoped, `crates/heal/src/fix/solid.rs`,
