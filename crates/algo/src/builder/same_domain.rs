@@ -246,9 +246,11 @@ pub fn detect_same_domain<S: BuildHasher>(
     {
         // Per planar face, from one outer-wire sampling: an AABB (drives the
         // grid broad-phase) and a tol-expanded OBB (tighter oriented reject in
-        // the pair loop below).
+        // the pair loop below). `planar_obbs` is indexed directly by sub-face
+        // index — dense and hasher-free in the hot loop; an entry is `Some`
+        // exactly for the faces that also entered `planar_aabbs`.
         let mut planar_aabbs: Vec<(usize, brepkit_math::aabb::Aabb3)> = Vec::new();
-        let mut planar_obbs: HashMap<usize, brepkit_math::obb::Obb3> = HashMap::new();
+        let mut planar_obbs: Vec<Option<brepkit_math::obb::Obb3>> = vec![None; n];
         for (idx, surf) in surfaces.iter().enumerate() {
             let Some(FaceSurface::Plane { normal, .. }) = surf else {
                 continue;
@@ -267,7 +269,7 @@ pub fn detect_same_domain<S: BuildHasher>(
                 continue;
             };
             planar_aabbs.push((idx, aabb));
-            planar_obbs.insert(idx, obb);
+            planar_obbs[idx] = Some(obb);
         }
         // Broad-phase: only test pairs whose AABBs overlap. Two planar faces
         // that don't share 3D space (expanded by tol for boundary-coincident
@@ -290,9 +292,9 @@ pub fn detect_same_domain<S: BuildHasher>(
             // is result-preserving and prunes the coplanar-but-disjoint lattice
             // pairs the axis-aligned box admits — a thin diagonal strut's AABB
             // is a large square overlapping every lattice member it crosses,
-            // while its OBB hugs the strut. Missing OBBs (degenerate faces)
-            // fall through to the full test unchanged.
-            if let (Some(oi), Some(oj)) = (planar_obbs.get(&i), planar_obbs.get(&j))
+            // while its OBB hugs the strut. Both `i` and `j` come from
+            // `planar_aabbs`, so their OBB entries are always `Some`.
+            if let (Some(oi), Some(oj)) = (&planar_obbs[i], &planar_obbs[j])
                 && !oi.intersects(oj)
             {
                 continue;
@@ -1186,13 +1188,14 @@ fn face_outer_aabb(topo: &Topology, face_id: FaceId) -> Option<brepkit_math::aab
 /// the polygons the overlap tests build. Samples `0..SD_EDGE_SAMPLES` (not
 /// `..=`) so each shared vertex is covered once, by the next edge's `frac=0`.
 fn face_outer_wire_points(topo: &Topology, face_id: FaceId) -> Vec<brepkit_math::vec::Point3> {
-    let mut pts: Vec<brepkit_math::vec::Point3> = Vec::new();
     let Ok(face) = topo.face(face_id) else {
-        return pts;
+        return Vec::new();
     };
     let Ok(wire) = topo.wire(face.outer_wire()) else {
-        return pts;
+        return Vec::new();
     };
+    let mut pts: Vec<brepkit_math::vec::Point3> =
+        Vec::with_capacity(wire.edges().len() * SD_EDGE_SAMPLES);
     for oe in wire.edges() {
         let Ok(edge) = topo.edge(oe.edge()) else {
             continue;
