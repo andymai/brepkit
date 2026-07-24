@@ -561,15 +561,7 @@ fn tessellate_planar_with_holes(
         })
         .collect();
 
-    for &(start, end) in &inner_wire_ranges {
-        let count = end - start;
-        if count < 3 {
-            continue;
-        }
-
-        let hole_poly: Vec<Point2> = (start..end).map(|i| pts2d[i]).collect();
-        let seed = find_interior_seed(&hole_poly);
-
+    for seed in hole_removal_seeds(&pts2d, &inner_wire_ranges) {
         let _removed = cdt.flood_remove_from_point(seed, &constraint_set);
     }
 
@@ -701,6 +693,89 @@ fn find_interior_seed(polygon: &[brepkit_math::vec::Point2]) -> brepkit_math::ve
     cx /= n as f64;
     cy /= n as f64;
     Point2::new(cx, cy)
+}
+
+/// Seeds for the cells that must be flood-removed from a CDT of a face with
+/// inner wires, one per wire that actually bounds a hole.
+///
+/// Inner wires can nest: an O-shaped bin's top face carries the cavity opening,
+/// the island band around the central hole, and that hole itself. Nesting
+/// alternates material and void, so only odd-depth wires bound a hole — taking
+/// every inner wire as a hole erases the islands. Stored winding cannot be used
+/// to tell them apart; a boolean can emit a hole wound like its outer.
+///
+/// Each seed sits just inside its own wire (never at its centroid, which
+/// concentric wires share) so the flood starts in that wire's own cell.
+pub(super) fn hole_removal_seeds(
+    pts2d: &[brepkit_math::vec::Point2],
+    inner_wire_ranges: &[(usize, usize)],
+) -> Vec<brepkit_math::vec::Point2> {
+    use brepkit_math::predicates::point_in_polygon;
+    use brepkit_math::vec::Point2;
+
+    let polys: Vec<Vec<Point2>> = inner_wire_ranges
+        .iter()
+        .map(|&(start, end)| (start..end).map(|i| pts2d[i]).collect())
+        .collect();
+    let seeds: Vec<Option<Point2>> = polys
+        .iter()
+        .map(|p| (p.len() >= 3).then(|| find_interior_seed(p)))
+        .collect();
+
+    // One wire cannot nest, so skip the containment scan entirely — the common
+    // case, and it keeps this off the hot path for ordinary single-hole faces.
+    if polys.len() < 2 {
+        return seeds.into_iter().flatten().collect();
+    }
+
+    // Bounds gate the winding-number tests: honeycomb faces carry dozens of
+    // disjoint holes whose boxes never overlap, so the scan stays near-linear.
+    let boxes: Vec<Option<(f64, f64, f64, f64)>> = polys
+        .iter()
+        .map(|p| {
+            (p.len() >= 3).then(|| {
+                p.iter().fold(
+                    (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+                    |(x0, y0, x1, y1), q| {
+                        (x0.min(q.x()), y0.min(q.y()), x1.max(q.x()), y1.max(q.y()))
+                    },
+                )
+            })
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    for (i, seed) in seeds.iter().enumerate() {
+        let Some(seed) = *seed else { continue };
+        // `find_interior_seed` falls back to the centroid when no vertex
+        // bisector candidate lands inside, and that fallback can sit outside a
+        // sufficiently degenerate wire. Depth measured from a point that is not
+        // in its own wire is meaningless, so drop back to the pre-nesting
+        // behaviour — flood from it unconditionally — rather than guess.
+        if !point_in_polygon(seed, &polys[i]) {
+            out.push(seed);
+            continue;
+        }
+        let mut depth = 1;
+        for (j, poly) in polys.iter().enumerate() {
+            if j == i {
+                continue;
+            }
+            let Some((x0, y0, x1, y1)) = boxes[j] else {
+                continue;
+            };
+            if seed.x() < x0 || seed.x() > x1 || seed.y() < y0 || seed.y() > y1 {
+                continue;
+            }
+            if point_in_polygon(seed, poly) {
+                depth += 1;
+            }
+        }
+        if depth % 2 == 1 {
+            out.push(seed);
+        }
+    }
+    out
 }
 
 /// Reconstruct a 3D point from a 2D projection, using the face plane.
@@ -1010,21 +1085,8 @@ pub(super) fn tessellate_planar_shared_with_holes(
         })
         .collect();
 
-    for &(start, end) in &inner_wire_ranges {
-        let count = end - start;
-        if count < 3 {
-            continue;
-        }
-        let mut cx = 0.0;
-        let mut cy = 0.0;
-        #[allow(clippy::cast_precision_loss)]
-        for idx in start..end {
-            cx += pts2d[idx].x();
-            cy += pts2d[idx].y();
-        }
-        cx /= count as f64;
-        cy /= count as f64;
-        let _removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+    for seed in hole_removal_seeds(&pts2d, &inner_wire_ranges) {
+        let _removed = cdt.flood_remove_from_point(seed, &constraint_set);
     }
 
     let cdt_triangles = cdt.triangles();
@@ -1087,7 +1149,6 @@ pub(super) fn run_planar_cdt(
     inner_wire_ranges: &[(usize, usize)],
 ) -> Result<Vec<(usize, usize, usize)>, crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
-    use brepkit_math::vec::Point2;
 
     let bounds = compute_cdt_bounds(pts2d);
 
@@ -1140,21 +1201,8 @@ pub(super) fn run_planar_cdt(
         })
         .collect();
 
-    for &(start, end) in inner_wire_ranges {
-        let count = end - start;
-        if count < 3 {
-            continue;
-        }
-        let mut cx = 0.0;
-        let mut cy = 0.0;
-        #[allow(clippy::cast_precision_loss)]
-        for idx in start..end {
-            cx += pts2d[idx].x();
-            cy += pts2d[idx].y();
-        }
-        cx /= count as f64;
-        cy /= count as f64;
-        let _removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+    for seed in hole_removal_seeds(pts2d, inner_wire_ranges) {
+        let _removed = cdt.flood_remove_from_point(seed, &constraint_set);
     }
 
     let cdt_triangles = cdt.triangles();
