@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784908448163,
+  "lastUpdate": 1784911123946,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11339,6 +11339,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21649027,
             "range": "± 63961",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61406abad1a57a67464c3360c0826a8b8f6beedc",
+          "message": "test(operations): benchmark the N-way fuse on an interpenetrating lattice (#1204)\n\n## What\n\nWires the N-way fuse speedup (#1202) into the repo's criterion harness\nso it's reproducible and regression-tracked.\n\nAdds a `compound_cut_struts` group to `compound_cut_perf.rs`: a\n**kumiko-style lattice** of thin interpenetrating box struts — `bars`\nhorizontal + `bars` vertical bars crossing in one z-slab, forming one\nconnected AABB-overlap cluster (the config `compound_cut` fuses via\n`fuse_n`) — cut from a slab. All struts are planar prisms sharing\ncoplanar top/bottom planes, exercising the N-way same-domain path.\n\nTwo arms isolate the fuse strategy on identical geometry:\n- **`nway`** — `compound_cut` (single GFA arrangement over all struts)\n- **`sequential`** — the old accumulate-then-cut (fuse each strut into a\ngrowing accumulator, then one cut)\n\n## Sample output\n\n```\ncompound_cut_struts/nway_N=6         time: [17.5 ms 17.7 ms 17.9 ms]\ncompound_cut_struts/sequential_N=6   time: [24.8 ms 25.0 ms 25.3 ms]   (~1.4x)\n```\n\nThe gap widens with strut count — the same O(n·k)-vs-O(n²) mechanism\nthat makes the 180-strut kumiko `compound_cut` **3.9× faster** (46.1s →\n11.8s) for a byte-equivalent result.\n\n## Notes\n\n- Self-contained synthetic geometry — no external fixtures.\n- Run: `cargo bench -p brepkit-operations --bench compound_cut_perf --\nstruts`\n- clippy clean; benches are excluded from release-please version bumps.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a Criterion benchmark for the N-way fuse on an interpenetrating\nkumiko-style strut lattice, comparing `compound_cut` vs sequential\nfuse-then-cut. Makes the speedup reproducible and regression-tracked;\n~1.4x at N=6 and grows with N.\n\n- **New Features**\n  - Adds `compound_cut_struts` to `compound_cut_perf.rs`.\n- Synthetic kumiko lattice of thin crossing struts in one z-slab;\nexercises same-domain N-way; no fixtures.\n- Compares `nway` (`compound_cut` single arrangement) vs `sequential`\n(accumulate fuses, then cut).\n- Run: `cargo bench -p brepkit-operations --bench compound_cut_perf --\nstruts`.\n\n<sup>Written for commit 704e8bd51dd156f603dfd3f287d093efc011f886.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1204?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T16:36:13Z",
+          "tree_id": "58c7f831695ce8d64ef6be96919ab4369f558079",
+          "url": "https://github.com/andymai/brepkit/commit/61406abad1a57a67464c3360c0826a8b8f6beedc"
+        },
+        "date": 1784911122494,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 823181,
+            "range": "± 2563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 912880,
+            "range": "± 7574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12058,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661373,
+            "range": "± 1109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21912024,
+            "range": "± 89653",
             "unit": "ns/iter"
           }
         ]
