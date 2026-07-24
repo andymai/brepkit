@@ -1,0 +1,23 @@
+crates/algo/src/classifier/mod.rs
+  s_e836c6d34a440b::t_b36c144453fab6 200-208,222-229,238,251,254,256
+  s_e836c6d34a440b::t_a6438a717739dc 209
+crates/io/tests/tship_lipcut_inmem.rs
+  s_e836c6d34a440b::t_eb7086982a6ffd 84-108,110-112,117-121
+  s_e836c6d34a440b::t_ffe9948a0979e0 122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "68af9434b6d8688f4f1840e7fc591d81780065b2",
+  "prompts": {},
+  "sessions": {
+    "s_e836c6d34a440b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f1bf2182-4702-46ff-847f-ece0d3d743de",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
