@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784912769137,
+  "lastUpdate": 1784912945131,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11501,6 +11501,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22727252,
             "range": "± 356559",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4625701129b132bbeb8f51c8526f12f2e0f2b009",
+          "message": "fix(operations): guard fuse_cluster against empty input (#1207)\n\nFollow-up addressing the two cubic findings on #1205 (which auto-merged\nbefore they were read):\n\n1. **`fuse_cluster` empty-slice panic** — it's `pub(crate)` and\ndocumented as requiring a non-empty cluster, but\n`cluster[0]`/`cluster[1..]` would panic on empty input. Now guards with\n`split_first` and returns `OperationsError::InvalidInput`. Adds a test\nasserting the error path.\n\n2. **Misleading test name** —\n`fuse_all_connected_cluster_matches_sequential` didn't actually compare\nagainst a sequential fuse; it checks watertightness + union volume.\nRenamed to `_is_watertight_bar` and reworded the doc to match.\n\nclippy clean; the guard test and existing `fuse_all` tests pass.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nGuarded `fuse_cluster` against empty input to prevent a panic. It now\nreturns `OperationsError::InvalidInput`. Also renamed a misleading test\nto match what it actually checks.\n\n- **Bug Fixes**\n- Use `split_first` to reject empty clusters; return `InvalidInput`\ninstead of panicking.\n  - Add regression test: `fuse_cluster_empty_errors_not_panics`.\n\n- **Refactors**\n- Rename `fuse_all_connected_cluster_matches_sequential` to\n`fuse_all_connected_cluster_is_watertight_bar` and update the doc to\nreflect the watertightness + volume check.\n\n<sup>Written for commit 7703f62f3fc2344e39fa95297daebd228f3adf4a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1207?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T10:07:02-07:00",
+          "tree_id": "21e2409ae117ab8bb9c82588b6a7439821482367",
+          "url": "https://github.com/andymai/brepkit/commit/4625701129b132bbeb8f51c8526f12f2e0f2b009"
+        },
+        "date": 1784912944392,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 574019,
+            "range": "± 12457",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 620383,
+            "range": "± 2727",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8192,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 434615,
+            "range": "± 39340",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15794843,
+            "range": "± 1767322",
             "unit": "ns/iter"
           }
         ]
