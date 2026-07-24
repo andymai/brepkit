@@ -80,6 +80,8 @@ The rule: after ANY GFA or boolean PR, rerun the scenario matrix and record face
 
 Vitest gotcha: the forks pool swallows `console.log`. Write probe results to a file, do not rely on stdout.
 
+**STL edge-use probe** — the cheapest tool-level correctness oracle, and the only one for `assert: 'snapshot'` scenarios, which pin `triangleCount` and never check validity. `exportBin(params, 'stl')`, `parseSTLBinary`, quantize each vertex to 1e-4 and count edge uses: used once = boundary (hole), used >2 = non-manifold. Watertight is 0/0. Pair it with wall-clock — a sibling scenario taking 20x longer is the fallback tell. Working example: `gomaBoundaryProbe.test.ts` in the tool's `__kernel-tests__/`; run with `--config vitest.profile.config.ts` (that dir is excluded from the normal projects).
+
 ## Faithful fixture capture
 
 Never grind on a hand-built repro without proving it matches the real tool geometry first. Diagnosis that flip-flops across debugging passes is itself the signal that your repro is unfaithful.

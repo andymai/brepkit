@@ -573,14 +573,38 @@ stepped tip→centroid by fractions that overshoot a ~1.2mm annulus into the hol
 no valid probe → unstable ray-cast → Inside. Fix (`classifier/mod.rs`): deep centroid
 fractions first (honeycomb stacked-cap foil needs them), then a thin-band absolute-nudge
 fallback near the tip. Band now single-covered, translation-invariant, vol 6090.8 (was
-the doubled 20108.8, which `tship_lipcut` had enshrined as "watertight" — its by-edge-id
+the doubled 20108.8, which `tship_lipcut_inmem` had enshrined as "watertight" — its by-edge-id
 gate is blind to position-duplicate doubling). Benign residual: bottom tiles as ring + 2
 tiny T-armpit pieces (3 faces) from redundant FF-coplanar concave-corner sections — exact
-watertight tiling, not the defect. Tool-side fuse re-probe pending release.
-DURABLE detector reaffirmed: `solid_volume` is TRANSLATION-VARIANT on a doubled/malformed
+watertight tiling, not the defect. TOOL-SIDE RE-PROBE DONE (2026-07-24): 3x3 T export
+bnd=173 nm=6 @10.4s -> bnd=0 nm=0 @0.84s; L and U already clean and byte-identical, 1
+of 23 customShape triangle counts moved. DURABLE detector reaffirmed: `solid_volume` is TRANSLATION-VARIANT on a doubled/malformed
 boundary (a doubled face breaks Σ(area·nz)=0) — translate and re-measure needs no second
 oracle. And `validate_solid` + the by-edge-id manifold gate are both BLIND to nested
 same-orientation / position-duplicate faces.
+
+Custom-shape O-ring — CLOSED (2026-07-24, fixture
+`crates/io/tests/oring_nested_holes.rs`). Found by the T re-probe and it was a
+TESSELLATION bug, not a boolean one: minimal config `3x3 O, base=flat, lip=OFF`
+gave nm=88 at 1800 tris in 64ms while the B-Rep was clean (F=47, 24 cylinder +
+23 plane, free=0 over=0). All 88 folds sat on the z=21 wall top, whose 3 inner
+wires NEST (cavity opening > island band > central hole). Two stacked roots:
+(1) both SOLID tessellation paths seeded hole flood-removal at each wire's
+vertex CENTROID, and a bin centred on the origin gives every concentric wire the
+same centroid — first flood took the innermost cell, the rest found it gone, so
+the cavity was never removed (the non-shared path already used
+`find_interior_seed`); (2) removing one cell per inner wire is wrong regardless
+— nesting alternates material and void, so only ODD-depth wires bound a hole.
+Fixed by `hole_removal_seeds` in `tessellate/planar.rs` (per-wire interior seed +
+even-odd depth by geometric containment; stored winding CANNOT classify them —
+a boolean can emit a hole wound like its outer). Tool-verified: every O variant
+bnd=0 nm=0, and the downstream fallback disappeared (lip=on 24.2s -> 4.2s,
+off-centre 29.7s -> 4.7s); L/T/U/full unchanged. DURABLE: a centroid is not an
+interior point for concentric or non-convex wires, and cell-area arithmetic
+(predicted 13945.8/595.0/793.1 vs measured 13944.0/590.1/799.9) confirmed the
+mechanism instead of inferring it. REFUTED en route: arc-cornered wires as the
+trigger — synthetic straight-edged multi-hole faces are clean because their
+holes are side-by-side, not nested.
 
 combinedFeatures re-read (2026-07-10, 2.124.13-based overlay, full 11-case suite):
 all 6 structural cases PASS including "handles + label (back skip)" (7167 tris,
