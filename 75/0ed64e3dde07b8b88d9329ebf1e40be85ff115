@@ -1,0 +1,24 @@
+crates/algo/src/ds/shape_store.rs
+  s_0d544b8727eb96::t_cd4438a60278f7 401-444
+  s_0d544b8727eb96::t_5994e01d3b4920 102-106
+  s_0d544b8727eb96::t_d90dee9c3dfc1f 120
+  s_0d544b8727eb96::t_bf5601c86fb9e7 96-101,107-119,121-169
+crates/algo/src/ds/mod.rs
+  s_0d544b8727eb96::t_0010326e4c4269 28-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "750ed64e3dde07b8b88d9329ebf1e40be85ff115",
+  "prompts": {},
+  "sessions": {
+    "s_0d544b8727eb96": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a83d6e58-79a3-46d1-ab8b-79dfbbccdffa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
