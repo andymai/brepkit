@@ -6333,3 +6333,57 @@ fn compound_cut_coaxial_pair_clusters_match_sequential() {
     );
     assert_eq!(count_non_manifold_edges(&topo, result), 0);
 }
+
+/// Ready-repro for the `cone ∪ box` GFA rejection — the only remaining
+/// primitive-boolean mesh fallback in `approx_census`.
+///
+/// `make_cone(6, 2, 12)` has radius exactly 4 at z=6, where the 8×8 box's
+/// bottom face sits, so the section circle is INSCRIBED in the box square and
+/// TANGENT to all four walls — the recurring tangential-contact class.
+///
+/// Raw GFA very nearly succeeds: F=10, 1 cone + 9 planes, zero free edges. The
+/// box side of the split is CORRECT — the pinched square-minus-inscribed-circle
+/// region becomes 4 curvilinear-triangle faces, and each wall splits at its
+/// tangency point. Two things go wrong on the cone side:
+///
+///   1. Both of the cone solid's PLANE faces vanish. The z=12 top disc is
+///      correctly absorbed (it lies inside the box), but the z=0 base disc
+///      (r=6, nowhere near the box) must survive and does not — all 9 result
+///      planes are box-derived.
+///   2. The cone lateral keeps the z=6 rim TWICE: its outer wire is the four
+///      z=6 arcs and its single inner wire is those same four edge ids, rather
+///      than the z=0 base rim. That is what makes each arc used 3× (twice by
+///      the cone, once by its corner plane) and trips the non-manifold gate.
+///
+/// Both point at the same missing piece — the z=0 base rim — so the cone
+/// remainder is being closed by duplicating the wrong rim.
+#[test]
+#[ignore = "ready-repro — cone∪box falls back to mesh; see doc comment"]
+fn cone_union_box_should_be_analytic() {
+    use brepkit_math::mat::Mat4;
+    let mut topo = Topology::new();
+    let cone = crate::primitives::make_cone(&mut topo, 6.0, 2.0, 12.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 8.0, 8.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(-4.0, -4.0, 6.0)).unwrap();
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cone, b).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let z0_discs = faces
+        .iter()
+        .filter(|&&fid| {
+            let f = topo.face(fid).unwrap();
+            f.surface().type_tag() == "plane"
+                && topo.wire(f.outer_wire()).unwrap().edges().iter().all(|oe| {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    topo.vertex(e.start()).unwrap().point().z().abs() < 1e-9
+                })
+        })
+        .count();
+    assert_eq!(
+        z0_discs, 1,
+        "the cone's z=0 base disc must survive the fuse"
+    );
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+}
