@@ -1587,3 +1587,97 @@ fn gfa_cut_shelled_box_through_floor_is_manifold() {
         "closed manifold: every edge shared by exactly two wires"
     );
 }
+
+// ── N-way pave filler (run_pave_filler_n) ───────────────────────────────
+
+#[test]
+fn interacting_pairs_prunes_disjoint_boxes() {
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+    let mut topo = Topology::default();
+    // Unit cubes span [0,1], [0.5,1.5], [1.0,2.0]: 0&1 overlap, 1&2 overlap,
+    // 0&2 only touch at x=1.0 (within tol → still interacting), 0&3 disjoint.
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+    let c = make_unit_cube_manifold_at(&mut topo, 1.0, 0.0, 0.0);
+    let d = make_unit_cube_manifold_at(&mut topo, 3.0, 0.0, 0.0); // far away
+
+    let pairs = super::interacting_pairs(&topo, &[a, b, c, d], tol);
+    assert!(pairs.contains(&(0, 1)), "0&1 overlap");
+    assert!(pairs.contains(&(1, 2)), "1&2 overlap");
+    // 0&3 and 1&3 and 2&3 are far apart and must be pruned.
+    assert!(!pairs.contains(&(0, 3)), "0&3 disjoint, pruned");
+    assert!(!pairs.contains(&(1, 3)), "1&3 disjoint, pruned");
+    assert!(!pairs.contains(&(2, 3)), "2&3 disjoint, pruned");
+}
+
+#[test]
+fn pave_filler_n_empty_sources_errors() {
+    let mut topo = Topology::default();
+    let tol = brepkit_math::tolerance::Tolerance::default();
+    let mut arena = GfaArena::new();
+    assert!(crate::pave_filler::run_pave_filler_n(&mut topo, &[], tol, &mut arena).is_err());
+}
+
+/// For N=2 the N-way pave filler runs the exact same phase sequence as the
+/// two-solid `run_pave_filler`, so the full pipeline (pave filler → builder →
+/// fuse) must produce an identical result. Compare the fused face count.
+#[test]
+fn pave_filler_n_matches_two_solid_for_n2() {
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+
+    let fuse_faces = |use_nway: bool| -> usize {
+        let mut topo = Topology::default();
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+        let mut arena = GfaArena::new();
+        if use_nway {
+            crate::pave_filler::run_pave_filler_n(&mut topo, &[a, b], tol, &mut arena).unwrap();
+        } else {
+            crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+        }
+        let mut builder = crate::builder::Builder::with_tolerance(topo, arena, a, b, tol);
+        builder.perform().unwrap();
+        let (rtopo, result) = builder.build_result(crate::bop::BooleanOp::Fuse).unwrap();
+        solid_faces(&rtopo, result).unwrap().len()
+    };
+
+    let two_solid = fuse_faces(false);
+    let n_way = fuse_faces(true);
+    assert!(two_solid > 0, "2-solid fuse produced faces");
+    assert_eq!(
+        two_solid, n_way,
+        "N=2 n-way pave filler must match the 2-solid fuse face count"
+    );
+}
+
+/// Smoke test that the pairwise accumulation over THREE solids runs and
+/// actually splits shared edges. The middle box overlaps both neighbours, so
+/// the arena must end with at least one edge carrying multiple pave blocks
+/// (i.e. split by an intersection). Proves the phases accumulate into one arena
+/// across pairs without a hidden two-solid assumption.
+#[test]
+fn pave_filler_n_accumulates_three_overlapping_boxes() {
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    let tol = brepkit_math::tolerance::Tolerance::default();
+    let mut topo = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+    let c = make_unit_cube_manifold_at(&mut topo, 1.0, 0.0, 0.0);
+
+    let mut arena = GfaArena::new();
+    crate::pave_filler::run_pave_filler_n(&mut topo, &[a, b, c], tol, &mut arena).unwrap();
+
+    let split_edges = arena
+        .edge_pave_blocks
+        .values()
+        .filter(|blocks| blocks.len() > 1)
+        .count();
+    assert!(
+        split_edges > 0,
+        "three overlapping boxes must split at least one shared edge \
+         (arena accumulated no splits — pairwise phases did not accumulate)"
+    );
+}

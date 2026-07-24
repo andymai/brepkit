@@ -161,3 +161,142 @@ pub fn run_pave_filler(
 
     Ok(())
 }
+
+/// Run the PaveFiller pipeline over **N** source solids for an N-way fuse.
+///
+/// The Stage-1 intersection phases are inherently pairwise (each section is
+/// between the faces of two solids) and, crucially, deposit only geometric
+/// split data into the shared `arena` — they carry no `Rank`. So the two-solid
+/// phase code is reused verbatim: run each phase for every spatially-interacting
+/// source pair into ONE arena, and the paves/sections accumulate correctly. A
+/// bbox broad-phase skips non-interacting pairs, keeping the stage O(n·k) for
+/// the sparse interaction graphs a fused lattice produces rather than O(n²).
+///
+/// Phase order preserves the two-solid pipeline's invariant that the
+/// pave-vertex coincidence index is built ONCE, after all VV coincidences are
+/// registered and before the phases that query it: every pair's VV runs first,
+/// then the index is built, then the remaining phases run per pair. Stage-2
+/// resolution (which is already solid-agnostic — it reads the accumulated arena)
+/// runs once.
+///
+/// For `sources.len() == 2` this is behaviourally identical to
+/// [`run_pave_filler`]. Cut/Intersect are unaffected; this path is fuse-only.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if `sources` is empty or any stage fails.
+// Foundation for the N-way fuse: reached only from tests until the N-way builder
+// wires it into a `fuse_n` entry point (see `project_nway-gfa-fuse`). The
+// dead-code allow comes off with that consumer.
+#[allow(dead_code)]
+pub fn run_pave_filler_n(
+    topo: &mut Topology,
+    sources: &[SolidId],
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    if sources.is_empty() {
+        return Err(AlgoError::AssemblyFailed(
+            "N-way pave filler needs at least one source solid".into(),
+        ));
+    }
+
+    // Stage 1: Intersection over interacting pairs, accumulating into one arena.
+    init_pave_blocks_n(topo, sources, arena)?;
+    let pairs = interacting_pairs(topo, sources, tol);
+
+    for &(i, j) in &pairs {
+        phase_vv::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+    // VV is the only phase that registers same-domain vertices and the edge
+    // pave blocks are fixed at init, so the coincidence index is stable for the
+    // remaining phases — build it once, after every pair's VV (mirrors the
+    // two-solid `PaveFiller::perform`).
+    arena.build_pave_vertex_index(topo, tol.linear);
+    for &(i, j) in &pairs {
+        phase_ve::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+    for &(i, j) in &pairs {
+        phase_ee::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+    for &(i, j) in &pairs {
+        phase_vf::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+    for &(i, j) in &pairs {
+        phase_ef::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+    for &(i, j) in &pairs {
+        phase_ff::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+    for &(i, j) in &pairs {
+        phase_ff_coplanar::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+
+    // Stage 2: Resolution (solid-agnostic — reads the accumulated arena).
+    make_blocks::perform(arena)?;
+    force_interf_ee::perform(topo, tol, arena)?;
+    link_existing::perform(topo, tol, arena)?;
+    make_split_edges::perform(topo, arena)?;
+    make_pcurves::perform(topo, arena)?;
+    fill_face_info::perform(topo, arena)?;
+
+    Ok(())
+}
+
+/// Initialize a pave block for every edge across all `sources`, de-duplicating
+/// edges shared between solids (coincident walls). Mirrors
+/// [`PaveFiller::init_pave_blocks`] but over N solids.
+#[allow(dead_code)] // Foundation for the N-way fuse; consumer lands next.
+fn init_pave_blocks_n(
+    topo: &Topology,
+    sources: &[SolidId],
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    for &solid in sources {
+        for edge_id in brepkit_topology::explorer::solid_edges(topo, solid)? {
+            if arena.edge_pave_blocks.contains_key(&edge_id) {
+                continue;
+            }
+            let edge = topo.edge(edge_id)?;
+            let start_pos = topo.vertex(edge.start())?.point();
+            let end_pos = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+            arena.init_edge_pave_block(edge_id, edge.start(), t0, edge.end(), t1);
+        }
+    }
+    Ok(())
+}
+
+/// Axis-aligned bounding box of a solid from its vertices.
+#[allow(dead_code)] // Foundation for the N-way fuse; consumer lands next.
+fn solid_aabb(topo: &Topology, solid: SolidId) -> Option<brepkit_math::aabb::Aabb3> {
+    let mut pts = Vec::new();
+    for vid in brepkit_topology::explorer::solid_vertices(topo, solid).ok()? {
+        pts.push(topo.vertex(vid).ok()?.point());
+    }
+    brepkit_math::aabb::Aabb3::try_from_points(pts)
+}
+
+/// Source-index pairs `(i, j)` with `i < j` whose bounding boxes overlap (each
+/// expanded by tolerance so coincident-wall pairs are not missed). Two solids
+/// with disjoint boxes cannot intersect, so pruning them is result-preserving.
+/// A solid without a computable box is treated as interacting with all others
+/// (conservative — never drops a real interaction).
+#[allow(dead_code)] // Foundation for the N-way fuse; consumer lands next.
+fn interacting_pairs(topo: &Topology, sources: &[SolidId], tol: Tolerance) -> Vec<(usize, usize)> {
+    let boxes: Vec<Option<brepkit_math::aabb::Aabb3>> =
+        sources.iter().map(|&s| solid_aabb(topo, s)).collect();
+    let mut pairs = Vec::new();
+    for i in 0..sources.len() {
+        for j in (i + 1)..sources.len() {
+            let interact = match (boxes[i], boxes[j]) {
+                (Some(bi), Some(bj)) => bi.expanded(tol.linear).intersects(bj.expanded(tol.linear)),
+                _ => true,
+            };
+            if interact {
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs
+}
