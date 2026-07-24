@@ -164,7 +164,7 @@ pub fn classify_coincident_coplanar(
 
         // Wholly-exterior wedge: outside-or-on everywhere, with real exterior
         // extent. A straddler (any strictly-inside vertex) is deferred.
-        let Some((_, tip)) = deepest_outside else {
+        let Some((depth, tip)) = deepest_outside else {
             return Ok(None);
         };
         if any_strictly_inside {
@@ -196,9 +196,33 @@ pub fn classify_coincident_coplanar(
         let inv = 1.0 / sub_verts.len() as f64;
         let centroid = Point3::new(cx * inv, cy * inv, cz * inv);
         let probe = (100.0 * plane_tol).max(1e-3);
-        let mut decided: Option<FaceClass> = None;
+
+        // Candidate probe locations, tip → centroid, DEEP first. The historical
+        // centroid fractions are tried first so a partially-internal coincident
+        // plane (the honeycomb's stacked caps: outer-boundary near the rim, but
+        // solid persists deeper toward the centroid) is still probed at its deep
+        // internal region and correctly deferred. Only when EVERY deep fraction
+        // is invalid — the thin-annulus overshoot, where a fraction of the
+        // tip→centroid distance jumps clear across a ~1.2mm band into the hole
+        // (the opposing 2D region) and is rejected — fall back to small ABSOLUTE
+        // nudges (a fraction of the wedge's own outside-extent `depth`) that
+        // stay near the tip inside the band. Without the fallback the band face
+        // found no valid probe and was left unclassified and dropped.
+        let mut candidates: Vec<Point3> = Vec::new();
         for frac in [0.25_f64, 0.4, 0.55] {
-            let probe_xy = tip + (centroid - tip) * frac;
+            candidates.push(tip + (centroid - tip) * frac);
+        }
+        let dir = centroid - tip;
+        let dl = dir.length();
+        if dl > 1e-12 {
+            let dir_unit = dir * (1.0 / dl);
+            for scale in [0.5_f64, 0.25, 0.1] {
+                candidates.push(tip + dir_unit * (depth * scale).min(0.9 * dl));
+            }
+        }
+
+        let mut decided: Option<FaceClass> = None;
+        for probe_xy in candidates {
             // Must still be strictly outside the opposing region and clear of
             // its boundary, else the probe is meaningless.
             if point_in_planar_region(probe_xy, &outer, &holes, &region_normal)

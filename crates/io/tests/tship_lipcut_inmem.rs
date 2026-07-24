@@ -9,6 +9,19 @@
 //! walls classified Inside/Outside asymmetrically, one wall dropped, and
 //! the cut fell to an OPEN mesh fallback (the T custom-shape export
 //! failures, bd=88). Deeper-first interior sampling keeps the walls.
+//!
+//! A second defect in the SAME cut hid behind a manifold-looking result: the
+//! band-bottom RING (outer ±62.75 T, inner ±61.55 T hole) was mis-classified
+//! Inside the tool and dropped, so the outer bottom passed through UNSPLIT
+//! alongside the tool's bottom disc — two nested same-orientation discs (a
+//! DOUBLED bottom that the by-edge-id manifold gate is blind to). The ring's
+//! interior sample sits in the ~1.2mm annulus, coplanar with the tool's bottom
+//! cap; `classify_coincident_coplanar`'s depth probe stepped from the wedge tip
+//! toward the face centroid by fractions of that distance, overshooting the
+//! thin band into the hole so no valid probe was found and ray-cast (unstable
+//! here) decided. With the thin-band absolute-nudge probe the ring classifies
+//! Outside and is kept, so the band is single-covered: volume 6090.8, not the
+//! doubled 20108.8.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -62,9 +75,42 @@ fn t_lip_frustum_cut_is_analytic_and_watertight() {
         "analytic result expected, got {curved} curved of {} faces",
         faces.len()
     );
+
+    // Single-cover guard: the band bottom (z == -2.6) is a ring, so EXACTLY ONE
+    // planar face on that plane carries an inner (hole) wire and the total
+    // horizontal area there equals the outer-minus-inner bottom area — not two
+    // nested same-orientation discs (the doubled bottom). A doubled bottom
+    // passes the by-edge-id manifold gate above, so it must be caught here.
+    let mut bottom_with_hole = 0usize;
+    for &fid in &faces {
+        let face = topo.face(fid).unwrap();
+        if face.surface().type_tag() != "plane" {
+            continue;
+        }
+        let wire = topo.wire(face.outer_wire()).unwrap();
+        let zs: Vec<f64> = wire
+            .edges()
+            .iter()
+            .flat_map(|oe| {
+                let e = topo.edge(oe.edge()).unwrap();
+                [e.start(), e.end()].map(|v| topo.vertex(v).unwrap().point().z())
+            })
+            .collect();
+        let zmin = zs.iter().copied().fold(f64::MAX, f64::min);
+        let zmax = zs.iter().copied().fold(f64::MIN, f64::max);
+        if (zmax - zmin).abs() < 1e-6 && (zmin + 2.6).abs() < 1e-3 && !face.inner_wires().is_empty()
+        {
+            bottom_with_hole += 1;
+        }
+    }
+    assert_eq!(
+        bottom_with_hole, 1,
+        "band bottom must be one ring face carrying the ±61.55 hole, got {bottom_with_hole}"
+    );
+
     let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.05).unwrap();
     assert!(
-        (vol - 20108.8).abs() < 20.0,
-        "lip ring volume out of band: got {vol}"
+        (vol - 6090.8).abs() < 40.0,
+        "lip ring volume out of band: got {vol} (doubled bottom would give ~20108)"
     );
 }
