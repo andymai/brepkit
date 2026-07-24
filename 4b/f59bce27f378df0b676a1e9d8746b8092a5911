@@ -1,0 +1,19 @@
+crates/io/examples/replay_kumiko_goma.rs
+  s_5e1448ca841e6f::t_ef98b870d722d4 67-72,84-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "4bf59bce27f378df0b676a1e9d8746b8092a5911",
+  "prompts": {},
+  "sessions": {
+    "s_5e1448ca841e6f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d7e78e2c-32c0-4614-8cf0-23c4c356e272",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
