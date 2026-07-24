@@ -93,6 +93,80 @@ impl GfaShapeStore {
     }
 }
 
+/// Isolated shape store for an N-way GFA fuse.
+///
+/// Like [`GfaShapeStore`] but holds an arbitrary number of deep-copied source
+/// solids in one store topology, for the N-way fuse pipeline (one arrangement
+/// over all operands rather than sequential pairwise booleans). The 2-operand
+/// [`GfaShapeStore`] is unchanged; this is additive.
+///
+/// Foundation for the N-way fuse: consumed by the forthcoming
+/// `run_pave_filler_n` orchestration (see `project_nway-gfa-fuse`). Marked
+/// `allow(dead_code)` only until that consumer lands in the next increment.
+#[allow(dead_code)]
+pub struct GfaShapeStoreN {
+    /// The store's own topology arena.
+    pub topo: Topology,
+    /// Store-local `SolidId` for each deep-copied source, in input order.
+    pub sources: Vec<SolidId>,
+    /// Store-local input-face index → the source index (position in `sources`)
+    /// it belongs to. The basis for per-sub-face source tagging downstream.
+    pub face_source: HashMap<usize, usize>,
+    /// Store-local input-face index → caller-topology face index, for
+    /// shape-evolution provenance across the copy.
+    pub input_face_to_caller: HashMap<usize, usize>,
+}
+
+#[allow(dead_code)] // Consumed by run_pave_filler_n in the next N-way increment.
+impl GfaShapeStoreN {
+    /// Create a store by deep-copying every solid in `origs` into one topology.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if `origs` is empty or any topology lookup fails.
+    pub fn new(source: &Topology, origs: &[SolidId]) -> Result<Self, AlgoError> {
+        if origs.is_empty() {
+            return Err(AlgoError::AssemblyFailed(
+                "N-way fuse store needs at least one source solid".into(),
+            ));
+        }
+
+        let mut topo = Topology::default();
+        let mut sources = Vec::with_capacity(origs.len());
+        let mut face_source = HashMap::new();
+        let mut input_face_to_caller = HashMap::new();
+
+        for (src_idx, &orig) in origs.iter().enumerate() {
+            let (solid, map) = deep_copy_solid(source, &mut topo, orig)?;
+            sources.push(solid);
+            for (caller_idx, store_face) in map {
+                face_source.insert(store_face.index(), src_idx);
+                input_face_to_caller.insert(store_face.index(), caller_idx);
+            }
+        }
+
+        Ok(Self {
+            topo,
+            sources,
+            face_source,
+            input_face_to_caller,
+        })
+    }
+
+    /// Export a result solid from this store back to the caller's topology.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if any topology lookup fails.
+    pub fn export_solid(
+        &self,
+        target: &mut Topology,
+        solid_id: SolidId,
+    ) -> Result<SolidId, AlgoError> {
+        Ok(deep_copy_solid(&self.topo, target, solid_id)?.0)
+    }
+}
+
 /// Deep-copy a solid from `source` topology into `target` topology.
 ///
 /// Creates new vertices, edges, wires, faces, shells, and solid in `target`
@@ -323,5 +397,49 @@ mod tests {
                 .unwrap()
                 .len();
         assert_eq!(store_vertex_count, 6, "store solid_a should have 6 faces");
+    }
+
+    #[test]
+    fn nway_store_copies_all_sources_and_tags_faces() {
+        use brepkit_topology::explorer::solid_faces;
+        use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+
+        let mut source = Topology::default();
+        let boxes = [
+            make_unit_cube_manifold_at(&mut source, 0.0, 0.0, 0.0),
+            make_unit_cube_manifold_at(&mut source, 0.5, 0.0, 0.0),
+            make_unit_cube_manifold_at(&mut source, 1.0, 0.0, 0.0),
+        ];
+
+        let store = GfaShapeStoreN::new(&source, &boxes).unwrap();
+        assert_eq!(store.sources.len(), 3, "three sources copied");
+
+        // Every source is an independent 6-face box, and every one of its faces
+        // is tagged with that source's index.
+        for (src_idx, &sid) in store.sources.iter().enumerate() {
+            let faces = solid_faces(&store.topo, sid).unwrap();
+            assert_eq!(faces.len(), 6, "source {src_idx} is a 6-face box");
+            for fid in faces {
+                assert_eq!(
+                    store.face_source.get(&fid.index()).copied(),
+                    Some(src_idx),
+                    "face {fid:?} tagged to source {src_idx}"
+                );
+            }
+        }
+
+        // 3 independent boxes -> 18 distinct faces, all source-tagged.
+        assert_eq!(store.face_source.len(), 18, "18 distinct tagged faces");
+
+        // Export round-trips one source into a fresh topology.
+        let mut target = Topology::default();
+        let exported = store.export_solid(&mut target, store.sources[1]).unwrap();
+        assert_eq!(solid_faces(&target, exported).unwrap().len(), 6);
+    }
+
+    #[test]
+    fn nway_store_rejects_empty() {
+        let source = Topology::default();
+        assert!(GfaShapeStoreN::new(&source, &[]).is_err());
     }
 }
