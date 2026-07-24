@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784858822821,
+  "lastUpdate": 1784901341785,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11123,6 +11123,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17616364,
             "range": "± 19411",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6e28fce6832276bbb1e842e2eaaa888860897bd8",
+          "message": "perf(algo): reject coplanar-but-disjoint SD pairs with an oriented box (#1200)\n\n## What\n\nThe planar geometric-containment pass (Step 3b of `detect_same_domain`)\ngrid-prunes candidate pairs by axis-aligned AABB, then runs the full\n`planar_faces_overlap` containment test on every survivor. An\naxis-aligned box is a poor bound for a thin **diagonal** face: a\ndiagonal strut's AABB is a large square that overlaps every lattice\nmember it crosses. On a dense coplanar lattice (the kumiko wall pattern)\nthe broad-phase barely prunes, and the pass runs tens of thousands of\nfull containment tests per boolean that find nothing.\n\nThis adds a per-planar-face **oriented bounding box** (thickness axis\npinned to the plane normal, in-plane axes from PCA), built from the same\nouter-wire sampling already used for the AABB, and rejects a candidate\npair when the two tol-expanded OBBs are disjoint — before the full test.\n\n## Why it's safe\n\nAn OBB conservatively contains its face (both are tol-expanded), so\nOBB-disjoint proves the faces share no point, and `planar_faces_overlap`\ncould only return `false`. The reject is **result-preserving**.\nCandidate iteration order and the union-find sequence are unchanged, so\nrepresentative selection is identical.\n\n## Measurements\n\nCaptured 180-strut kumiko fuse (replayed natively from the\nparity-capture cache):\n\n- coplanar full-test count per boolean: **~40k -> ~10k (approx 4x)**\n- sequential fuse chain: **40.9s -> 36.4s (~11%)**, **byte-identical\nresult volume** (13776.89)\n\nThe AABB grid, candidate ordering, and all downstream SD logic are\nuntouched.\n\n## Verification\n\n- `brepkit-algo` unit tests: pass\n- Full `brepkit-io` + `brepkit-operations` foil: **1208 tests pass** (8\nskipped are `#[ignore]` ready-repros), including the SD-load-bearing\ngridfinity lip/socket/honeycomb fuses\n- clippy clean on the changed crate\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an oriented-bounding-box early reject to the planar containment\npass to skip coplanar‑but‑disjoint pairs. On the 180‑strut kumiko\ncapture this yields ~4x fewer full overlap tests and ~11% faster\nruntime, with byte‑identical results.\n\n- **Performance**\n- Build a tol‑expanded OBB per planar face from the same outer‑wire\nsamples as the AABB (normal pinned to the plane; in‑plane axes via PCA).\n- After AABB pruning, reject pairs whose OBBs don’t intersect; OBBs are\nstored in a dense `Vec<Option<Obb3>>` by sub‑face index (no hashing in\nthe hot loop), and candidates from the AABB set always have OBBs. Minor:\npreallocate outer‑wire sampling.\n- Verified: `brepkit-algo` unit tests and the `brepkit-io` +\n`brepkit-operations` suite (1208) pass; clippy clean.\n\n<sup>Written for commit ea5acdfa146639cbfd23277fe219d8e983ffb692.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1200?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T13:52:09Z",
+          "tree_id": "33f06653c6a09d303440ef070a60a7d5c8130e89",
+          "url": "https://github.com/andymai/brepkit/commit/6e28fce6832276bbb1e842e2eaaa888860897bd8"
+        },
+        "date": 1784901340362,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 848757,
+            "range": "± 4796",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 945917,
+            "range": "± 1368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13113,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 680156,
+            "range": "± 17741",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23072723,
+            "range": "± 63365",
             "unit": "ns/iter"
           }
         ]
