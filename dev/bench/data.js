@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784907952450,
+  "lastUpdate": 1784908448163,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -11285,6 +11285,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21865222,
             "range": "± 823354",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8bf327ff6bc0e4534af737822558765578f05d2e",
+          "message": "chore(main): release 2.128.0 (#1203)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.0](https://github.com/andymai/brepkit/compare/v2.127.33...v2.128.0)\n(2026-07-24)\n\n\n### Features\n\n* N-way GFA fuse — 3.9x faster kumiko compound_cut\n([#1202](https://github.com/andymai/brepkit/issues/1202))\n([679f9de](https://github.com/andymai/brepkit/commit/679f9de5bb58bf42cdafa872eb90e6065829471a))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.128.0 introducing an N‑way GFA fuse that speeds\nup kumiko compound_cut by ~3.9×.\n\n<sup>Written for commit ddaed6a7d8b990c9e554989d51ea156c9bfe98de.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1203?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-07-24T15:51:38Z",
+          "tree_id": "0a05ecc0c1279f8757f255a8e1226b04a2ecde57",
+          "url": "https://github.com/andymai/brepkit/commit/8bf327ff6bc0e4534af737822558765578f05d2e"
+        },
+        "date": 1784908446876,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 832798,
+            "range": "± 11611",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 919047,
+            "range": "± 36385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11901,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663942,
+            "range": "± 1151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21649027,
+            "range": "± 63961",
             "unit": "ns/iter"
           }
         ]
