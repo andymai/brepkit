@@ -792,13 +792,19 @@ filter 1 (lines), 49 ELLIPSES dropped at filter 2's AABB in-both sampling, 3 ell
 line pairs.** So the dominant loss is ellipses at filter 2 — the SAME aliasing class as the
 even-band Line bug, on the path #1224 does NOT cover (its exact clip is gated to Lines) and which
 the existing bespoke exact-arc bypass only covers for the faceted-ramp × cylinder configuration.
-**CAUTION, do not overclaim:** most of those 49 are probably CORRECT drops — a tool face's AABB can
-overlap the cylinder while the face itself does not touch it — so the defect is a SUBSET. Treating
-all 49 as wrong would repeat the "12 sections survive intact" false-all-clear. NEXT: identify WHICH
-ellipse should produce the missing corner-cylinder sub-face at the lump bbox
-(x[17.186,18.114] y[−20.745,−19.418] z[8.185,9.026]) and confirm it is among the 49 BEFORE touching
-filter 2. Note filter 2 already refines non-Lines up to 1024 samples, so if aliasing really is the
-root then `n_fine` is under-scaled here — measure that rather than assume it. Each odd band hits a
+**AND THE ELLIPSE-ALIASING READING OF THOSE 49 IS REFUTED — DO NOT "FIX" FILTER 2.** The caution
+paid off: a temporary min-distance probe (curve samples vs the mutual box `bb_a ∩ bb_b`, since
+removed) shows NONE of the 49 dropped ellipses has a mutual box overlapping the lump's z window
+[8.1,9.1] — they are all elsewhere in z — and the CLOSEST drop anywhere misses by 0.108mm while
+sampled at 0.055mm spacing (n_fine=404 over approx_len=22.261), i.e. a genuine 2× separation, not an
+aliasing artifact. So filter 2 is working correctly here and the 49 drops are legitimate; loosening
+it would break calibrated fixtures for nothing. Worth recording for a FUTURE case though: `n_fine`
+is clamped at 1024 while `approx_len` reaches ~1173mm on near-axis-parallel planes (1.15mm spacing
+against sub-millimetre boxes), so the clamp IS a real aliasing hazard — just not this bug's cause.
+NEXT: the missing corner-cylinder sub-face at the lump (x[17.186,18.114] y[−20.745,−19.418]
+z[8.185,9.026]) is therefore NOT a dropped FF section. Check the sections that ARE emitted at the
+lump's z and follow them into the face splitter — the sub-face is lost at or after splitting, not at
+section computation. Each odd band hits a
 DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;
 tool3 → (+x,+y) x≈18.6–20.5 y≈+18.3–19.9 z≈6.5–9.8), consistent with one diagonal member per band.
 CORRECTION, filed then retracted within the same session: an initial read called this the
