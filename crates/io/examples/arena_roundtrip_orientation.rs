@@ -122,7 +122,7 @@ fn main() {
     // yields an outward wedge, `revolve` is fine and the input convention is
     // what matters. If all four are inward, `revolve` itself inverts.
     for (ccw, ny) in [(true, -1.0), (true, 1.0), (false, -1.0), (false, 1.0)] {
-        println!("revolve wedge (ccw={ccw} normal_y={ny}):");
+        println!("PARTIAL revolve 45deg (ccw={ccw} normal_y={ny}):");
         let profile = wedge_profile(&mut topo, ccw, ny);
         match brepkit_operations::revolve::revolve(
             &mut topo,
@@ -132,6 +132,24 @@ fn main() {
             std::f64::consts::FRAC_PI_4,
         ) {
             Ok(wedge) => cut_by_far_box(&mut topo, wedge, "  wedge"),
+            Err(e) => println!("  revolve ERR {e}"),
+        }
+    }
+
+    // The analytic FULL-revolution path documents itself as exact for both
+    // windings. If full is clean where partial is not, the gap is specific to
+    // the segmented path.
+    for ccw in [true, false] {
+        println!("FULL revolve 360deg (ccw={ccw}):");
+        let profile = wedge_profile(&mut topo, ccw, -1.0);
+        match brepkit_operations::revolve::revolve(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::TAU,
+        ) {
+            Ok(full) => cut_by_far_box(&mut topo, full, "  full"),
             Err(e) => println!("  revolve ERR {e}"),
         }
     }

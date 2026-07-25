@@ -982,9 +982,20 @@ the result's orientation and the face's stored `normal` is IGNORED. Wound one wa
 proper outward solid whose disjoint cut stays analytic at six faces; wound the other it emits an
 INWARD solid that fails every downstream orientation check and drops to the mesh fallback at 48
 planar faces. The tool's wedge is wound the inward way, which is why every corner cut in every
-kumiko band degrades — and why the flat-wall path, which has no revolve, is clean. FIX: make
-`revolve` always emit an outward-oriented solid regardless of profile winding (precedent: the #1045
-loft fix reverses downward-stacked CCW sketches rather than bailing). Independently and still worth doing: short-circuit a disjoint Cut to A (the ops shortcut
+kumiko band degrades — and why the flat-wall path, which has no revolve, is clean. **SCOPED FURTHER — IT IS AN INCONSISTENCY BETWEEN REVOLVE'S TWO PATHS, NOT A MISSING CAPABILITY.**
+Same probe, adding a 360° case: **FULL revolution is CORRECT for BOTH windings** (ccw and cw both
+`outward=Some(true) -> growth`, F=4, a washer of 2 cylinders + 2 planes), while the PARTIAL 45°
+revolve is wrong for one (ccw → hole → F=48 mesh; cw → growth → F=6 analytic). So
+`try_analytic_full_revolution` (gated on `is_full`) ALREADY normalizes orientation — its doc comment
+says as much, "face orientation comes from the profile's traversal winding in the (radial, axial)
+chart, so inward-facing walls and cap normals are exact for both CCW- and CW-wound profiles" — and
+the SEGMENTED path taken by partial revolutions never got the same treatment. The kumiko corner
+wedge is a partial revolve, so it lands on the unfixed path. FIX: apply the full path's winding
+normalization to the segmented path (compute the profile's signed area in the (radial, axial) chart
+and reverse the oriented edges when it has the inward sign), with a working reference implementation
+sitting in the same file. Incidental confirmation: the full washer reports `signed_vol=0.000000` and
+is rescued by the flux test — exactly the lone-shell path `perform_areas` documents for the
+torus−box notch band, so that path is load-bearing and must not be disturbed. Independently and still worth doing: short-circuit a disjoint Cut to A (the ops shortcut
 detects only containment), which would spare tool0/tool3 the whole path. Reproduce per tool by symlinking
 one `cut-tool<i>.bin` as `cut-tool0.bin` beside `cut-base.bin` and running
 `PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1 BBOX=1`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
