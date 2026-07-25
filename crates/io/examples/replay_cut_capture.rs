@@ -99,11 +99,22 @@ fn main() {
     // Answers "is this splitter interior point genuinely inside the cutter?",
     // which separates an incomplete face split from a classifier misjudgement.
     if let Ok(spec) = std::env::var("POINT_IN") {
-        let v: Vec<f64> = spec
-            .split(',')
-            .filter_map(|t| t.trim().parse().ok())
+        // Parse exactly three floats. Discarding unparseable tokens would let
+        // POINT_IN=1,2,foo,3 run silently as (1,2,3) — a probe answering about
+        // a different point than asked is worse than no probe.
+        let tokens: Vec<&str> = spec.split(',').map(str::trim).collect();
+        let v: Vec<f64> = tokens
+            .iter()
+            .map(|t| {
+                t.parse::<f64>()
+                    .expect("POINT_IN component must be a float")
+            })
             .collect();
-        assert!(v.len() == 3, "POINT_IN needs x,y,z");
+        assert!(
+            v.len() == 3,
+            "POINT_IN needs exactly x,y,z — got {} component(s)",
+            v.len()
+        );
         let p = brepkit_math::vec::Point3::new(v[0], v[1], v[2]);
         let labelled = std::iter::once(("base".to_string(), base)).chain(
             tools
