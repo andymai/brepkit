@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784991986409,
+  "lastUpdate": 1784993567268,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12905,6 +12905,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21138769,
             "range": "± 64093",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1665b8c1351170f875a2fbf6e3f59e918f5137d4",
+          "message": "docs(roadmap): qualify the all-planar fallback tell for the goma bands (#1234)\n\n#1233 concluded the goma bands are mesh-fallback output because they\ncarry **zero curved faces**. That conclusion holds, but the supporting\nargument as written was too broad. This records what it actually rests\non, and a trap found while checking.\n\nDocs only; no code change.\n\n## The tell is narrower than it reads\n\n`helical_sweep` output is **all-planar by construction** — the helix is\na NURBS approximated by segments and the sweep emits planar quads:\n\n```\nturns=0.25 segs=8:  F=42  mix=[(\"plane\", 42)]\n```\n\nSo the helix-swept rising diagonals contribute no curved faces *even on\na perfectly analytic path*, and neither do the chord-box falling\ndiagonals. \"All-planar\" alone therefore proves less than #1233 implied.\n\n## What still makes zero-curved damning\n\nThe **revolve** struts. `revolve` with a proper axis-containing profile\ndoes emit cylinders — census row `revolve cylinder (parallel→Cyl,\ncaps→Plane)`, `cyl=1`. So each vertical and near-horizontal strut should\nleave a cylindrical wall in the band, and **none survives**. That is the\npart of the argument that carries the conclusion.\n\n## A trap worth recording\n\nDo not try to confirm this with a hand-built strut fuse without checking\nthe profile plane first. A probe using `make_unit_square_face` — a unit\nsquare in the **XY** plane — revolved about **Z** is degenerate: the\nprofile is perpendicular to the axis. It returns `F=6` all-planar, which\nlooks like a result and is not one.\n\nThat probe has been deleted rather than committed, since an unfaithful\nrepro in the tree is worse than none — the doctrine's own warning is\n*\"never grind on a hand-built repro without proving it matches the real\ntool geometry first.\"*\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClarified the “all‑planar” fallback tell and fixed the framing: bands\nare cut from a `revolve` wedge; `helical_sweep` is all‑planar by design,\nso zero‑curved faces are damning only when cylinders from `revolve`\nstruts go missing in the corner‑wedge cut. Confirmed the flat‑wall strut\ncut is healthy (all‑planar, expected), noted the\n`make_unit_square_face`→`revolve` Z probe is degenerate, normalized code\nfont, and called out that the corner‑wedge `cutAll` path needs\ncapturing.\n\n<sup>Written for commit c4269ecc63337703b92f58878340619f918368c3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1234?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T08:30:31-07:00",
+          "tree_id": "a94a35f6dfbd9d9e6f96afdbcbe93b57fcbc5714",
+          "url": "https://github.com/andymai/brepkit/commit/1665b8c1351170f875a2fbf6e3f59e918f5137d4"
+        },
+        "date": 1784993565955,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 820654,
+            "range": "± 4701",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 913515,
+            "range": "± 2217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11973,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 662753,
+            "range": "± 1412",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21846941,
+            "range": "± 118019",
             "unit": "ns/iter"
           }
         ]
