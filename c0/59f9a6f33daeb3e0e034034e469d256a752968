@@ -1,0 +1,21 @@
+crates/io/tests/kumiko_corner_wedge_inmem.rs
+  s_4be9cbc078e9c4::t_6f8d36f3a1d892 27-37
+.claude/skills/roadmap/SKILL.md
+  s_4be9cbc078e9c4::t_6f8d36f3a1d892 924-930
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "c059f9a6f33daeb3e0e034034e469d256a752968",
+  "prompts": {},
+  "sessions": {
+    "s_4be9cbc078e9c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb0e4ea1-d098-48cf-921d-3ac9562102ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
