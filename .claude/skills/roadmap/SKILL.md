@@ -907,10 +907,38 @@ region F=147 all-planar free=0 over=0, every strut F=6 free=0 over=0, result **F
 free=0 over=0, 11.6s** — and F=1146 matches the "each ~F=1146" figure in `gomaCaptureBisect`'s own
 doc comment. NOTE all-planar is CORRECT here and is NOT a fallback tell: a box slab cut by box prisms
 has no curved surfaces to lose. So this capture cannot exercise the suspect path.
-**THE REMAINING SUSPECT IS THE CORNER-WEDGE CUT** (`kumikoWrapBuilder.ts` ~734), which starts from a
-`revolve` wedge and carves it with revolve/helix struts — the only place where missing cylinders are
-diagnostic. It is NOT in the cache; capture it (hook that `cutAll` the way `gomaCaptureBisect` hooks
-`cutAllBisect`) before doing anything else. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
+**ROOT FOUND, AND IT IS A 2ms SIX-FACE REPRO — fixture
+`crates/io/tests/kumiko_corner_wedge_inmem.rs`.** The corner-wedge `cutAll` was captured
+(`kumikoCornerCutCapture.test.ts`, modelled on `gomaCaptureBisect`, HEIGHT=4, 295s; six calls in
+`~/.cache/brepkit-parity-captures/2026-07-25/kumiko-corner/`, replay each with `PREFIX=cut`). Calls
+0–3 are the flat-wall path, all planar in and out and all clean, ending at the good F=663 band.
+**Call 4 is the corner wedge and it is the defect:** base `F=6 mix=[("cylinder", 2), ("plane", 4)]`
+free=0 over=0, five strut tools each identically `F=6` with 2 cylinders and watertight, result
+**`F=71 mix=[("plane", 71)] free=2 over=1`**. Bisecting by tool count separates TWO failures:
+`1 tool → F=60 ALL-PLANAR free=0` (the cylinders are already gone at the FIRST cut, in 2ms),
+`2 → F=68 free=0`, `3 → F=72 free=3`, `4 → free=2 over=1`, `5 → free=2 over=1`. So (a) a COAXIAL
+wedge×wedge cut — six analytic faces against six, two cylinders each, same corner axis — drops to
+the mesh fallback immediately, and (b) openness appears from the third strut on. **The kumiko root
+is therefore NOT that `mesh_boolean_fallback` consumes open output (it does, and that remains a real
+defect); it is that these coaxial wedge cuts fall back AT ALL.** Fix that and no band is
+mesh-derived, which is what the whole family is downstream of. **AND THE REASON IT FALLS BACK IS ALREADY MEASURED:** raw GFA on that exact pair
+(`RAW=1 TOOL=0 SHELL_LOG=1`) reports `BuilderSolid: 0 growth shells, 1 hole shells` and aborts with
+**"no outer shell found (all shells classified as holes)" in 0ms**. The analytic path does not
+produce a wrong result — it produces NO result: one shell is built and classified INWARD, so nothing
+remains to be the outer shell. For `Cut(wedge, strut)` the answer should be a single OUTWARD shell,
+so the suspect is orientation or the growth-vs-hole decision in `perform_areas`
+(`crates/algo/src/builder/builder_solid.rs`), NOT the face splitter. **INSTRUMENTED (`BK_AREAS=1`,
+new): the growth/hole REJECTION IS CORRECT — what feeds it is wrong.** The lone shell reports
+`faces=6 mix=[("cylinder", 2), ("plane", 4)] signed_vol=-182.448 lone=true outward=Some(false)`, so
+both the corner-fan volume AND the curvature-robust flux test agree it is inward, and rejecting it is
+right. But look at what it IS: six faces with the SAME surface signature as each operand (both are
+`F=6`, 2 cylinders + 4 planes; wedge vol 284.873, strut vol 43.971), and a corner-fan magnitude
+closer to the wedge than the strut. **The strut never split the wedge at all — a whole operand came
+through, inverted.** A partial cut must produce MORE than six faces. So the defect is upstream of
+`perform_areas`: either the pair produced no sections (check phase FF for this pair) or face
+selection kept exactly one operand with flipped orientation. START HERE, with
+`CAPTURE_DIR=<call4> PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1` plus `BK_FF_TRACE`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
+fixture itself — an unvalidated operand already cost this campaign several passes. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
 either make the mesh co-refinement produce closed output for these operands, or make
 `mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
 rejecting means the op fails outright, since there is no further fallback; that is a product call).

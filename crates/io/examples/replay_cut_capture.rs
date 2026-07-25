@@ -45,8 +45,9 @@ fn describe(topo: &Topology, sid: brepkit_topology::solid::SolidId, label: &str)
     // operand with free edges silently poisons every classification.
     let free = uses.values().filter(|&&c| c == 1).count();
     let over = uses.values().filter(|&&c| c > 2).count();
+    let vol = brepkit_operations::measure::solid_volume(topo, sid, 0.01).unwrap_or(f64::NAN);
     println!(
-        "  {label}: F={} mix={mix:?} free={free} over={over}",
+        "  {label}: F={} mix={mix:?} free={free} over={over} vol={vol:.3}",
         faces.len()
     );
 }
