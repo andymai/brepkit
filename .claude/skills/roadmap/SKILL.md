@@ -970,12 +970,21 @@ result shell is just the box, run with `BK_AREAS=1 BK_FLUX=1`) gives for a 10×1
 the convention is not inverted and `shell_is_outward_oriented` needs no fix. **Therefore the
 captured wedge operand is GENUINELY INWARD-ORIENTED, and the defect is upstream of GFA entirely.**
 Do NOT "fix" `signed_volume_of_shell` or `shell_is_outward_oriented` — they are provably right.
-NEXT: find what inverts the wedge. Two candidates, both cheap to test: (1) brepkit's `revolve`
-emitting an inward solid for a wedge profile (build one natively — profile in a plane CONTAINING the
-axis, NOT `make_unit_square_face` which is XY and degenerate about Z — cut it by a far-away box and
-read `signed_vol`); (2) the arena `.bin` round-trip (`serializeSolid` / `deserialize_solid`)
-inverting orientation, testable by serializing a known-good box, reading it back and re-running the
-same probe. Independently and still worth doing: short-circuit a disjoint Cut to A (the ops shortcut
+**ROOT CAUSE FOUND AND REPRODUCED NATIVELY IN ~30 LINES — `revolve` DOES NOT NORMALIZE THE
+ORIENTATION OF THE SOLID IT EMITS.** Probe: `crates/io/examples/arena_roundtrip_orientation.rs`. The
+arena round-trip is INNOCENT (a serialize/deserialize copy of a box gives the same
+`signed_vol=1000.000000 outward=Some(true) -> growth` as the native one). But revolving a wedge
+profile (rectangle in the XZ plane, r 1.55→4.75, z 2.7→20.8, about Z, 45°) across all four
+combinations of profile winding and stored plane normal gives: ccw/−Y → `signed_vol=-129.010` hole,
+disjoint cut F=48 (mesh fallback); ccw/+Y → `-129.010` hole, F=48; cw/−Y → `+129.010` growth,
+**F=6 analytic**; cw/+Y → `+129.010` growth, **F=6 analytic**. So the PROFILE WINDING alone decides
+the result's orientation and the face's stored `normal` is IGNORED. Wound one way `revolve` emits a
+proper outward solid whose disjoint cut stays analytic at six faces; wound the other it emits an
+INWARD solid that fails every downstream orientation check and drops to the mesh fallback at 48
+planar faces. The tool's wedge is wound the inward way, which is why every corner cut in every
+kumiko band degrades — and why the flat-wall path, which has no revolve, is clean. FIX: make
+`revolve` always emit an outward-oriented solid regardless of profile winding (precedent: the #1045
+loft fix reverses downward-stacked CCW sketches rather than bailing). Independently and still worth doing: short-circuit a disjoint Cut to A (the ops shortcut
 detects only containment), which would spare tool0/tool3 the whole path. Reproduce per tool by symlinking
 one `cut-tool<i>.bin` as `cut-tool0.bin` beside `cut-base.bin` and running
 `PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1 BBOX=1`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
