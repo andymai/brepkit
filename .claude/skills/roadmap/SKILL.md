@@ -880,17 +880,17 @@ sitting in the operand dump the whole time — **EVERY band is 100% planar, the 
 wrapping the corner; their total absence is the parity skill's canonical fallback tell ("all-planar
 with zero curved surfaces on a shape that should have cylinders is fallback regardless of the
 number"). **CAVEAT, measured afterwards — the tell is weaker than it first reads and rests
-specifically on the REVOLVE struts.** `helical_sweep` output is all-planar BY CONSTRUCTION (the helix
-is a NURBS approximated by segments and the sweep emits planar quads: turns=0.25 segs=8 gives
-`F=42 mix=[("plane",42)]`), so the helix-swept diagonals contribute no curved faces even on a
+specifically on the `revolve` struts.** `helical_sweep` output is all-planar BY CONSTRUCTION (the
+helix is a NURBS approximated by segments and the sweep emits planar quads: `turns=0.25 segs=8`
+gives `F=42 mix=[("plane", 42)]`), so the helix-swept diagonals contribute no curved faces even on a
 perfectly analytic path, and neither do the chord-box falling diagonals. What still makes
 zero-curved damning is that `revolve` with a proper axis-containing profile DOES emit cylinders
-(census row `revolve cylinder (parallel→Cyl, caps→Plane)`, cyl=1), so each vertical and
-near-horizontal revolve strut should leave a cylindrical wall in the band, and none survives. DO NOT
-try to confirm this with a hand-built strut fuse without checking the profile plane first: a probe
-using `make_unit_square_face` (a unit square in the XY plane) revolved about Z is DEGENERATE — the
-profile is perpendicular to the axis, and it returns F=6 all-planar, which looks like a result and
-is not one. All eight bands are mesh-fallback output; four happened to come out watertight and four
+(census row `revolve cylinder (parallel→Cyl, caps→Plane)`, `cyl=1`), so each vertical and
+near-horizontal `revolve` strut should leave a cylindrical wall in the band, and none survives. DO
+NOT try to confirm this with a hand-built strut fuse without checking the profile plane first: a
+probe using `make_unit_square_face` (a unit square in the XY plane) revolved about Z is DEGENERATE —
+the profile is perpendicular to the axis, and it returns `F=6` all-planar, which looks like a result
+and is not one. All eight bands are mesh-fallback output; four happened to come out watertight and four
 did not. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
 either make the mesh co-refinement produce closed output for these operands, or make
 `mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
