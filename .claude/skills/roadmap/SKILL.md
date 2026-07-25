@@ -645,103 +645,24 @@ vitest's per-test timeout, the abandoned async generation chain stays pending, a
 kernel concurrently with the next test. The following kumiko scenarios then inherit the poisoned object
 (two surface as "Shape handle has been disposed"); only `mitsukude bold` (bnd=571) has an independent
 assertion. So do NOT chase this as a panic — `catch_unwind`/`lastPanicMessage` have nothing to report.
-Chase the 849s. MEASURED, in order: (1) `generateBin` alone is **847s** of the 849 — tessellation and STL
-are noise, so it is generation, not the mesher. (2) Wrapping `cutAll` across a whole generation (vi.mock)
-gives **32 calls, ZERO failures** — no bisect thrash — in 4 chunks x 8 families (tool counts
-4,6,7,180,6,3,14,80 repeated 4x), summing to only **206s of 911s = 23%**. **So ~705s (77%) is NOT in
-cutAll**, and is still UNLOCATED — do not assume it is the boolean chain. Candidates: the per-strut
-sketch/extrude/translate prism construction (thousands of small kernel ops), `fuseAllOrNull` in
-wallPatternClips, or JS-side lattice work. (3) Batching is real but SECONDARY: native chunked replay
-(`CHUNK=n` in `crates/io/examples/replay_kumiko_goma.rs`) gives 1x180 = 11.7s vs 3x60 = 15.8s vs 6x30 =
-18.6s, and the SAME 30 tools cost 393ms at F=168 vs 6103ms at F=1131 — cost grows steeply with region
-complexity, so the per-family loop over an accumulating region is the pessimal shape, but fixing it
-cannot recover the missing 77%. Also unexplained: that 180-tool call is 33.5s in-tool vs 11.7s natively
-(3x). (4) FULL OP ATTRIBUTION at h=4 (wrap every brepjs op; 99.9% accounted, total 292.7s):
-**`cutAllBisect` 1 call / 203.5s / 69.5%**, `cutAll` 32 calls / 88.5s / 30.2%, all else 0.1%. So the bulk
-is ONE call — the step applying the pattern solids to the bin — not the per-family carve. Phase split
-confirms it: `buildKumikoWallPatterns` is only 32.8%, of which prism construction is **322ms (0.1%)**, so
-the "thousands of small sketch/extrude ops" candidate is REFUTED. CORRECTION: an earlier probe wrapped
-`cutAll`, saw 32 calls with zero failures, and concluded there was no bisect thrash — INVALID, because
-`cutAllBisect` is a separate export whose internal retries use an internal ops reference the wrapper never
-saw. That hypothesis was untested, not refuted. (5) BISECT TELEMETRY (the right instrument this time): `{totalInputs:8, batchAttempts:1,
-batchSucceeded:1, singletonFallbacks:0, failedInputs:[]}` — **NO thrash**, one attempt, one success. So
-**ONE `cutAll` of just EIGHT tools takes 203.5s**. Those 8 tools are the carved kumiko lattice bands
-(each ~F=1146 per the captured replay), so this is a single honest N-way boolean of the bin body against
-8 very complex solids — squarely a BREPKIT perf defect, not tool-side structure. (6) CAPTURED AND REPLAYED NATIVELY (capture
-`~/.cache/brepkit-parity-captures/2026-07-24/goma-bisect/`, harness
-`crates/io/examples/replay_cut_capture.rs`, `CAPTURE_DIR=... [N]`): base is the bin body F=78
-{cone:12, cylinder:24, plane:42}; each tool is a carved lattice band F=663-726 ALL PLANE. Cutting
-N tools: **1 -> 2824ms F=1003 free=0 over=0; 2 -> 6187ms F=1519 free=756 over=320; 3 -> 12659ms
-F=1920 free=723 over=333**. TWO CONCLUSIONS. (a) EVERY result is ALL-PLANAR although the base has
-12 cones + 24 cylinders — the analytic types are destroyed, i.e. this is the MESH FALLBACK, so
-goma's cost is not N-way boolean work but fallback meshing that grows superlinearly with tool
-count. The real fix is to stop falling back: find why GFA rejects bin-body x lattice-band. (b) From
-TWO tools on, `compound_cut` returns Ok with a BROKEN solid (756 free, 320 over) — a native repro
-of the open "mesh-boolean fallback emits OPEN meshes that get CONSUMED" row above. (7) ROOT FOUND — it is a GFA CORRECTNESS bug, not a perf bug (`RAW=1` mode in the same
-harness calls `gfa::boolean` directly, bypassing the ops gate; note `brepkit-algo` IS already a
-dev-dependency of `brepkit-io`, so io examples can reach it): **RAW cut 0 = 231ms, F=494,
-{cone:12, cylinder:24, plane:458}, free=30, over=0** versus the ops path's 2824ms/F=1003/all-plane
-for the SAME cut — the analytic engine is 12x faster and keeps every cone and cylinder, but leaves
-**30 free edges**, so `validate_boolean_result` rejects it and the mesh fallback runs. **RAW cut 1
-fails outright: "assembly failed: open growth shell with 20 faces would be dropped; aborting
-analytic assembly".** So the 203s is the CONSEQUENCE of those 30 free edges. (8) THE 30 FREE EDGES ARE LOCALIZED (`DUMP_FREE=1`): every one lies at
-x = 17.00 or x = 17.05 — a single **0.05mm-thin slab** — with y in [-21.95, -17.15] and z in
-[2.70, 12.37]. Curve mix is mostly Line plus a few Ellipse/Circle, on plane and cylinder faces;
-the ellipses each BRIDGE the two planes (e.g. (17.00,-20.75,12.34)->(17.05,-20.75,12.37)), so this
-is a sliver between two near-parallel faces 0.05mm apart, where the lattice band's edge meets the
-bin's corner cylinders. 0.05mm is FAR above the 1e-7 linear tolerance, so this is a genuine
-thin-feature failure, not numerical noise. ORIGIN OF THE TWO SIDES (`XSCAN=17.0`): the BASE has NO X-normal plane near
-x=17 at all; tool0 has exactly ONE at x=17.05 (its cut plane); tool1 has many including x=17.00.
-Since the 30 free edges come from cut 0 (tool0 only), the x=17.00 side is NOT a plane — the dump
-shows `free line on cylinder (17.00,-19.55,2.70)`, i.e. the base's corner CYLINDER surface. So the
-sliver is between tool0's cut plane at x=17.05 and curved base geometry reaching x~17.00 — a
-plane-vs-cylinder thin sliver, plausibly the same family as the tangency row above, though the
-mechanism is NOT yet proven. (9) EXACTLY FOUR FACES ARE MISSING (`FREE_LOOPS=1`): the 30 free edges chain into
-**4 components in which EVERY vertex has degree exactly 2** (histogram [(2,30)]) — i.e. four SIMPLE
-CLOSED outlines of 7, 7, 7 and 9 vertices. (Degree-2-everywhere is the test that actually proves
-this; "no odd-degree vertices" does NOT, since a degree-4 junction / figure-eight is even too.) So these are not ragged partial boundaries; they are four well-formed polygon outlines
-where a face should be and is not, all inside the 0.05mm slab. That is the same class as cut 1's
-"open growth shell with 20 faces would be dropped" — the assembler dropping faces in this region,
-harder on the second cut. LOOP GEOMETRY (`LOOP_GEOM=1`): each of the 4 outlines has the same
-signature — several Lines lying in the x=17.05 plane, ONE Line on the far side at x=17.00, and TWO
-short Ellipse arcs bridging 17.00 <-> 17.05. So each loop STRADDLES the 0.05mm gap and is NOT
-planar: the missing faces span from tool0's cut plane across to the base cylinder. Each covers
-roughly 1.2 x 0.83mm with a 0.05mm depth excursion. (10) THE DEFECT IS OP-INDEPENDENT (`OP=cut|fuse|intersect` on the same
-operands): Cut F=494 free=30 over=0; Fuse F=1155 free=29 over=1; Intersect ERRs with "open growth
-shell with 6 faces would be dropped" (same error family as cut 1's 20-face version). All three fail
-in the SAME region, which points AWAY from classification — that selects different subsets per op
-and would not fail identically — and toward the shared upstream: the splitter/section machinery
-emitting a partition that cannot be assembled under any op. So these are NOT faces that were built
-and then classified out; the partition is defective before classification runs. (11) EVERY TOOL FAILS, IN TWO MODES (`TOOL=<i>`, base cut by that one tool):
-tools 0/2/4/6 each give IDENTICAL F=494 free=30 over=0; tools 1/3/5/7 each ERR with "open growth
-shell with N faces would be dropped" (N = 9, 22, 23, 36). The evens are congruent bands on the
-bin's four walls (file sizes agree: evens ~650KB, odds ~380KB), so the split is the two kumiko
-diagonal families. So this is not one awkward tool — it hits 100% of the pattern bands, which is
-why the fallback runs for all 8 and compounds to 203s. (12) THE TWO MODES ARE NOT ONE MECHANISM (`SHELL_LOG=1` prints
-`BuilderSolid`'s shell summary and its sliver-drop debug lines). tool0: **1 growth shell, 0 hole
-shells, and NO sliver-drop messages** — so its 30 free edges are NOT dropped faces. That single
-shell is the OUTER shell, which `assemble()` deliberately never tests for closedness, and it is
-itself open: the 4 faces were NEVER CREATED. tool1: **20 growth shells, 17 hole shells**, one of
-them open with 9 faces, which trips the `gs.len() >= 4` abort. So the even mode is a
-splitter/section gap (missing faces) and the odd mode is fragmentation + the assembly guard. A
-tempting unification — "small open shells are silently dropped (<4 faces) while big ones abort" —
-was REFUTED by this probe; tool0 drops nothing. (13) THE 0.05mm IS DELIBERATE, AND IT IS A TANGENCY WORKAROUND:
-`kumikoWrapBuilder.ts` has `const SLAB_OVERLAP = 0.05` — "Overlap of flat slabs past the corner
-tangent planes (boolean robustness)". The tool extends each flat slab 0.05mm PAST THE CORNER
-TANGENT PLANES specifically to avoid exact tangential contact, and that overlap is exactly where
-brepkit fails. So a workaround meant to dodge a tangency problem manufactures a thin-sliver problem
-instead; it also explains why all 8 tools fail identically (the offset is a constant, not an
-accident) and gives real evidence for the link to the tangency row above, which was previously only
-a geometric coincidence. NOTE a tool-side mitigation (different overlap) may exist, but the kernel
-defect is the real target. THE TARGET IS NOW the FF/section/split stage for the 0.05mm
-plane-vs-cylinder sliver (even mode), with the odd mode's fragmentation treated as possibly
-separate. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
-broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
-NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
-idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
-the call path you intend to claim about. REFUTED: the captured goma `compound_cut`
-(`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`) is NOT the culprit — all 180 tools replay in
-11.8s with F=1146, free=0, over=0.
+Chase the 849s. FULLY ROOT-CAUSED (#1215-#1219) — the whole measured chain lives in the doc
+comment of the ready-repro `crates/io/tests/goma_wall_band_cut_inmem.rs`; read that, not this.
+Summary: the 850s scenario trips vitest's timeout, whose abandoned async chain poisons the kernel
+for every later kumiko test (14 failures, ONE root). 203s of it is a single `cutAll` of 8 lattice
+bands, slow only because the analytic path is rejected for **30 free edges** and the mesh fallback
+runs; the analytic path is ~12x faster and keeps all 12 cones + 24 cylinders. Those 30 edges are
+**4 missing faces** in one **0.05mm plane-vs-cylinder sliver** — the tool's deliberate
+`SLAB_OVERLAP = 0.05` past the corner tangent planes (a tangency workaround). Repro is ~230ms per
+tool; all 8 bands fail, evens with free=30, odds aborting on an open growth shell. TARGET: the
+FF/section/split stage — the faces are never created.
+REFUTED, do not re-attempt: a panic (none; `lastPanicMessage()` is empty), bisect thrash
+(telemetry: 1 attempt, 1 success), prism construction (322ms, 0.1%), boolean batching as the main
+cost (30%), classification (defect is op-independent), and the assembly sliver-drop guard (tool0
+drops nothing). TOOLING: V8 `--cpu-prof` does NOT work through vitest here (fork pool drops it via
+NODE_OPTIONS and execArgv; no vite-node) — use `vi.mock` wrapping, and verify the wrapper covers
+the path you are claiming about. Other 7 bands + harness:
+`~/.cache/brepkit-parity-captures/2026-07-24/goma-bisect/` + `crates/io/examples/replay_cut_capture.rs`
+(`RAW`, `TOOL`, `OP`, `FREE_LOOPS`, `LOOP_GEOM`, `XSCAN`, `SHELL_LOG`, `CHUNK`).
 
 CAUTION on counting: the baseline's classified kinds (23 boundary-edge, 2 non-manifold, 4 poisoning,
 1 timeout) sum to 30 of 43, so ~13 failures carry no recognised error form — probably cascade
