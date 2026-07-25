@@ -348,13 +348,44 @@ pub fn perform(
                     };
                     let in_both =
                         |p: Point3| -> bool { bb_a.contains_point(p) && bb_b.contains_point(p) };
+                    // A straight section against a BANDED quadric partner
+                    // admits an EXACT answer, so never sample one: the
+                    // predicate is membership in bb_a ∩ bb_b, itself an AABB,
+                    // so slab-clip the segment against it. Sampling is not
+                    // merely wasteful here, it is unsound — the in-both window
+                    // can be far shorter than the sample pitch. A kumiko
+                    // lattice band cuts a bin's corner cylinder in a
+                    // full-height generator (~20mm) whose true in-both span is
+                    // one ~0.8mm opening, well under this filter's ~1.3mm
+                    // pitch, so whether the section survived was aliasing luck:
+                    // 12 of 16 band×cylinder pairs kept their generator and 4
+                    // silently lost both, leaving 30 free edges that sent the
+                    // whole kumiko export family to the mesh fallback.
+                    //
+                    // Deliberately NOT applied to plane×plane. The two tests
+                    // can only disagree when the in-both window is shorter than
+                    // the sample pitch, and on that difference set the inflated
+                    // AABB is a gross over-approximation of a planar face, so
+                    // the exact test also admits lines that cross bb_a ∩ bb_b
+                    // while missing both faces. Widening it there admits two
+                    // such lines into the dovetail A1-corner nub fuse and takes
+                    // it from watertight to bnd=158. Plane×plane keeps the
+                    // sampled test and stays theoretically susceptible to the
+                    // same aliasing; no repro exhibits it, and closing it needs
+                    // a test against true face extents rather than AABBs.
+                    let banded_partner =
+                        matches!(surf_a, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+                            || matches!(surf_b, FaceSurface::Cylinder(_) | FaceSurface::Cone(_));
+                    if banded_partner && matches!(raw.curve, EdgeCurve::Line) {
+                        return segment_meets_both_boxes(raw.p_start, raw.p_end, bb_a, bb_b);
+                    }
                     if (0..=N).map(|i| sample(i, N)).any(in_both) {
                         return true;
                     }
-                    // Straight lines are exactly represented by their
-                    // endpoints; a uniform scan cannot under-sample them at
-                    // this granularity in practice, and refining every far
-                    // pair would be pure cost.
+                    // Remaining (plane×plane) lines keep their original
+                    // treatment: no refinement, because refining every far pair
+                    // would be pure cost and the exact test above is the answer
+                    // wherever it is safe to apply.
                     if matches!(raw.curve, EdgeCurve::Line) {
                         return false;
                     }
@@ -911,6 +942,53 @@ fn point_to_polygon_dist(p: brepkit_math::vec::Point2, poly: &[brepkit_math::vec
         best = best.min(((p.x() - cx).powi(2) + (p.y() - cy).powi(2)).sqrt());
     }
     best
+}
+
+/// Exact test: does the segment `p0`→`p1` meet the intersection of two AABBs?
+///
+/// The in-both predicate for a straight section is membership in `a ∩ b`,
+/// itself an AABB, so this is the standard slab clip. It replaces sampling for
+/// lines, which aliases: the overlap window can be orders of magnitude shorter
+/// than the segment, and a missed window silently discards a real section.
+fn segment_meets_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> bool {
+    let lo = [
+        a.min.x().max(b.min.x()),
+        a.min.y().max(b.min.y()),
+        a.min.z().max(b.min.z()),
+    ];
+    let hi = [
+        a.max.x().min(b.max.x()),
+        a.max.y().min(b.max.y()),
+        a.max.z().min(b.max.z()),
+    ];
+    let start = [p0.x(), p0.y(), p0.z()];
+    let dir = [p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z()];
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for i in 0..3 {
+        if lo[i] > hi[i] {
+            return false;
+        }
+        // Exact zero is the only case that would make the slab ratio NaN; a
+        // merely tiny component divides to a large finite (or infinite) bound,
+        // which the min/max below handle correctly.
+        if dir[i] == 0.0 {
+            if start[i] < lo[i] || start[i] > hi[i] {
+                return false;
+            }
+            continue;
+        }
+        let mut ta = (lo[i] - start[i]) / dir[i];
+        let mut tb = (hi[i] - start[i]) / dir[i];
+        if ta > tb {
+            std::mem::swap(&mut ta, &mut tb);
+        }
+        t0 = t0.max(ta);
+        t1 = t1.min(tb);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
 }
 
 /// Restrict surface-surface intersection curves to the region inside BOTH
@@ -4529,6 +4607,89 @@ fn clip_line_to_polygon_general(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    fn boxes(
+        a: ([f64; 3], [f64; 3]),
+        b: ([f64; 3], [f64; 3]),
+    ) -> (brepkit_math::aabb::Aabb3, brepkit_math::aabb::Aabb3) {
+        let mk = |(lo, hi): ([f64; 3], [f64; 3])| {
+            brepkit_math::aabb::Aabb3::from_points([
+                Point3::new(lo[0], lo[1], lo[2]),
+                Point3::new(hi[0], hi[1], hi[2]),
+            ])
+        };
+        (mk(a), mk(b))
+    }
+
+    #[test]
+    fn segment_meets_window_far_shorter_than_sample_pitch() {
+        // The goma root: a 20mm generator whose only in-both span is a 0.8mm
+        // window. A 16-sample scan (1.27mm pitch) can step right over it; the
+        // exact slab clip cannot.
+        let (a, b) = boxes(
+            ([-1.0, -1.0, 0.0], [1.0, 1.0, 20.3]),
+            ([-1.0, -1.0, 11.507], [1.0, 1.0, 12.338]),
+        );
+        assert!(segment_meets_both_boxes(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 20.3),
+            a,
+            b
+        ));
+    }
+
+    #[test]
+    fn segment_misses_when_boxes_are_disjoint() {
+        let (a, b) = boxes(
+            ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+            ([5.0, 5.0, 5.0], [6.0, 6.0, 6.0]),
+        );
+        assert!(!segment_meets_both_boxes(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 1.0),
+            a,
+            b
+        ));
+    }
+
+    #[test]
+    fn segment_stopping_short_of_the_window_is_rejected() {
+        // Overlap exists but lies beyond the segment's end: the clip must
+        // respect t in [0,1], not treat the segment as an infinite line.
+        let (a, b) = boxes(
+            ([-1.0, -1.0, 0.0], [1.0, 1.0, 20.0]),
+            ([-1.0, -1.0, 15.0], [1.0, 1.0, 16.0]),
+        );
+        assert!(!segment_meets_both_boxes(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 10.0),
+            a,
+            b
+        ));
+    }
+
+    #[test]
+    fn axis_parallel_segment_outside_the_slab_is_rejected() {
+        // Zero direction component: the degenerate axis is decided by
+        // containment alone, and here the segment sits outside the overlap.
+        let (a, b) = boxes(
+            ([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]),
+            ([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]),
+        );
+        assert!(!segment_meets_both_boxes(
+            Point3::new(-5.0, 20.0, 5.0),
+            Point3::new(15.0, 20.0, 5.0),
+            a,
+            b
+        ));
+        // Same segment, inside the slab this time.
+        assert!(segment_meets_both_boxes(
+            Point3::new(-5.0, 5.0, 5.0),
+            Point3::new(15.0, 5.0, 5.0),
+            a,
+            b
+        ));
+    }
 
     #[test]
     fn longest_run_open_middle() {

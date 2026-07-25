@@ -729,19 +729,29 @@ outer + 1 inner missing notches and exactly the 4 free components. **So restrict
 generator curves on all 16 geometrically-identical pairs and discards BOTH on 4 of them.** This also
 corrects #1222: its "12 sections survive restrict intact" was a FALSE ALL-CLEAR — the correct
 denominator is 16, and 12 is just the successful-notch count. **ROOT CAUSE, CONFIRMED BY EXPERIMENT:**
-the AABB pre-filter samples each raw curve 24× and keeps it only if some sample lands in both faces'
-inflated AABBs — but for `EdgeCurve::Line` it then RETURNS FALSE without the adaptive refinement it
+the AABB pre-filter samples each raw curve 16× and keeps it only if some sample lands in both faces'
+inflated AABBs — but for `EdgeCurve::Line` it then RETURNED FALSE without the adaptive refinement it
 applies to every other curve type ("straight lines are exactly represented by their endpoints; a
 uniform scan cannot under-sample them at this granularity in practice"). That reasoning is wrong for
 this geometry: exactness of the LINE says nothing about whether a sample lands in the tiny in-both
-WINDOW. The generator spans the full ~20.3mm cylinder height, 25 uniform samples give a ~0.85mm
+WINDOW. The generator spans the full ~20.3mm cylinder height, 17 uniform samples give a ~1.27mm
 pitch, and each lattice opening band is only ~0.83mm tall — so whether a band is hit is aliasing
-luck, which is exactly why the B,B,B,F,B,F,B,F pattern looked random. Deleting that early-return
-takes tool0 to **free=0** (F=495, 24 cylinders + 12 cones preserved, 232ms — no slowdown), and bands
-2/4/6 likewise; the ready-repro `goma_wall_band_cut_is_closed` PASSES. Note the same mechanism is
+luck, which is exactly why the B,B,B,F,B,F,B,F pattern looked random. Note the same mechanism is
 ALREADY documented one filter above for the faceted-ramp × cylinder ELLIPSE case ("the 16-sample
 AABB pre-filter below and the uniform-t restriction both drop it (no sample lands in the band)"),
-which got a bespoke exact-arc bypass — lines never got one. STILL OPEN after that fix: bands
+which got a bespoke exact-arc bypass — lines never got one. **FIXED (#1224):** a straight section
+never needs sampling at all — the predicate is membership in `bb_a ∩ bb_b`, itself an AABB, so
+`segment_meets_both_boxes` slab-clips the segment against it (exact, O(1), and strictly CHEAPER than
+the 16-sample scan it replaces). tool0 and bands 2/4/6 all go free=30 → **free=0** (F=495, 24
+cylinders + 12 cones preserved, ~230ms unchanged); `goma_wall_band_cut_is_closed` is un-ignored and
+green. **GATED to pairs with a Cylinder/Cone partner, deliberately NOT plane×plane** — the exact and
+sampled tests can only disagree when the in-both window is shorter than the sample pitch, and on
+that difference set the inflated AABB is a gross over-approximation of a PLANAR face, so the exact
+test also admits lines crossing `bb_a ∩ bb_b` while missing both faces: ungated it admitted exactly
+two such plane×plane lines into `dovetail_a1corner_nubfuse_inmem` and took it watertight → bnd=158.
+Plane×plane keeps the sampled test and its `return false`, so it stays theoretically susceptible to
+the same aliasing; no repro exhibits it, and closing it needs a test against true FACE extents
+rather than AABBs. STILL OPEN after that fix: bands
 1/3/5/7 continue to abort with "open growth shell with N faces" (pre-existing, a SEPARATE defect —
 do not assume the line fix addresses it). Secondary lead, the inner/outer asymmetry: the inner
 cylinder Id(6088) forms SEVEN notches and fails only at z 2.700–3.192, while the outer Id(5678)
