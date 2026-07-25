@@ -857,6 +857,18 @@ item "Mesh-boolean fallback emits OPEN meshes that get CONSUMED") or tool-side c
 from the kumiko pattern generator in `~/Git/gridfinity-layout-tool` (`patterns/kumiko/`) and the
 tool's existing probes (`__kernel-tests__/goma*`, `kumiko*`).
 
+**MANDATORY POST-GFA RE-PROBE DONE, AND THE ANSWER IS THAT #1224 MOVED THE SCENARIO NOT AT ALL.**
+`gomaBoundaryProbe` (goma 1×1×6 export + STL edge-use oracle) on the overlaid 2.128.5 build:
+**844s wall-clock** (pre-fix baseline 849s — unchanged, still blows the 600s vitest timeout) and
+**2567 boundary edges** on the exported STL (still not watertight). So the even-band fix, though
+real and verified free=30→0 on tools 0/2/4/6 in isolation, buys NOTHING at scenario level, because
+goma's cost and brokenness are dominated by the four malformed diagonal bands — an upstream
+construction defect #1224 does not touch. **Do not quote #1224 as progress on the kumiko
+export-integrity family; it is not.** The 14 kumiko failures, the 850s export and its
+timeout-poisoning of later tests are ALL still open, and they will stay open until the diagonal
+lattice bands are built as closed solids. That is now the single blocking item for this whole
+family.
+
 Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
 not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
 is NOT established; the classifier was fed a non-closed solid.**
