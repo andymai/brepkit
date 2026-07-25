@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784978926434,
+  "lastUpdate": 1784979259218,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12473,6 +12473,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20635331,
             "range": "± 219150",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa9a3b1eb6d1493bde8c9a56541f37d85c3a5f43",
+          "message": "test(algo): describe open growth shells before the assembly aborts (#1226)\n\nFollow-up to #1224, which closed the goma **even** bands. This\ncharacterises the remaining half — bands 1/3/5/7, which abort with \"open\ngrowth shell with N faces\" (9, 22, 23, 36).\n\nDiagnostics only; no behavior change.\n\n## The probe\n\n`BK_OPEN_SHELL=1` at the abort site in `builder_solid`. The abort\nmessage carries only a face count, which says nothing about *why* the\nlump failed to pair. This prints each face's surface kind and a\nrepresentative point, then every unpaired edge with its curve kind and\nendpoints — enough to tell a stray sliver from a real chunk and to spot\nnear-duplicate junction vertices.\n\nThe abort itself is deliberate and correct: an open growth shell of ≥4\nfaces is a genuine solid lump whose selection left unpaired junction\nedges, and failing beats silently deleting its volume (the lite\nfused-foot lesson — 72 faces and ~2700 units³ invisible to every\nedge-pairing gate).\n\n## What it shows\n\n**Strongest datum: both inspected lumps are ALL PLANES — zero cylinder\nor cone faces.** A genuine chunk of bin *wall* at a corner would\nnecessarily include corner-cylinder faces, and the lattice tool is 100%\nplanes. So these lumps are clusters of **tool** faces (the cut surfaces)\nthat formed a disjoint growth shell instead of joining the main body —\nthe junction between the tool's cut surface and the bin's corner\ncylinder never connects.\n\nEach odd band hits a **different corner**, consistent with one diagonal\nlattice member per band:\n\n| Band | Faces | Location |\n|---|---|---|\n| tool1 | 9 | (+x,−y), z ≈ 8.2–9.0 |\n| tool3 | 22 | (+x,+y), x ≈ 18.6–20.5, y ≈ +18.3–19.9, z ≈ 6.5–9.8 |\n\nAlso confirmed: this defect is **independent of #1224** — identical face\ncounts on pre-fix main.\n\n## A correction, filed and retracted in the same session\n\nAn initial read called this the near-duplicate-vertex / weld-band class\nand pointed the next dig at vertex minting. The near-duplicates *are*\npresent — `Id(2721)`/`Id(2730)` start at `(17.809,−19.418,8.466)` with a\n~0.002 mm unpaired ellipse to `(17.811,−19.418,8.465)` — but the\nsurrounding junction gaps run **~0.019–0.06 mm**, three to four orders\nabove the ~1e-6 marched-fit error that defines that class. So the filing\nis not supported, and the micro-edges are a symptom of the unconnected\ntool/cylinder junction rather than the root. Both the claim and its\nretraction are in the roadmap so the next session doesn't re-derive\neither.\n\n## Verification\n\n- `cargo nextest run -p brepkit-algo -p brepkit-io`: **430 passed**, 0\nskipped (includes the full calibrated foil set).\n- `cargo clippy -p brepkit-algo --all-targets`: clean.\n- Diagnostic is env-gated and off by default.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an env-gated diagnostic to describe open growth shells just before\nthe assembly abort. Helps debug the remaining goma odd-band failures; no\nbehavior change and logging is off by default.\n\n- New Features\n- `BK_OPEN_SHELL=1` in `builder_solid` logs each face’s surface type and\na sample point, plus every unpaired edge with its curve type and\nendpoints.\n  - Default behavior unchanged; runs only when the env var is set.\n\n<sup>Written for commit e038e322c7599c1f06e08b7644d6d82ccba49e53.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1226?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T04:32:08-07:00",
+          "tree_id": "a8b8efaf6ce5cf864f460ba09d79c252826b325c",
+          "url": "https://github.com/andymai/brepkit/commit/aa9a3b1eb6d1493bde8c9a56541f37d85c3a5f43"
+        },
+        "date": 1784979258222,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 688353,
+            "range": "± 7499",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 769036,
+            "range": "± 20937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9912,
+            "range": "± 148",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 535342,
+            "range": "± 10235",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18311948,
+            "range": "± 250306",
             "unit": "ns/iter"
           }
         ]
