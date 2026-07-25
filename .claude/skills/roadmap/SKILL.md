@@ -663,9 +663,33 @@ tangent point where each corner cylinder (x[17.000,20.750]) meets the flat wall 
 range (exactly SLAB_OVERLAP past the tangent), and should split it. The result's cylinders still
 span [17.000,20.750], identical to the base: had they been split with the outer piece kept they
 would read [17.050,20.750]. **So the cut plane appears not to split the corner cylinders at all** —
-that is the defect, and the missing patches are the cylinder pieces it should have produced. NEXT
-STEP needs algo-level instrumentation (black-box probing is exhausted): whether a section is
-emitted for the cylinder x cut-plane pair at all.
+that is the defect, and the missing patches are the cylinder pieces it should have produced. ALGO TRACE (`BK_FF_TRACE=<x>` in phase_ff.rs, env-gated): sections ARE
+emitted and DO survive clipping — at x=17.05, 64 cylinder x plane pairs pass the AABB test (736
+rejected, mostly correctly) and **12 sections survive `restrict_curves_to_faces` intact**. and all 12 are then EMITTED into the arena as `line` curves —
+correct geometry, since the cut plane's normal is along X while the corner cylinders' axes are
+along Z, so the plane is parallel to the axis and meets them in generators, not ellipses (and only
+one of the two generators lies on each quarter-arc face). So FF, restrict and emission all do their job. THE GAP IS
+BETWEEN ARENA EMISSION AND THE PER-FACE SECTION LISTS (`BK_SPLIT_TRACE=1`, eprintln at the
+`fill_images_faces` face loop): that loop DOES run, over 741 faces, and reports **only 2 of 24
+CYLINDER faces with has_sections=true** (22 without; planes are 420 true / 285 false) — although FF
+emitted 12 cylinder x plane curves. So ~10 emitted sections never reach their cylinder face's
+section list, which is why those faces are never split. NEXT STEP: `build_section_map` in fill_images_faces.rs, which SKIPS any
+`arena.curves` entry whose `pave_blocks` is empty (`continue`). REFUTED: that skip never fires — all
+**890 curves carry exactly ONE pave block, none are empty**, so this is NOT the snapClip
+deepened-notch pave-bypass root. Nor is it the `section_map` lookup: that map has 2 cylinder keys
+(total 422; plane 420) and the other 22 cylinder faces are simply ABSENT (`in_map=false`), so
+nothing is lost in the lookup. CAUTION — do NOT read "only 2 of 24 cylinders sectioned" as the
+defect. The `FACES_NEAR_X` filter tests only the X range, and EVERY corner cylinder spans
+[17.000,20.750], so all four corners pass it regardless of y/z; most of those 22 are on other
+corners and SHOULD be untouched by tool0's single-wall slab. START THE NEXT SESSION HERE: identify
+which cylinder faces tool0 actually reaches (using y and z, not just x), and only then decide
+whether 2 sectioned is right or short. Everything else in this chain is measured and solid — FF
+pairing, restrict, emission and the section map are all confirmed working; two hypotheses (the
+empty-`pave_blocks` skip and a face-id mismatch) are REFUTED. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
+adjacent `log::debug!` and `eprintln!` on the same line gave **0 vs 890** records, while
+`builder_solid`'s `log::debug!` reaches the same logger fine. Log-based probes in that file read as
+a FALSE ZERO. Use a temporary `eprintln!` gated on an env var (it trips `clippy::print_stderr`, so
+do not commit it). Cause not diagnosed.
 REFUTED, do not re-attempt: a panic (none; `lastPanicMessage()` is empty), bisect thrash
 (telemetry: 1 attempt, 1 success), prism construction (322ms, 0.1%), boolean batching as the main
 cost (30%), classification (defect is op-independent), and the assembly sliver-drop guard (tool0
