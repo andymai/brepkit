@@ -24,6 +24,17 @@
 //! output (it does — see `mesh_boolean_fallback`, which warns and proceeds).
 //! It is that these coaxial wedge cuts fall back AT ALL.
 //!
+//! WHY IT FALLS BACK, measured: the analytic path does not produce a wrong
+//! result, it produces no result. Raw GFA on this exact pair reports
+//! `BuilderSolid: 0 growth shells, 1 hole shells` and aborts with
+//! "no outer shell found (all shells classified as holes)" — in 0ms. One shell
+//! is built and classified INWARD, so nothing is left to be the outer shell.
+//! For `Cut(wedge, strut)` the result should be a single outward shell, so the
+//! suspect is orientation or the growth-vs-hole decision in `perform_areas`,
+//! not the face splitter. Reproduce with
+//! `CAPTURE_DIR=<call4> PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1
+//! ./target/release/examples/replay_cut_capture`.
+//!
 //! Operands captured from the live tool on a local 2.128.5 build via
 //! `kumikoCornerCutCapture.test.ts`; full six-call capture in
 //! `~/.cache/brepkit-parity-captures/2026-07-25/kumiko-corner/`.

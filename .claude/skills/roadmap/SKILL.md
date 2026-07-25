@@ -921,9 +921,13 @@ wedge×wedge cut — six analytic faces against six, two cylinders each, same co
 the mesh fallback immediately, and (b) openness appears from the third strut on. **The kumiko root
 is therefore NOT that `mesh_boolean_fallback` consumes open output (it does, and that remains a real
 defect); it is that these coaxial wedge cuts fall back AT ALL.** Fix that and no band is
-mesh-derived, which is what the whole family is downstream of. START HERE: run the ignored
-`kumiko_corner_wedge_cut_stays_analytic` and find why the analytic path rejects a coaxial
-cylinder×cylinder cut. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
+mesh-derived, which is what the whole family is downstream of. **AND THE REASON IT FALLS BACK IS ALREADY MEASURED:** raw GFA on that exact pair
+(`RAW=1 TOOL=0 SHELL_LOG=1`) reports `BuilderSolid: 0 growth shells, 1 hole shells` and aborts with
+**"no outer shell found (all shells classified as holes)" in 0ms**. The analytic path does not
+produce a wrong result — it produces NO result: one shell is built and classified INWARD, so nothing
+remains to be the outer shell. For `Cut(wedge, strut)` the answer should be a single OUTWARD shell,
+so the suspect is orientation or the growth-vs-hole decision in `perform_areas`
+(`crates/algo/src/builder/builder_solid.rs`), NOT the face splitter. START HERE. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
 fixture itself — an unvalidated operand already cost this campaign several passes. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
 either make the mesh co-refinement produce closed output for these operands, or make
 `mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
