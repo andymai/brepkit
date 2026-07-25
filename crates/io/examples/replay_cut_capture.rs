@@ -136,6 +136,45 @@ fn main() {
                         t.elapsed().as_millis(),
                         faces.len()
                     );
+                    if free > 0 && std::env::var("FREE_LOOPS").is_ok() {
+                        // Free edges bound the hole(s) left by dropped faces.
+                        // Chain them by shared vertex: each closed chain is one
+                        // missing face's outline.
+                        let mut segs: Vec<(usize, usize)> = Vec::new();
+                        for (eid, _) in uses.iter().filter(|&(_, &c)| c == 1) {
+                            let e = topo.edge(*eid).expect("edge");
+                            segs.push((e.start().index(), e.end().index()));
+                        }
+                        let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
+                        for &(a, b) in &segs {
+                            adj.entry(a).or_default().push(b);
+                            adj.entry(b).or_default().push(a);
+                        }
+                        let mut seen: std::collections::HashSet<usize> =
+                            std::collections::HashSet::new();
+                        let mut loops = 0;
+                        for &(a, _) in &segs {
+                            if !seen.insert(a) {
+                                continue;
+                            }
+                            let mut stack = vec![a];
+                            let mut n = 1;
+                            while let Some(v) = stack.pop() {
+                                for &w in adj.get(&v).into_iter().flatten() {
+                                    if seen.insert(w) {
+                                        n += 1;
+                                        stack.push(w);
+                                    }
+                                }
+                            }
+                            loops += 1;
+                            println!("    free component {loops}: {n} vertices");
+                        }
+                        let odd = adj.values().filter(|v| v.len() % 2 == 1).count();
+                        println!(
+                            "    free components={loops} odd-degree vertices={odd} (0 == every chain closed)"
+                        );
+                    }
                     if free > 0 && std::env::var("DUMP_FREE").is_ok() {
                         for (eid, _) in uses.iter().filter(|&(_, &c)| c == 1) {
                             let e = topo.edge(*eid).expect("edge");
