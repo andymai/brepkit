@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_4be9cbc078e9c4::t_88a5156ea6fa48 854-867
+crates/operations/src/helix.rs
+  s_4be9cbc078e9c4::t_d9ee5e522e5d3c 287-337
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "3320f22c8659d8779d788ee6f8de293e2716e8c4",
+  "prompts": {},
+  "sessions": {
+    "s_4be9cbc078e9c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb0e4ea1-d098-48cf-921d-3ac9562102ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
