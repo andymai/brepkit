@@ -103,8 +103,16 @@ fn main() {
     // RAW=1: call the analytic GFA directly, bypassing the ops-level gate and
     // its mesh fallback, to see whether GFA itself produces a usable result.
     if std::env::var("RAW").is_ok() {
+        // TOOL=<i>: cut the base by that ONE tool, instead of chaining from 0.
+        let single = std::env::var("TOOL")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok());
+        let selected: Vec<(usize, brepkit_topology::solid::SolidId)> = match single {
+            Some(i) if i < tools.len() => vec![(i, tools[i])],
+            _ => tools.iter().copied().enumerate().collect(),
+        };
         let mut acc = base;
-        for (i, &tool) in tools.iter().enumerate() {
+        for (i, tool) in selected {
             let t = Instant::now();
             // OP=cut|fuse|intersect — if the faces survive under a different op,
             // the splitter created them and classification is dropping them; if
