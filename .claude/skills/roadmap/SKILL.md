@@ -656,8 +656,53 @@ wallPatternClips, or JS-side lattice work. (3) Batching is real but SECONDARY: n
 18.6s, and the SAME 30 tools cost 393ms at F=168 vs 6103ms at F=1131 — cost grows steeply with region
 complexity, so the per-family loop over an accumulating region is the pessimal shape, but fixing it
 cannot recover the missing 77%. Also unexplained: that 180-tool call is 33.5s in-tool vs 11.7s natively
-(3x). NEXT PROBE: a V8 `--cpu-prof` of one generation — the wasm-vs-JS self-time split decides whether
-this is brepkit's problem at all. REFUTED: the captured goma `compound_cut`
+(3x). (4) FULL OP ATTRIBUTION at h=4 (wrap every brepjs op; 99.9% accounted, total 292.7s):
+**`cutAllBisect` 1 call / 203.5s / 69.5%**, `cutAll` 32 calls / 88.5s / 30.2%, all else 0.1%. So the bulk
+is ONE call — the step applying the pattern solids to the bin — not the per-family carve. Phase split
+confirms it: `buildKumikoWallPatterns` is only 32.8%, of which prism construction is **322ms (0.1%)**, so
+the "thousands of small sketch/extrude ops" candidate is REFUTED. CORRECTION: an earlier probe wrapped
+`cutAll`, saw 32 calls with zero failures, and concluded there was no bisect thrash — INVALID, because
+`cutAllBisect` is a separate export whose internal retries use an internal ops reference the wrapper never
+saw. That hypothesis was untested, not refuted. (5) BISECT TELEMETRY (the right instrument this time): `{totalInputs:8, batchAttempts:1,
+batchSucceeded:1, singletonFallbacks:0, failedInputs:[]}` — **NO thrash**, one attempt, one success. So
+**ONE `cutAll` of just EIGHT tools takes 203.5s**. Those 8 tools are the carved kumiko lattice bands
+(each ~F=1146 per the captured replay), so this is a single honest N-way boolean of the bin body against
+8 very complex solids — squarely a BREPKIT perf defect, not tool-side structure. (6) CAPTURED AND REPLAYED NATIVELY (capture
+`~/.cache/brepkit-parity-captures/2026-07-24/goma-bisect/`, harness
+`crates/io/examples/replay_cut_capture.rs`, `CAPTURE_DIR=... [N]`): base is the bin body F=78
+{cone:12, cylinder:24, plane:42}; each tool is a carved lattice band F=663-726 ALL PLANE. Cutting
+N tools: **1 -> 2824ms F=1003 free=0 over=0; 2 -> 6187ms F=1519 free=756 over=320; 3 -> 12659ms
+F=1920 free=723 over=333**. TWO CONCLUSIONS. (a) EVERY result is ALL-PLANAR although the base has
+12 cones + 24 cylinders — the analytic types are destroyed, i.e. this is the MESH FALLBACK, so
+goma's cost is not N-way boolean work but fallback meshing that grows superlinearly with tool
+count. The real fix is to stop falling back: find why GFA rejects bin-body x lattice-band. (b) From
+TWO tools on, `compound_cut` returns Ok with a BROKEN solid (756 free, 320 over) — a native repro
+of the open "mesh-boolean fallback emits OPEN meshes that get CONSUMED" row above. (7) ROOT FOUND — it is a GFA CORRECTNESS bug, not a perf bug (`RAW=1` mode in the same
+harness calls `gfa::boolean` directly, bypassing the ops gate; note `brepkit-algo` IS already a
+dev-dependency of `brepkit-io`, so io examples can reach it): **RAW cut 0 = 231ms, F=494,
+{cone:12, cylinder:24, plane:458}, free=30, over=0** versus the ops path's 2824ms/F=1003/all-plane
+for the SAME cut — the analytic engine is 12x faster and keeps every cone and cylinder, but leaves
+**30 free edges**, so `validate_boolean_result` rejects it and the mesh fallback runs. **RAW cut 1
+fails outright: "assembly failed: open growth shell with 20 faces would be dropped; aborting
+analytic assembly".** So the 203s is the CONSEQUENCE of those 30 free edges. (8) THE 30 FREE EDGES ARE LOCALIZED (`DUMP_FREE=1`): every one lies at
+x = 17.00 or x = 17.05 — a single **0.05mm-thin slab** — with y in [-21.95, -17.15] and z in
+[2.70, 12.37]. Curve mix is mostly Line plus a few Ellipse/Circle, on plane and cylinder faces;
+the ellipses each BRIDGE the two planes (e.g. (17.00,-20.75,12.34)->(17.05,-20.75,12.37)), so this
+is a sliver between two near-parallel faces 0.05mm apart, where the lattice band's edge meets the
+bin's corner cylinders. 0.05mm is FAR above the 1e-7 linear tolerance, so this is a genuine
+thin-feature failure, not numerical noise. ORIGIN OF THE TWO SIDES (`XSCAN=17.0`): the BASE has NO X-normal plane near
+x=17 at all; tool0 has exactly ONE at x=17.05 (its cut plane); tool1 has many including x=17.00.
+Since the 30 free edges come from cut 0 (tool0 only), the x=17.00 side is NOT a plane — the dump
+shows `free line on cylinder (17.00,-19.55,2.70)`, i.e. the base's corner CYLINDER surface. So the
+sliver is between tool0's cut plane at x=17.05 and curved base geometry reaching x~17.00 — a
+plane-vs-cylinder thin sliver, plausibly the same family as the tangency row above, though the
+mechanism is NOT yet proven. THE TARGET IS NOW that one sliver region: why the analytic assembly
+cannot close a 0.05mm plane-vs-cylinder slab there, and whether cut 1's "open growth shell with 20
+faces" is the same region. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
+broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
+NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
+idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
+the call path you intend to claim about. REFUTED: the captured goma `compound_cut`
 (`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/`) is NOT the culprit — all 180 tools replay in
 11.8s with F=1146, free=0, over=0.
 
