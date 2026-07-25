@@ -1,0 +1,22 @@
+.claude/skills/roadmap/SKILL.md
+  s_4be9cbc078e9c4::t_85392eaa66fba3 985-998
+crates/io/examples/arena_roundtrip_orientation.rs
+  s_4be9cbc078e9c4::t_0ed923abe2005d 125,138-152
+  s_4be9cbc078e9c4::t_915bb6fd7bddcb 153-155
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "6c64817fc3aa5cd45328951f6b8f7e82419f298e",
+  "prompts": {},
+  "sessions": {
+    "s_4be9cbc078e9c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb0e4ea1-d098-48cf-921d-3ac9562102ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
