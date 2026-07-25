@@ -962,13 +962,21 @@ them: `solid_volume` returns `total.abs()` so its +284.873 says nothing about or
 `classify_point` is ray-parity based so its Inside/Outside verdicts (material between r=1.55 and
 r=4.75, hollow inside — geometrically correct) are orientation-independent too. `brepkit-check`'s
 `integrate_face` DOES accumulate a signed volume but check is out of `brepkit-io`'s layer.
-**THE DISCRIMINATING EXPERIMENT, cheap and decisive: run the same instrumentation on a KNOWN-GOOD
-primitive** — `Cut(box, far-away disjoint box)` built natively, whose result shell is just the box.
-If `BK_FLUX` reports outward for that but inward for the deserialized wedge, the wedge is inverted
-(fork b, upstream defect). If it reports inward for both, the flux convention itself is wrong (fork
-a, fix `shell_is_outward_oriented`). FIX SHAPE depends on which: correct the orientation decision
-for cylinder-bounded wedges, or fix whatever inverts the operand — and independently, short-circuit
-a disjoint Cut to A. Reproduce per tool by symlinking
+**FORK RESOLVED — (a) IS DEAD, THE ORIENTATION TESTS ARE CORRECT.** The discriminating experiment
+(`crates/operations/examples/flux_orientation_probe.rs`: `Cut(box, far-away disjoint box)`, whose
+result shell is just the box, run with `BK_AREAS=1 BK_FLUX=1`) gives for a 10×10×10 cube:
+`signed_vol=1000.000000`, per-face flux `0/0/0/1000/1000/1000` totalling **3000.0 = 3V**,
+`outward=Some(true) -> growth`. Both tests are EXACT and correctly signed on known-good geometry, so
+the convention is not inverted and `shell_is_outward_oriented` needs no fix. **Therefore the
+captured wedge operand is GENUINELY INWARD-ORIENTED, and the defect is upstream of GFA entirely.**
+Do NOT "fix" `signed_volume_of_shell` or `shell_is_outward_oriented` — they are provably right.
+NEXT: find what inverts the wedge. Two candidates, both cheap to test: (1) brepkit's `revolve`
+emitting an inward solid for a wedge profile (build one natively — profile in a plane CONTAINING the
+axis, NOT `make_unit_square_face` which is XY and degenerate about Z — cut it by a far-away box and
+read `signed_vol`); (2) the arena `.bin` round-trip (`serializeSolid` / `deserialize_solid`)
+inverting orientation, testable by serializing a known-good box, reading it back and re-running the
+same probe. Independently and still worth doing: short-circuit a disjoint Cut to A (the ops shortcut
+detects only containment), which would spare tool0/tool3 the whole path. Reproduce per tool by symlinking
 one `cut-tool<i>.bin` as `cut-tool0.bin` beside `cut-base.bin` and running
 `PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1 BBOX=1`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
 fixture itself — an unvalidated operand already cost this campaign several passes. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
