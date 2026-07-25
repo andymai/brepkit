@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784995766104,
+  "lastUpdate": 1784996567040,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13013,6 +13013,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21705417,
             "range": "± 249374",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e4f8792d94dc024567faeb33740bc731d4b7e1f2",
+          "message": "test(io): add BBOX and pin the corner-wedge root to shell orientation (#1236)\n\nFollows the 2 ms kumiko corner-wedge repro (#1235) to its root.\nDiagnostics only; no behavior change.\n\n## The route\n\n`BBOX=1` (new) on the operands:\n\n```\nbase:  z[ 2.700, 20.800]\ntool0: z[-8.307,  2.192]   ← fully DISJOINT (tool3 likewise, above)\n```\n\nFor a disjoint `Cut(A, B)`, GFA correctly keeps all of A's faces and\nnone of B's — so the resulting 6-face shell **is the base wedge,\nunmodified**. And `BK_AREAS` reports it:\n\n```\nfaces=6  signed_vol=-182.448  outward=Some(false)  -> hole\n```\n\nwhile `solid_volume` measures that same wedge at **+284.873**.\n\n## The root\n\nBoth cannot be right, and the tessellation-based volume is the\ntrustworthy one. So the corner-fan `signed_volume_of_shell` **and** the\ncurvature-robust `shell_is_outward_oriented` are **both wrong on this\ngeometry** — a corner wedge bounded by two coaxial cylinders.\n\nThe signature is unmistakable: `-182.448` recurs **identically** across\ntool0 (6 faces), tool2 (6 faces) and tool4 (5 faces). Three different\nshells cannot share a volume integral.\n\n## Per-tool\n\nEach tool cut against the base alone — all five fail `no outer shell\nfound`:\n\n| tool | bbox vs base | sections | outcome |\n|---|---|---|---|\n| 0, 3 | disjoint | none (correctly AABB-rejected) | fail |\n| 1, 2 | overlapping | emitted | fail |\n| 4 | overlapping | none at the traced x | fail |\n\nSo the failure is **downstream of sectioning in every case**, which is\nwhy the earlier splitter and classifier leads all dead-ended.\n\n## Also worth fixing\n\nThe ops-level shortcut detects only **containment** (A⊂B, B⊂A, A=B).\n**Disjointness is not handled**, so a non-touching strut still routes\nthrough GFA and then the mesh fallback — losing the wedge's cylinders\nfor a cut that should have been a no-op.\n\n## Fix shape\n\nMake the orientation decision correct for cylinder-bounded wedges,\nand/or short-circuit a disjoint `Cut` to A.\n\nReproduce per tool by symlinking one `cut-tool<i>.bin` as\n`cut-tool0.bin` beside `cut-base.bin`, then `PREFIX=cut RAW=1 TOOL=0\nSHELL_LOG=1 BK_AREAS=1 BBOX=1`.\n\n## Verification\n\n- `cargo nextest run -p brepkit-algo -p brepkit-io`: **431 passed**, 1\nskipped.\n- `cargo clippy`: clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an opt-in bounding box dump to the `replay_cut_capture` example via\nBBOX=1, and pins the kumiko corner‑wedge failure to incorrect shell\norientation on cylinder‑bounded wedges. Diagnostic-only; no behavior\nchange.\n\n- New Features\n- When `BBOX=1` is set, prints x/y/z bounds for each operand to spot\ndisjoint `Cut(A,B)` cases.\n- Confirms the repro’s base and tool are fully disjoint, tying the\nfailure to shell‑orientation logic.\n\n<sup>Written for commit b692d7672606e149dbec7ee83d5a4d90852446f7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1236?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T09:20:45-07:00",
+          "tree_id": "485a5d6ad94945c411709a4f4da540c6601fbaa2",
+          "url": "https://github.com/andymai/brepkit/commit/e4f8792d94dc024567faeb33740bc731d4b7e1f2"
+        },
+        "date": 1784996566182,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 655463,
+            "range": "± 2559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 735633,
+            "range": "± 1109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10152,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 512489,
+            "range": "± 818",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18001853,
+            "range": "± 69677",
             "unit": "ns/iter"
           }
         ]
