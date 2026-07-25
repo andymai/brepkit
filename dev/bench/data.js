@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784976297130,
+  "lastUpdate": 1784978472295,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12365,6 +12365,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21604760,
             "range": "± 103851",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "84e445b236c5f1e7868d89666b5de85546eb16e2",
+          "message": "fix(algo): clip straight FF sections to the mutual AABB exactly (#1224)\n\nCloses the goma/kumiko wall-band cut root diagnosed in #1223. Un-ignores\n`goma_wall_band_cut_is_closed`.\n\n## The bug\n\nPhase FF's AABB in-both pre-filter samples each raw curve 16× and keeps\nit only if a sample lands in both faces' inflated AABBs. For an\n`EdgeCurve::Line` it then gave up **without** the adaptive refinement it\napplies to every other curve type:\n\n```rust\n// Straight lines are exactly represented by their endpoints; a uniform scan\n// cannot under-sample them at this granularity in practice, and refining\n// every far pair would be pure cost.\nif matches!(raw.curve, EdgeCurve::Line) {\n    return false;\n}\n```\n\nThat reasoning is wrong. Exactness of the *line* says nothing about\nwhether a sample lands in the tiny in-both **window**. A kumiko lattice\nband cuts a gridfinity bin's corner cylinder in a full-height (~20.3 mm)\ngenerator whose true in-both span is one ~0.83 mm opening — under the\nfilter's ~1.27 mm pitch. Whether a section survived was aliasing luck:\n**12 of 16** band×cylinder pairs kept their generator and **4 silently\nlost both**, leaving 30 free edges that failed the manifold gate and\nsent the whole kumiko export family to the mesh fallback.\n\nThe same mechanism is already documented one filter above for the\nfaceted-ramp × cylinder *ellipse* case, which got a bespoke exact-arc\nbypass. Lines never got one.\n\n## The fix\n\nA straight section needs no sampling at all. The predicate is membership\nin `bb_a ∩ bb_b`, itself an AABB, so `segment_meets_both_boxes`\nslab-clips the segment against it — **exact, O(1), and strictly cheaper\nthan the 16-sample scan it replaces.**\n\n**Gated to pairs with a Cylinder/Cone partner, deliberately not\nplane×plane.** The exact and sampled tests can only disagree when the\nin-both window is shorter than the sample pitch, and on that difference\nset the inflated AABB is a gross over-approximation of a *planar* face —\nso the exact test also admits lines crossing `bb_a ∩ bb_b` while missing\nboth faces. Ungated, it admitted exactly two such plane×plane lines into\n`dovetail_a1corner_nubfuse_inmem` and took it from watertight to\n`bnd=158`.\n\n**Known limitation, stated plainly:** plane×plane keeps the sampled test\nand its early return, so it remains theoretically susceptible to the\nsame aliasing. No repro exhibits it, and closing it properly needs a\ntest against true face extents rather than AABBs. Recorded in the\nroadmap.\n\n## Results\n\n| Band | Before | After |\n|---|---|---|\n| tool0 | free=30 | **free=0** |\n| tool2 / 4 / 6 | free=30 | **free=0** |\n| tool1 / 3 / 5 / 7 | open growth shell | open growth shell (unchanged)\n|\n\ntool0: F=495, 24 cylinders + 12 cones preserved, ~230 ms (unchanged).\n`goma_wall_band_cut_is_closed` un-ignored and green.\n\n**Not closed by this PR:** bands 1/3/5/7 still abort with \"open growth\nshell with N faces\" — a separate, pre-existing defect. The kumiko family\nis half addressed, not finished.\n\n## Verification\n\n- **1419** tests across `brepkit-algo` + `brepkit-io` +\n`brepkit-operations`, all passing — including the full calibrated foil\nset (d4, honeycomb pcut3, divider-lip, cylinder-slot, groove-mouth,\njunction-disc, a1corner/dblcorner nub fixtures).\n- `cargo test -p brepkit-wasm --lib gridfinity`: 27 passed.\n- `cargo clippy --all-targets --all-features`: clean.\n- Census unchanged — `cone ∪ box` remains the only primitive-boolean\nfallback; no new fallbacks.\n- Four unit tests on `segment_meets_both_boxes` cover the sub-pitch\nwindow, disjoint boxes, a segment stopping short of the overlap, and the\naxis-parallel/zero-direction branch.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes aliasing in FF’s AABB pre-filter by replacing sampled checks for\nstraight intersection lines with an exact slab clip against the mutual\nAABB when paired with a cylinder or cone. This restores watertight\nanalytic results in kumiko band cuts (free edges 30 → 0).\n\n- **Bug Fixes**\n- Added `segment_meets_both_boxes` and used it for `EdgeCurve::Line`\nwhen either face is a cylinder or cone; exact O(1) slab clip replaces\nthe 16-sample scan.\n- Left plane×plane pairs on the sampled path to avoid admitting lines\nthat only cross the AABB overlap; limitation documented.\n- Un-ignored `goma_wall_band_cut_is_closed` (now green). Tools 0/2/4/6\nfixed; 1/3/5/7 still fail with open growth shell (separate issue). Added\nunit tests for narrow window, disjoint boxes, truncated segment, and\naxis-parallel cases.\n- Clarified test docs to attribute the diagnosis to #1223 and this fix\nto #1224; roadmap updated to localize the odd-band open growth shell as\na separate, independent work item.\n\n<sup>Written for commit b945261eaf973681b6a791fa130a4c83015b8f6c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1224?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T04:18:56-07:00",
+          "tree_id": "0986ddefda4b17c472a282e0a1837aa5317410c2",
+          "url": "https://github.com/andymai/brepkit/commit/84e445b236c5f1e7868d89666b5de85546eb16e2"
+        },
+        "date": 1784978471265,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 798699,
+            "range": "± 7201",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 888777,
+            "range": "± 2025",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11927,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 622942,
+            "range": "± 775",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21168686,
+            "range": "± 33962",
             "unit": "ns/iter"
           }
         ]
