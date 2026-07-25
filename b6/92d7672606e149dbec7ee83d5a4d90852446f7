@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_4be9cbc078e9c4::t_0126ec674802d4 937-954
+crates/io/examples/replay_cut_capture.rs
+  s_4be9cbc078e9c4::t_aa551954fe7fdb 49-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "b692d7672606e149dbec7ee83d5a4d90852446f7",
+  "prompts": {},
+  "sessions": {
+    "s_4be9cbc078e9c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb0e4ea1-d098-48cf-921d-3ac9562102ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
