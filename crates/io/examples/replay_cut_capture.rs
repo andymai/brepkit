@@ -119,6 +119,39 @@ fn main() {
         return;
     }
 
+    // BASE_FACES_NEAR_X=<v>: same slab scan, but on the INPUT operands, to tell
+    // whether a trim boundary pre-exists or is produced by the boolean.
+    if let Ok(v) = std::env::var("BASE_FACES_NEAR_X") {
+        let target: f64 = v.parse().expect("BASE_FACES_NEAR_X");
+        let scan = |label: &str, sid: brepkit_topology::solid::SolidId| {
+            for fid in solid_faces(&topo, sid).expect("faces") {
+                let f = topo.face(fid).expect("face");
+                let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+                for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+                    for oe in topo.wire(wid).expect("wire").edges() {
+                        let e = topo.edge(oe.edge()).expect("edge");
+                        for v in [e.start(), e.end()] {
+                            let x = topo.vertex(v).expect("v").point().x();
+                            lo = lo.min(x);
+                            hi = hi.max(x);
+                        }
+                    }
+                }
+                if lo <= hi && lo < target + 0.1 && hi > target - 0.1 {
+                    println!(
+                        "    {label} {fid:?} {} x[{lo:.3},{hi:.3}]",
+                        f.surface().type_tag()
+                    );
+                }
+            }
+        };
+        scan("base", base);
+        if let Some(&t0) = tools.first() {
+            scan("tool0", t0);
+        }
+        return;
+    }
+
     println!("loaded base + {} tools", tools.len());
     describe(&topo, base, "base");
     for (i, &t) in tools.iter().enumerate() {
