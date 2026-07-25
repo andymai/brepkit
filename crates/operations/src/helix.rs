@@ -284,6 +284,66 @@ mod tests {
         );
     }
 
+    /// A helical sweep must be closed at every turn count and segment density.
+    ///
+    /// The kumiko wall builder sweeps rising diagonal struts along a helix, and
+    /// the lattice bands made of them come back open while revolve-built bands
+    /// do not — so the sweep itself was the natural suspect. It is not: this
+    /// pins that down, and keeps it pinned.
+    #[test]
+    fn helical_sweep_is_watertight_across_turns_and_segments() {
+        use std::collections::HashMap;
+
+        use brepkit_topology::edge::EdgeId;
+        use brepkit_topology::explorer::solid_faces;
+
+        for turns in [0.25_f64, 0.3, 0.5, 0.75, 1.0, 2.0] {
+            for segs in [4_usize, 8, 16] {
+                let mut topo = Topology::new();
+                let profile = make_unit_square_face(&mut topo);
+                let sid = helical_sweep(
+                    &mut topo,
+                    profile,
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    3.75,
+                    12.0,
+                    turns,
+                    segs,
+                )
+                .unwrap();
+
+                let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+                for fid in solid_faces(&topo, sid).unwrap() {
+                    let f = topo.face(fid).unwrap();
+                    for wid in
+                        std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied())
+                    {
+                        for oe in topo.wire(wid).unwrap().edges() {
+                            *uses.entry(oe.edge()).or_default() += 1;
+                        }
+                    }
+                }
+                let free = uses.values().filter(|&&c| c == 1).count();
+                let over = uses.values().filter(|&&c| c > 2).count();
+                assert_eq!(
+                    (free, over),
+                    (0, 0),
+                    "helical sweep turns={turns} segs={segs} must be closed and manifold"
+                );
+                // The two checks are complementary, not redundant: edge-use
+                // counts catch position-duplicate faces that `validate_solid`
+                // is blind to, and it catches Euler and wire-closure faults
+                // that leave every edge used exactly twice.
+                let report = crate::validate::validate_solid(&topo, sid).unwrap();
+                assert!(
+                    report.is_valid(),
+                    "helical sweep turns={turns} segs={segs} must pass validation: {report:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn helical_sweep_creates_solid() {
         let mut topo = Topology::new();
