@@ -170,9 +170,19 @@ fn main() {
                             loops += 1;
                             println!("    free component {loops}: {n} vertices");
                         }
-                        let odd = adj.values().filter(|v| v.len() % 2 == 1).count();
+                        // A simple closed outline needs EVERY vertex at degree
+                        // exactly 2. Even-degree alone is not enough: a degree-4
+                        // junction (figure-eight) is even but is not one loop.
+                        let mut deg: HashMap<usize, usize> = HashMap::new();
+                        for (v, ns) in &adj {
+                            *deg.entry(ns.len()).or_default() += 1;
+                            let _ = v;
+                        }
+                        let mut deg: Vec<_> = deg.into_iter().collect();
+                        deg.sort_unstable();
+                        let all_two = adj.values().all(|ns| ns.len() == 2);
                         println!(
-                            "    free components={loops} odd-degree vertices={odd} (0 == every chain closed)"
+                            "    free components={loops} degree histogram(deg:count)={deg:?} all_degree_2={all_two}"
                         );
                     }
                     if free > 0 && std::env::var("DUMP_FREE").is_ok() {

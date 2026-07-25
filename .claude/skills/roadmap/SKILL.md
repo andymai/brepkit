@@ -697,8 +697,9 @@ shows `free line on cylinder (17.00,-19.55,2.70)`, i.e. the base's corner CYLIND
 sliver is between tool0's cut plane at x=17.05 and curved base geometry reaching x~17.00 — a
 plane-vs-cylinder thin sliver, plausibly the same family as the tangency row above, though the
 mechanism is NOT yet proven. (9) EXACTLY FOUR FACES ARE MISSING (`FREE_LOOPS=1`): the 30 free edges chain into
-**4 components with ZERO odd-degree vertices** — i.e. four CLOSED outlines of 7, 7, 7 and 9
-vertices. So these are not ragged partial boundaries; they are four well-formed polygon outlines
+**4 components in which EVERY vertex has degree exactly 2** (histogram [(2,30)]) — i.e. four SIMPLE
+CLOSED outlines of 7, 7, 7 and 9 vertices. (Degree-2-everywhere is the test that actually proves
+this; "no odd-degree vertices" does NOT, since a degree-4 junction / figure-eight is even too.) So these are not ragged partial boundaries; they are four well-formed polygon outlines
 where a face should be and is not, all inside the 0.05mm slab. That is the same class as cut 1's
 "open growth shell with 20 faces would be dropped" — the assembler dropping faces in this region,
 harder on the second cut. THE TARGET IS NOW: why those 4 sliver faces are dropped from the analytic
