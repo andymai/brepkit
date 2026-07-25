@@ -832,10 +832,36 @@ whole iteration was spent inside it. **ALWAYS print operand free/over counts bef
 replayed capture; the harness now does this unconditionally.** OPEN QUESTION, and the real next
 step: is the breakage in the CAPTURE or does the tool genuinely build open lattice bands? If the
 latter it is a real defect, but upstream of GFA — re-capture the odd bands from a current build
-before spending anything further. Everything below this line about the odd bands describes behaviour
-observed on BROKEN INPUT and must not be treated as an engine defect: **RETRACTED — the "GFA
-classifier misjudgement" reading (#1229) is NOT established; the classifier was fed a non-closed
-solid.** The probe now prints
+before spending anything further. TWO FACTS THAT NARROW IT ALREADY, both cheap and already measured:
+(1) **they are NOT mesh-fallback output** — the odd tools carry 726/737/714/764 PLANAR faces against
+663 for the working ones, comparable magnitude, whereas a mesh co-refinement fallback on this
+geometry would be a triangle soup in the thousands. So the "fallback-poisoned capture" explanation
+does not fit and should not be assumed. (2) they are non-manifold as well as open (`over` 29–42
+alongside `free` 367–405), which reads as overlapping or duplicated faces — a mis-assembled analytic
+shell, not a truncated or lossy capture. Note also that serialization is unlikely to be the culprit:
+the SAME `arena_io` round-trip produced perfectly watertight even bands in the same capture
+directory. **THE DECISIVE TEST IS DONE AND THE ANSWER IS: A REAL DEFECT, UPSTREAM OF THE GFA CUT.** The old
+captures were 2026-07-24 from published 2.128.2 (pre-#1224), so the odd bands were re-captured on a
+local 2.128.5 build carrying the fix (overlay md5-verified in BOTH tool `node_modules` locations;
+`gomaCaptureBisect.test.ts` in the tool's `__kernel-tests__/`, 294s; fresh operands in
+`~/.cache/brepkit-parity-captures/2026-07-25/goma-bisect/`). **The odd bands are STILL open and
+non-manifold**: tool1 free=405 over=38 (identical to the old capture), tool3 393/33, tool5 386/36,
+tool7 428/40 — while tool0/2/4/6 stay a clean 0/0. Face counts shifted slightly between captures
+(tool5 714→690, tool7 764→792) so construction is not bit-identical, yet the brokenness reproduces
+every time. That kills BOTH remaining benign explanations: not a stale/bad fixture, and not a
+nondeterministic flake. So the tool's DIAGONAL kumiko lattice bands are genuinely built as malformed
+solids, and the goma odd-band failures were never a defect in the boolean engine — the cut is being
+handed garbage. NEXT: find which operation builds those bands and whether it is a brepkit op
+returning an open solid (which WOULD be a real engine bug, just not in GFA — cf. the open roadmap
+item "Mesh-boolean fallback emits OPEN meshes that get CONSUMED") or tool-side construction. Start
+from the kumiko pattern generator in `~/Git/gridfinity-layout-tool` (`patterns/kumiko/`) and the
+tool's existing probes (`__kernel-tests__/goma*`, `kumiko*`).
+
+Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
+not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
+is NOT established; the classifier was fed a non-closed solid.**
+
+The probe now prints
 each sub-face's `interior_point`, and a new `POINT_IN=x,y,z` knob on the replay classifies a point
 against the base and every tool with the independent operations-level `classify_point`. The two
 remainders' points differ: tool0 uses (17.244,−19.538,10.771) → GFA Outside, SELECTED; tool1 uses
