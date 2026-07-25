@@ -42,6 +42,19 @@ const NURBS_MARCH_STEP: f64 = 0.01;
 ///
 /// Returns [`AlgoError`] if any topology lookup or intersection computation fails.
 #[allow(clippy::too_many_lines)]
+/// `BK_FF_TRACE=<x>`: report every face pair whose AABBs straddle that x, and
+/// whether the pair was AABB-rejected. Diagnostic only, and resolved ONCE per
+/// process — the pair loop runs hundreds of times per boolean and must not pay
+/// an env lookup and allocation each iteration.
+fn ff_trace_x() -> Option<f64> {
+    static FF_TRACE: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *FF_TRACE.get_or_init(|| {
+        std::env::var("BK_FF_TRACE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+    })
+}
+
 pub fn perform(
     topo: &mut Topology,
     solid_a: SolidId,
@@ -90,6 +103,8 @@ pub fn perform(
         brepkit_topology::vertex::VertexId,
     > = std::collections::HashMap::new();
 
+    let ff_trace = ff_trace_x();
+
     for (idx_a, &fa) in faces_a.iter().enumerate() {
         let bbox_a = &bboxes_a[idx_a];
         let surf_a = &surfs_a[idx_a];
@@ -97,11 +112,6 @@ pub fn perform(
         for (idx_b, &fb) in faces_b.iter().enumerate() {
             let bbox_b = &bboxes_b[idx_b];
 
-            // BK_FF_TRACE=<x>: report every face pair whose AABBs straddle that
-            // x, and whether the pair was AABB-rejected. Diagnostic only.
-            let ff_trace: Option<f64> = std::env::var("BK_FF_TRACE")
-                .ok()
-                .and_then(|v| v.parse().ok());
             let traced = ff_trace.is_some_and(|x| {
                 bbox_a.min.x() - tol.linear <= x
                     && x <= bbox_a.max.x() + tol.linear
