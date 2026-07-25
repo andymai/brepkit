@@ -331,15 +331,12 @@ pub fn perform(
             let bb_a = bbox_a.expanded(tol.linear * 10.0);
             let bb_b = bbox_b.expanded(tol.linear * 10.0);
             if traced {
+                let [ln, ci, el, nu] = kind_counts(&raw_curves);
                 log::debug!(
-                    "FF_TRACE afterF1 a={} b={} n={} kinds={:?}",
+                    "FF_TRACE afterF1 a={} b={} n={} line={ln} circle={ci} ellipse={el} nurbs={nu}",
                     surf_a.type_tag(),
                     surf_b.type_tag(),
-                    raw_curves.len(),
-                    raw_curves
-                        .iter()
-                        .map(|r| r.curve.type_tag())
-                        .collect::<Vec<_>>()
+                    raw_curves.len()
                 );
             }
             let raw_curves: Vec<RawCurve> = raw_curves
@@ -425,15 +422,12 @@ pub fn perform(
                 })
                 .collect();
             if traced {
+                let [ln, ci, el, nu] = kind_counts(&raw_curves);
                 log::debug!(
-                    "FF_TRACE afterF2 a={} b={} n={} kinds={:?}",
+                    "FF_TRACE afterF2 a={} b={} n={} line={ln} circle={ci} ellipse={el} nurbs={nu}",
                     surf_a.type_tag(),
                     surf_b.type_tag(),
-                    raw_curves.len(),
-                    raw_curves
-                        .iter()
-                        .map(|r| r.curve.type_tag())
-                        .collect::<Vec<_>>()
+                    raw_curves.len()
                 );
             }
 
@@ -966,6 +960,26 @@ fn point_to_polygon_dist(p: brepkit_math::vec::Point2, poly: &[brepkit_math::vec
         best = best.min(((p.x() - cx).powi(2) + (p.y() - cy).powi(2)).sqrt());
     }
     best
+}
+
+/// Per-kind counts of raw section curves, for the `BK_FF_TRACE` diagnostics.
+///
+/// Returns `[line, circle, ellipse, nurbs]`. A fixed histogram keeps the trace
+/// line short and allocation-free even when a pair yields many curves, and it
+/// is what the reader actually wants — which KINDS survived a filter, not the
+/// order they happened to be in.
+fn kind_counts(curves: &[RawCurve]) -> [usize; 4] {
+    let mut n = [0usize; 4];
+    for c in curves {
+        let i = match c.curve {
+            EdgeCurve::Line => 0,
+            EdgeCurve::Circle(_) => 1,
+            EdgeCurve::Ellipse(_) => 2,
+            EdgeCurve::NurbsCurve(_) => 3,
+        };
+        n[i] += 1;
+    }
+    n
 }
 
 /// Exact test: does the segment `p0`→`p1` meet the intersection of two AABBs?
