@@ -287,7 +287,7 @@ fn main() {
                         // than an untouched quarter-cylinder's four.
                         for &fid in &faces {
                             let f = topo.face(fid).expect("face");
-                            if f.surface().type_tag() == "plane" {
+                            if f.surface().is_planar() {
                                 continue;
                             }
                             let wires: Vec<_> = std::iter::once(f.outer_wire())
