@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784993567268,
+  "lastUpdate": 1784995766104,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12959,6 +12959,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21846941,
             "range": "± 118019",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5cd4d775e1aa13aef721b597abed3819f46f6e49",
+          "message": "test(io): add a 2ms repro for the kumiko corner-wedge mesh fallback (#1235)\n\nReduces the whole kumiko export-integrity family — 14 scenario failures,\nan 850 s export, 2567 boundary edges — to a **six-face cut that takes 2\nms**.\n\n## How a band is built\n\nThe tool *carves* each lattice band rather than fusing it. It starts\nfrom a `wedge` (a `revolve`, so it carries cylindrical corner faces) and\nruns `cutter = cutAll(cutter, family)` per strut family. Capturing those\ncalls (`kumikoCornerCutCapture`, modelled on the existing\n`gomaCaptureBisect`, HEIGHT=4, 295 s) gives six invocations:\n\n| call | target | result | verdict |\n|---|---|---|---|\n| 0–3 | planar box region | → F=663 | clean, watertight — the flat-wall\npath |\n| **4** | **F=6, 2 cylinders + 4 planes, watertight** | **F=71, all\nplanar, free=2 over=1** | **the defect** |\n| 5 | inherits call 4's damage | — | — |\n\n## Bisecting call 4 separates two failures\n\nAll five strut tools are identically `F=6` with 2 cylinders, watertight.\n\n```\n1 tool:  F=60  all planar  free=0     ← cylinders already lost, in 2ms\n2 tools: F=68  all planar  free=0\n3 tools: F=72  all planar  free=3     ← openness starts\n4 tools: F=72             free=2 over=1\n5 tools: F=71             free=2 over=1\n```\n\nSo a **coaxial wedge × wedge cut** — six analytic faces against six, two\ncylinders each, about the same corner axis — drops straight to the mesh\nfallback. Openness then accumulates from the third strut on.\n\n## What this changes\n\nThe kumiko root is **not** that `mesh_boolean_fallback` consumes open\noutput. It does, and that remains a real defect. But the thing to fix\nfirst is that **these coaxial wedge cuts fall back at all** — fix that\nand no band is mesh-derived, which is what the entire family is\ndownstream of.\n\nIt also explains the odd/even split cleanly: the flat-wall span's\noperands are planar boxes and replay perfectly (F=1146, watertight),\nwhich is why four bands are fine.\n\n## The fixture\n\n- `kumiko_corner_wedge_cut_stays_analytic` — ignored by default; fails\nwith `got 60 faces {\"plane\": 60}`.\n- `operands_are_clean_analytic_wedges` — runs unignored, asserting both\noperands carry 2 cylinders and are watertight. An unvalidated operand\nalready cost this campaign several passes, so the fixture guards itself.\n\n## Verification\n\n- `cargo nextest run -p brepkit-io`: **225 passed**, 1 skipped.\n- `cargo clippy -p brepkit-io --all-targets`: clean.\n- Tool overlay restored to its exact prior state; the capture probe was\nremoved from the tool's working tree.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a 2 ms repro for the kumiko corner‑wedge cut falling to the mesh\nfallback, plus diagnostics that show the analytic path builds a single\ninward shell (the wedge survives inverted) with an exact replay command.\n\n- New Features\n- Added `crates/io/tests/kumiko_corner_wedge_inmem.rs` with two tests:\nan operand guard, and an ignored repro showing the coaxial wedge×wedge\ncut falls back to mesh with all‑planar faces. Docs record the\nshell‑classification failure (“0 growth shells, 1 hole shell; no outer\nshell found”) and the replay command; fixtures `kumiko_corner_wedge.bin`\nand `kumiko_corner_strut.bin` added.\n- Added `BK_AREAS=1` tracing in\n`crates/algo/src/builder/builder_solid.rs` to log per‑shell face mix,\nsigned volume, and outwardness at the growth vs hole decision; on the\nrepro it shows a single inward six‑face shell. Updated\n`crates/io/examples/replay_cut_capture.rs` to print solid volume.\n\n- Refactors\n- Switched the surface tag map to `&'static str` keys to avoid per‑face\n`String` allocations and match the existing helper.\n\n<sup>Written for commit 6e45ea7639a126c09d0b4d8f80352101451fab06.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1235?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T09:07:08-07:00",
+          "tree_id": "89c84692d20787e2e11ded0bc18db2e0b0a704f5",
+          "url": "https://github.com/andymai/brepkit/commit/5cd4d775e1aa13aef721b597abed3819f46f6e49"
+        },
+        "date": 1784995765137,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 823073,
+            "range": "± 2728",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 910041,
+            "range": "± 3218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12019,
+            "range": "± 192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 660979,
+            "range": "± 578",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21705417,
+            "range": "± 249374",
             "unit": "ns/iter"
           }
         ]
