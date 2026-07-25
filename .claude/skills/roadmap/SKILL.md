@@ -673,8 +673,14 @@ BETWEEN ARENA EMISSION AND THE PER-FACE SECTION LISTS (`BK_SPLIT_TRACE=1`, eprin
 `fill_images_faces` face loop): that loop DOES run, over 741 faces, and reports **only 2 of 24
 CYLINDER faces with has_sections=true** (22 without; planes are 420 true / 285 false) — although FF
 emitted 12 cylinder x plane curves. So ~10 emitted sections never reach their cylinder face's
-section list, which is why those faces are never split. NEXT STEP: `build_section_edges` / how
-arena curves are attached to faces. WARNING: `log::debug!` markers added inside
+section list, which is why those faces are never split. NEXT STEP: `build_section_map` in fill_images_faces.rs, which SKIPS any
+`arena.curves` entry whose `pave_blocks` is empty (`continue`). HYPOTHESIS, EXPLICITLY UNVERIFIED:
+those 10 cylinder sections carry no pave blocks and are skipped there — which would make this the
+SAME root as the snapClip deepened-notch row ("marched FF sections on curved faces carry
+pave_block_id=None, bypassing the pave machinery", canonical fix at phase-FF/make_blocks altitude).
+Could NOT be confirmed: `log::debug!` inside fill_images_faces.rs does not emit (see warning below),
+and `eprintln!` is denied there by `clippy::print_stderr`, so both probes read as a false zero.
+Confirm it by counting empty-`pave_blocks` curves some other way before acting on it. WARNING: `log::debug!` markers added inside
 `fill_images_faces` did NOT reach a custom logger that WAS receiving `builder_solid`'s debug lines,
 so log-based probes there read as a false ZERO — use `eprintln!` gated on the env var instead.
 REFUTED, do not re-attempt: a panic (none; `lastPanicMessage()` is empty), bisect thrash
