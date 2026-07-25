@@ -522,7 +522,8 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
     let mut any = false;
     let trace = std::env::var("BK_FLUX").is_ok();
     for &fid in faces {
-        let flux_before = flux;
+        // Only meaningful under BK_FLUX; skip the bookkeeping otherwise.
+        let flux_before = if trace { flux } else { 0.0 };
         let Ok(face) = topo.face(fid) else { continue };
         let surface = face.surface();
         if let FaceSurface::Plane { .. } = surface {
