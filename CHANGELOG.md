@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.5](https://github.com/andymai/brepkit/compare/v2.128.4...v2.128.5) (2026-07-25)
+
+
+### Bug Fixes
+
+* **algo:** clip straight FF sections to the mutual AABB exactly ([#1224](https://github.com/andymai/brepkit/issues/1224)) ([84e445b](https://github.com/andymai/brepkit/commit/84e445b236c5f1e7868d89666b5de85546eb16e2))
+
 ## [2.128.4](https://github.com/andymai/brepkit/compare/v2.128.3...v2.128.4) (2026-07-24)
 
 
