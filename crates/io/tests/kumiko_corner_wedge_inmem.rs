@@ -59,10 +59,13 @@ fn load(name: &str, topo: &mut Topology) -> brepkit_topology::solid::SolidId {
     deserialize_solid(&std::fs::read(fixture(name)).unwrap(), topo).unwrap()
 }
 
-fn surface_mix(topo: &Topology, sid: brepkit_topology::solid::SolidId) -> HashMap<String, usize> {
-    let mut mix: HashMap<String, usize> = HashMap::new();
+fn surface_mix(
+    topo: &Topology,
+    sid: brepkit_topology::solid::SolidId,
+) -> HashMap<&'static str, usize> {
+    let mut mix: HashMap<&'static str, usize> = HashMap::new();
     for fid in solid_faces(topo, sid).unwrap() {
-        *mix.entry(topo.face(fid).unwrap().surface().type_tag().to_string())
+        *mix.entry(topo.face(fid).unwrap().surface().type_tag())
             .or_default() += 1;
     }
     mix
