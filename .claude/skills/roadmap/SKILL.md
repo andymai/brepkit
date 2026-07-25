@@ -820,9 +820,20 @@ against. So the splitter IS producing the face and #1227's "missing from the sel
 the mechanism is misclassification, NOT a failure to create. Prime suspect, and it is a KNOWN class
 here: the sub-face's interior sample point. See the a1corner root ("splitter interior points of
 notched/symmetric pieces land on feature-plane intersections BY CONSTRUCTION; classification must
-survive on-plane sample points", `classifier/ray_cast.rs` per-ray degeneracy re-cast). NEXT: dump
-that remainder's `interior_point` and the classifier's verdict for tool1 vs tool0 — if the point
-lands inside a lattice opening or on a feature plane, that is the bug. CAVEAT on the probe: it tests
+survive on-plane sample points", `classifier/ray_cast.rs` per-ray degeneracy re-cast). **CONFIRMED A GFA CLASSIFIER MISJUDGEMENT, NOT AN INCOMPLETE SPLIT (#1229).** The probe now prints
+each sub-face's `interior_point`, and a new `POINT_IN=x,y,z` knob on the replay classifies a point
+against the base and every tool with the independent operations-level `classify_point`. The two
+remainders' points differ: tool0 uses (17.244,−19.538,10.771) → GFA Outside, SELECTED; tool1 uses
+(17.816,−19.416,8.070) → GFA Inside, DROPPED. But the oracle says that tool1 point is **Outside
+tool1**, and the geometry agrees — z=8.070 sits BELOW the lattice opening at z[8.185,9.026]. So GFA's
+classifier is wrong on this point; the face is correctly split and correctly sampled. This is the
+a1corner degenerate-ray class (`classifier/ray_cast.rs`, per-ray degeneracy re-cast): the point lies
+exactly ON the inner corner cylinder in a corner crowded with coincident feature planes. NEXT:
+instrument GFA's ray-cast for that exact point on tool1 — which rays are cast, which hits are
+counted, and whether the existing degeneracy re-cast fires. CAVEAT on the new knob: both interior
+points classify oddly against the BASE (Inside vs Outside) when both lie exactly ON the inner
+cylinder and should read OnBoundary — a tolerance artifact in `is_on_boundary`, harmless for the
+tool verdict but the base column of `POINT_IN` is not trustworthy. CAVEAT on the probe: it tests
 VERTICES against the box, so a large unsplit face whose corners sit outside the box will not
 register — widen the box or add a face-bbox-overlap mode before concluding a face is absent. Each odd band hits a
 DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;

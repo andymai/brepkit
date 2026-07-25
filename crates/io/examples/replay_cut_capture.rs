@@ -95,6 +95,30 @@ fn main() {
         return;
     }
 
+    // POINT_IN=x,y,z: classify that point against the base and every tool.
+    // Answers "is this splitter interior point genuinely inside the cutter?",
+    // which separates an incomplete face split from a classifier misjudgement.
+    if let Ok(spec) = std::env::var("POINT_IN") {
+        let v: Vec<f64> = spec
+            .split(',')
+            .filter_map(|t| t.trim().parse().ok())
+            .collect();
+        assert!(v.len() == 3, "POINT_IN needs x,y,z");
+        let p = brepkit_math::vec::Point3::new(v[0], v[1], v[2]);
+        let labelled = std::iter::once(("base".to_string(), base)).chain(
+            tools
+                .iter()
+                .enumerate()
+                .map(|(i, &t)| (format!("tool{i}"), t)),
+        );
+        for (label, sid) in labelled {
+            match brepkit_operations::classify::classify_point(&topo, sid, p, 0.01, 1e-7) {
+                Ok(c) => println!("  POINT_IN {label} {sid:?}: {c:?}"),
+                Err(e) => println!("  POINT_IN {label} {sid:?}: ERR {e}"),
+            }
+        }
+    }
+
     // XSCAN=<v>: list X-normal planes near v in each operand, to tell whether a
     // thin slab is pre-existing in the inputs or produced by the boolean.
     if let Ok(v) = std::env::var("XSCAN") {
