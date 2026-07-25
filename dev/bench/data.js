@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784934166178,
+  "lastUpdate": 1784937820661,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12041,6 +12041,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21615860,
             "range": "± 72185",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c211153003644a445b408076288f2bb4644800b7",
+          "message": "docs(roadmap): attribute goma cost to one cutAllBisect call (#1217)\n\nContinues the kumiko/goma dig from #1215 and #1216. Full op-level\nattribution, two refuted candidates, and a correction to a claim I\nrecorded as settled. Docs only.\n\n## Where the time actually goes\n\nWrapping every brepjs op across one goma generation at h=4 — 99.9%\naccounted, total 292.7 s:\n\n| op | calls | ms | % |\n|---|---|---|---|\n| **`cutAllBisect`** | **1** | **203552** | **69.5** |\n| `cutAll` | 32 | 88543 | 30.2 |\n| everything else | 7 | ~318 | 0.1 |\n\nThe bulk is **one call** — the step applying the pattern solids to the\nbin — not the per-family carve.\n\nThe phase split agrees: `buildKumikoWallPatterns` is only 32.8% of\ngeneration, and within it prism construction is **322 ms (0.1%)**.\n\n## Two candidates refuted\n\n- **Prism construction** (\"thousands of small sketch/extrude/translate\nkernel ops\") — 322 ms. Dead. I had written this into the roadmap as a\nleading candidate.\n- **Batching as the main cause** — the per-family loop is genuinely the\npessimal shape (#1216 measured 1×180 = 11.7 s vs 6×30 = 18.6 s), but at\n30.2% it cannot explain the total.\n\n## A correction\n\nAn earlier probe wrapped `cutAll`, saw 32 calls with zero failures, and\nI concluded there was **no bisect thrash** — and recorded that in the\nroadmap.\n\nThat was invalid. `cutAllBisect` is a **separate export**, and its\ninternal retries go through an internal ops reference my wrapper never\nsaw. The hypothesis was **untested**, not refuted. The measurement was\nreal; the claim simply covered a code path the instrument couldn't\nobserve.\n\n## Next probe\n\nRead `cutAllBisect`'s own `BatchBisectTelemetry`:\n\n- `batchAttempts` >> `batchSucceeded`, or a large pairwise count → the\nbatch is **failing** and the 203 s is retry cost — a correctness bug\nwearing a perf costume.\n- one attempt → honest N-way work on a hard batch.\n\nDifferent fixes, so it is left open rather than guessed.\n\n## Tooling note\n\nV8 `--cpu-prof` does **not** work in this harness: vitest's fork pool\ndrops it via both `NODE_OPTIONS` and `poolOptions.forks.execArgv`, and\n`vite-node` is not installed. Two attempts (~20 min) produced only idle\nparent-process profiles. Recorded so the next session doesn't repeat it\n— use `vi.mock` wrapping, and check the wrapper covers the path you\nintend to claim about.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins kumiko/goma cost to one 8‑tool `cutAllBisect` (~203.5s), not bisect\nthrash. RAW GFA: cut 0 leaves 30 free edges and cut 1 aborts, forcing\nmesh fallback (all‑planar, open); all free edges sit on a 0.05 mm slab\nat x=17.00–17.05, now identified as plane‑vs‑cylinder; prism build is\n322 ms.\n\n- **New Features**\n- Added `crates/io/examples/replay_cut_capture.rs` to replay\n`compound_cut` captures; supports `RAW=1` to call analytic GFA,\n`DUMP_FREE=1` to print free‑edge locations, and `XSCAN=<x>` to list\nX‑normal planes near a target.\n\n<sup>Written for commit d35773fe13db5a154f43bc09b27e3bb9b701dbb7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1217?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T17:01:14-07:00",
+          "tree_id": "591f7ee7b4be88013a68506735baf395c36c0222",
+          "url": "https://github.com/andymai/brepkit/commit/c211153003644a445b408076288f2bb4644800b7"
+        },
+        "date": 1784937819110,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 818390,
+            "range": "± 1254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 909807,
+            "range": "± 20436",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12197,
+            "range": "± 1118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 659545,
+            "range": "± 740",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21627961,
+            "range": "± 50703",
             "unit": "ns/iter"
           }
         ]
