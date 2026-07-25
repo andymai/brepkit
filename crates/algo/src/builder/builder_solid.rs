@@ -202,7 +202,7 @@ pub fn build_solid_with_origins(
     }
 
     // Phase 4: Assemble
-    let solid_id = assemble(topo, growth, holes)?;
+    let solid_id = assemble(topo, growth, holes, &face_source)?;
     let origins = brepkit_topology::explorer::solid_faces(topo, solid_id)?
         .into_iter()
         .map(|f| (f, face_source.get(&f).copied().flatten()))
@@ -1140,10 +1140,16 @@ fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
 /// representative point, then every unpaired edge with its curve kind and
 /// endpoints — enough to tell a stray sliver from a real chunk, and to spot
 /// near-duplicate junction vertices.
-fn log_open_growth_shell(topo: &Topology, gs: &[FaceId]) {
+fn log_open_growth_shell(
+    topo: &Topology,
+    gs: &[FaceId],
+    all: &[FaceId],
+    face_source: &HashMap<FaceId, Option<FaceId>>,
+) {
     if std::env::var("BK_OPEN_SHELL").is_err() {
         return;
     }
+    let in_lump: HashSet<FaceId> = gs.iter().copied().collect();
     let mut uses: HashMap<EdgeId, usize> = HashMap::new();
     for &fid in gs {
         let Ok(f) = topo.face(fid) else { continue };
@@ -1154,16 +1160,21 @@ fn log_open_growth_shell(topo: &Topology, gs: &[FaceId]) {
             }
         }
     }
-    log::debug!("growth shell OPENSHELL faces={}", gs.len());
+    log::debug!(
+        "growth shell OPENSHELL faces={} signed_volume={:.6}",
+        gs.len(),
+        signed_volume_of_shell(topo, gs)
+    );
     for &fid in gs {
         let Ok(f) = topo.face(fid) else { continue };
         let p = topo.wire(f.outer_wire()).ok().and_then(|w| {
             let e = topo.edge(w.edges().first()?.edge()).ok()?;
             Some(topo.vertex(e.start()).ok()?.point())
         });
+        let src = face_source.get(&fid).copied().flatten();
         match p {
             Some(p) => log::debug!(
-                "growth shell OPENSHELL face {fid:?} {} at ({:.3},{:.3},{:.3})",
+                "growth shell OPENSHELL face {fid:?} {} src={src:?} at ({:.3},{:.3},{:.3})",
                 f.surface().type_tag(),
                 p.x(),
                 p.y(),
@@ -1175,6 +1186,79 @@ fn log_open_growth_shell(topo: &Topology, gs: &[FaceId]) {
             ),
         }
     }
+    // What else was SELECTED near the lump? If the missing partners are base
+    // faces that were never created, nothing of the base appears here; if they
+    // exist but were not walked in, they show up.
+    let mut lo = [f64::MAX; 3];
+    let mut hi = [f64::MIN; 3];
+    for &fid in gs {
+        let Ok(f) = topo.face(fid) else { continue };
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            let Ok(w) = topo.wire(wid) else { continue };
+            for oe in w.edges() {
+                let Ok(e) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                for vid in [e.start(), e.end()] {
+                    let Ok(v) = topo.vertex(vid) else { continue };
+                    let p = v.point();
+                    for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+                        lo[k] = lo[k].min(c);
+                        hi[k] = hi[k].max(c);
+                    }
+                }
+            }
+        }
+    }
+    log::debug!(
+        "growth shell OPENSHELL bbox x[{:.3},{:.3}] y[{:.3},{:.3}] z[{:.3},{:.3}]",
+        lo[0],
+        hi[0],
+        lo[1],
+        hi[1],
+        lo[2],
+        hi[2]
+    );
+    let mut allmix: HashMap<&str, usize> = HashMap::new();
+    for &ofid in all {
+        if let Ok(f) = topo.face(ofid) {
+            *allmix.entry(f.surface().type_tag()).or_default() += 1;
+        }
+    }
+    let mut allmix: Vec<_> = allmix.into_iter().collect();
+    allmix.sort_unstable();
+    log::debug!("growth shell OPENSHELL selected-total {allmix:?}");
+    let pad = 0.5;
+    for &ofid in all {
+        if in_lump.contains(&ofid) {
+            continue;
+        }
+        let Ok(of) = topo.face(ofid) else { continue };
+        let Ok(w) = topo.wire(of.outer_wire()) else {
+            continue;
+        };
+        let inside = w.edges().iter().any(|oe| {
+            let Ok(e) = topo.edge(oe.edge()) else {
+                return false;
+            };
+            [e.start(), e.end()].into_iter().any(|vid| {
+                topo.vertex(vid).is_ok_and(|v| {
+                    let p = v.point();
+                    [p.x(), p.y(), p.z()]
+                        .into_iter()
+                        .enumerate()
+                        .all(|(k, c)| c >= lo[k] - pad && c <= hi[k] + pad)
+                })
+            })
+        });
+        if inside {
+            let src = face_source.get(&ofid).copied().flatten();
+            log::debug!(
+                "growth shell OPENSHELL near {ofid:?} {} src={src:?}",
+                of.surface().type_tag()
+            );
+        }
+    }
     for (eid, count) in &uses {
         if *count != 1 {
             continue;
@@ -1184,8 +1268,41 @@ fn log_open_growth_shell(topo: &Topology, gs: &[FaceId]) {
             continue;
         };
         let (a, b) = (a.point(), b.point());
+        // Is the partner MISSING, or does it exist under a different edge id?
+        // "same id elsewhere" means the lump simply was not walked into the
+        // main shell; a position-coincident DIFFERENT id means the junction was
+        // minted twice and the two copies never merged. Those need opposite
+        // fixes, so the distinction is the whole point of this probe.
+        let mut same_id_outside = 0usize;
+        let mut coincident_other_id = 0usize;
+        let near = |p: Point3, q: Point3| (p - q).length() < 1e-4;
+        for &ofid in all {
+            if in_lump.contains(&ofid) {
+                continue;
+            }
+            let Ok(of) = topo.face(ofid) else { continue };
+            for wid in std::iter::once(of.outer_wire()).chain(of.inner_wires().iter().copied()) {
+                let Ok(w) = topo.wire(wid) else { continue };
+                for oe in w.edges() {
+                    if oe.edge() == *eid {
+                        same_id_outside += 1;
+                        continue;
+                    }
+                    let Ok(oe2) = topo.edge(oe.edge()) else {
+                        continue;
+                    };
+                    let (Ok(c), Ok(d)) = (topo.vertex(oe2.start()), topo.vertex(oe2.end())) else {
+                        continue;
+                    };
+                    let (c, d) = (c.point(), d.point());
+                    if (near(a, c) && near(b, d)) || (near(a, d) && near(b, c)) {
+                        coincident_other_id += 1;
+                    }
+                }
+            }
+        }
         log::debug!(
-            "growth shell OPENSHELL free {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+            "growth shell OPENSHELL free {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) same_id_outside={same_id_outside} coincident_other_id={coincident_other_id}",
             e.curve().type_tag(),
             a.x(),
             a.y(),
@@ -1201,6 +1318,7 @@ fn assemble(
     topo: &mut Topology,
     growth_shells: Vec<Vec<FaceId>>,
     hole_shells: Vec<Vec<FaceId>>,
+    face_source: &HashMap<FaceId, Option<FaceId>>,
 ) -> Result<SolidId, AlgoError> {
     let all_faces: Vec<FaceId> = growth_shells
         .iter()
@@ -1208,7 +1326,7 @@ fn assemble(
         .flatten()
         .copied()
         .collect();
-    for fid in all_faces {
+    for &fid in &all_faces {
         normalize_face_wires(topo, fid);
     }
 
@@ -1253,7 +1371,7 @@ fn assemble(
             // boolean falls back to the volume-correct mesh path. Note the
             // OUTER shell is never subjected to this test, so which lump
             // dodges it historically depended on volume-ordering luck.
-            log_open_growth_shell(topo, gs);
+            log_open_growth_shell(topo, gs, &all_faces, face_source);
             return Err(AlgoError::AssemblyFailed(format!(
                 "open growth shell with {} faces would be dropped; aborting analytic assembly",
                 gs.len()
