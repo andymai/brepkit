@@ -668,9 +668,15 @@ emitted and DO survive clipping — at x=17.05, 64 cylinder x plane pairs pass t
 rejected, mostly correctly) and **12 sections survive `restrict_curves_to_faces` intact**. and all 12 are then EMITTED into the arena as `line` curves —
 correct geometry, since the cut plane's normal is along X while the corner cylinders' axes are
 along Z, so the plane is parallel to the axis and meets them in generators, not ellipses (and only
-one of the two generators lies on each quarter-arc face). So FF, restrict and emission all do their
-job: **the splitter has correct sections and still does not split the cylinder faces**. NEXT STEP:
-pave-block splitting / face building, same 230ms repro.
+one of the two generators lies on each quarter-arc face). So FF, restrict and emission all do their job. THE GAP IS
+BETWEEN ARENA EMISSION AND THE PER-FACE SECTION LISTS (`BK_SPLIT_TRACE=1`, eprintln at the
+`fill_images_faces` face loop): that loop DOES run, over 741 faces, and reports **only 2 of 24
+CYLINDER faces with has_sections=true** (22 without; planes are 420 true / 285 false) — although FF
+emitted 12 cylinder x plane curves. So ~10 emitted sections never reach their cylinder face's
+section list, which is why those faces are never split. NEXT STEP: `build_section_edges` / how
+arena curves are attached to faces. WARNING: `log::debug!` markers added inside
+`fill_images_faces` did NOT reach a custom logger that WAS receiving `builder_solid`'s debug lines,
+so log-based probes there read as a false ZERO — use `eprintln!` gated on the env var instead.
 REFUTED, do not re-attempt: a panic (none; `lastPanicMessage()` is empty), bisect thrash
 (telemetry: 1 attempt, 1 success), prism construction (322ms, 0.1%), boolean batching as the main
 cost (30%), classification (defect is op-independent), and the assembly sliver-drop guard (tool0
