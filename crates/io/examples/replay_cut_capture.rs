@@ -103,15 +103,29 @@ fn main() {
     // RAW=1: call the analytic GFA directly, bypassing the ops-level gate and
     // its mesh fallback, to see whether GFA itself produces a usable result.
     if std::env::var("RAW").is_ok() {
+        // TOOL=<i>: cut the base by that ONE tool, instead of chaining from 0.
+        let single = std::env::var("TOOL")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok());
+        let selected: Vec<(usize, brepkit_topology::solid::SolidId)> = match single {
+            Some(i) if i < tools.len() => vec![(i, tools[i])],
+            _ => tools.iter().copied().enumerate().collect(),
+        };
         let mut acc = base;
-        for (i, &tool) in tools.iter().enumerate() {
+        for (i, tool) in selected {
             let t = Instant::now();
-            match brepkit_algo::gfa::boolean(
-                &mut topo,
-                brepkit_algo::bop::BooleanOp::Cut,
-                acc,
-                tool,
-            ) {
+            // OP=cut|fuse|intersect — if the faces survive under a different op,
+            // the splitter created them and classification is dropping them; if
+            // every op loses them, the splitter never made them.
+            let op = match std::env::var("OP")
+                .unwrap_or_else(|_| "cut".into())
+                .as_str()
+            {
+                "fuse" => brepkit_algo::bop::BooleanOp::Fuse,
+                "intersect" => brepkit_algo::bop::BooleanOp::Intersect,
+                _ => brepkit_algo::bop::BooleanOp::Cut,
+            };
+            match brepkit_algo::gfa::boolean(&mut topo, op, acc, tool) {
                 Ok(next) => {
                     let faces = solid_faces(&topo, next).expect("faces");
                     let mut uses: HashMap<EdgeId, usize> = HashMap::new();
@@ -136,6 +150,99 @@ fn main() {
                         t.elapsed().as_millis(),
                         faces.len()
                     );
+                    if free > 0 && std::env::var("FREE_LOOPS").is_ok() {
+                        // Free edges bound the hole(s) left by dropped faces.
+                        // Chain them by shared vertex: each closed chain is one
+                        // missing face's outline.
+                        let mut segs: Vec<(usize, usize)> = Vec::new();
+                        for (eid, _) in uses.iter().filter(|&(_, &c)| c == 1) {
+                            let e = topo.edge(*eid).expect("edge");
+                            segs.push((e.start().index(), e.end().index()));
+                        }
+                        let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
+                        for &(a, b) in &segs {
+                            adj.entry(a).or_default().push(b);
+                            adj.entry(b).or_default().push(a);
+                        }
+                        let mut seen: std::collections::HashSet<usize> =
+                            std::collections::HashSet::new();
+                        let mut loops = 0;
+                        for &(a, _) in &segs {
+                            if !seen.insert(a) {
+                                continue;
+                            }
+                            let mut stack = vec![a];
+                            let mut n = 1;
+                            while let Some(v) = stack.pop() {
+                                for &w in adj.get(&v).into_iter().flatten() {
+                                    if seen.insert(w) {
+                                        n += 1;
+                                        stack.push(w);
+                                    }
+                                }
+                            }
+                            loops += 1;
+                            println!("    free component {loops}: {n} vertices");
+                        }
+                        // A simple closed outline needs EVERY vertex at degree
+                        // exactly 2. Even-degree alone is not enough: a degree-4
+                        // junction (figure-eight) is even but is not one loop.
+                        let mut deg: HashMap<usize, usize> = HashMap::new();
+                        for (v, ns) in &adj {
+                            *deg.entry(ns.len()).or_default() += 1;
+                            let _ = v;
+                        }
+                        let mut deg: Vec<_> = deg.into_iter().collect();
+                        deg.sort_unstable();
+                        if std::env::var("LOOP_GEOM").is_ok() {
+                            // Print each component's edges so the missing face's
+                            // surface can be read off the loop it bounds.
+                            let mut comp: HashMap<usize, usize> = HashMap::new();
+                            let mut cid = 0;
+                            for &(a, _) in &segs {
+                                if comp.contains_key(&a) {
+                                    continue;
+                                }
+                                cid += 1;
+                                let mut stack = vec![a];
+                                while let Some(v) = stack.pop() {
+                                    if comp.insert(v, cid).is_some() {
+                                        continue;
+                                    }
+                                    for &w in adj.get(&v).into_iter().flatten() {
+                                        if !comp.contains_key(&w) {
+                                            stack.push(w);
+                                        }
+                                    }
+                                }
+                            }
+                            for want in 1..=cid {
+                                println!("    --- component {want} ---");
+                                for (eid, _) in uses.iter().filter(|&(_, &c)| c == 1) {
+                                    let e = topo.edge(*eid).expect("edge");
+                                    if comp.get(&e.start().index()) != Some(&want) {
+                                        continue;
+                                    }
+                                    let a = topo.vertex(e.start()).expect("v").point();
+                                    let b = topo.vertex(e.end()).expect("v").point();
+                                    println!(
+                                        "      {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                                        e.curve().type_tag(),
+                                        a.x(),
+                                        a.y(),
+                                        a.z(),
+                                        b.x(),
+                                        b.y(),
+                                        b.z()
+                                    );
+                                }
+                            }
+                        }
+                        let all_two = adj.values().all(|ns| ns.len() == 2);
+                        println!(
+                            "    free components={loops} degree histogram(deg:count)={deg:?} all_degree_2={all_two}"
+                        );
+                    }
                     if free > 0 && std::env::var("DUMP_FREE").is_ok() {
                         for (eid, _) in uses.iter().filter(|&(_, &c)| c == 1) {
                             let e = topo.edge(*eid).expect("edge");

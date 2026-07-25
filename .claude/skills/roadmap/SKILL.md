@@ -696,9 +696,30 @@ Since the 30 free edges come from cut 0 (tool0 only), the x=17.00 side is NOT a 
 shows `free line on cylinder (17.00,-19.55,2.70)`, i.e. the base's corner CYLINDER surface. So the
 sliver is between tool0's cut plane at x=17.05 and curved base geometry reaching x~17.00 — a
 plane-vs-cylinder thin sliver, plausibly the same family as the tangency row above, though the
-mechanism is NOT yet proven. THE TARGET IS NOW that one sliver region: why the analytic assembly
-cannot close a 0.05mm plane-vs-cylinder slab there, and whether cut 1's "open growth shell with 20
-faces" is the same region. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
+mechanism is NOT yet proven. (9) EXACTLY FOUR FACES ARE MISSING (`FREE_LOOPS=1`): the 30 free edges chain into
+**4 components in which EVERY vertex has degree exactly 2** (histogram [(2,30)]) — i.e. four SIMPLE
+CLOSED outlines of 7, 7, 7 and 9 vertices. (Degree-2-everywhere is the test that actually proves
+this; "no odd-degree vertices" does NOT, since a degree-4 junction / figure-eight is even too.) So these are not ragged partial boundaries; they are four well-formed polygon outlines
+where a face should be and is not, all inside the 0.05mm slab. That is the same class as cut 1's
+"open growth shell with 20 faces would be dropped" — the assembler dropping faces in this region,
+harder on the second cut. LOOP GEOMETRY (`LOOP_GEOM=1`): each of the 4 outlines has the same
+signature — several Lines lying in the x=17.05 plane, ONE Line on the far side at x=17.00, and TWO
+short Ellipse arcs bridging 17.00 <-> 17.05. So each loop STRADDLES the 0.05mm gap and is NOT
+planar: the missing faces span from tool0's cut plane across to the base cylinder. Each covers
+roughly 1.2 x 0.83mm with a 0.05mm depth excursion. (10) THE DEFECT IS OP-INDEPENDENT (`OP=cut|fuse|intersect` on the same
+operands): Cut F=494 free=30 over=0; Fuse F=1155 free=29 over=1; Intersect ERRs with "open growth
+shell with 6 faces would be dropped" (same error family as cut 1's 20-face version). All three fail
+in the SAME region, which points AWAY from classification — that selects different subsets per op
+and would not fail identically — and toward the shared upstream: the splitter/section machinery
+emitting a partition that cannot be assembled under any op. So these are NOT faces that were built
+and then classified out; the partition is defective before classification runs. (11) EVERY TOOL FAILS, IN TWO MODES (`TOOL=<i>`, base cut by that one tool):
+tools 0/2/4/6 each give IDENTICAL F=494 free=30 over=0; tools 1/3/5/7 each ERR with "open growth
+shell with N faces would be dropped" (N = 9, 22, 23, 36). The evens are congruent bands on the
+bin's four walls (file sizes agree: evens ~650KB, odds ~380KB), so the split is the two kumiko
+diagonal families. So this is not one awkward tool — it hits 100% of the pattern bands, which is
+why the fallback runs for all 8 and compounds to 203s. THE TARGET IS NOW the FF/section/split stage
+for this 0.05mm plane-vs-cylinder sliver, NOT the classifier; and note ONE fix should clear both
+modes if they share the root, which the identical even-tool signatures suggest but do not prove. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
 broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
