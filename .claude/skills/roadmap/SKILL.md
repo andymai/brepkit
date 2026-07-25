@@ -665,9 +665,12 @@ span [17.000,20.750], identical to the base: had they been split with the outer 
 would read [17.050,20.750]. **So the cut plane appears not to split the corner cylinders at all** —
 that is the defect, and the missing patches are the cylinder pieces it should have produced. ALGO TRACE (`BK_FF_TRACE=<x>` in phase_ff.rs, env-gated): sections ARE
 emitted and DO survive clipping — at x=17.05, 64 cylinder x plane pairs pass the AABB test (736
-rejected, mostly correctly) and **12 sections survive `restrict_curves_to_faces` intact**. So
-phase FF and restrict both do their job; curves reach the splitter. NEXT STEP: pave-block splitting
-or face building, same 230ms repro.
+rejected, mostly correctly) and **12 sections survive `restrict_curves_to_faces` intact**. and all 12 are then EMITTED into the arena as `line` curves —
+correct geometry, since the cut plane's normal is along X while the corner cylinders' axes are
+along Z, so the plane is parallel to the axis and meets them in generators, not ellipses (and only
+one of the two generators lies on each quarter-arc face). So FF, restrict and emission all do their
+job: **the splitter has correct sections and still does not split the cylinder faces**. NEXT STEP:
+pave-block splitting / face building, same 230ms repro.
 REFUTED, do not re-attempt: a panic (none; `lastPanicMessage()` is empty), bisect thrash
 (telemetry: 1 attempt, 1 success), prism construction (322ms, 0.1%), boolean batching as the main
 cost (30%), classification (defect is op-independent), and the assembly sliver-drop guard (tool0

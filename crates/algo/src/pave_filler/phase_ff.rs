@@ -508,6 +508,14 @@ pub fn perform(
                 let pb_id = arena.pave_blocks.alloc(pb);
 
                 let curve_index = arena.curves.len();
+                if traced {
+                    log::debug!(
+                        "FF_TRACE emit a={} b={} curve#{curve_index} {}",
+                        surf_a.type_tag(),
+                        surf_b.type_tag(),
+                        raw.curve.type_tag()
+                    );
+                }
                 arena.curves.push(IntersectionCurveDS {
                     curve: raw.curve,
                     face_a: fa,
