@@ -820,9 +820,35 @@ against. So the splitter IS producing the face and #1227's "missing from the sel
 the mechanism is misclassification, NOT a failure to create. Prime suspect, and it is a KNOWN class
 here: the sub-face's interior sample point. See the a1corner root ("splitter interior points of
 notched/symmetric pieces land on feature-plane intersections BY CONSTRUCTION; classification must
-survive on-plane sample points", `classifier/ray_cast.rs` per-ray degeneracy re-cast). NEXT: dump
-that remainder's `interior_point` and the classifier's verdict for tool1 vs tool0 — if the point
-lands inside a lattice opening or on a feature plane, that is the bug. CAVEAT on the probe: it tests
+survive on-plane sample points", `classifier/ray_cast.rs` per-ray degeneracy re-cast). **STOP — THE WHOLE ODD-BAND LINE OF INVESTIGATION WAS GIGO. THE ODD TOOL OPERANDS ARE NOT
+WATERTIGHT.** Adding free/over-edge counts to the replay's operand `describe()` shows the failure
+split IS the watertightness split: tool0/2/4/6 (the bands that work) are `free=0 over=0`; tool1/3/5/7
+(every failing band) are `free=405 over=38`, `free=383 over=34`, `free=367 over=42`, `free=392
+over=29`. Ray-cast parity against a non-closed solid is UNDEFINED, which fully explains the chain
+below — the "1 crossing" rays, the misclassified corner cylinder, the dropped inner wall and the open
+growth shell are all downstream of a malformed operand. This is exactly the documented trap
+("captured operands are fallback-poisoned, never replay them directly", the snapClip note) and a
+whole iteration was spent inside it. **ALWAYS print operand free/over counts before diagnosing a
+replayed capture; the harness now does this unconditionally.** OPEN QUESTION, and the real next
+step: is the breakage in the CAPTURE or does the tool genuinely build open lattice bands? If the
+latter it is a real defect, but upstream of GFA — re-capture the odd bands from a current build
+before spending anything further. Everything below this line about the odd bands describes behaviour
+observed on BROKEN INPUT and must not be treated as an engine defect: **RETRACTED — the "GFA
+classifier misjudgement" reading (#1229) is NOT established; the classifier was fed a non-closed
+solid.** The probe now prints
+each sub-face's `interior_point`, and a new `POINT_IN=x,y,z` knob on the replay classifies a point
+against the base and every tool with the independent operations-level `classify_point`. The two
+remainders' points differ: tool0 uses (17.244,−19.538,10.771) → GFA Outside, SELECTED; tool1 uses
+(17.816,−19.416,8.070) → GFA Inside, DROPPED. But the oracle says that tool1 point is **Outside
+tool1**, and the geometry agrees — z=8.070 sits BELOW the lattice opening at z[8.185,9.026]. So GFA's
+classifier is wrong on this point; the face is correctly split and correctly sampled. This is the
+a1corner degenerate-ray class (`classifier/ray_cast.rs`, per-ray degeneracy re-cast): the point lies
+exactly ON the inner corner cylinder in a corner crowded with coincident feature planes. NEXT:
+instrument GFA's ray-cast for that exact point on tool1 — which rays are cast, which hits are
+counted, and whether the existing degeneracy re-cast fires. CAVEAT on the new knob: both interior
+points classify oddly against the BASE (Inside vs Outside) when both lie exactly ON the inner
+cylinder and should read OnBoundary — a tolerance artifact in `is_on_boundary`, harmless for the
+tool verdict but the base column of `POINT_IN` is not trustworthy. CAVEAT on the probe: it tests
 VERTICES against the box, so a large unsplit face whose corners sit outside the box will not
 register — widen the box or add a face-bbox-overlap mode before concluding a face is absent. Each odd band hits a
 DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;

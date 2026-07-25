@@ -151,6 +151,26 @@ pub fn classify_ray_cast_cached(
         Ok(FaceClass::Outside)
     }
 }
+/// `BK_RAY_POINT=x,y,z[,radius]` — the point (and match radius) for `RAYTRACE`.
+///
+/// Resolved once: the classifier runs this per sub-face, so an env lookup here
+/// would land in a hot path.
+fn ray_trace_target() -> Option<(Point3, f64)> {
+    static TARGET: std::sync::OnceLock<Option<(Point3, f64)>> = std::sync::OnceLock::new();
+    *TARGET.get_or_init(|| {
+        let spec = std::env::var("BK_RAY_POINT").ok()?;
+        let v: Vec<f64> = spec
+            .split(',')
+            .map(|t| t.trim().parse::<f64>())
+            .collect::<Result<_, _>>()
+            .ok()?;
+        match v.len() {
+            3 => Some((Point3::new(v[0], v[1], v[2]), 1e-6)),
+            4 => Some((Point3::new(v[0], v[1], v[2]), v[3])),
+            _ => None,
+        }
+    })
+}
 
 /// Count the inside votes (of three rays) for a point against pre-collected
 /// face geometry: cardinal rays first, re-cast with fixed generic directions
@@ -194,7 +214,14 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
         ),
     ];
 
-    let vote = |dirs: &[Vec3; 3]| -> (u8, u8) {
+    // `BK_RAY_POINT=x,y,z[,radius]`: dump this vote when the classified point is
+    // near the given one. The verdict alone cannot say WHY a point classified
+    // wrongly — the useful facts are the per-ray crossing parity and which rays
+    // reported grazing degenerate structure, since the generic re-cast only
+    // fires when ALL THREE cardinal rays are suspicious.
+    let traced = ray_trace_target().is_some_and(|(t, r)| (point - t).length() <= r);
+
+    let vote = |dirs: &[Vec3; 3], label: &str| -> (u8, u8) {
         let mut inside_votes = 0u8;
         let mut suspicious_rays = 0u8;
         for ray_dir in dirs {
@@ -211,11 +238,30 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
             if suspicious {
                 suspicious_rays += 1;
             }
+            if traced {
+                log::debug!(
+                    "RAYTRACE {label} dir=({:.3},{:.3},{:.3}) crossings={crossings} parity={} suspicious={suspicious}",
+                    ray_dir.x(),
+                    ray_dir.y(),
+                    ray_dir.z(),
+                    crossings % 2
+                );
+            }
         }
         (inside_votes, suspicious_rays)
     };
 
-    let (cardinal, suspicious) = vote(&cardinal_dirs);
+    let (cardinal, suspicious) = vote(&cardinal_dirs, "cardinal");
+    if traced {
+        log::debug!(
+            "RAYTRACE point=({:.3},{:.3},{:.3}) faces={} cardinal_inside={cardinal} suspicious={suspicious} recast={}",
+            point.x(),
+            point.y(),
+            point.z(),
+            face_data.len(),
+            suspicious >= 3
+        );
+    }
     if suspicious < 3 {
         return Ok(cardinal);
     }
@@ -223,7 +269,7 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
     // when both instruments graze degenerate structure there is no cleaner
     // signal left, and the generic directions are still the less-aligned,
     // better-conditioned of the two.
-    let (generic, _) = vote(&generic_dirs);
+    let (generic, _) = vote(&generic_dirs, "generic");
     Ok(generic)
 }
 

@@ -28,13 +28,27 @@ use brepkit_topology::explorer::solid_faces;
 fn describe(topo: &Topology, sid: brepkit_topology::solid::SolidId, label: &str) {
     let faces = solid_faces(topo, sid).expect("faces");
     let mut mix: HashMap<&str, usize> = HashMap::new();
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
     for &fid in &faces {
-        *mix.entry(topo.face(fid).expect("face").surface().type_tag())
-            .or_default() += 1;
+        let f = topo.face(fid).expect("face");
+        *mix.entry(f.surface().type_tag()).or_default() += 1;
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).expect("wire").edges() {
+                *uses.entry(oe.edge()).or_default() += 1;
+            }
+        }
     }
     let mut mix: Vec<_> = mix.into_iter().collect();
     mix.sort_unstable();
-    println!("  {label}: F={} mix={mix:?}", faces.len());
+    // Ray-cast parity is only meaningful against a CLOSED operand: a point
+    // outside a watertight solid must cross it an even number of times. An
+    // operand with free edges silently poisons every classification.
+    let free = uses.values().filter(|&&c| c == 1).count();
+    let over = uses.values().filter(|&&c| c > 2).count();
+    println!(
+        "  {label}: F={} mix={mix:?} free={free} over={over}",
+        faces.len()
+    );
 }
 
 struct DropLogger;
@@ -53,6 +67,7 @@ impl log::Log for DropLogger {
             || msg.contains("growth shell")
             || msg.contains("FF_TRACE")
             || msg.contains("SUBFACE")
+            || msg.contains("RAYTRACE")
         {
             println!("    [algo] {msg}");
         }
@@ -93,6 +108,41 @@ fn main() {
     if tools.is_empty() {
         println!("no tools found for prefix '{prefix}' in {}", dir.display());
         return;
+    }
+
+    // POINT_IN=x,y,z: classify that point against the base and every tool.
+    // Answers "is this splitter interior point genuinely inside the cutter?",
+    // which separates an incomplete face split from a classifier misjudgement.
+    if let Ok(spec) = std::env::var("POINT_IN") {
+        // Parse exactly three floats. Discarding unparseable tokens would let
+        // POINT_IN=1,2,foo,3 run silently as (1,2,3) — a probe answering about
+        // a different point than asked is worse than no probe.
+        let tokens: Vec<&str> = spec.split(',').map(str::trim).collect();
+        let v: Vec<f64> = tokens
+            .iter()
+            .map(|t| {
+                t.parse::<f64>()
+                    .expect("POINT_IN component must be a float")
+            })
+            .collect();
+        assert!(
+            v.len() == 3,
+            "POINT_IN needs exactly x,y,z — got {} component(s)",
+            v.len()
+        );
+        let p = brepkit_math::vec::Point3::new(v[0], v[1], v[2]);
+        let labelled = std::iter::once(("base".to_string(), base)).chain(
+            tools
+                .iter()
+                .enumerate()
+                .map(|(i, &t)| (format!("tool{i}"), t)),
+        );
+        for (label, sid) in labelled {
+            match brepkit_operations::classify::classify_point(&topo, sid, p, 0.01, 1e-7) {
+                Ok(c) => println!("  POINT_IN {label} {sid:?}: {c:?}"),
+                Err(e) => println!("  POINT_IN {label} {sid:?}: ERR {e}"),
+            }
+        }
     }
 
     // XSCAN=<v>: list X-normal planes near v in each operand, to tell whether a

@@ -116,13 +116,17 @@ fn log_subfaces_in_box(topo: &Topology, subs: &[SubFace], selected: &[bop::Selec
         }
         if touches {
             log::debug!(
-                "SUBFACE {:?} {} src={:?} class={:?} rank={:?} selected={} x[{:.3},{:.3}] y[{:.3},{:.3}] z[{:.3},{:.3}]",
+                "SUBFACE {:?} {} src={:?} class={:?} rank={:?} selected={} ip={} x[{:.3},{:.3}] y[{:.3},{:.3}] z[{:.3},{:.3}]",
                 sf.face_id,
                 f.surface().type_tag(),
                 sf.source_face,
                 sf.classification,
                 sf.rank,
                 chosen.contains(&sf.face_id),
+                sf.interior_point.map_or_else(
+                    || "none".to_string(),
+                    |p| format!("({:.3},{:.3},{:.3})", p.x(), p.y(), p.z())
+                ),
                 flo[0],
                 fhi[0],
                 flo[1],
