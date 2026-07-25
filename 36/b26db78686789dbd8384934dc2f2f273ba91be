@@ -1,0 +1,20 @@
+crates/io/examples/replay_cut_capture.rs
+  s_4be9cbc078e9c4::t_0535b7734ede7b 102-107,113-117
+  s_4be9cbc078e9c4::t_c6c3cc0e514876 108-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "36b26db78686789dbd8384934dc2f2f273ba91be",
+  "prompts": {},
+  "sessions": {
+    "s_4be9cbc078e9c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb0e4ea1-d098-48cf-921d-3ac9562102ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
