@@ -330,6 +330,15 @@ pub fn perform(
             // restriction below applies to grazes.
             let bb_a = bbox_a.expanded(tol.linear * 10.0);
             let bb_b = bbox_b.expanded(tol.linear * 10.0);
+            if traced {
+                let [ln, ci, el, nu] = kind_counts(&raw_curves);
+                log::debug!(
+                    "FF_TRACE afterF1 a={} b={} n={} line={ln} circle={ci} ellipse={el} nurbs={nu}",
+                    surf_a.type_tag(),
+                    surf_b.type_tag(),
+                    raw_curves.len()
+                );
+            }
             let raw_curves: Vec<RawCurve> = raw_curves
                 .into_iter()
                 .filter(|raw| {
@@ -412,6 +421,15 @@ pub fn perform(
                     n_fine > N && (0..=n_fine).map(|i| sample(i, n_fine)).any(in_both)
                 })
                 .collect();
+            if traced {
+                let [ln, ci, el, nu] = kind_counts(&raw_curves);
+                log::debug!(
+                    "FF_TRACE afterF2 a={} b={} n={} line={ln} circle={ci} ellipse={el} nurbs={nu}",
+                    surf_a.type_tag(),
+                    surf_b.type_tag(),
+                    raw_curves.len()
+                );
+            }
 
             // Restrict surface-surface intersection curves to the region that
             // lies inside BOTH faces. `compute_raw_curves` works on the
@@ -541,10 +559,14 @@ pub fn perform(
                 let curve_index = arena.curves.len();
                 if traced {
                     log::debug!(
-                        "FF_TRACE emit a={} b={} curve#{curve_index} {}",
+                        "FF_TRACE emit a={} b={} curve#{curve_index} {} z[{:.3},{:.3}] y[{:.3},{:.3}]",
                         surf_a.type_tag(),
                         surf_b.type_tag(),
-                        raw.curve.type_tag()
+                        raw.curve.type_tag(),
+                        raw.bbox.min.z(),
+                        raw.bbox.max.z(),
+                        raw.bbox.min.y(),
+                        raw.bbox.max.y()
                     );
                 }
                 arena.curves.push(IntersectionCurveDS {
@@ -942,6 +964,26 @@ fn point_to_polygon_dist(p: brepkit_math::vec::Point2, poly: &[brepkit_math::vec
         best = best.min(((p.x() - cx).powi(2) + (p.y() - cy).powi(2)).sqrt());
     }
     best
+}
+
+/// Per-kind counts of raw section curves, for the `BK_FF_TRACE` diagnostics.
+///
+/// Returns `[line, circle, ellipse, nurbs]`. A fixed histogram keeps the trace
+/// line short and allocation-free even when a pair yields many curves, and it
+/// is what the reader actually wants — which KINDS survived a filter, not the
+/// order they happened to be in.
+fn kind_counts(curves: &[RawCurve]) -> [usize; 4] {
+    let mut n = [0usize; 4];
+    for c in curves {
+        let i = match c.curve {
+            EdgeCurve::Line => 0,
+            EdgeCurve::Circle(_) => 1,
+            EdgeCurve::Ellipse(_) => 2,
+            EdgeCurve::NurbsCurve(_) => 3,
+        };
+        n[i] += 1;
+    }
+    n
 }
 
 /// Exact test: does the segment `p0`→`p1` meet the intersection of two AABBs?

@@ -783,10 +783,49 @@ z[8.185,9.026], ALL are planes and only ONE is base-derived (src=73). INSTRUMENT
 is real and LOCAL. Lump signed volumes are substantial, not slivers: 3.69 / 7.39 / 9.55 / 10.13 mm³
 for bands 1/3/5/7. So the over-selection reading (a spurious tool patch that should never appear) is
 REFUTED; this is a genuine missing-face defect in the same corner and the same family as the
-even-band notch loss, reached by a different mechanism. NEXT: find why the corner-cylinder split
-produces no sub-face covering the diagonal's crossing region — start at the FF/section stage for the
-cylinder × diagonal-plane pairs at those coordinates (`BK_FF_TRACE`), exactly as the even-band dig
-did. Each odd band hits a DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;
+even-band notch loss, reached by a different mechanism. **FF STAGE MEASURED (#1228):**
+`BK_FF_TRACE=17.65` with new per-stage `afterF1`/`afterF2` traces (they report curve KINDS, and they
+exist because the old `restrict N -> M` line captures N AFTER both filters, so an earlier loss reads
+as "restrict 0 → 0" and looks like restrict's doing — that misreading cost one iteration in the
+even-band dig). At the lump's x the 127 surviving cylinder×plane pairs split as: **73 dropped at
+filter 1 (lines), 49 ELLIPSES dropped at filter 2's AABB in-both sampling, 3 ellipses surviving, 2
+line pairs.** So the dominant loss is ellipses at filter 2 — the SAME aliasing class as the
+even-band Line bug, on the path #1224 does NOT cover (its exact clip is gated to Lines) and which
+the existing bespoke exact-arc bypass only covers for the faceted-ramp × cylinder configuration.
+**AND THE ELLIPSE-ALIASING READING OF THOSE 49 IS REFUTED — DO NOT "FIX" FILTER 2.** The caution
+paid off: a temporary min-distance probe (curve samples vs the mutual box `bb_a ∩ bb_b`, since
+removed) shows NONE of the 49 dropped ellipses has a mutual box overlapping the lump's z window
+[8.1,9.1] — they are all elsewhere in z — and the CLOSEST drop anywhere misses by 0.108mm while
+sampled at 0.055mm spacing (n_fine=404 over approx_len=22.261), i.e. a genuine 2× separation, not an
+aliasing artifact. So filter 2 is working correctly here and the 49 drops are legitimate; loosening
+it would break calibrated fixtures for nothing. Worth recording for a FUTURE case though: `n_fine`
+is clamped at 1024 while `approx_len` reaches ~1173mm on near-axis-parallel planes (1.15mm spacing
+against sub-millimetre boxes), so the clamp IS a real aliasing hazard — just not this bug's cause.
+CONFIRMED, the sections ARE emitted and DO cover the lump: the `FF_TRACE emit` line now carries the
+curve's y/z bbox, and at the lump's x tool1 emits `curve#26` ellipse z[6.128,12.000]
+y[−20.749,−13.251] (the OUTER r=3.75 cylinder) and `curve#241` ellipse z[7.068,11.061]
+y[−19.550,−14.450] (the INNER r=2.55 one) — both spanning the lump's z window [8.185,9.026] and its
+y range — plus `curve#334` line. So FF, restrict, emission and coverage are all CORRECT for this
+lump; **the corner-cylinder sub-face is lost DOWNSTREAM, in the face splitter or in classification,
+not at section computation.** **ROOT FOUND — IT IS A CLASSIFICATION ERROR, NOT A MISSING FACE (#1228).** A new
+`BK_SUBFACE_BOX=x0,x1,y0,y1,z0,z1` probe (in `builder/mod.rs`, reports every sub-face touching the
+box with surface kind, source, `FaceClass`, rank, selection and extent) diffed the SAME corner
+between a working and a broken band. On **tool0 (works)** the inner corner cylinder `Id(72)` yields
+8 tiny **Inside** notch slivers at x[17.000,17.050] — the 0.05mm bands #1224 restored, correctly
+removed — plus ONE big **Outside** remainder x[17.000,19.550] y[−19.550,−17.000] z[1.200,20.300]
+that is SELECTED. On **tool1 (broken)** the identically-extented full remainder
+x[17.000,19.550] y[−19.550,−17.000] z[1.200,20.300] is classified **Inside** and DROPPED, taking the
+whole inner corner wall with it and leaving the tool's cut-surface patch with nothing to pair
+against. So the splitter IS producing the face and #1227's "missing from the selection" stands, but
+the mechanism is misclassification, NOT a failure to create. Prime suspect, and it is a KNOWN class
+here: the sub-face's interior sample point. See the a1corner root ("splitter interior points of
+notched/symmetric pieces land on feature-plane intersections BY CONSTRUCTION; classification must
+survive on-plane sample points", `classifier/ray_cast.rs` per-ray degeneracy re-cast). NEXT: dump
+that remainder's `interior_point` and the classifier's verdict for tool1 vs tool0 — if the point
+lands inside a lattice opening or on a feature plane, that is the bug. CAVEAT on the probe: it tests
+VERTICES against the box, so a large unsplit face whose corners sit outside the box will not
+register — widen the box or add a face-bbox-overlap mode before concluding a face is absent. Each odd band hits a
+DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;
 tool3 → (+x,+y) x≈18.6–20.5 y≈+18.3–19.9 z≈6.5–9.8), consistent with one diagonal member per band.
 CORRECTION, filed then retracted within the same session: an initial read called this the
 near-duplicate-vertex/weld-band class and pointed at vertex minting. The near-duplicates ARE present
