@@ -28,13 +28,27 @@ use brepkit_topology::explorer::solid_faces;
 fn describe(topo: &Topology, sid: brepkit_topology::solid::SolidId, label: &str) {
     let faces = solid_faces(topo, sid).expect("faces");
     let mut mix: HashMap<&str, usize> = HashMap::new();
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
     for &fid in &faces {
-        *mix.entry(topo.face(fid).expect("face").surface().type_tag())
-            .or_default() += 1;
+        let f = topo.face(fid).expect("face");
+        *mix.entry(f.surface().type_tag()).or_default() += 1;
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).expect("wire").edges() {
+                *uses.entry(oe.edge()).or_default() += 1;
+            }
+        }
     }
     let mut mix: Vec<_> = mix.into_iter().collect();
     mix.sort_unstable();
-    println!("  {label}: F={} mix={mix:?}", faces.len());
+    // Ray-cast parity is only meaningful against a CLOSED operand: a point
+    // outside a watertight solid must cross it an even number of times. An
+    // operand with free edges silently poisons every classification.
+    let free = uses.values().filter(|&&c| c == 1).count();
+    let over = uses.values().filter(|&&c| c > 2).count();
+    println!(
+        "  {label}: F={} mix={mix:?} free={free} over={over}",
+        faces.len()
+    );
 }
 
 struct DropLogger;
@@ -53,6 +67,7 @@ impl log::Log for DropLogger {
             || msg.contains("growth shell")
             || msg.contains("FF_TRACE")
             || msg.contains("SUBFACE")
+            || msg.contains("RAYTRACE")
         {
             println!("    [algo] {msg}");
         }
