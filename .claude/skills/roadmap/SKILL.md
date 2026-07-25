@@ -934,10 +934,24 @@ both the corner-fan volume AND the curvature-robust flux test agree it is inward
 right. But look at what it IS: six faces with the SAME surface signature as each operand (both are
 `F=6`, 2 cylinders + 4 planes; wedge vol 284.873, strut vol 43.971), and a corner-fan magnitude
 closer to the wedge than the strut. **The strut never split the wedge at all — a whole operand came
-through, inverted.** A partial cut must produce MORE than six faces. So the defect is upstream of
-`perform_areas`: either the pair produced no sections (check phase FF for this pair) or face
-selection kept exactly one operand with flipped orientation. START HERE, with
-`CAPTURE_DIR=<call4> PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1` plus `BK_FF_TRACE`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
+through, inverted.** A partial cut must produce MORE than six faces. **ROOT NAILED: BOTH SHELL-ORIENTATION TESTS MIS-READ A CORNER WEDGE
+BOUNDED BY TWO COAXIAL CYLINDERS.** Decisive route: `BBOX=1` shows tool0 is z[-8.307,2.192] while the
+base is z[2.700,20.800] — **fully DISJOINT** (tool3 likewise, above). For a disjoint `Cut(A,B)` GFA
+correctly keeps all of A's faces and none of B's, so the resulting 6-face shell IS the base wedge
+unmodified — and `BK_AREAS` reports it `signed_vol=-182.448 outward=Some(false) -> hole`, while
+`solid_volume` measures that same wedge at **+284.873**. Both cannot be right and the
+tessellation-based volume is the trustworthy one, so the corner-fan `signed_volume_of_shell` AND the
+curvature-robust `shell_is_outward_oriented` are BOTH wrong on this geometry. The signature is
+unmistakable: `-182.448` recurs IDENTICALLY across tool0 (6 faces), tool2 (6 faces) and tool4 (5
+faces) — three different shells cannot share a volume integral. Per-tool results (each tool cut
+against the base alone): all five fail "no outer shell found", tool0/tool3 with no sections at all
+(disjoint, correctly AABB-rejected) and tool1/tool2 with sections emitted, so the failure is
+downstream of sectioning in every case. NOTE the ops-level shortcut only detects CONTAINMENT
+(A⊂B, B⊂A, A=B) — **disjointness is not handled**, which is why a non-touching strut still routes
+through GFA and then the mesh fallback. FIX SHAPE: make the orientation decision correct for
+cylinder-bounded wedges (and/or short-circuit a disjoint Cut to A). Reproduce per tool by symlinking
+one `cut-tool<i>.bin` as `cut-tool0.bin` beside `cut-base.bin` and running
+`PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1 BBOX=1`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
 fixture itself — an unvalidated operand already cost this campaign several passes. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
 either make the mesh co-refinement produce closed output for these operands, or make
 `mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
