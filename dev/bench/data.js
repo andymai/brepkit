@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784985944989,
+  "lastUpdate": 1784987702160,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12689,6 +12689,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21594474,
             "range": "± 26112",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d621902e2555783c88823388c312b915907c3b4e",
+          "message": "docs(roadmap): the goma odd bands are malformed at construction, not by the cut (#1230)\n\nFollow-up to #1229, which found the goma odd-band replay was GIGO. This\n**answers** the question that left open: the odd lattice bands are\ngenuinely built as malformed solids, so the failures were never a defect\nin the boolean engine.\n\nDocs only; no code change.\n\n## The decisive test\n\nThe old captures were 2026-07-24 from published **2.128.2** — before the\n#1224 fix. So I re-captured on a local **2.128.5** build carrying it\n(overlay md5-verified in *both* tool `node_modules` locations, via the\ntool's own `gomaCaptureBisect` probe, 294 s).\n\n| Tool | old capture (2.128.2) | fresh capture (2.128.5) |\n|---|---|---|\n| tool0 / 2 / 4 / 6 | free=0 over=0 | **free=0 over=0** |\n| tool1 | free=405 over=38 | **free=405 over=38** |\n| tool3 | free=383 over=34 | **free=393 over=33** |\n| tool5 | free=367 over=42 | **free=386 over=36** |\n| tool7 | free=392 over=29 | **free=428 over=40** |\n\nStill open, still non-manifold, on a current kernel.\n\n## What that rules out\n\nFace counts shifted slightly between captures (tool5 714→690, tool7\n764→792), so construction is **not** bit-identical — yet the brokenness\nreproduces every time. That kills both remaining benign explanations at\nonce:\n\n- **not a stale/bad fixture** — a fresh capture on the fixed kernel\nbehaves the same;\n- **not a nondeterministic flake** — it varies in detail and fails\nregardless.\n\nCombined with the earlier forensics (not mesh-fallback output, not a\nserialization artifact), the conclusion is that the tool's **diagonal**\nkumiko lattice bands are genuinely malformed solids, and the GFA cut was\nbeing handed garbage.\n\n## Why this matters for the campaign\n\nThe goma odd-band work consumed several iterations diagnosing the\nboolean engine — classifier verdicts, sub-face splitting, FF section\nfilters — all downstream of a broken operand. Those readings are\nretracted in the roadmap. The engine-side half of this family (the even\nbands) was a real bug and is fixed and shipped in #1224.\n\n## Next\n\nFind which operation builds those bands, and whether it is a brepkit op\nreturning an open solid — which **would** be a real engine bug, just not\nin GFA (compare the open roadmap item \"Mesh-boolean fallback emits OPEN\nmeshes that get CONSUMED\") — or tool-side construction. Start from\n`patterns/kumiko/` in the tool and its existing `__kernel-tests__/goma*`\n/ `kumiko*` probes.\n\n## Also in this PR\n\nThe earlier operand forensics that narrowed the question before the\nre-capture: the odd tools are not mesh-fallback output (726/737/714/764\nplanar faces vs 663 for working bands — a fallback would be thousands of\ntriangles), and not a serialization artifact (the same `arena_io`\nround-trip produced watertight even bands from the same directory). Plus\ntwo doc-style review fixes.",
+          "timestamp": "2026-07-25T06:52:44-07:00",
+          "tree_id": "81f6f4ca2a5643d59b6058a24716adb229d1c02b",
+          "url": "https://github.com/andymai/brepkit/commit/d621902e2555783c88823388c312b915907c3b4e"
+        },
+        "date": 1784987701397,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 806593,
+            "range": "± 14772",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 889941,
+            "range": "± 5291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11475,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 630075,
+            "range": "± 4858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20936651,
+            "range": "± 136582",
             "unit": "ns/iter"
           }
         ]
