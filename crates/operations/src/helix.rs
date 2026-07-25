@@ -331,6 +331,15 @@ mod tests {
                     (0, 0),
                     "helical sweep turns={turns} segs={segs} must be closed and manifold"
                 );
+                // The two checks are complementary, not redundant: edge-use
+                // counts catch position-duplicate faces that `validate_solid`
+                // is blind to, and it catches Euler and wire-closure faults
+                // that leave every edge used exactly twice.
+                let report = crate::validate::validate_solid(&topo, sid).unwrap();
+                assert!(
+                    report.is_valid(),
+                    "helical sweep turns={turns} segs={segs} must pass validation: {report:?}"
+                );
             }
         }
     }
