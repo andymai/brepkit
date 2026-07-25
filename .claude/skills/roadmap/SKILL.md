@@ -761,12 +761,20 @@ uniform 663) — they are structurally different lattice members (the diagonals)
 corner cylinder at an angle rather than square on. LOCALIZED (env-gated `BK_OPEN_SHELL` probe at the
 abort site, stashed not yet committed): tool1's 9 faces are ALL PLANES clustered in the SAME (+x,−y)
 corner as the even-band defect and the SAME 1.2mm wall-thickness band — x≈17.1–18.1, y≈−19.4 to
-−20.75 — but in one narrow z window ≈8.2–9.0. SIGNATURE IS JUNCTION IDENTITY, NOT ALIASING: two face
-pairs share identical start points (Id(2696)/Id(2709) at (17.760,−20.080,8.372), Id(2721)/Id(2730)
-at (17.809,−19.418,8.466)), and the unpaired edges include MICRO-ellipses — (17.809,−19.418,8.466)→
-(17.811,−19.418,8.465) is ~0.002mm, another ~0.022mm. That is the near-duplicate-vertex/weld-band
-class (cf. the intwidth tangency and lite magnet-pad roots), so start from vertex minting in that
-corner (VERTEX_WATCH recipe) rather than from the splitter. Secondary lead, the inner/outer
+−20.75 — but in one narrow z window ≈8.2–9.0. **THE STRONGEST DATUM: BOTH LUMPS ARE ALL PLANES,
+zero cylinder or cone faces.** A genuine chunk of bin WALL at a corner would necessarily include
+corner-cylinder faces; the lattice tool is 100% planes. So these lumps are clusters of TOOL faces
+(the cut surfaces) that formed a disjoint growth shell instead of joining the main body — i.e. the
+junction between the tool's cut surface and the bin's corner cylinder never connects. Start there,
+not at a stray-sliver theory. Each odd band hits a DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;
+tool3 → (+x,+y) x≈18.6–20.5 y≈+18.3–19.9 z≈6.5–9.8), consistent with one diagonal member per band.
+CORRECTION, filed then retracted within the same session: an initial read called this the
+near-duplicate-vertex/weld-band class and pointed at vertex minting. The near-duplicates ARE present
+(Id(2721)/Id(2730) start at (17.809,−19.418,8.466) with a ~0.002mm unpaired ellipse to
+(17.811,−19.418,8.465)), but the surrounding junction gaps run ~0.019–0.06mm — three to four orders
+above the ~1e-6 marched-fit error that defines the weld-band class, so that filing is NOT supported.
+Treat the micro-edges as a symptom of the unconnected tool/cylinder junction, not the root.
+Secondary lead, the inner/outer
 asymmetry: the inner
 cylinder Id(6088) forms SEVEN notches and fails only at z 2.700–3.192, while the outer Id(5678)
 forms five and fails at three bands — same tool, same openings, two concentric cylinders 1.2mm
