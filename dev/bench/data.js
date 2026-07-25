@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784942096273,
+  "lastUpdate": 1784943575142,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12203,6 +12203,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21733396,
             "range": "± 88960",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3be33ca41a30b4bb47452bd5258334afd6734098",
+          "message": "test(io): show cylinders stop 0.05mm short of the cut plane (#1220)\n\nFollow-on to #1219. Adds `FACES_NEAR_X=<v>` to list result faces\nspanning a slab, which produces the sharpest datum yet on the goma root.\nDiagnostic only.\n\n## The gap, stated exactly\n\n```\nface Id(5676) cylinder x[17.000, 20.750]     ← every corner cylinder stops at 17.000\nface Id(5678) cylinder x[17.000, 20.750]\nface Id(5688) plane    x[17.050, 17.050]     ← tool0's cut plane\nface Id(5687) plane    x[16.756, 17.050]     ← planes do reach it\n```\n\nEvery corner **cylinder** face in the result is trimmed at **x =\n17.000**, while tool0's cut plane sits at **x = 17.050**. The 0.05 mm of\ncylinder between those values has **no face at all** — and that band is\nprecisely what the 30 free edges bound.\n\nThe planes reach 17.050 correctly. The cylinders stop 0.05 mm short.\n\nSo the four missing patches are **cylinder slivers that should run from\nx=17.000 out to the cut plane**, and the free-edge loops are the holes\nthey leave behind. That matches everything upstream: the loops are\nnon-planar (#1218), the defect is op-independent (#1218), and nothing is\ndropped at assembly (#1219) — the splitter simply never extends those\ncylinder faces to the cut plane.\n\n## Where this leaves the fix\n\nThe question is now specific enough to act on: **why the cylinder faces\nare trimmed at 17.000 rather than at tool0's cut plane 0.05 mm further\nout.** Candidates worth checking first are the section emitted for the\ncylinder × cut-plane pair, and whether the cylinder's own trim boundary\nis being taken from the wrong partner.\n\nRepro is unchanged and cheap: `goma_wall_band_cut_inmem.rs` (~230 ms),\nor `TOOL=0 FACES_NEAR_X=17.025` through `replay_cut_capture`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd `BASE_FACES_NEAR_X=<v>` and `FACES_NEAR_X=<v>` to\n`replay_cut_capture` to show the cut plane at x=17.050 does not split\nthe corner cylinders, which stop at x=17.000. Confirms a 0.05 mm band\nwith no cylinder face and narrows the defect to the FF/section/split\nstage; investigation notes updated.\n\n- **New Features**\n- `BASE_FACES_NEAR_X=<v>` scans input operands to confirm 17.000 is the\nbase cylinder tangent (not a trim).\n- `FACES_NEAR_X=<v>` slab scan prints face type and edge count to show\ncylinders span [17.000, 20.750] while the cut plane is at 17.050.\n\n- **Refactors**\n- Renamed a loop vertex variable to avoid shadowing; no behavior change.\n\n<sup>Written for commit 0020b3146a16cf3ad96ba6db12f52f5c7a817099.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1220?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T18:37:16-07:00",
+          "tree_id": "2f41d40556f5c3189a38df074664f42fa91cc405",
+          "url": "https://github.com/andymai/brepkit/commit/3be33ca41a30b4bb47452bd5258334afd6734098"
+        },
+        "date": 1784943573760,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 754269,
+            "range": "± 5553",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 840758,
+            "range": "± 2300",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10806,
+            "range": "± 214",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 601947,
+            "range": "± 3261",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20019073,
+            "range": "± 165428",
             "unit": "ns/iter"
           }
         ]
