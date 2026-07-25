@@ -717,9 +717,17 @@ tools 0/2/4/6 each give IDENTICAL F=494 free=30 over=0; tools 1/3/5/7 each ERR w
 shell with N faces would be dropped" (N = 9, 22, 23, 36). The evens are congruent bands on the
 bin's four walls (file sizes agree: evens ~650KB, odds ~380KB), so the split is the two kumiko
 diagonal families. So this is not one awkward tool — it hits 100% of the pattern bands, which is
-why the fallback runs for all 8 and compounds to 203s. THE TARGET IS NOW the FF/section/split stage
-for this 0.05mm plane-vs-cylinder sliver, NOT the classifier; and note ONE fix should clear both
-modes if they share the root, which the identical even-tool signatures suggest but do not prove. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
+why the fallback runs for all 8 and compounds to 203s. (12) THE TWO MODES ARE NOT ONE MECHANISM (`SHELL_LOG=1` prints
+`BuilderSolid`'s shell summary and its sliver-drop debug lines). tool0: **1 growth shell, 0 hole
+shells, and NO sliver-drop messages** — so its 30 free edges are NOT dropped faces. That single
+shell is the OUTER shell, which `assemble()` deliberately never tests for closedness, and it is
+itself open: the 4 faces were NEVER CREATED. tool1: **20 growth shells, 17 hole shells**, one of
+them open with 9 faces, which trips the `gs.len() >= 4` abort. So the even mode is a
+splitter/section gap (missing faces) and the odd mode is fragmentation + the assembly guard. A
+tempting unification — "small open shells are silently dropped (<4 faces) while big ones abort" —
+was REFUTED by this probe; tool0 drops nothing. THE TARGET IS NOW the FF/section/split stage for
+the 0.05mm plane-vs-cylinder sliver (even mode), with the odd mode's fragmentation treated as
+possibly separate. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
 broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
