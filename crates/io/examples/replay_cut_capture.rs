@@ -130,8 +130,8 @@ fn main() {
                 for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
                     for oe in topo.wire(wid).expect("wire").edges() {
                         let e = topo.edge(oe.edge()).expect("edge");
-                        for v in [e.start(), e.end()] {
-                            let x = topo.vertex(v).expect("v").point().x();
+                        for vid in [e.start(), e.end()] {
+                            let x = topo.vertex(vid).expect("vertex").point().x();
                             lo = lo.min(x);
                             hi = hi.max(x);
                         }
@@ -223,8 +223,8 @@ fn main() {
                             {
                                 for oe in topo.wire(wid).expect("wire").edges() {
                                     let e = topo.edge(oe.edge()).expect("edge");
-                                    for v in [e.start(), e.end()] {
-                                        let x = topo.vertex(v).expect("v").point().x();
+                                    for vid in [e.start(), e.end()] {
+                                        let x = topo.vertex(vid).expect("vertex").point().x();
                                         lo = lo.min(x);
                                         hi = hi.max(x);
                                         n += 1;
