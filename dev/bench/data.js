@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784979259218,
+  "lastUpdate": 1784980444657,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12527,6 +12527,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18311948,
             "range": "± 250306",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "58ca8f09b41c09467e633dfde47378bedf0f2834",
+          "message": "test(algo): narrow the goma odd-band defect to missing corner-cylinder faces (#1227)\n\nFollow-up to #1226. Narrows the remaining goma defect (bands 1/3/5/7)\nfrom \"a lump failed to pair\" to a specific missing-face claim.\nDiagnostics only; no behavior change.\n\nExtends `BK_OPEN_SHELL` to classify each unpaired edge, report face\nprovenance, list what else was selected near the lump, and print the\nlump's signed volume plus a global surface-type histogram.\n\n## Four measurements, each ruling something out\n\n**1. The partner faces do not exist.** Every one of tool1's 14 unpaired\nedges reports `same_id_outside=0` **and** `coincident_other_id=0` — no\nface outside the lump uses that edge id, and none has a\nposition-coincident edge under a different id. That rules out both \"the\nlump was never walked into the main shell\" and \"the junction was minted\ntwice and the copies never merged.\"\n\n**2. The lump is entirely tool-derived.** All 9 faces carry `src` ids\n226–348. The base holds only 78 faces (ids 0–77, deserialized first), so\nevery lump face comes from the tool and the missing partners must be\n**base** faces.\n\n**3. The missing partners are the corner cylinders.** The lump's\nboundary vertices lie exactly on them — `(17.186,−20.745)` and\n`(18.114,−20.581)` are at r=3.750 from axis (17,−17), and\n`(17.809,−19.418)` is at r=2.550. So the chunk is the wall segment\nbetween the inner and outer corner cylinders, and those cylinders are\nwhat should close it.\n\n**4. Nothing curved was selected nearby.** Of the 11 selected faces\nwithin 0.5 mm of the lump bbox `x[17.186,18.114] y[−20.745,−19.418]\nz[8.185,9.026]`, all are planes and only one is base-derived (`src=73`).\n\n## Instrument verified, not assumed\n\nThe same run reports `selected-total [cone 12, cylinder 26, plane 378]`.\nCylinders **are** selected globally, so their absence at the lump is\nreal and local — not a probe that quietly missed the path it claims to\ntest.\n\n## What this refutes\n\nLump signed volumes are substantial, not degenerate slivers: **3.69 /\n7.39 / 9.55 / 10.13 mm³** for bands 1/3/5/7. Combined with (3), the\nover-selection reading — a spurious tool patch that should never have\nappeared, which the ≥4-face guard is merely refusing to drop — is\n**refuted**. This is a genuine missing-face defect, in the same corner\nand the same family as the even-band notch loss closed by #1224, reached\nby a different mechanism.\n\n## Next\n\nFind why the corner-cylinder split produces no sub-face covering the\ndiagonal's crossing region — start at the FF/section stage for the\ncylinder × diagonal-plane pairs at those coordinates (`BK_FF_TRACE`),\nexactly as the even-band dig did.\n\n## Verification\n\n- `cargo nextest run -p brepkit-algo -p brepkit-io`: **430 passed**, 0\nskipped (full calibrated foil set included).\n- `cargo clippy -p brepkit-algo --all-targets`: clean.\n- Diagnostic is env-gated and off by default; the lump-membership tests\nuse a `HashSet` rather than repeated linear scans.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nExtend `BK_OPEN_SHELL` diagnostics to trace open growth shells and\nconfirm the odd‑band goma defect comes from missing corner‑cylinder\nfaces. Env‑gated only; no behavior change.\n\n- **New Features**\n- Log lump signed volume and a global surface-type histogram; compute\nlump bbox and list nearby selected faces with `src` provenance.\n- For each unpaired edge, log curve kind, endpoints, and counts for\n`same_id_outside` and `coincident_other_id`.\n- Include face `src` in shell logs; pass `face_source` through\n`assemble` to `log_open_growth_shell`.\n- Behind `BK_OPEN_SHELL` (off by default); `cargo nextest` (430 passed)\nand `cargo clippy` are clean.\n\n<sup>Written for commit ed168035cc778a369e67dfe7e0baf7df81928055.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1227?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T04:51:53-07:00",
+          "tree_id": "16da3422492b7d3a687294be440eab0c02e8fe1f",
+          "url": "https://github.com/andymai/brepkit/commit/58ca8f09b41c09467e633dfde47378bedf0f2834"
+        },
+        "date": 1784980443860,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 849177,
+            "range": "± 733",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 950975,
+            "range": "± 1428",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12964,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661915,
+            "range": "± 1373",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22666383,
+            "range": "± 49879",
             "unit": "ns/iter"
           }
         ]
