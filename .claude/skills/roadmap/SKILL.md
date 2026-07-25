@@ -704,11 +704,27 @@ x=17.000 with no bay, and **those un-notched generator segments ARE the free edg
 e17971), free because the flat wall at y=−20.750 does have its opening there so nothing pairs.
 `FREE_OWNERS=1` confirms the whole rim: 10 faces carry all 30 free edges — the two corner cylinders
 (3 + 2) and eight planes, dominated by the cut-plane faces Id(6090) 10-of-12 and Id(6091) 4-of-9.
-CANDIDATE DISCRIMINANT (not yet confirmed): in every WORKING bay the bridging ellipse's z DECREASES
-outward (19.140→19.111), in every FAILING one it INCREASES (12.338→12.367) — kumiko diagonals slope
-alternately, so this points at a direction/orientation assumption in the notch split rather than a
-tolerance. START THE NEXT SESSION HERE: confirm or refute that slope discriminant across all 8 bands
-and both cylinders, then find the split site that declines the notch for one slope sign. Everything
+SLOPE DISCRIMINANT — PROPOSED AND REFUTED IN THE SAME SESSION, do not re-chase: the bridging
+ellipse's z direction looked like the split (working bays DECREASE outward 19.140→19.111, the three
+failures INCREASE 12.338→12.367), but enumerating all 8 bands kills it — the working bay at
+z 9.291–10.122 goes 10.122→10.151, i.e. UP-outward exactly like all three failures, and its notch
+forms fine. Full band table, top to bottom (B=notch formed, F=free): B 18.309–19.140 down,
+B 16.093–16.923 down, B 13.723–14.707 down, **F 11.507–12.338 up**, B 9.291–10.122 up,
+**F 6.794–7.624 up**, B 4.578–5.408 down, **F 2.700–3.192 up**. Also REFUTED as discriminants: band
+width (working and failing bands are both ≈0.831, except one working band at 0.984 and one failing
+at 0.492) and band spacing (centres are a near-uniform ≈2.2 lattice pitch). START THE NEXT SESSION
+HERE: the pattern B,B,B,F,B,F,B,F is not periodic and not slope-keyed, so stop pattern-matching the
+OUTPUT and instrument the notch split itself — find where the θ=90→89.24 trim is decided per band
+and log why it declines for those three. THE SHARPEST LEAD IS THE INNER/OUTER ASYMMETRY: the inner
+cylinder Id(6088) forms SEVEN notches and fails only at z 2.700–3.192, while the outer Id(5678)
+forms five and fails at three bands — same tool, same openings, two concentric cylinders 1.2mm
+apart, different outcomes. So the decision is per-face, not per-opening. The two bands where inner
+succeeds but outer fails also show the cascade: at z 11.536–12.367 the inner notch IS built but its
+x=17.050 line (e19454) is left FREE because the outer side never produced the partner patch. Also
+worth explaining: every outer-cylinder edge sits in one fresh contiguous id block (e17930–e17972)
+while the inner mixes a shared lower block (e18387–e18485, its formed notch ellipses) with fresh
+e19445–e19459 — the outer's notch ellipses appear NOT to be the shared section edges the inner's
+are, which may be the provenance difference behind the whole asymmetry. Everything
 else in this chain is measured and solid — FF pairing, restrict, emission and the section map are
 all confirmed working; three hypotheses (the empty-`pave_blocks` skip, a face-id mismatch, and
 cylinder mis-wiring via a duplicated inner wire) are REFUTED. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
