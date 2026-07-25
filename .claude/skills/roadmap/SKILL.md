@@ -948,8 +948,27 @@ against the base alone): all five fail "no outer shell found", tool0/tool3 with 
 (disjoint, correctly AABB-rejected) and tool1/tool2 with sections emitted, so the failure is
 downstream of sectioning in every case. NOTE the ops-level shortcut only detects CONTAINMENT
 (A⊂B, B⊂A, A=B) — **disjointness is not handled**, which is why a non-touching strut still routes
-through GFA and then the mesh fallback. FIX SHAPE: make the orientation decision correct for
-cylinder-bounded wedges (and/or short-circuit a disjoint Cut to A). Reproduce per tool by symlinking
+through GFA and then the mesh fallback. **FLUX BREAKDOWN (`BK_FLUX=1`, new) NARROWS IT TO ONE UNRESOLVED FORK — resolve
+this BEFORE writing any fix.** Per-face on the disjoint case: `Id(0) plane d=0.0000`,
+`Id(4) cylinder d=+68.3065`, `Id(3) plane reversed=true d=-320.9000`,
+`Id(2) cylinder reversed=true d=-641.4838`, `Id(1) plane d=+41.6553`, `Id(5) plane d=0.0000`,
+**total = -852.42**. Compare 3V = 3 × 284.873 = **+854.6**: the magnitudes agree to 0.3% and the SIGN
+is opposite. So the geometry is integrated correctly and the orientation is GLOBALLY inverted — this
+is not a per-face `is_reversed` slip (flipping only the reversed faces gives ±1072.4, not ±855).
+THE FORK: either (a) the flux convention is inverted and `shell_is_outward_oriented` is wrong, or
+(b) **the captured base operand is genuinely inward-oriented**, the flux test is right, and the
+defect is upstream in how the tool's wedge is built or serialized. Evidence does NOT yet separate
+them: `solid_volume` returns `total.abs()` so its +284.873 says nothing about orientation, and
+`classify_point` is ray-parity based so its Inside/Outside verdicts (material between r=1.55 and
+r=4.75, hollow inside — geometrically correct) are orientation-independent too. `brepkit-check`'s
+`integrate_face` DOES accumulate a signed volume but check is out of `brepkit-io`'s layer.
+**THE DISCRIMINATING EXPERIMENT, cheap and decisive: run the same instrumentation on a KNOWN-GOOD
+primitive** — `Cut(box, far-away disjoint box)` built natively, whose result shell is just the box.
+If `BK_FLUX` reports outward for that but inward for the deserialized wedge, the wedge is inverted
+(fork b, upstream defect). If it reports inward for both, the flux convention itself is wrong (fork
+a, fix `shell_is_outward_oriented`). FIX SHAPE depends on which: correct the orientation decision
+for cylinder-bounded wedges, or fix whatever inverts the operand — and independently, short-circuit
+a disjoint Cut to A. Reproduce per tool by symlinking
 one `cut-tool<i>.bin` as `cut-tool0.bin` beside `cut-base.bin` and running
 `PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1 BBOX=1`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
 fixture itself — an unvalidated operand already cost this campaign several passes. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
