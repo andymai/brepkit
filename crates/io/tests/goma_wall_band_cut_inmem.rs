@@ -1,6 +1,19 @@
-//! Ready-repro: cutting a gridfinity bin wall by one kumiko lattice band
-//! leaves 30 free edges, so the analytic result is rejected and the whole
-//! kumiko family falls back to the mesh boolean.
+//! Regression: cutting a gridfinity bin wall by one kumiko lattice band used
+//! to leave 30 free edges, so the analytic result was rejected and the whole
+//! kumiko family fell back to the mesh boolean.
+//!
+//! Root cause (diagnosed in #1223, fixed in #1224): phase FF's AABB in-both
+//! pre-filter sampled each raw curve 16× and, for a `Line`, gave up without
+//! the adaptive refinement it applies to every other curve type — on the
+//! stated reasoning that a straight line cannot be under-sampled at that
+//! granularity. But exactness of the LINE says nothing about
+//! whether a sample lands in the tiny in-both WINDOW: the section here is a
+//! full-height (~20.3mm) cylinder generator whose true in-both span is one
+//! ~0.83mm lattice opening, under the filter's ~1.27mm pitch. Whether a band
+//! survived was aliasing luck — 12 of the 16 band×cylinder pairs kept their
+//! generator and 4 silently lost both. A straight section needs no sampling at
+//! all: the predicate is membership in `bb_a ∩ bb_b`, itself an AABB, so the
+//! segment is now slab-clipped against it exactly.
 //!
 //! This one boolean is the root of the kumiko export-integrity family. The
 //! chain, measured (see the roadmap's goma entry): the tool's
@@ -11,19 +24,23 @@
 //! analytic path is rejected and the mesh fallback runs instead. The analytic
 //! path is ~12x faster and keeps all 12 cones and 24 cylinders.
 //!
-//! What the analytic result gets wrong is small and precise: **30 free edges**,
-//! which chain into **4 components whose every vertex has degree exactly 2** —
-//! four simple closed outlines, i.e. four missing faces. They all sit in one
-//! 0.05mm slab: every vertex is at x=17.00 or x=17.05. The x=17.05 side is this
-//! tool's cut plane; the x=17.00 side is NOT a plane but the base's corner
-//! cylinder, so it is a plane-vs-cylinder sliver. Each outline mixes lines in
-//! the cut plane with one line at x=17.00 and two ellipse arcs bridging the
-//! gap, so the missing faces are non-planar patches, not flat slivers.
+//! What the analytic result got wrong was small and precise: **30 free edges**,
+//! chaining into **4 components whose every vertex has degree exactly 2**. Each
+//! was an un-notched span of a corner cylinder's tangent generator at x=17.00,
+//! left unpaired because the flat wall at y=−20.750 does have its opening
+//! there. The notch — the quarter-cylinder trimmed from θ=90 back to θ=89.24
+//! across the tool's 0.05mm `SLAB_OVERLAP` — formed in 5 of 8 z-bands on the
+//! outer (r=3.75) cylinder and 7 of 8 on the inner (r=2.55) one.
 //!
-//! The defect is op-independent (Cut/Fuse both leave ~30 free edges, Intersect
-//! aborts assembly), which points at the splitter/section stage rather than
-//! classification. It also hits every band: tools 0/2/4/6 all give this exact
-//! signature, tools 1/3/5/7 abort with "open growth shell with N faces".
+//! Diagnostic notes worth keeping: the failing bands are NOT distinguished by
+//! the bridging ellipse's slope, band width, or band spacing (all three were
+//! checked and refuted — the working bay at z 9.291–10.122 slopes the same way
+//! as all three failures). And "only 2 of 24 cylinders carry sections" is
+//! CORRECT, not short: localizing by the free loops' y/z rather than x puts
+//! every outline in the single (+x,−y) corner.
+//!
+//! Bands 1/3/5/7 still abort with "open growth shell with N faces" — a
+//! SEPARATE, pre-existing defect that this fix does not address.
 //!
 //! Operands captured from the live tool on published 2.128.2; the other seven
 //! bands live in `~/.cache/brepkit-parity-captures/2026-07-24/goma-bisect/`
@@ -50,7 +67,6 @@ fn load(name: &str, topo: &mut Topology) -> brepkit_topology::solid::SolidId {
 }
 
 #[test]
-#[ignore = "ready-repro — kumiko band cut leaves 30 free edges; see doc comment"]
 fn goma_wall_band_cut_is_closed() {
     let mut topo = Topology::new();
     let base = load("goma_wall_base.bin", &mut topo);
