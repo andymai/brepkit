@@ -39,10 +39,15 @@ fn describe(topo: &Topology, sid: brepkit_topology::solid::SolidId, label: &str)
 
 struct DropLogger;
 impl log::Log for DropLogger {
-    fn enabled(&self, _m: &log::Metadata) -> bool {
-        true
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        // Only the assembler's shell chatter — an unconditional `true` here
+        // would route every record in the workspace through `log()`.
+        m.target().starts_with("brepkit_algo") && m.level() <= log::Level::Debug
     }
     fn log(&self, r: &log::Record) {
+        if !self.enabled(r.metadata()) {
+            return;
+        }
         let msg = format!("{}", r.args());
         if msg.contains("growth sliver") || msg.contains("growth shell") {
             println!("    [algo] {msg}");
