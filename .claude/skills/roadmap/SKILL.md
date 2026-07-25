@@ -674,15 +674,15 @@ BETWEEN ARENA EMISSION AND THE PER-FACE SECTION LISTS (`BK_SPLIT_TRACE=1`, eprin
 CYLINDER faces with has_sections=true** (22 without; planes are 420 true / 285 false) — although FF
 emitted 12 cylinder x plane curves. So ~10 emitted sections never reach their cylinder face's
 section list, which is why those faces are never split. NEXT STEP: `build_section_map` in fill_images_faces.rs, which SKIPS any
-`arena.curves` entry whose `pave_blocks` is empty (`continue`). HYPOTHESIS, EXPLICITLY UNVERIFIED:
-those 10 cylinder sections carry no pave blocks and are skipped there — which would make this the
-SAME root as the snapClip deepened-notch row ("marched FF sections on curved faces carry
-pave_block_id=None, bypassing the pave machinery", canonical fix at phase-FF/make_blocks altitude).
-Could NOT be confirmed: `log::debug!` inside fill_images_faces.rs does not emit (see warning below),
-and `eprintln!` is denied there by `clippy::print_stderr`, so both probes read as a false zero.
-Confirm it by counting empty-`pave_blocks` curves some other way before acting on it. WARNING: `log::debug!` markers added inside
-`fill_images_faces` did NOT reach a custom logger that WAS receiving `builder_solid`'s debug lines,
-so log-based probes there read as a false ZERO — use `eprintln!` gated on the env var instead.
+`arena.curves` entry whose `pave_blocks` is empty (`continue`). REFUTED: that skip never fires — all
+**890 curves carry exactly ONE pave block, none are empty**, so this is NOT the snapClip
+deepened-notch pave-bypass root. The loss is in the `section_map` -> face lookup instead: curves are
+keyed by `curve.face_a`/`face_b`, yet 22 of 24 cylinder faces find no sections, so suspect a face-id
+mismatch between the arena's recorded faces and the faces the split loop iterates. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
+adjacent `log::debug!` and `eprintln!` on the same line gave **0 vs 890** records, while
+`builder_solid`'s `log::debug!` reaches the same logger fine. Log-based probes in that file read as
+a FALSE ZERO. Use a temporary `eprintln!` gated on an env var (it trips `clippy::print_stderr`, so
+do not commit it). Cause not diagnosed.
 REFUTED, do not re-attempt: a panic (none; `lastPanicMessage()` is empty), bisect thrash
 (telemetry: 1 attempt, 1 success), prism construction (322ms, 0.1%), boolean batching as the main
 cost (30%), classification (defect is op-independent), and the assembly sliver-drop guard (tool0
