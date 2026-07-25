@@ -702,8 +702,12 @@ CLOSED outlines of 7, 7, 7 and 9 vertices. (Degree-2-everywhere is the test that
 this; "no odd-degree vertices" does NOT, since a degree-4 junction / figure-eight is even too.) So these are not ragged partial boundaries; they are four well-formed polygon outlines
 where a face should be and is not, all inside the 0.05mm slab. That is the same class as cut 1's
 "open growth shell with 20 faces would be dropped" — the assembler dropping faces in this region,
-harder on the second cut. THE TARGET IS NOW: why those 4 sliver faces are dropped from the analytic
-assembly. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
+harder on the second cut. LOOP GEOMETRY (`LOOP_GEOM=1`): each of the 4 outlines has the same
+signature — several Lines lying in the x=17.05 plane, ONE Line on the far side at x=17.00, and TWO
+short Ellipse arcs bridging 17.00 <-> 17.05. So each loop STRADDLES the 0.05mm gap and is NOT
+planar: the missing faces span from tool0's cut plane across to the base cylinder. Each covers
+roughly 1.2 x 0.83mm with a 0.05mm depth excursion. THE TARGET IS NOW: why those 4 non-planar
+sliver faces are dropped from the analytic assembly. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
 broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers

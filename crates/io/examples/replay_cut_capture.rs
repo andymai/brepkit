@@ -180,6 +180,50 @@ fn main() {
                         }
                         let mut deg: Vec<_> = deg.into_iter().collect();
                         deg.sort_unstable();
+                        if std::env::var("LOOP_GEOM").is_ok() {
+                            // Print each component's edges so the missing face's
+                            // surface can be read off the loop it bounds.
+                            let mut comp: HashMap<usize, usize> = HashMap::new();
+                            let mut cid = 0;
+                            for &(a, _) in &segs {
+                                if comp.contains_key(&a) {
+                                    continue;
+                                }
+                                cid += 1;
+                                let mut stack = vec![a];
+                                while let Some(v) = stack.pop() {
+                                    if comp.insert(v, cid).is_some() {
+                                        continue;
+                                    }
+                                    for &w in adj.get(&v).into_iter().flatten() {
+                                        if !comp.contains_key(&w) {
+                                            stack.push(w);
+                                        }
+                                    }
+                                }
+                            }
+                            for want in 1..=cid {
+                                println!("    --- component {want} ---");
+                                for (eid, _) in uses.iter().filter(|&(_, &c)| c == 1) {
+                                    let e = topo.edge(*eid).expect("edge");
+                                    if comp.get(&e.start().index()) != Some(&want) {
+                                        continue;
+                                    }
+                                    let a = topo.vertex(e.start()).expect("v").point();
+                                    let b = topo.vertex(e.end()).expect("v").point();
+                                    println!(
+                                        "      {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                                        e.curve().type_tag(),
+                                        a.x(),
+                                        a.y(),
+                                        a.z(),
+                                        b.x(),
+                                        b.y(),
+                                        b.z()
+                                    );
+                                }
+                            }
+                        }
                         let all_two = adj.values().all(|ns| ns.len() == 2);
                         println!(
                             "    free components={loops} degree histogram(deg:count)={deg:?} all_degree_2={all_two}"
