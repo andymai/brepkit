@@ -46,6 +46,19 @@ fn describe(topo: &Topology, sid: brepkit_topology::solid::SolidId, label: &str)
     let free = uses.values().filter(|&&c| c == 1).count();
     let over = uses.values().filter(|&&c| c > 2).count();
     let vol = brepkit_operations::measure::solid_volume(topo, sid, 0.01).unwrap_or(f64::NAN);
+    if std::env::var("BBOX").is_ok()
+        && let Ok(bb) = brepkit_operations::measure::solid_bounding_box(topo, sid)
+    {
+        println!(
+            "    {label} bbox x[{:.3},{:.3}] y[{:.3},{:.3}] z[{:.3},{:.3}]",
+            bb.min.x(),
+            bb.max.x(),
+            bb.min.y(),
+            bb.max.y(),
+            bb.min.z(),
+            bb.max.z()
+        );
+    }
     println!(
         "  {label}: F={} mix={mix:?} free={free} over={over} vol={vol:.3}",
         faces.len()
