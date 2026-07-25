@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784937820661,
+  "lastUpdate": 1784940150191,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12095,6 +12095,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21627961,
             "range": "± 50703",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f918862c0ad4cb5140d89b048c98bd1b1dfcbb38",
+          "message": "test(io): show four closed outlines are missing in the goma sliver (#1218)\n\nContinues the goma dig from #1217, which ended at \"30 free edges in a\n0.05 mm plane-vs-cylinder sliver.\" Adds `FREE_LOOPS=1` and `XSCAN=<v>`\nmodes to the replay harness. Diagnostic only — no production code.\n\n## Exactly four faces are missing\n\n```\nfree components=4   odd-degree vertices=0   (every chain closed)\n  component 1: 7 vertices\n  component 2: 7 vertices\n  component 3: 7 vertices\n  component 4: 9 vertices\n```\n\nChaining the 30 free edges by shared vertex gives **4 components, all\nclosed** — zero odd-degree vertices. So these are not ragged partial\nboundaries but four well-formed polygon outlines (7–9 vertices each)\nwhere a face should be and is not, all inside the 0.05 mm slab.\n\nThat is the same class as cut 1's `assembly failed: open growth shell\nwith 20 faces would be dropped` — the assembler dropping faces in this\nregion, harder on the second cut.\n\n## Where the slab comes from\n\n`XSCAN=17.0` on each operand:\n\n```\nbase:  X-normal planes near 17: []\ntool0: X-normal planes near 17: [17.05]\ntool1: X-normal planes near 17: [16.05 … 17.00 … 17.90]\n```\n\nThe base has none. tool0 contributes its cut plane at x=17.05. Since the\nfree edges come from cut 0 (tool0 only), the x=17.00 side is **not a\nplane** — the dump shows `free line on cylinder (17.00,−19.55,2.70)`,\nthe base's corner cylinder. So it is a plane-vs-cylinder sliver, not two\nparallel planes.\n\nI want to be explicit that this **resembles** #1213's\ntangent-section-circle family but the mechanism is **not proven**; the\nresemblance is geometric coincidence only.\n\n## Why this matters\n\nThe chain from #1215/#1217: the kumiko family's 14 export-integrity\nfailures reduce to one 203 s `cutAll`, which is 203 s only because the\nanalytic path is rejected for these 30 free edges and the mesh fallback\nruns instead. The analytic result is **12× faster and keeps all 12 cones\nand 24 cylinders**.\n\nSo recovering these 4 faces would make goma analytic, cut ~12× per\nboolean, and remove the broken-fallback consumption (`Ok` with 756 free\nedges) at the same time.\n\n**Target for the fix:** why those 4 sliver faces are dropped from the\nanalytic assembly.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nProves four simple closed loops bound the missing faces in the goma\nsliver via a degree‑2 check, dumps each loop’s geometry, and shows the\ndefect is op‑independent and present across all pattern bands. Adds\ndebug-only toggles and a ready‑repro test to reproduce the 30‑free‑edge\nfailure; diagnostic only.\n\n- Debug flags: `FREE_LOOPS=1` (chain and count closed components),\n`LOOP_GEOM=1` (dump per‑loop curves), `OP` (`cut|fuse|intersect`), and\n`TOOL=<i>` (single‑tool cut). Even tools: F=494 free=30 over=0; odd\ntools: assembler aborts (“open growth shell with N faces…”).\n- New test: ignored ready‑repro at\n`crates/io/tests/goma_wall_band_cut_inmem.rs` with fixtures\n`goma_wall_base.bin` and `goma_wall_band.bin` that cuts one band and\ndemonstrates the 30 free edges while preserving curved analytic faces.\n\n<sup>Written for commit 9fcc058747dd060f675ff5f417f9888c996d0457.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1218?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T17:40:17-07:00",
+          "tree_id": "82d48207975ab4b75561469ea9f192b9534a410b",
+          "url": "https://github.com/andymai/brepkit/commit/f918862c0ad4cb5140d89b048c98bd1b1dfcbb38"
+        },
+        "date": 1784940149373,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 819241,
+            "range": "± 29525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 909924,
+            "range": "± 1466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11972,
+            "range": "± 188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 658126,
+            "range": "± 10213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21604338,
+            "range": "± 46348",
             "unit": "ns/iter"
           }
         ]
