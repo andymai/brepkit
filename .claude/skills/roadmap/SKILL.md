@@ -839,12 +839,15 @@ geometry would be a triangle soup in the thousands. So the "fallback-poisoned ca
 does not fit and should not be assumed. (2) they are non-manifold as well as open (`over` 29–42
 alongside `free` 367–405), which reads as overlapping or duplicated faces — a mis-assembled analytic
 shell, not a truncated or lossy capture. Note also that serialization is unlikely to be the culprit:
-the SAME arena_io round-trip produced perfectly watertight even bands in the same capture directory.
-Captures are dated 2026-07-24 from published 2.128.2, i.e. BEFORE the #1224 fix; the tool is present
-at `~/Git/gridfinity-layout-tool`, so a re-capture on ≥2.128.5 is the decisive test. Everything below this line about the odd bands describes behaviour
-observed on BROKEN INPUT and must not be treated as an engine defect: **RETRACTED — the "GFA
-classifier misjudgement" reading (#1229) is NOT established; the classifier was fed a non-closed
-solid.** The probe now prints
+the SAME `arena_io` round-trip produced perfectly watertight even bands in the same capture
+directory. Captures are dated 2026-07-24 from published 2.128.2, i.e. BEFORE the #1224 fix; the tool
+is present at `~/Git/gridfinity-layout-tool`, so a re-capture on ≥2.128.5 is the decisive test.
+
+Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
+not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
+is NOT established; the classifier was fed a non-closed solid.**
+
+The probe now prints
 each sub-face's `interior_point`, and a new `POINT_IN=x,y,z` knob on the replay classifies a point
 against the base and every tool with the independent operations-level `classify_point`. The two
 remainders' points differ: tool0 uses (17.244,−19.538,10.771) → GFA Outside, SELECTED; tool1 uses
