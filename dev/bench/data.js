@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784990832258,
+  "lastUpdate": 1784991986409,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12851,6 +12851,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17709735,
             "range": "± 16793",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "83aaa86b7cdeae7e93b58ae427d5762822e3d492",
+          "message": "docs(roadmap): the goma bands are mesh-fallback output; correct my earlier read (#1233)\n\nTraces the open-band chain to the **already-open** item *\"Mesh-boolean\nfallback emits OPEN meshes that get CONSUMED\"* — and corrects a wrong\ninference I recorded in #1232.\n\nDocs only; no code change.\n\n## The chain, code-confirmed\n\n1. An analytic fuse fails the **strict** gate —\n`validate_boolean_result` in `boolean/assembly.rs`, which *does* reject\n`free_edges > 0` per #1192.\n2. It drops to `mesh_boolean_fallback`, which checks\n`boundary_edge_count` / `non_manifold_edge_count`, `log::warn!`s that\nthe output is not a closed 2-manifold, then falls straight through to\n`mesh_result_to_face_specs` and uses it anyway.\n3. The result is finally checked by\n`validate_boolean_result_**lenient**`, which by design rejects only\ndegenerate topology (too few faces, zero edges/vertices) — it is the\nterminal check with no fallback left.\n\nSo an open mesh result is accepted, exactly as the open item describes.\n\n## Correcting my earlier read\n\n#1232 recorded that the bands were \"almost certainly NOT that path's\noutput\", because 726/737/690/792 planar faces is too few for a triangle\nsoup. **That was wrong, twice over:**\n\n1. `mesh_boolean_fallback` runs `unify_faces` on its output, merging\ncoplanar triangles back into polygons — so a mesh-derived band lands at\na modest planar face count.\n2. The decisive tell was in the operand dump the whole time: **every\nband is 100% planar, the clean ones included** (`mix=[(\"plane\", 663)]`\nand friends, zero cylinders or cones), while the base carries 12 cones\nand 24 cylinders. A band built from revolves and helix sweeps *must*\nhave cylindrical strut surfaces wrapping the corner. Their total absence\nis the parity skill's canonical fallback tell: *\"all-planar with zero\ncurved surfaces on a shape that should have cylinders is fallback\nregardless of the number.\"*\n\nAll eight bands are mesh-fallback output. Four happened to come out\nwatertight; four did not.\n\n## What this makes it\n\nA **brepkit-side defect with a clear shape**, and one already on the\nroadmap rather than a new discovery:\n\n- either make the mesh co-refinement produce closed output for these\noperands,\n- or make `mesh_boolean_fallback` **reject** a non-watertight result\ninstead of warning and consuming it — noting that rejecting means the op\nfails outright, since nothing follows it. That is a product call, not a\npure bug fix.\n\nAlso worth asking **why the strut fuses fall back at all**: if the\nanalytic path held, no band would be mesh-derived and the family would\nlikely close on its own.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to confirm the goma bands are brepkit mesh-fallback\noutput, links this to the “Mesh-boolean fallback emits OPEN meshes that\nget CONSUMED” item, and clarifies the strict `validate_boolean_result`\n-> `mesh_boolean_fallback` -> `validate_boolean_result_lenient` path\nthat can accept open meshes. Also fixes the gate identifier casing to\n`validate_boolean_result_lenient` and retracts a prior claim that this\nwas “never a boolean engine defect” (it is a brepkit mesh-fallback\nissue); docs only.\n\n<sup>Written for commit 1fe239ae6c206de72e9b12617a1ed2ebc8172710.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1233?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T08:04:08-07:00",
+          "tree_id": "b1b9aa83d1313c17fd82c2be6605c8abea210d07",
+          "url": "https://github.com/andymai/brepkit/commit/83aaa86b7cdeae7e93b58ae427d5762822e3d492"
+        },
+        "date": 1784991985633,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 794570,
+            "range": "± 1431",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 890502,
+            "range": "± 1002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11943,
+            "range": "± 644",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 619868,
+            "range": "± 1858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21138769,
+            "range": "± 64093",
             "unit": "ns/iter"
           }
         ]
