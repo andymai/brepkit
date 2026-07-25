@@ -681,11 +681,24 @@ deepened-notch pave-bypass root. Nor is it the `section_map` lookup: that map ha
 nothing is lost in the lookup. CAUTION — do NOT read "only 2 of 24 cylinders sectioned" as the
 defect. The `FACES_NEAR_X` filter tests only the X range, and EVERY corner cylinder spans
 [17.000,20.750], so all four corners pass it regardless of y/z; most of those 22 are on other
-corners and SHOULD be untouched by tool0's single-wall slab. START THE NEXT SESSION HERE: identify
-which cylinder faces tool0 actually reaches (using y and z, not just x), and only then decide
-whether 2 sectioned is right or short. Everything else in this chain is measured and solid — FF
-pairing, restrict, emission and the section map are all confirmed working; two hypotheses (the
-empty-`pave_blocks` skip and a face-id mismatch) are REFUTED. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
+corners and SHOULD be untouched by tool0's single-wall slab. **RESOLVED: 2 sectioned cylinders is
+RIGHT, not short** — localizing by the free loops' y/z (not x) puts all four missing outlines in the
+SINGLE (+x,−y) corner, whose two full-height wall cylinders are exactly the outer r=3.75
+(x[17.000,20.750], 30 edges) and inner r=2.55 (x[17.000,19.550], 34 edges); the other 22 are other
+corners or low-z base profile that tool0 never reaches. **AND THE QUADRIC SIDE IS PROBABLY NOT THE
+DEFECT AT ALL.** `FACE_WIRES=1` (new knob on the replay example) shows both cylinders carry ONE
+plain outer wire and ZERO inner wires — so the cone-box row's predicted "inner wire duplicating the
+outer" fix-shape does NOT transfer here, and a bayed single outer wire is the CORRECT shape for a
+quarter-cylinder bitten at its θ=90 edge. Re-reading the free-loop geometry accordingly: each
+missing outline spans y∈[−19.550,−20.750] — exactly the 1.2mm wall thickness between the inner and
+outer corner cylinders — and is bounded by TWO ELLIPSE ARCS plus lines. A plane×cylinder section is
+an ellipse and tool0 is 663 PLANES, so **the missing patches are planar TOOL-side faces (the lattice
+opening's slanted walls) trimmed by the two corner cylinders, not cylinder pieces**. Confirmed
+absent: no face in the result spans x[17.000,17.050]. START THE NEXT SESSION HERE: identify which
+tool0 plane face each of the 4 outlines belongs to, and whether that plane face is split-but-missing
+a sliver sub-face or dropped whole. Everything else in this chain is measured and solid — FF
+pairing, restrict, emission and the section map are all confirmed working; three hypotheses (the
+empty-`pave_blocks` skip, a face-id mismatch, and cylinder mis-wiring) are REFUTED. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
 adjacent `log::debug!` and `eprintln!` on the same line gave **0 vs 890** records, while
 `builder_solid`'s `log::debug!` reaches the same logger fine. Log-based probes in that file read as
 a FALSE ZERO. Use a temporary `eprintln!` gated on an env var (it trips `clippy::print_stderr`, so

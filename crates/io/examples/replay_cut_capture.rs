@@ -241,6 +241,45 @@ fn main() {
                             }
                         }
                     }
+                    if std::env::var("FACE_WIRES").is_ok() {
+                        // Sections reach the two corner cylinders but no sliver
+                        // sub-faces come out. Either the splitter declined the
+                        // split (one plain outer wire) or it mis-wired the face
+                        // (an inner wire duplicating the outer). Print the wire
+                        // structure of every curved face carrying more edges
+                        // than an untouched quarter-cylinder's four.
+                        for &fid in &faces {
+                            let f = topo.face(fid).expect("face");
+                            if f.surface().type_tag() == "plane" {
+                                continue;
+                            }
+                            let wires: Vec<_> = std::iter::once(f.outer_wire())
+                                .chain(f.inner_wires().iter().copied())
+                                .collect();
+                            let total: usize = wires
+                                .iter()
+                                .map(|&w| topo.wire(w).expect("wire").edges().len())
+                                .sum();
+                            if total <= 4 {
+                                continue;
+                            }
+                            println!(
+                                "    face {fid:?} {} wires={} edges={total}",
+                                f.surface().type_tag(),
+                                wires.len()
+                            );
+                            for (k, &wid) in wires.iter().enumerate() {
+                                let w = topo.wire(wid).expect("wire");
+                                let kind = if k == 0 { "outer" } else { "inner" };
+                                let ids: Vec<usize> =
+                                    w.edges().iter().map(|oe| oe.edge().index()).collect();
+                                println!(
+                                    "      {kind} wire {wid:?} n={} edges={ids:?}",
+                                    w.edges().len()
+                                );
+                            }
+                        }
+                    }
                     if free > 0 && std::env::var("FREE_LOOPS").is_ok() {
                         // Free edges bound the hole(s) left by dropped faces.
                         // Chain them by shared vertex: each closed chain is one
