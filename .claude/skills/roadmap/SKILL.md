@@ -766,7 +766,27 @@ zero cylinder or cone faces.** A genuine chunk of bin WALL at a corner would nec
 corner-cylinder faces; the lattice tool is 100% planes. So these lumps are clusters of TOOL faces
 (the cut surfaces) that formed a disjoint growth shell instead of joining the main body — i.e. the
 junction between the tool's cut surface and the bin's corner cylinder never connects. Start there,
-not at a stray-sliver theory. Each odd band hits a DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;
+not at a stray-sliver theory. **ROOT NARROWED (2026-07-25, #1227): THE CORNER-CYLINDER SUB-FACES
+THAT SHOULD CLOSE THE CHUNK ARE MISSING FROM THE SELECTION.** Four measurements, each ruling
+something out. (1) Every one of tool1's 14 unpaired edges has `same_id_outside=0` AND
+`coincident_other_id=0` — the partner exists nowhere in the selected set under ANY identity, so this
+is neither "the lump was not walked into the main shell" nor a double-minted junction. (2) All 9
+lump faces carry `src` ids 226–348; the base holds only 78 faces (ids 0–77, deserialized first), so
+EVERY lump face is tool-derived and the missing partners must be BASE faces. (3) The lump's boundary
+vertices lie EXACTLY on the two corner cylinders — (17.186,−20.745) and (18.114,−20.581) are at
+r=3.750 from axis (17,−17), and (17.809,−19.418) is at r=2.550 — so the chunk is the wall segment
+between the inner and outer corner cylinders, and those cylinders are what should close it. (4) Of
+the 11 selected faces within 0.5mm of the lump bbox x[17.186,18.114] y[−20.745,−19.418]
+z[8.185,9.026], ALL are planes and only ONE is base-derived (src=73). INSTRUMENT VERIFIED (the
+"probe that misses the path looks like a null result" trap): the same run reports selected-total
+`[cone 12, cylinder 26, plane 378]`, so cylinders ARE selected globally — their absence at the lump
+is real and LOCAL. Lump signed volumes are substantial, not slivers: 3.69 / 7.39 / 9.55 / 10.13 mm³
+for bands 1/3/5/7. So the over-selection reading (a spurious tool patch that should never appear) is
+REFUTED; this is a genuine missing-face defect in the same corner and the same family as the
+even-band notch loss, reached by a different mechanism. NEXT: find why the corner-cylinder split
+produces no sub-face covering the diagonal's crossing region — start at the FF/section stage for the
+cylinder × diagonal-plane pairs at those coordinates (`BK_FF_TRACE`), exactly as the even-band dig
+did. Each odd band hits a DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;
 tool3 → (+x,+y) x≈18.6–20.5 y≈+18.3–19.9 z≈6.5–9.8), consistent with one diagonal member per band.
 CORRECTION, filed then retracted within the same session: an initial read called this the
 near-duplicate-vertex/weld-band class and pointed at vertex minting. The near-duplicates ARE present
