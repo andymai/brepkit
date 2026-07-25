@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784940150191,
+  "lastUpdate": 1784942096273,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12149,6 +12149,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21604338,
             "range": "± 46348",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a7589ea4cc03a70f959d584a2902dbab96d5aad",
+          "message": "test(io): show tool0 drops nothing — its faces are never created (#1219)\n\nFollow-on to #1218. Adds a `SHELL_LOG=1` mode that surfaces\n`BuilderSolid`'s shell summary and its sliver-drop debug lines, and uses\nit to **refute a hypothesis I formed from reading the assembler**.\nDiagnostic only.\n\n## The hypothesis\n\n`assemble()` in `builder_solid.rs` handles a non-outer growth shell\nthree ways: join it if closed, **abort** if open with ≥4 faces,\n**silently drop** it otherwise. That looked like it unified both failure\nmodes — even tools losing small open shells (→ free edges), odd tools\ntripping the ≥4 abort.\n\n## The measurement\n\n```\ntool0:  [algo] BuilderSolid: 1 growth shells, 0 hole shells   → F=494 free=30\ntool1:  [algo] BuilderSolid: 20 growth shells, 17 hole shells → ERR (open 9-face shell)\n```\n\ntool0 has **one** growth shell, **zero** hole shells, and produces\n**no** `dropping open N-face growth sliver` message. Nothing is dropped.\nThat single shell is the outer shell — which `assemble()` deliberately\nnever tests for closedness — and it is itself open.\n\n**So tool0's four faces were never created.** The assembler is not\ndiscarding them.\n\ntool1 is a genuinely different situation: 20 growth shells, 17 hole\nshells, fragmentation plus the ≥4 guard.\n\n## Consequence\n\nThe two modes are **not** one mechanism, and the unification would have\nsent the fix at the assembly guard — which is a safety net working as\ndesigned, not the bug. The even mode is a splitter/section gap; the odd\nmode is fragmentation.\n\nThis is consistent with the op-independence result in #1218\n(Cut/Fuse/Intersect all fail in the same region), which also pointed\nupstream of classification.\n\nTarget, unchanged in location but now better evidenced: **the\nFF/section/split stage for the 0.05 mm plane-vs-cylinder sliver**, with\nthe odd mode's fragmentation treated as possibly separate.\n\n`log` added as a **dev**-dependency of `brepkit-io` for the example's\nlogger — no change to the published crate.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds `SHELL_LOG` to the IO replay example to print `BuilderSolid`\nshell/sliver lines scoped to `brepkit_algo`. Confirms tool0 drops\nnothing (faces were never created); tool1 hits the ≥4 open-shell abort;\nroadmap trimmed to note the deliberate 0.05 mm slab overlap, summarize\nthe tangency row, and remove a duplicated tangency tail.\n\n- **New Features**\n- `SHELL_LOG=1` enables a lightweight logger in `replay_cut_capture`\nthat emits \"growth shell\" and \"growth sliver\" lines.\n  - Logger is scoped to the `brepkit_algo` target to reduce noise.\n\n- **Dependencies**\n- Add `log` as a dev-dependency of `brepkit-io` for the example logger.\nNo changes to the published crate.\n\n<sup>Written for commit f6146ea7a22d943946dd208f013626efe2caac38.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1219?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T18:12:24-07:00",
+          "tree_id": "d064ef9273fb016a70fb753208b8d2878ad7171e",
+          "url": "https://github.com/andymai/brepkit/commit/6a7589ea4cc03a70f959d584a2902dbab96d5aad"
+        },
+        "date": 1784942095105,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 825578,
+            "range": "± 3725",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 918891,
+            "range": "± 32078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12216,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 667225,
+            "range": "± 1203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21733396,
+            "range": "± 88960",
             "unit": "ns/iter"
           }
         ]
