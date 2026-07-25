@@ -241,6 +241,98 @@ fn main() {
                             }
                         }
                     }
+                    if free > 0 && std::env::var("FREE_OWNERS").is_ok() {
+                        // Each free edge is used by exactly one face. Those
+                        // faces are the rim around the hole, so their surfaces
+                        // say which input face should have owned the missing
+                        // patch.
+                        let mut rows: Vec<(usize, String, usize, [f64; 3])> = Vec::new();
+                        for &fid in &faces {
+                            let f = topo.face(fid).expect("face");
+                            let n = std::iter::once(f.outer_wire())
+                                .chain(f.inner_wires().iter().copied())
+                                .flat_map(|wid| topo.wire(wid).expect("wire").edges())
+                                .filter(|oe| uses.get(&oe.edge()).copied() == Some(1))
+                                .count();
+                            if n == 0 {
+                                continue;
+                            }
+                            let w = topo.wire(f.outer_wire()).expect("w");
+                            let p = topo
+                                .vertex(topo.edge(w.edges()[0].edge()).expect("e").start())
+                                .expect("v")
+                                .point();
+                            rows.push((
+                                fid.index(),
+                                f.surface().type_tag().to_string(),
+                                n,
+                                [p.x(), p.y(), p.z()],
+                            ));
+                        }
+                        rows.sort_unstable_by_key(|r| r.0);
+                        println!("    free-edge rim faces: {}", rows.len());
+                        for (fid, tag, n, p) in rows {
+                            println!(
+                                "      face Id({fid}) {tag} free={n} at ({:.3},{:.3},{:.3})",
+                                p[0], p[1], p[2]
+                            );
+                        }
+                    }
+                    if std::env::var("FACE_WIRES").is_ok() {
+                        // Sections reach the two corner cylinders but no sliver
+                        // sub-faces come out. Either the splitter declined the
+                        // split (one plain outer wire) or it mis-wired the face
+                        // (an inner wire duplicating the outer). Print the wire
+                        // structure of every curved face carrying more edges
+                        // than an untouched quarter-cylinder's four.
+                        for &fid in &faces {
+                            let f = topo.face(fid).expect("face");
+                            if f.surface().is_planar() {
+                                continue;
+                            }
+                            let wires: Vec<_> = std::iter::once(f.outer_wire())
+                                .chain(f.inner_wires().iter().copied())
+                                .collect();
+                            let total: usize = wires
+                                .iter()
+                                .map(|&w| topo.wire(w).expect("wire").edges().len())
+                                .sum();
+                            if total <= 4 {
+                                continue;
+                            }
+                            println!(
+                                "    face {fid:?} {} wires={} edges={total}",
+                                f.surface().type_tag(),
+                                wires.len()
+                            );
+                            for (k, &wid) in wires.iter().enumerate() {
+                                let w = topo.wire(wid).expect("wire");
+                                let kind = if k == 0 { "outer" } else { "inner" };
+                                println!("      {kind} wire {wid:?} n={}", w.edges().len());
+                                for oe in w.edges() {
+                                    let e = topo.edge(oe.edge()).expect("edge");
+                                    let a = topo.vertex(e.start()).expect("v").point();
+                                    let b = topo.vertex(e.end()).expect("v").point();
+                                    let f = if uses.get(&oe.edge()).copied() == Some(1) {
+                                        " FREE"
+                                    } else {
+                                        ""
+                                    };
+                                    println!(
+                                        "        e{} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}){f}",
+                                        oe.edge().index(),
+                                        e.curve().type_tag(),
+                                        a.x(),
+                                        a.y(),
+                                        a.z(),
+                                        b.x(),
+                                        b.y(),
+                                        b.z()
+                                    );
+                                }
+                            }
+                        }
+                    }
                     if free > 0 && std::env::var("FREE_LOOPS").is_ok() {
                         // Free edges bound the hole(s) left by dropped faces.
                         // Chain them by shared vertex: each closed chain is one

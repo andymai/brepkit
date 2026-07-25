@@ -681,11 +681,81 @@ deepened-notch pave-bypass root. Nor is it the `section_map` lookup: that map ha
 nothing is lost in the lookup. CAUTION — do NOT read "only 2 of 24 cylinders sectioned" as the
 defect. The `FACES_NEAR_X` filter tests only the X range, and EVERY corner cylinder spans
 [17.000,20.750], so all four corners pass it regardless of y/z; most of those 22 are on other
-corners and SHOULD be untouched by tool0's single-wall slab. START THE NEXT SESSION HERE: identify
-which cylinder faces tool0 actually reaches (using y and z, not just x), and only then decide
-whether 2 sectioned is right or short. Everything else in this chain is measured and solid — FF
-pairing, restrict, emission and the section map are all confirmed working; two hypotheses (the
-empty-`pave_blocks` skip and a face-id mismatch) are REFUTED. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
+corners and SHOULD be untouched by tool0's single-wall slab. **RESOLVED: 2 sectioned cylinders is
+RIGHT, not short** — localizing by the free loops' y/z (not x) puts all four missing outlines in the
+SINGLE (+x,−y) corner, whose two full-height wall cylinders are exactly the outer r=3.75
+(x[17.000,20.750], 30 edges) and inner r=2.55 (x[17.000,19.550], 34 edges); the other 22 are other
+corners or low-z base profile that tool0 never reaches. **AND THE QUADRIC SIDE IS PROBABLY NOT THE
+DEFECT AT ALL.** `FACE_WIRES=1` (new knob on the replay example) shows both cylinders carry ONE
+plain outer wire and ZERO inner wires — so the cone-box row's predicted "inner wire duplicating the
+outer" fix-shape does NOT transfer here, and a bayed single outer wire is the CORRECT shape for a
+quarter-cylinder bitten at its θ=90 edge. Re-reading the free-loop geometry accordingly: each
+missing outline spans y∈[−19.550,−20.750] — exactly the 1.2mm wall thickness between the inner and
+outer corner cylinders. An intermediate read of that — "the missing patches are planar TOOL-side
+faces, not cylinder pieces" — was WRONG and is retracted; it inferred the surface from the rim's
+ellipse arcs without checking whether the cylinder boundary itself was notched. **THE REAL
+SIGNATURE, and the sharpest datum in this whole dig: the notch forms in 5 of 8 z-bands and is simply
+ABSENT in 3.** Dumping face 5678's 30-edge outer wire (`FACE_WIRES=1` prints per-edge geometry and
+flags free edges) shows a clean repeating bay wherever the cut worked — `line` along the tangent
+generator at x=17.000, `ellipse` out to x=17.050, `line` down the cut plane, `ellipse` back — i.e.
+the quarter-cylinder trimmed from θ=90 back to θ=89.24 across the tool's 0.05mm overshoot. In the
+three failing bands (z 11.507–12.338, 6.794–7.624, 2.700–3.192) the wire instead runs STRAIGHT along
+x=17.000 with no bay, and **those un-notched generator segments ARE the free edges** (e17959, e17965,
+e17971), free because the flat wall at y=−20.750 does have its opening there so nothing pairs.
+`FREE_OWNERS=1` confirms the whole rim: 10 faces carry all 30 free edges — the two corner cylinders
+(3 + 2) and eight planes, dominated by the cut-plane faces Id(6090) 10-of-12 and Id(6091) 4-of-9.
+SLOPE DISCRIMINANT — PROPOSED AND REFUTED IN THE SAME SESSION, do not re-chase: the bridging
+ellipse's z direction looked like the split (working bays DECREASE outward 19.140→19.111, the three
+failures INCREASE 12.338→12.367), but enumerating all 8 bands kills it — the working bay at
+z 9.291–10.122 goes 10.122→10.151, i.e. UP-outward exactly like all three failures, and its notch
+forms fine. Full band table, top to bottom (B=notch formed, F=free): B 18.309–19.140 down,
+B 16.093–16.923 down, B 13.723–14.707 down, **F 11.507–12.338 up**, B 9.291–10.122 up,
+**F 6.794–7.624 up**, B 4.578–5.408 down, **F 2.700–3.192 up**. Also REFUTED as discriminants: band
+width (working and failing bands are both ≈0.831, except one working band at 0.984 and one failing
+at 0.492) and band spacing (centres are a near-uniform ≈2.2 lattice pitch). START THE NEXT SESSION
+HERE — **THE DEFECT IS IN PHASE FF'S AABB IN-BOTH PRE-FILTER, NOT THE FACE SPLITTER AND NOT
+`restrict_curves_to_faces`.** (An intermediate commit on this branch pinned it on
+`restrict_curves_to_faces`; that was a MISREAD of the trace — `before_restrict` is captured after two
+shadowing filters, so "restrict 0 → 0" means the curves were ALREADY gone. Stage traces afterF1 /
+afterF2 show filter 1 keeps 2 of 2 on all 16 pairs and the AABB pre-filter at phase_ff.rs ~333–383
+drops 2→1 on the 12 successes and 2→0 on the 4 failures.) Aggregating the
+`BK_FF_TRACE=17.05` pair/restrict lines by partner face closes the accounting exactly. Isolating the
+true cut-plane partners (`bx[17.050,17.050]`; the `bx[15.437,17.050]`/`[16.037,17.050]`/
+`[16.756,17.050]` partners are the slanted lattice walls and all restrict 0→0): outer cylinder
+`ax[17.000,20.750]` × cut plane gives raw_curves=2 restrict **1→1 on 5** pairs and **0→0 on 3**;
+inner `ax[17.000,19.550]` × cut plane gives **1→1 on 7** and **0→0 on 1**. That is 5+3=8 and 7+1=8,
+i.e. ALL 16 band×cylinder pairs accounted for, and the 3 outer + 1 inner failures are exactly the 3
+outer + 1 inner missing notches and exactly the 4 free components. **So restrict is handed TWO raw
+generator curves on all 16 geometrically-identical pairs and discards BOTH on 4 of them.** This also
+corrects #1222: its "12 sections survive restrict intact" was a FALSE ALL-CLEAR — the correct
+denominator is 16, and 12 is just the successful-notch count. **ROOT CAUSE, CONFIRMED BY EXPERIMENT:**
+the AABB pre-filter samples each raw curve 24× and keeps it only if some sample lands in both faces'
+inflated AABBs — but for `EdgeCurve::Line` it then RETURNS FALSE without the adaptive refinement it
+applies to every other curve type ("straight lines are exactly represented by their endpoints; a
+uniform scan cannot under-sample them at this granularity in practice"). That reasoning is wrong for
+this geometry: exactness of the LINE says nothing about whether a sample lands in the tiny in-both
+WINDOW. The generator spans the full ~20.3mm cylinder height, 25 uniform samples give a ~0.85mm
+pitch, and each lattice opening band is only ~0.83mm tall — so whether a band is hit is aliasing
+luck, which is exactly why the B,B,B,F,B,F,B,F pattern looked random. Deleting that early-return
+takes tool0 to **free=0** (F=495, 24 cylinders + 12 cones preserved, 232ms — no slowdown), and bands
+2/4/6 likewise; the ready-repro `goma_wall_band_cut_is_closed` PASSES. Note the same mechanism is
+ALREADY documented one filter above for the faceted-ramp × cylinder ELLIPSE case ("the 16-sample
+AABB pre-filter below and the uniform-t restriction both drop it (no sample lands in the band)"),
+which got a bespoke exact-arc bypass — lines never got one. STILL OPEN after that fix: bands
+1/3/5/7 continue to abort with "open growth shell with N faces" (pre-existing, a SEPARATE defect —
+do not assume the line fix addresses it). Secondary lead, the inner/outer asymmetry: the inner
+cylinder Id(6088) forms SEVEN notches and fails only at z 2.700–3.192, while the outer Id(5678)
+forms five and fails at three bands — same tool, same openings, two concentric cylinders 1.2mm
+apart, different outcomes. So the decision is per-face, not per-opening. The two bands where inner
+succeeds but outer fails also show the cascade: at z 11.536–12.367 the inner notch IS built but its
+x=17.050 line (e19454) is left FREE because the outer side never produced the partner patch. Also
+worth explaining: every outer-cylinder edge sits in one fresh contiguous id block (e17930–e17972)
+while the inner mixes a shared lower block (e18387–e18485, its formed notch ellipses) with fresh
+e19445–e19459 — the outer's notch ellipses appear NOT to be the shared section edges the inner's
+are, which may be the provenance difference behind the whole asymmetry. Everything
+else in this chain is measured and solid — FF pairing, restrict, emission and the section map are
+all confirmed working; three hypotheses (the empty-`pave_blocks` skip, a face-id mismatch, and
+cylinder mis-wiring via a duplicated inner wire) are REFUTED. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
 adjacent `log::debug!` and `eprintln!` on the same line gave **0 vs 890** records, while
 `builder_solid`'s `log::debug!` reaches the same logger fine. Log-based probes in that file read as
 a FALSE ZERO. Use a temporary `eprintln!` gated on an env var (it trips `clippy::print_stderr`, so
