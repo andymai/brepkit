@@ -891,7 +891,26 @@ NOT try to confirm this with a hand-built strut fuse without checking the profil
 probe using `make_unit_square_face` (a unit square in the XY plane) revolved about Z is DEGENERATE —
 the profile is perpendicular to the axis, and it returns `F=6` all-planar, which looks like a result
 and is not one. All eight bands are mesh-fallback output; four happened to come out watertight and four
-did not. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
+did not.
+
+**HOW A BAND IS ACTUALLY BUILT — it is a CUT, not a fuse (correcting an earlier framing here).**
+`kumikoWrapBuilder.ts` starts from a `wedge` (a `revolve`, so it HAS cylindrical faces) and
+iteratively carves it: `for (const family of families) cutter = cutAll(cutter, family)`. The flat-wall
+span does the same with a box region (line ~413). `cutAll` is `compound_cut`, which delegates to
+`boolean(Cut, …)` per tool (batched via `cluster_tools_by_aabb` + `fuse_cluster`, else sequential),
+so every step runs the strict-gate-then-mesh-fallback path.
+
+**FLAT-WALL STRUT CUT IS HEALTHY — measured, do not re-probe it.** An existing capture,
+`~/.cache/brepkit-parity-captures/2026-07-23/kumiko-goma/` (`cut1-region.bin` + 180 `cut1-tool<i>.bin`;
+replay it by symlinking `cut1-region.bin` to `cut1-base.bin` and using `PREFIX=cut1`), replays clean:
+region F=147 all-planar free=0 over=0, every strut F=6 free=0 over=0, result **F=1146 all-planar,
+free=0 over=0, 11.6s** — and F=1146 matches the "each ~F=1146" figure in `gomaCaptureBisect`'s own
+doc comment. NOTE all-planar is CORRECT here and is NOT a fallback tell: a box slab cut by box prisms
+has no curved surfaces to lose. So this capture cannot exercise the suspect path.
+**THE REMAINING SUSPECT IS THE CORNER-WEDGE CUT** (`kumikoWrapBuilder.ts` ~734), which starts from a
+`revolve` wedge and carves it with revolve/helix struts — the only place where missing cylinders are
+diagnostic. It is NOT in the cache; capture it (hook that `cutAll` the way `gomaCaptureBisect` hooks
+`cutAllBisect`) before doing anything else. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
 either make the mesh co-refinement produce closed output for these operands, or make
 `mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
 rejecting means the op fails outright, since there is no further fallback; that is a product call).
