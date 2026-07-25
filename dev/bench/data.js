@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784980444657,
+  "lastUpdate": 1784984292929,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12581,6 +12581,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22666383,
             "range": "± 49879",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "67e7ad1edc7d4c0fadea8f4469fb670dc5dcb206",
+          "message": "test(algo): trace FF filter stages and curve kinds (#1228)\n\nFollow-up to #1227. Measures where the goma odd-band sections are lost —\nand **refutes** the hypothesis that measurement first suggested.\nDiagnostics only; no behavior change.\n\n## Why these traces\n\nThe existing trace prints `restrict N -> M`, but `N` is captured\n**after** two shadowing filters — so a curve lost earlier reads as\n`restrict 0 -> 0` and looks like restrict's doing. That misreading cost\nan iteration during the even-band dig. These traces report the surviving\ncount and a per-kind histogram after each filter.\n\n## What it shows\n\n`BK_FF_TRACE=17.65` on tool1. The 127 surviving cylinder×plane pairs\nsplit as:\n\n| Stage | Kinds | Count |\n|---|---|---|\n| dropped at filter 1 | lines | **73** |\n| survives F1, dropped at F2 | ellipse | **49** |\n| survives both | ellipse | 3 |\n| line pairs | line | 2 |\n\nBy count, filter 2's ellipse drops dominate — and \"same aliasing class\nas the even-band Line bug, on the path #1224 doesn't cover\" is a\ntempting story.\n\n## It is wrong, and that is the point of this PR\n\nA temporary min-distance probe (curve samples vs the mutual box `bb_a ∩\nbb_b`, since removed) shows:\n\n- **None** of the 49 dropped ellipses has a mutual box overlapping the\nlump's z window [8.1, 9.1]. They are all elsewhere in z.\n- The **closest** drop anywhere misses by **0.108 mm** while sampled at\n**0.055 mm** spacing (`n_fine=404` over `approx_len=22.261`) — a genuine\n2× separation, not an aliasing artifact.\n\nSo filter 2 is working correctly here, the 49 drops are legitimate, and\nloosening it would break calibrated fixtures for no gain. Acting on the\ncount alone would have repeated the \"12 sections survive restrict\nintact\" false all-clear that #1223 had to undo.\n\n## One hazard worth recording for a future case\n\n`n_fine` is clamped at **1024** while `approx_len` reaches **~1173 mm**\non near-axis-parallel planes — a 1.15 mm sample spacing against\nsub-millimetre mutual boxes. That clamp is a real aliasing hazard. It is\nsimply not the cause of this bug.\n\n## Where the odd-band defect actually is\n\nNot a dropped FF section. The next step is to follow the sections that\n**are** emitted at the lump's z into the face splitter — the sub-face is\nlost at or after splitting, not at section computation.\n\n## Verification\n\n- `cargo nextest run -p brepkit-algo -p brepkit-io`: **430 passed**, 0\nskipped.\n- `cargo clippy -p brepkit-algo --all-targets`: clean.\n- Traces gated on the existing `BK_FF_TRACE`; kinds logged as a fixed\n`[line, circle, ellipse, nurbs]` histogram (review finding — no\nper-curve `Vec` allocation, short lines).",
+          "timestamp": "2026-07-25T05:55:55-07:00",
+          "tree_id": "9a98df0ddd855d3df6b09760934811e016b6e63c",
+          "url": "https://github.com/andymai/brepkit/commit/67e7ad1edc7d4c0fadea8f4469fb670dc5dcb206"
+        },
+        "date": 1784984291462,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 814687,
+            "range": "± 3400",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 904496,
+            "range": "± 3372",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12145,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 658129,
+            "range": "± 6064",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21672628,
+            "range": "± 453485",
             "unit": "ns/iter"
           }
         ]
