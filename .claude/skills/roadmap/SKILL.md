@@ -851,11 +851,20 @@ tool7 428/40 — while tool0/2/4/6 stay a clean 0/0. Face counts shifted slightl
 every time. That kills BOTH remaining benign explanations: not a stale/bad fixture, and not a
 nondeterministic flake. So the tool's DIAGONAL kumiko lattice bands are genuinely built as malformed
 solids, and the goma odd-band failures were never a defect in the boolean engine — the cut is being
-handed garbage. NEXT: find which operation builds those bands and whether it is a brepkit op
-returning an open solid (which WOULD be a real engine bug, just not in GFA — cf. the open roadmap
-item "Mesh-boolean fallback emits OPEN meshes that get CONSUMED") or tool-side construction. Start
-from the kumiko pattern generator in `~/Git/gridfinity-layout-tool` (`patterns/kumiko/`) and the
-tool's existing probes (`__kernel-tests__/goma*`, `kumiko*`).
+handed garbage. CONSTRUCTION TRACED (`kumikoWrapBuilder.ts` in the tool): a band is the FUSE of dozens of struts —
+vertical struts as small-angle revolves, near-horizontal as thin partial revolves, **rising diagonals
+as `sketchHelix(...).sweepSketch(rect, {frenet:true})`**, and falling diagonals as chord boxes (a
+left-handed helix is unsupported). The odd/even split maps onto that: revolve-built bands are clean,
+diagonal-bearing bands are open. **HELIX SWEEP REFUTED as the direct cause** — `helical_sweep` is
+watertight (free=0 over=0) at every turn count 0.25–2.0 and segment density 4/8/16 at the bin's
+r=3.75; now pinned by `helical_sweep_is_watertight_across_turns_and_segments` in `helix.rs`. So a
+single strut is not the problem. NEXT, and the prime suspect: the band is ASSEMBLED by fusing those
+struts, so chase the FUSE, not the sweep — and note there is an already-open roadmap item that fits
+exactly, "Mesh-boolean fallback emits OPEN meshes that get CONSUMED" (discovered 2026-07-16). If a
+strut fuse falls back to the mesh boolean and that output is open, it is consumed and the band comes
+out open — which would make this a KNOWN engine bug rather than a new one. Probe by checking
+free/over on the partial band after each strut fuse; use a SMALL repro (one diagonal band), since
+the full export is 844s and blows the 600s vitest timeout before reporting.
 
 **MANDATORY POST-GFA RE-PROBE DONE, AND THE ANSWER IS THAT #1224 MOVED THE SCENARIO NOT AT ALL.**
 `gomaBoundaryProbe` (goma 1×1×6 export + STL edge-use oracle) on the overlaid 2.128.5 build:
