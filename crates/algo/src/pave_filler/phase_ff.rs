@@ -330,6 +330,18 @@ pub fn perform(
             // restriction below applies to grazes.
             let bb_a = bbox_a.expanded(tol.linear * 10.0);
             let bb_b = bbox_b.expanded(tol.linear * 10.0);
+            if traced {
+                log::debug!(
+                    "FF_TRACE afterF1 a={} b={} n={} kinds={:?}",
+                    surf_a.type_tag(),
+                    surf_b.type_tag(),
+                    raw_curves.len(),
+                    raw_curves
+                        .iter()
+                        .map(|r| r.curve.type_tag())
+                        .collect::<Vec<_>>()
+                );
+            }
             let raw_curves: Vec<RawCurve> = raw_curves
                 .into_iter()
                 .filter(|raw| {
@@ -412,6 +424,18 @@ pub fn perform(
                     n_fine > N && (0..=n_fine).map(|i| sample(i, n_fine)).any(in_both)
                 })
                 .collect();
+            if traced {
+                log::debug!(
+                    "FF_TRACE afterF2 a={} b={} n={} kinds={:?}",
+                    surf_a.type_tag(),
+                    surf_b.type_tag(),
+                    raw_curves.len(),
+                    raw_curves
+                        .iter()
+                        .map(|r| r.curve.type_tag())
+                        .collect::<Vec<_>>()
+                );
+            }
 
             // Restrict surface-surface intersection curves to the region that
             // lies inside BOTH faces. `compute_raw_curves` works on the
