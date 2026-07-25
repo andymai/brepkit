@@ -678,6 +678,23 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
             // Multi-shell: a negative shell is the tool's interior cavity (hole).
             false
         };
+        if std::env::var("BK_AREAS").is_ok() {
+            let mut mix: HashMap<&str, usize> = HashMap::new();
+            for &fid in shell {
+                if let Ok(f) = topo.face(fid) {
+                    *mix.entry(f.surface().type_tag()).or_default() += 1;
+                }
+            }
+            let mut mix: Vec<_> = mix.into_iter().collect();
+            mix.sort_unstable();
+            log::debug!(
+                "growth shell AREAS shell faces={} mix={mix:?} signed_vol={signed_vol:.6} lone={} outward={:?} -> {}",
+                shell.len(),
+                shells.len() == 1,
+                shell_is_outward_oriented(topo, shell),
+                if is_growth { "growth" } else { "hole" }
+            );
+        }
         if is_growth {
             growth.push(shell.clone());
         } else {

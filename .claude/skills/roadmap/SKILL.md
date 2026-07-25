@@ -927,7 +927,17 @@ mesh-derived, which is what the whole family is downstream of. **AND THE REASON 
 produce a wrong result — it produces NO result: one shell is built and classified INWARD, so nothing
 remains to be the outer shell. For `Cut(wedge, strut)` the answer should be a single OUTWARD shell,
 so the suspect is orientation or the growth-vs-hole decision in `perform_areas`
-(`crates/algo/src/builder/builder_solid.rs`), NOT the face splitter. START HERE. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
+(`crates/algo/src/builder/builder_solid.rs`), NOT the face splitter. **INSTRUMENTED (`BK_AREAS=1`,
+new): the growth/hole REJECTION IS CORRECT — what feeds it is wrong.** The lone shell reports
+`faces=6 mix=[("cylinder", 2), ("plane", 4)] signed_vol=-182.448 lone=true outward=Some(false)`, so
+both the corner-fan volume AND the curvature-robust flux test agree it is inward, and rejecting it is
+right. But look at what it IS: six faces with the SAME surface signature as each operand (both are
+`F=6`, 2 cylinders + 4 planes; wedge vol 284.873, strut vol 43.971), and a corner-fan magnitude
+closer to the wedge than the strut. **The strut never split the wedge at all — a whole operand came
+through, inverted.** A partial cut must produce MORE than six faces. So the defect is upstream of
+`perform_areas`: either the pair produced no sections (check phase FF for this pair) or face
+selection kept exactly one operand with flipped orientation. START HERE, with
+`CAPTURE_DIR=<call4> PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1` plus `BK_FF_TRACE`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
 fixture itself — an unvalidated operand already cost this campaign several passes. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
 either make the mesh co-refinement produce closed output for these operands, or make
 `mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
