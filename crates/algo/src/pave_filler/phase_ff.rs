@@ -390,9 +390,19 @@ pub fn perform(
             // cylinder/tilted-plane ellipse that meets the other face only
             // along a shared cap then reaches far past it and slits the
             // partner face's wire. Keep only the in-both span (curves only).
+            let before_restrict = raw_curves.len();
             let raw_curves = restrict_curves_to_faces(
                 topo, fa, fb, surf_a, surf_b, v_range_a, v_range_b, raw_curves, tol,
             );
+            if traced {
+                log::debug!(
+                    "FF_TRACE restrict a={} b={} {} -> {}",
+                    surf_a.type_tag(),
+                    surf_b.type_tag(),
+                    before_restrict,
+                    raw_curves.len()
+                );
+            }
             // Emit the EXACT faceted-ramp arcs with registry-aware endpoint
             // resolution: each arc's endpoints are bit-identical to the shared
             // boundary-line crossing of the adjacent tread's arc, so consult
