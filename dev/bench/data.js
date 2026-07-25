@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784948678166,
+  "lastUpdate": 1784976297130,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12311,6 +12311,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19879090,
             "range": "± 431067",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "79591914b2a86ea9c996a159a33c98c79a14b36f",
+          "message": "test(io): root-cause the goma notch loss to phase FF's AABB pre-filter (#1223)\n\nContinues the goma dig past #1222 and **root-causes it**. Diagnostics +\nroadmap only; the one-line fix lands in a follow-up PR so it can be\nreviewed on its own.\n\nSix commits, three of which retract or refute an earlier hypothesis of\nmine. All kept on the record so the dead ends aren't rediscovered.\n\n## Root cause\n\nPhase FF's AABB in-both pre-filter (`phase_ff.rs` ~333–383) samples each\nraw curve 24× and keeps it only if some sample lands in both faces'\ninflated AABBs — but for `EdgeCurve::Line` it returns `false`\n**without** the adaptive refinement it applies to every other curve\ntype:\n\n```rust\n// Straight lines are exactly represented by their endpoints; a uniform scan\n// cannot under-sample them at this granularity in practice, and refining\n// every far pair would be pure cost.\nif matches!(raw.curve, EdgeCurve::Line) {\n    return false;\n}\n```\n\nThat reasoning is wrong for this geometry. Exactness of the *line* says\nnothing about whether a sample lands in the tiny in-both **window**. The\ngenerator spans the full ~20.3 mm cylinder height; 25 uniform samples\ngive a ~0.85 mm pitch; each lattice opening band is ~0.83 mm tall.\nWhether a band gets hit is aliasing luck — which is exactly why the\nfailure pattern looked random.\n\nThe same mechanism is **already documented one filter above** for the\nfaceted-ramp × cylinder *ellipse* case (\"the 16-sample AABB pre-filter\nbelow and the uniform-t restriction both drop it (no sample lands in the\nband)\"), which got a bespoke exact-arc bypass. Lines never got one.\n\n## The accounting, closed exactly\n\nStage traces (`afterF1`/`afterF2`) show filter 1 keeps 2 of 2 on all 16\npairs, and the AABB pre-filter drops:\n\n| Cylinder | raw | after pre-filter | count |\n|---|---|---|---|\n| outer `ax[17.000,20.750]` | 2 | **1** | **5** |\n| outer `ax[17.000,20.750]` | 2 | **0** | **3** |\n| inner `ax[17.000,19.550]` | 2 | **1** | **7** |\n| inner `ax[17.000,19.550]` | 2 | **0** | **1** |\n\n5+3 = 8 and 7+1 = 8 — all 16 band×cylinder pairs, and the 3+1 failures\nare exactly the 3+1 missing notches and exactly the 4 free components.\n\nThis corrects #1222: \"12 sections survive restrict intact\" was a **false\nall-clear**. The correct denominator is 16; 12 is just the\nsuccessful-notch count.\n\n## Experimental confirmation\n\nDeleting the early-return takes tool0 to **`free=0`** (F=495, 24\ncylinders + 12 cones preserved, 232 ms — no slowdown). Bands 2/4/6\nlikewise, and the ready-repro `goma_wall_band_cut_is_closed` **passes**.\nFull gate green: 425 algo+io, 989 operations, 27 wasm gridfinity.\n\n**Still open, separate defect:** bands 1/3/5/7 continue to abort with\n\"open growth shell with N faces\" — pre-existing, not addressed by the\nline fix.\n\n## Retracted / refuted along the way\n\n- **Retracted:** the missing patches are planar tool-side faces\n(inferred from rim ellipse arcs without checking the cylinder boundary).\n- **Retracted:** the defect is in `restrict_curves_to_faces` — a\nmisread, since `before_restrict` is captured *after* two shadowing\nfilters.\n- **Refuted:** the ellipse-slope discriminant (working bay z\n9.291–10.122 is up-outward like all three failures and forms fine), band\nwidth (~0.831 both sides), band spacing (uniform ~2.2 pitch).\n- **Refuted:** cylinder mis-wiring — both carry one plain outer wire,\nzero inner wires.\n- **Settled:** \"only 2 of 24 cylinders sectioned\" is right, not short.\n\n## Verification\n\n- Probes are env-gated and off by default; no behavior change in this\nPR.\n- `cargo nextest run -p brepkit-io`: 223 passed, 1 skipped.\n- `cargo fmt` + `cargo clippy` clean.\n- Review finding addressed: `is_planar()` replaces the type-tag string\ncompare.",
+          "timestamp": "2026-07-25T03:42:37-07:00",
+          "tree_id": "65471b3a409a6fbc6f6dfacd68358f77ed4d6ab0",
+          "url": "https://github.com/andymai/brepkit/commit/79591914b2a86ea9c996a159a33c98c79a14b36f"
+        },
+        "date": 1784976295383,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 823793,
+            "range": "± 2667",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 912737,
+            "range": "± 6779",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11831,
+            "range": "± 89",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663548,
+            "range": "± 2310",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21604760,
+            "range": "± 103851",
             "unit": "ns/iter"
           }
         ]
