@@ -175,6 +175,38 @@ fn main() {
                         t.elapsed().as_millis(),
                         faces.len()
                     );
+                    if let Ok(v) = std::env::var("FACES_NEAR_X") {
+                        // Which faces actually exist in the sliver slab? If the
+                        // splitter never made the missing patches, nothing here
+                        // will span the gap.
+                        let target: f64 = v.parse().expect("FACES_NEAR_X");
+                        for &fid in &faces {
+                            let f = topo.face(fid).expect("face");
+                            let mut lo = f64::MAX;
+                            let mut hi = f64::MIN;
+                            let mut n = 0;
+                            for wid in std::iter::once(f.outer_wire())
+                                .chain(f.inner_wires().iter().copied())
+                            {
+                                for oe in topo.wire(wid).expect("wire").edges() {
+                                    let e = topo.edge(oe.edge()).expect("edge");
+                                    for v in [e.start(), e.end()] {
+                                        let x = topo.vertex(v).expect("v").point().x();
+                                        lo = lo.min(x);
+                                        hi = hi.max(x);
+                                        n += 1;
+                                    }
+                                }
+                            }
+                            if n > 0 && lo < target + 0.1 && hi > target - 0.1 {
+                                println!(
+                                    "    face {fid:?} {} x[{lo:.3},{hi:.3}] edges={}",
+                                    f.surface().type_tag(),
+                                    n / 2
+                                );
+                            }
+                        }
+                    }
                     if free > 0 && std::env::var("FREE_LOOPS").is_ok() {
                         // Free edges bound the hole(s) left by dropped faces.
                         // Chain them by shared vertex: each closed chain is one
