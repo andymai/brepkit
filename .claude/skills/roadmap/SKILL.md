@@ -801,10 +801,15 @@ aliasing artifact. So filter 2 is working correctly here and the 49 drops are le
 it would break calibrated fixtures for nothing. Worth recording for a FUTURE case though: `n_fine`
 is clamped at 1024 while `approx_len` reaches ~1173mm on near-axis-parallel planes (1.15mm spacing
 against sub-millimetre boxes), so the clamp IS a real aliasing hazard — just not this bug's cause.
-NEXT: the missing corner-cylinder sub-face at the lump (x[17.186,18.114] y[−20.745,−19.418]
-z[8.185,9.026]) is therefore NOT a dropped FF section. Check the sections that ARE emitted at the
-lump's z and follow them into the face splitter — the sub-face is lost at or after splitting, not at
-section computation. Each odd band hits a
+CONFIRMED, the sections ARE emitted and DO cover the lump: the `FF_TRACE emit` line now carries the
+curve's y/z bbox, and at the lump's x tool1 emits `curve#26` ellipse z[6.128,12.000]
+y[−20.749,−13.251] (the OUTER r=3.75 cylinder) and `curve#241` ellipse z[7.068,11.061]
+y[−19.550,−14.450] (the INNER r=2.55 one) — both spanning the lump's z window [8.185,9.026] and its
+y range — plus `curve#334` line. So FF, restrict, emission and coverage are all CORRECT for this
+lump; **the corner-cylinder sub-face is lost DOWNSTREAM, in the face splitter or in classification,
+not at section computation.** NEXT: dump the corner-cylinder faces' section lists and the sub-faces
+the splitter produces around z 8.2–9.0, and diff against the same corner on a WORKING (even) band —
+the even bands now assemble cleanly, so they are the control. Each odd band hits a
 DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;
 tool3 → (+x,+y) x≈18.6–20.5 y≈+18.3–19.9 z≈6.5–9.8), consistent with one diagonal member per band.
 CORRECTION, filed then retracted within the same session: an initial read called this the

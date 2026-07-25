@@ -559,10 +559,14 @@ pub fn perform(
                 let curve_index = arena.curves.len();
                 if traced {
                     log::debug!(
-                        "FF_TRACE emit a={} b={} curve#{curve_index} {}",
+                        "FF_TRACE emit a={} b={} curve#{curve_index} {} z[{:.3},{:.3}] y[{:.3},{:.3}]",
                         surf_a.type_tag(),
                         surf_b.type_tag(),
-                        raw.curve.type_tag()
+                        raw.curve.type_tag(),
+                        raw.bbox.min.z(),
+                        raw.bbox.max.z(),
+                        raw.bbox.min.y(),
+                        raw.bbox.max.y()
                     );
                 }
                 arena.curves.push(IntersectionCurveDS {
