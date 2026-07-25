@@ -663,9 +663,11 @@ tangent point where each corner cylinder (x[17.000,20.750]) meets the flat wall 
 range (exactly SLAB_OVERLAP past the tangent), and should split it. The result's cylinders still
 span [17.000,20.750], identical to the base: had they been split with the outer piece kept they
 would read [17.050,20.750]. **So the cut plane appears not to split the corner cylinders at all** —
-that is the defect, and the missing patches are the cylinder pieces it should have produced. NEXT
-STEP needs algo-level instrumentation (black-box probing is exhausted): whether a section is
-emitted for the cylinder x cut-plane pair at all.
+that is the defect, and the missing patches are the cylinder pieces it should have produced. ALGO-LEVEL TRACE (`BK_FF_TRACE=<x>` in phase_ff.rs, env-gated, on branch
+perf/goma-ff-trace): sections ARE emitted — **64 cylinder x plane pairs survive the AABB test at
+x=17.05, each returning raw_curves=1** (736 pairs are AABB-rejected, mostly correctly since they do
+not meet). So phase FF is NOT the gap. NEXT STEP: the defect is downstream of section computation —
+restrict/clip, pave-block splitting, or face building. Trace those with the same 230ms repro.
 REFUTED, do not re-attempt: a panic (none; `lastPanicMessage()` is empty), bisect thrash
 (telemetry: 1 attempt, 1 success), prism construction (322ms, 0.1%), boolean batching as the main
 cost (30%), classification (defect is op-independent), and the assembly sliver-drop guard (tool0

@@ -97,11 +97,42 @@ pub fn perform(
         for (idx_b, &fb) in faces_b.iter().enumerate() {
             let bbox_b = &bboxes_b[idx_b];
 
+            // BK_FF_TRACE=<x>: report every face pair whose AABBs straddle that
+            // x, and whether the pair was AABB-rejected. Diagnostic only.
+            let ff_trace: Option<f64> = std::env::var("BK_FF_TRACE")
+                .ok()
+                .and_then(|v| v.parse().ok());
+            let traced = ff_trace.is_some_and(|x| {
+                bbox_a.min.x() - tol.linear <= x
+                    && x <= bbox_a.max.x() + tol.linear
+                    && bbox_b.min.x() - tol.linear <= x
+                    && x <= bbox_b.max.x() + tol.linear
+            });
+
             // AABB rejection
             if !bbox_a
                 .expanded(tol.linear)
                 .intersects(bbox_b.expanded(tol.linear))
             {
+                if traced {
+                    log::debug!(
+                        "FF_TRACE reject-aabb a={} b={} A[{:.2},{:.2},{:.2}..{:.2},{:.2},{:.2}] B[{:.2},{:.2},{:.2}..{:.2},{:.2},{:.2}]",
+                        surfs_a[idx_a].type_tag(),
+                        surfs_b[idx_b].type_tag(),
+                        bbox_a.min.x(),
+                        bbox_a.min.y(),
+                        bbox_a.min.z(),
+                        bbox_a.max.x(),
+                        bbox_a.max.y(),
+                        bbox_a.max.z(),
+                        bbox_b.min.x(),
+                        bbox_b.min.y(),
+                        bbox_b.min.z(),
+                        bbox_b.max.x(),
+                        bbox_b.max.y(),
+                        bbox_b.max.z()
+                    );
+                }
                 continue;
             }
 
@@ -111,6 +142,18 @@ pub fn perform(
             let v_range_b = v_ranges_b[idx_b];
             let raw_curves =
                 compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?;
+            if traced {
+                log::debug!(
+                    "FF_TRACE pair a={} b={} raw_curves={} ax[{:.3},{:.3}] bx[{:.3},{:.3}]",
+                    surf_a.type_tag(),
+                    surf_b.type_tag(),
+                    raw_curves.len(),
+                    bbox_a.min.x(),
+                    bbox_a.max.x(),
+                    bbox_b.min.x(),
+                    bbox_b.max.x()
+                );
+            }
 
             // For plane-plane Line curves with all-straight-edge faces, trim
             // each curve to the mutual overlap of the two faces' clipped
