@@ -713,9 +713,22 @@ B 16.093–16.923 down, B 13.723–14.707 down, **F 11.507–12.338 up**, B 9.29
 **F 6.794–7.624 up**, B 4.578–5.408 down, **F 2.700–3.192 up**. Also REFUTED as discriminants: band
 width (working and failing bands are both ≈0.831, except one working band at 0.984 and one failing
 at 0.492) and band spacing (centres are a near-uniform ≈2.2 lattice pitch). START THE NEXT SESSION
-HERE: the pattern B,B,B,F,B,F,B,F is not periodic and not slope-keyed, so stop pattern-matching the
-OUTPUT and instrument the notch split itself — find where the θ=90→89.24 trim is decided per band
-and log why it declines for those three. THE SHARPEST LEAD IS THE INNER/OUTER ASYMMETRY: the inner
+HERE — **THE DEFECT IS IN `restrict_curves_to_faces`, NOT THE FACE SPLITTER.** Aggregating the
+`BK_FF_TRACE=17.05` pair/restrict lines by partner face closes the accounting exactly. Isolating the
+true cut-plane partners (`bx[17.050,17.050]`; the `bx[15.437,17.050]`/`[16.037,17.050]`/
+`[16.756,17.050]` partners are the slanted lattice walls and all restrict 0→0): outer cylinder
+`ax[17.000,20.750]` × cut plane gives raw_curves=2 restrict **1→1 on 5** pairs and **0→0 on 3**;
+inner `ax[17.000,19.550]` × cut plane gives **1→1 on 7** and **0→0 on 1**. That is 5+3=8 and 7+1=8,
+i.e. ALL 16 band×cylinder pairs accounted for, and the 3 outer + 1 inner failures are exactly the 3
+outer + 1 inner missing notches and exactly the 4 free components. **So restrict is handed TWO raw
+generator curves on all 16 geometrically-identical pairs and discards BOTH on 4 of them.** This also
+corrects #1222: its "12 sections survive restrict intact" was a FALSE ALL-CLEAR — the correct
+denominator is 16, and 12 is just the successful-notch count. NEXT: instrument inside
+`restrict_curves_to_faces` (phase_ff.rs) for those 4 pairs — which rejection branch fires, and on
+which of the two generators — rather than anything in the splitter. Its graze/extent-scaled
+refinement is the prime suspect given the 0.05mm in-both run (same class as the lite magnet-pad
+`rescue_corner_crossing` root), but that is NOT yet confirmed. Secondary lead, the inner/outer
+asymmetry: the inner
 cylinder Id(6088) forms SEVEN notches and fails only at z 2.700–3.192, while the outer Id(5678)
 forms five and fails at three bands — same tool, same openings, two concentric cylinders 1.2mm
 apart, different outcomes. So the decision is per-face, not per-opening. The two bands where inner
