@@ -1,0 +1,20 @@
+crates/io/tests/goma_wall_band_cut_inmem.rs
+  s_4be9cbc078e9c4::t_8ed5815316b4a6 5
+  s_4be9cbc078e9c4::t_16eb47f4d25a52 6-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "91070f57c08fc7e1071d0a59bce111aad8b0597f",
+  "prompts": {},
+  "sessions": {
+    "s_4be9cbc078e9c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb0e4ea1-d098-48cf-921d-3ac9562102ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
