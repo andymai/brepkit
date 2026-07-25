@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784987702160,
+  "lastUpdate": 1784989177341,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12743,6 +12743,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20936651,
             "range": "± 136582",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "05199015b5133e2355fb7fb95a73fb5fa8fae693",
+          "message": "docs(roadmap): the goma scenario re-probe shows #1224 moved it not at all (#1231)\n\nThe mandatory post-GFA re-probe for #1224 is done. The result is\nnegative and worth recording plainly rather than leaving the fix to\nimply progress it did not deliver.\n\nDocs only; no code change.\n\n## Measurement\n\n`gomaBoundaryProbe` — the goma 1×1×6 export plus the STL edge-use oracle\n— run against an overlaid local **2.128.5** build (md5-verified in both\ntool `node_modules` locations):\n\n| | pre-fix baseline | on #1224 |\n|---|---|---|\n| wall-clock | 849 s | **844 s** |\n| vitest 600 s timeout | blown | **still blown** |\n| exported STL boundary edges | — | **2567** (not watertight) |\n\n## What that means\n\nThe even-band fix is **real** — verified `free=30 → 0` on tools 0/2/4/6\nin isolation, with all analytic surfaces preserved and the ready-repro\nun-ignored as a passing regression test. But it buys **nothing at\nscenario level**, because goma's cost and brokenness are dominated by\nthe four *malformed diagonal bands* — the upstream construction defect\nestablished in #1230, which #1224 does not touch.\n\nSo: **#1224 should not be quoted as progress on the kumiko\nexport-integrity family.** The 14 kumiko failures, the 850 s export, and\nits timeout-poisoning of the tests that follow are all still open. They\nstay open until the diagonal lattice bands are built as closed solids,\nwhich is now the single blocking item for this family.\n\n## Why record a null result\n\nThe native repro said \"fixed\" — 30 free edges to 0, four times over.\nOnly the end-to-end scenario shows that the user-visible symptom did not\nmove at all. Without this measurement the roadmap would carry a fix that\nreads like it advanced the campaign when it did not, which is exactly\nthe kind of stale scorecard the parity doctrine warns about.\n\n## Housekeeping\n\nThe tool overlay has been restored to its exact prior state (2.128.2 in\nboth `node_modules` locations, md5-verified against a backup taken\nbefore the change — note `pnpm install --force` would *not* have\nrestored it, since the pre-existing state was itself an overlay rather\nthan the pinned 2.126.15).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap docs to record the mandatory re-probe: #1224 fixed the\neven bands in isolation, but the goma scenario didn’t improve.\n\n`gomaBoundaryProbe` on 2.128.5 still runs ~844s (600s timeout blown) and\nreports 2567 STL boundary edges (not watertight); kumiko\nexport-integrity remains blocked by malformed diagonal bands.\n\n<sup>Written for commit 61108334136244f4f24b690a4d819eb38ba1a95c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1231?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T07:17:24-07:00",
+          "tree_id": "3302f887c587b8cf3a0ed62164ba493a8ccc3f47",
+          "url": "https://github.com/andymai/brepkit/commit/05199015b5133e2355fb7fb95a73fb5fa8fae693"
+        },
+        "date": 1784989176534,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 814616,
+            "range": "± 1071",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 903375,
+            "range": "± 1873",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11818,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 658363,
+            "range": "± 24023",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21569281,
+            "range": "± 29945",
             "unit": "ns/iter"
           }
         ]
