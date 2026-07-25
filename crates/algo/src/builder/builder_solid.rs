@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
@@ -1132,6 +1133,70 @@ fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
 }
 
 /// Final assembly: build Solid from growth + hole shells.
+/// `BK_OPEN_SHELL=1`: describe an open growth shell before the assembly aborts.
+///
+/// The abort message carries only a face count, which says nothing about WHY
+/// the lump failed to pair. This prints each face's surface kind and a
+/// representative point, then every unpaired edge with its curve kind and
+/// endpoints — enough to tell a stray sliver from a real chunk, and to spot
+/// near-duplicate junction vertices.
+fn log_open_growth_shell(topo: &Topology, gs: &[FaceId]) {
+    if std::env::var("BK_OPEN_SHELL").is_err() {
+        return;
+    }
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+    for &fid in gs {
+        let Ok(f) = topo.face(fid) else { continue };
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            let Ok(w) = topo.wire(wid) else { continue };
+            for oe in w.edges() {
+                *uses.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    log::debug!("growth shell OPENSHELL faces={}", gs.len());
+    for &fid in gs {
+        let Ok(f) = topo.face(fid) else { continue };
+        let p = topo.wire(f.outer_wire()).ok().and_then(|w| {
+            let e = topo.edge(w.edges().first()?.edge()).ok()?;
+            Some(topo.vertex(e.start()).ok()?.point())
+        });
+        match p {
+            Some(p) => log::debug!(
+                "growth shell OPENSHELL face {fid:?} {} at ({:.3},{:.3},{:.3})",
+                f.surface().type_tag(),
+                p.x(),
+                p.y(),
+                p.z()
+            ),
+            None => log::debug!(
+                "growth shell OPENSHELL face {fid:?} {} at ?",
+                f.surface().type_tag()
+            ),
+        }
+    }
+    for (eid, count) in &uses {
+        if *count != 1 {
+            continue;
+        }
+        let Ok(e) = topo.edge(*eid) else { continue };
+        let (Ok(a), Ok(b)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+            continue;
+        };
+        let (a, b) = (a.point(), b.point());
+        log::debug!(
+            "growth shell OPENSHELL free {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+            e.curve().type_tag(),
+            a.x(),
+            a.y(),
+            a.z(),
+            b.x(),
+            b.y(),
+            b.z()
+        );
+    }
+}
+
 fn assemble(
     topo: &mut Topology,
     growth_shells: Vec<Vec<FaceId>>,
@@ -1188,6 +1253,7 @@ fn assemble(
             // boolean falls back to the volume-correct mesh path. Note the
             // OUTER shell is never subjected to this test, so which lump
             // dodges it historically depended on volume-ordering luck.
+            log_open_growth_shell(topo, gs);
             return Err(AlgoError::AssemblyFailed(format!(
                 "open growth shell with {} faces would be dropped; aborting analytic assembly",
                 gs.len()
