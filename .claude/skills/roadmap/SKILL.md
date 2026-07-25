@@ -713,7 +713,12 @@ B 16.093–16.923 down, B 13.723–14.707 down, **F 11.507–12.338 up**, B 9.29
 **F 6.794–7.624 up**, B 4.578–5.408 down, **F 2.700–3.192 up**. Also REFUTED as discriminants: band
 width (working and failing bands are both ≈0.831, except one working band at 0.984 and one failing
 at 0.492) and band spacing (centres are a near-uniform ≈2.2 lattice pitch). START THE NEXT SESSION
-HERE — **THE DEFECT IS IN `restrict_curves_to_faces`, NOT THE FACE SPLITTER.** Aggregating the
+HERE — **THE DEFECT IS IN PHASE FF'S AABB IN-BOTH PRE-FILTER, NOT THE FACE SPLITTER AND NOT
+`restrict_curves_to_faces`.** (An intermediate commit on this branch pinned it on
+`restrict_curves_to_faces`; that was a MISREAD of the trace — `before_restrict` is captured after two
+shadowing filters, so "restrict 0 → 0" means the curves were ALREADY gone. Stage traces afterF1 /
+afterF2 show filter 1 keeps 2 of 2 on all 16 pairs and the AABB pre-filter at phase_ff.rs ~333–383
+drops 2→1 on the 12 successes and 2→0 on the 4 failures.) Aggregating the
 `BK_FF_TRACE=17.05` pair/restrict lines by partner face closes the accounting exactly. Isolating the
 true cut-plane partners (`bx[17.050,17.050]`; the `bx[15.437,17.050]`/`[16.037,17.050]`/
 `[16.756,17.050]` partners are the slanted lattice walls and all restrict 0→0): outer cylinder
@@ -723,12 +728,22 @@ i.e. ALL 16 band×cylinder pairs accounted for, and the 3 outer + 1 inner failur
 outer + 1 inner missing notches and exactly the 4 free components. **So restrict is handed TWO raw
 generator curves on all 16 geometrically-identical pairs and discards BOTH on 4 of them.** This also
 corrects #1222: its "12 sections survive restrict intact" was a FALSE ALL-CLEAR — the correct
-denominator is 16, and 12 is just the successful-notch count. NEXT: instrument inside
-`restrict_curves_to_faces` (phase_ff.rs) for those 4 pairs — which rejection branch fires, and on
-which of the two generators — rather than anything in the splitter. Its graze/extent-scaled
-refinement is the prime suspect given the 0.05mm in-both run (same class as the lite magnet-pad
-`rescue_corner_crossing` root), but that is NOT yet confirmed. Secondary lead, the inner/outer
-asymmetry: the inner
+denominator is 16, and 12 is just the successful-notch count. **ROOT CAUSE, CONFIRMED BY EXPERIMENT:**
+the AABB pre-filter samples each raw curve 24× and keeps it only if some sample lands in both faces'
+inflated AABBs — but for `EdgeCurve::Line` it then RETURNS FALSE without the adaptive refinement it
+applies to every other curve type ("straight lines are exactly represented by their endpoints; a
+uniform scan cannot under-sample them at this granularity in practice"). That reasoning is wrong for
+this geometry: exactness of the LINE says nothing about whether a sample lands in the tiny in-both
+WINDOW. The generator spans the full ~20.3mm cylinder height, 25 uniform samples give a ~0.85mm
+pitch, and each lattice opening band is only ~0.83mm tall — so whether a band is hit is aliasing
+luck, which is exactly why the B,B,B,F,B,F,B,F pattern looked random. Deleting that early-return
+takes tool0 to **free=0** (F=495, 24 cylinders + 12 cones preserved, 232ms — no slowdown), and bands
+2/4/6 likewise; the ready-repro `goma_wall_band_cut_is_closed` PASSES. Note the same mechanism is
+ALREADY documented one filter above for the faceted-ramp × cylinder ELLIPSE case ("the 16-sample
+AABB pre-filter below and the uniform-t restriction both drop it (no sample lands in the band)"),
+which got a bespoke exact-arc bypass — lines never got one. STILL OPEN after that fix: bands
+1/3/5/7 continue to abort with "open growth shell with N faces" (pre-existing, a SEPARATE defect —
+do not assume the line fix addresses it). Secondary lead, the inner/outer asymmetry: the inner
 cylinder Id(6088) forms SEVEN notches and fails only at z 2.700–3.192, while the outer Id(5678)
 forms five and fails at three bands — same tool, same openings, two concentric cylinders 1.2mm
 apart, different outcomes. So the decision is per-face, not per-opening. The two bands where inner
