@@ -1,0 +1,25 @@
+.claude/skills/roadmap/SKILL.md
+  s_4be9cbc078e9c4::t_4cea02ea94ff9e 910-927
+crates/io/tests/data/kumiko_corner_wedge.bin
+  s_4be9cbc078e9c4::t_20b1aa5fd5fc40 1
+crates/io/tests/kumiko_corner_wedge_inmem.rs
+  s_4be9cbc078e9c4::t_294e19777aa8b0 1-123
+crates/io/tests/data/kumiko_corner_strut.bin
+  s_4be9cbc078e9c4::t_20b1aa5fd5fc40 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "42a0419208cb0f553cdba3aec9f3f344a9ec6f7c",
+  "prompts": {},
+  "sessions": {
+    "s_4be9cbc078e9c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb0e4ea1-d098-48cf-921d-3ac9562102ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
