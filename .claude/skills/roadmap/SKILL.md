@@ -832,7 +832,16 @@ whole iteration was spent inside it. **ALWAYS print operand free/over counts bef
 replayed capture; the harness now does this unconditionally.** OPEN QUESTION, and the real next
 step: is the breakage in the CAPTURE or does the tool genuinely build open lattice bands? If the
 latter it is a real defect, but upstream of GFA — re-capture the odd bands from a current build
-before spending anything further. Everything below this line about the odd bands describes behaviour
+before spending anything further. TWO FACTS THAT NARROW IT ALREADY, both cheap and already measured:
+(1) **they are NOT mesh-fallback output** — the odd tools carry 726/737/714/764 PLANAR faces against
+663 for the working ones, comparable magnitude, whereas a mesh co-refinement fallback on this
+geometry would be a triangle soup in the thousands. So the "fallback-poisoned capture" explanation
+does not fit and should not be assumed. (2) they are non-manifold as well as open (`over` 29–42
+alongside `free` 367–405), which reads as overlapping or duplicated faces — a mis-assembled analytic
+shell, not a truncated or lossy capture. Note also that serialization is unlikely to be the culprit:
+the SAME arena_io round-trip produced perfectly watertight even bands in the same capture directory.
+Captures are dated 2026-07-24 from published 2.128.2, i.e. BEFORE the #1224 fix; the tool is present
+at `~/Git/gridfinity-layout-tool`, so a re-capture on ≥2.128.5 is the decisive test. Everything below this line about the odd bands describes behaviour
 observed on BROKEN INPUT and must not be treated as an engine defect: **RETRACTED — the "GFA
 classifier misjudgement" reading (#1229) is NOT established; the classifier was fed a non-closed
 solid.** The probe now prints
