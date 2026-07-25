@@ -653,8 +653,19 @@ bands, slow only because the analytic path is rejected for **30 free edges** and
 runs; the analytic path is ~12x faster and keeps all 12 cones + 24 cylinders. Those 30 edges are
 **4 missing faces** in one **0.05mm plane-vs-cylinder sliver** — the tool's deliberate
 `SLAB_OVERLAP = 0.05` past the corner tangent planes (a tangency workaround). Repro is ~230ms per
-tool; all 8 bands fail, evens with free=30, odds aborting on an open growth shell. TARGET: the
-FF/section/split stage — the faces are never created.
+tool; all 8 bands fail, evens with free=30, odds aborting on an open growth shell. TARGET: the FF/section/split stage — the faces are never created. SHARPEST DATUM
+(`FACES_NEAR_X=17.025`): in the result every corner CYLINDER face is trimmed at x=17.000 while
+tool0's cut plane is at x=17.050 — the 0.05mm of cylinder between them has NO face at all, and
+that band is exactly what the 30 free edges bound. Planes do reach 17.050; the cylinders stop
+0.05mm short. INPUT SCAN (`BASE_FACES_NEAR_X`) shows 17.000 is the BASE's own geometry — the
+tangent point where each corner cylinder (x[17.000,20.750]) meets the flat wall (x[-17.000,17.000])
+— so it is not a trim. tool0's cut plane at x=17.050 therefore lies 0.05mm INSIDE the cylinder's
+range (exactly SLAB_OVERLAP past the tangent), and should split it. The result's cylinders still
+span [17.000,20.750], identical to the base: had they been split with the outer piece kept they
+would read [17.050,20.750]. **So the cut plane appears not to split the corner cylinders at all** —
+that is the defect, and the missing patches are the cylinder pieces it should have produced. NEXT
+STEP needs algo-level instrumentation (black-box probing is exhausted): whether a section is
+emitted for the cylinder x cut-plane pair at all.
 REFUTED, do not re-attempt: a panic (none; `lastPanicMessage()` is empty), bisect thrash
 (telemetry: 1 attempt, 1 success), prism construction (322ms, 0.1%), boolean batching as the main
 cost (30%), classification (defect is op-independent), and the assembly sliver-drop guard (tool0
