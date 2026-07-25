@@ -37,7 +37,32 @@ fn describe(topo: &Topology, sid: brepkit_topology::solid::SolidId, label: &str)
     println!("  {label}: F={} mix={mix:?}", faces.len());
 }
 
+struct DropLogger;
+impl log::Log for DropLogger {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        // Only the assembler's shell chatter — an unconditional `true` here
+        // would route every record in the workspace through `log()`.
+        m.target().starts_with("brepkit_algo") && m.level() <= log::Level::Debug
+    }
+    fn log(&self, r: &log::Record) {
+        if !self.enabled(r.metadata()) {
+            return;
+        }
+        let msg = format!("{}", r.args());
+        if msg.contains("growth sliver") || msg.contains("growth shell") {
+            println!("    [algo] {msg}");
+        }
+    }
+    fn flush(&self) {}
+}
+static DROP_LOGGER: DropLogger = DropLogger;
+
 fn main() {
+    if std::env::var("SHELL_LOG").is_ok() {
+        let _ = log::set_logger(&DROP_LOGGER);
+        log::set_max_level(log::LevelFilter::Debug);
+    }
+
     let dir = PathBuf::from(std::env::var_os("CAPTURE_DIR").unwrap_or_default());
     let prefix = std::env::var("PREFIX").unwrap_or_else(|_| "gomabisect".to_string());
     let limit: usize = std::env::args()
