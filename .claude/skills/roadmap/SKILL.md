@@ -849,27 +849,43 @@ non-manifold**: tool1 free=405 over=38 (identical to the old capture), tool3 393
 tool7 428/40 — while tool0/2/4/6 stay a clean 0/0. Face counts shifted slightly between captures
 (tool5 714→690, tool7 764→792) so construction is not bit-identical, yet the brokenness reproduces
 every time. That kills BOTH remaining benign explanations: not a stale/bad fixture, and not a
-nondeterministic flake. So the tool's DIAGONAL kumiko lattice bands are genuinely built as malformed
-solids, and the goma odd-band failures were never a defect in the boolean engine — the cut is being
-handed garbage. CONSTRUCTION TRACED (`kumikoWrapBuilder.ts` in the tool): a band is the FUSE of dozens of struts —
+nondeterministic flake. So the DIAGONAL kumiko lattice bands really do arrive at the cut as
+malformed solids — the cut is being handed garbage. (Where that garbage comes from is answered
+further down, and the answer is NOT "the tool built it": the bands are brepkit's own mesh-fallback
+output. An intermediate note here said the failures "were never a defect in the boolean engine";
+that is retracted — they are not a defect in GFA's ANALYTIC path, but they are a brepkit defect, in
+the mesh fallback.) CONSTRUCTION TRACED (`kumikoWrapBuilder.ts` in the tool): a band is the FUSE of dozens of struts —
 vertical struts as small-angle revolves, near-horizontal as thin partial revolves, **rising diagonals
 as `sketchHelix(...).sweepSketch(rect, {frenet:true})`**, and falling diagonals as chord boxes (a
 left-handed helix is unsupported). The odd/even split maps onto that: revolve-built bands are clean,
 diagonal-bearing bands are open. **HELIX SWEEP REFUTED as the direct cause** — `helical_sweep` is
 watertight (free=0 over=0) at every turn count 0.25–2.0 and segment density 4/8/16 at the bin's
 r=3.75; now pinned by `helical_sweep_is_watertight_across_turns_and_segments` in `helix.rs`. So a
-single strut is not the problem. NEXT: the band is ASSEMBLED by fusing those struts, so chase the FUSE, not the sweep. **The obvious
-candidate is ALREADY PARTLY REFUTED, so do not start there.** The mechanism of the open roadmap item
-"Mesh-boolean fallback emits OPEN meshes that get CONSUMED" is confirmed present in code —
-`mesh_boolean_fallback` (`boolean/mod.rs` ~2327) checks `boundary_edge_count`/`non_manifold_edge_count`,
-`log::warn!`s that the output is not a closed 2-manifold, and then falls straight through to
-`mesh_result_to_face_specs` and uses it anyway. BUT the odd bands are almost certainly NOT that
-path's output: a mesh fallback on this geometry is a triangle soup in the thousands, and the bands
-are 726/737/690/792 PLANAR faces, comparable to the 663 of the clean ones. So the open band most
-likely comes from an ANALYTIC fuse result accepted despite being open — which is surprising, because
-#1192 made `validate_boolean_result` hard-fail on `free_edges > 0`. FIRST QUESTION FOR THE NEXT
-SESSION: which gate does the band-assembly path actually run (the tool builds bands with `cutAll`
-and repeated fuses through brepjs), and is the #1192 free-edge check reached at all on that route?
+single strut is not the problem. NEXT: the band is ASSEMBLED by fusing those struts, so chase the FUSE, not the sweep. **IT IS THE KNOWN MESH-FALLBACK DEFECT — "Mesh-boolean fallback
+emits OPEN meshes that get CONSUMED" (open since 2026-07-16).** The full chain is now code-confirmed:
+an analytic fuse that fails the STRICT gate (`validate_boolean_result` in `boolean/assembly.rs`,
+which does reject `free_edges > 0` per #1192) drops to `mesh_boolean_fallback`; that function checks
+`boundary_edge_count`/`non_manifold_edge_count`, `log::warn!`s that the output is not a closed
+2-manifold, and then falls straight through to `mesh_result_to_face_specs` and uses it anyway; the
+result is finally checked by `validate_boolean_result_lenient`, which by design rejects only
+degenerate topology (too few faces, zero edges/vertices) because it is the terminal check with no
+fallback left. So an open mesh result is accepted, exactly as the open item says.
+**CORRECTION — an earlier read of mine said the bands were "almost certainly NOT that path's output"
+because 726/737/690/792 planar faces is too few for a triangle soup. That was WRONG, twice over:**
+(1) `mesh_boolean_fallback` runs `unify_faces` on its output, merging coplanar triangles back into
+polygons, so a mesh-derived band lands at a modest planar face count; and (2) the decisive tell was
+sitting in the operand dump the whole time — **EVERY band is 100% planar, the clean ones included**
+(`mix=[("plane", 663)]` and friends, zero cylinders or cones), while the base carries 12 cones and
+24 cylinders. A band built from revolves and helix sweeps MUST have cylindrical strut surfaces
+wrapping the corner; their total absence is the parity skill's canonical fallback tell ("all-planar
+with zero curved surfaces on a shape that should have cylinders is fallback regardless of the
+number"). All eight bands are mesh-fallback output; four happened to come out watertight and four
+did not. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
+either make the mesh co-refinement produce closed output for these operands, or make
+`mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
+rejecting means the op fails outright, since there is no further fallback; that is a product call).
+Also worth asking WHY the strut fuses fall back at all — if the analytic path held, no band would be
+mesh-derived and the whole family would likely close.
 Probe by checking free/over on the partial band after each strut fuse; use a SMALL repro (one
 diagonal band, or a native Rust fuse of a few revolve + helix-sweep struts at the tool's
 parameters), since the full export is 844s and blows the 600s vitest timeout before reporting.
