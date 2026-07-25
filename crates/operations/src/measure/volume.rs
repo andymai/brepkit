@@ -1211,6 +1211,38 @@ pub fn solid_volume(
     volume_from_per_face_tessellation(topo, solid, deflection)
 }
 
+/// Divergence-theorem volume of a solid WITHOUT the absolute value, so the sign
+/// reports shell orientation: positive for an outward-oriented (material-inside)
+/// solid, negative for an inverted one.
+///
+/// [`solid_volume`] deliberately reports a magnitude, which makes it blind to a
+/// globally inverted shell — the defect class that drops a boolean to the mesh
+/// fallback with no volume error to show for it.
+///
+/// # Errors
+///
+/// Returns an error if the solid cannot be tessellated.
+pub fn oriented_solid_volume(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+) -> Result<f64, crate::OperationsError> {
+    let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
+    let idx = &mesh.indices;
+    let pos = &mesh.positions;
+    let mut total = 0.0;
+    for t in 0..idx.len() / 3 {
+        let v0 = pos[idx[t * 3] as usize];
+        let v1 = pos[idx[t * 3 + 1] as usize];
+        let v2 = pos[idx[t * 3 + 2] as usize];
+        let a = Vec3::new(v0.x(), v0.y(), v0.z());
+        let b = Vec3::new(v1.x(), v1.y(), v1.z());
+        let c = Vec3::new(v2.x(), v2.y(), v2.z());
+        total += a.dot(b.cross(c));
+    }
+    Ok(total / 6.0)
+}
+
 /// Compute signed volume from a watertight triangle mesh using
 /// the divergence theorem (signed tetrahedra method).
 fn signed_volume_from_mesh(mesh: &tessellate::TriangleMesh) -> f64 {

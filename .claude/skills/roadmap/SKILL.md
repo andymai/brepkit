@@ -970,8 +970,30 @@ result shell is just the box, run with `BK_AREAS=1 BK_FLUX=1`) gives for a 10×1
 the convention is not inverted and `shell_is_outward_oriented` needs no fix. **Therefore the
 captured wedge operand is GENUINELY INWARD-ORIENTED, and the defect is upstream of GFA entirely.**
 Do NOT "fix" `signed_volume_of_shell` or `shell_is_outward_oriented` — they are provably right.
-**ROOT CAUSE FOUND AND REPRODUCED NATIVELY IN ~30 LINES — `revolve` DOES NOT NORMALIZE THE
-ORIENTATION OF THE SOLID IT EMITS.** Probe: `crates/io/examples/arena_roundtrip_orientation.rs`. The
+**ROOT CAUSE FOUND, FIXED, AND FIXTURED — THE SEGMENTED `revolve` PATH DID NOT NORMALIZE THE
+ORIENTATION OF THE SOLID IT EMITS.** Fix in `crates/operations/src/revolve.rs`
+(`profile_chart_is_ccw` + traversal reversal at the segmented path's entrance); fixtures
+`crates/operations/tests/regress_kumiko_corner_wedge.rs` (native wedges, both the overlapping and
+the disjoint cut) and `revolve::tests::revolve_segmented_{is_outward,full_turn_is_outward}_for_either_winding`.
+The sweep runs in `+θ = axis × e_r`, so a profile wound CCW in the (radial, axial) chart faces
+AGAINST it and revolves into a consistently-wound but globally INVERTED solid (Pappus: the swept
+signed volume carries the chart's signed area). `try_analytic_full_revolution` derives each face's
+material-outward side from that same shoelace sign; the segmented path built faces straight from
+traversal order, so it now normalizes the TRAVERSAL instead (reverse the oriented edges and negate
+the cap normal when the chart shoelace is CCW; a degenerate chart is left alone). WIDER THAN THE DIG
+RECORDED: the bug hits segmented FULL revolutions too (a profile whose surface is non-planar, so the
+analytic path declines) — `−112.833` for a `+113.1` washer — the earlier "full revolution is correct
+for both windings" reading only held because analytic profiles never reach the segmented path.
+NEW ORACLE, and the reason this survived so long: `measure::solid_volume` returns a MAGNITUDE, so no
+existing revolve test could see an inverted shell. `measure::oriented_solid_volume` (new, public)
+keeps the divergence-theorem sign — positive iff outward. Reach for it in any orientation
+assertion; the pre-fix wedges read `−143.148`.
+STALE FIXTURE, deliberately still ignored: `crates/io/tests/kumiko_corner_wedge_inmem.rs` replays
+operands captured PRE-FIX, i.e. already-inverted wedges that nothing downstream can recover. Its new
+`captured_operands_are_inward_oriented` pins exactly that (and self-reports when a re-capture lands).
+TOOL-SIDE RE-PROBE STILL OWED — see the mandatory-re-probe note below; the engine claim is closed,
+the export-integrity numbers are not.
+Historical dig record follows. Probe: `crates/io/examples/arena_roundtrip_orientation.rs`. The
 arena round-trip is INNOCENT (a serialize/deserialize copy of a box gives the same
 `signed_vol=1000.000000 outward=Some(true) -> growth` as the native one). But revolving a wedge
 profile (rectangle in the XZ plane, r 1.55→4.75, z 2.7→20.8, about Z, 45°) across all four
@@ -999,15 +1021,17 @@ torus−box notch band, so that path is load-bearing and must not be disturbed. 
 detects only containment), which would spare tool0/tool3 the whole path. Reproduce per tool by symlinking
 one `cut-tool<i>.bin` as `cut-tool0.bin` beside `cut-base.bin` and running
 `PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1 BBOX=1`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
-fixture itself — an unvalidated operand already cost this campaign several passes. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
-either make the mesh co-refinement produce closed output for these operands, or make
-`mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
-rejecting means the op fails outright, since there is no further fallback; that is a product call).
-Also worth asking WHY the strut fuses fall back at all — if the analytic path held, no band would be
-mesh-derived and the whole family would likely close.
-Probe by checking free/over on the partial band after each strut fuse; use a SMALL repro (one
-diagonal band, or a native Rust fuse of a few revolve + helix-sweep struts at the tool's
-parameters), since the full export is 844s and blows the 600s vitest timeout before reporting.
+fixture itself — an unvalidated operand already cost this campaign several passes.
+FIRST ACTION FOR THE NEXT SESSION: the engine fix is landed and fixtured, so the open work is
+MEASUREMENT — publish/overlay a build carrying it and re-run the tool's export-integrity matrix plus
+the 4 baseplate suites (baseline to beat: 37 failed / 371 passed on local main; kumiko 14 failures on
+one root; goma 1×1×6 at 844s with 2567 boundary edges). Expect the four diagonal bands to arrive
+closed, which should take them off the mesh fallback and collapse the 844s. Do NOT quote a kumiko
+closure before that re-probe. Two independent follow-ups remain, both untouched by the revolve fix:
+short-circuit a DISJOINT Cut to A (the ops shortcut detects only containment, so a non-touching strut
+still routes through GFA — tool0/tool3 are exactly this), and decide the product call on
+`mesh_boolean_fallback`, which warns that its output is not a closed 2-manifold and consumes it
+anyway (rejecting means the op fails outright, since there is no further fallback).
 
 **MANDATORY POST-GFA RE-PROBE DONE, AND THE ANSWER IS THAT #1224 MOVED THE SCENARIO NOT AT ALL.**
 `gomaBoundaryProbe` (goma 1×1×6 export + STL edge-use oracle) on the overlaid 2.128.5 build:
