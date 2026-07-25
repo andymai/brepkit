@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784984292929,
+  "lastUpdate": 1784985944989,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12635,6 +12635,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21672628,
             "range": "± 453485",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6d5b5b65f86c4e448478f666affe304a3be620c2",
+          "message": "test(io): report operand watertightness — the odd-band replay was GIGO (#1229)\n\nFollow-up to #1228. Ends the odd-band investigation with a result I did\nnot expect: **the odd tool operands are not watertight, so everything\ndiagnosed from them was garbage-in.** Diagnostics only; no behavior\nchange.\n\n## The finding\n\nAdding free/over-edge counts to the replay's operand `describe()` shows\nthe failure split **is** the watertightness split:\n\n| Tool | free | over | band |\n|---|---|---|---|\n| tool0 / 2 / 4 / 6 | 0 | 0 | all work ✅ |\n| tool1 | **405** | 38 | fails |\n| tool3 | **383** | 34 | fails |\n| tool5 | **367** | 42 | fails |\n| tool7 | **392** | 29 | fails |\n\nRay-cast parity against a non-closed solid is undefined. That single\nfact explains the entire chain: rays reporting **1** crossing from a\npoint provably outside, the misclassified corner cylinder, the dropped\ninner wall, and the open growth shell.\n\n## What this retracts\n\nThe earlier commits on this branch concluded the odd-band root was a\n**GFA classifier misjudgement**. That is **not established** — the\nclassifier was fed a malformed solid, so its verdict is meaningless\nrather than wrong. I have retracted it in the roadmap and in the commit\nhistory rather than quietly dropping it.\n\nThe evidence that led there was real and reproducible (tool0 and tool1\nsample the same face at different points; the oracle disagrees with GFA\non tool1's point). It was simply downstream of the actual problem.\n\n## How it was found\n\n`BK_RAY_POINT=x,y,z[,radius]` dumps the per-ray crossing parity and\nsuspicion flags behind a vote:\n\n```\ncardinal dir=(0,0,1) crossings=4 parity=0 suspicious=false\ncardinal dir=(1,0,0) crossings=1 parity=1 suspicious=false\ncardinal dir=(0,1,0) crossings=1 parity=1 suspicious=false\npoint=(17.816,-19.416,8.070) faces=726 cardinal_inside=2 suspicious=0 recast=false\n```\n\n`suspicious=0` ruled out the a1corner degenerate-ray class immediately.\nA point outside a **closed** solid must cross it an even number of\ntimes; two rays reported 1. That parity violation pointed at the\noperand, not the vote.\n\n## Guard against a repeat\n\nThe harness now prints operand free/over counts **unconditionally**, so\nno future replay of any capture can start from a broken operand\nunnoticed. This is the documented trap — *\"captured operands are\nfallback-poisoned, never replay them directly\"* — and a full iteration\nwas spent inside it.\n\n## The real next step\n\nIs the breakage in the **capture**, or does the tool genuinely build\nopen lattice bands? The latter would be a real defect, but upstream of\nGFA. Re-capture the odd bands from a current build before spending\nanything further on them.\n\n## Verification\n\n- `cargo nextest run -p brepkit-algo -p brepkit-io`: **430 passed**, 0\nskipped.\n- `cargo clippy -p brepkit-algo -p brepkit-io --all-targets`: clean.\n- All probes env-gated except the operand summary, which is one line per\noperand.\n- Review finding addressed: `POINT_IN` now parses strictly instead of\nsilently dropping malformed tokens.",
+          "timestamp": "2026-07-25T06:23:35-07:00",
+          "tree_id": "1e2a82a9185e11a71b8c290ab426c2e15998d4f8",
+          "url": "https://github.com/andymai/brepkit/commit/6d5b5b65f86c4e448478f666affe304a3be620c2"
+        },
+        "date": 1784985943989,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 821831,
+            "range": "± 748",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 914595,
+            "range": "± 11080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11996,
+            "range": "± 256",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 662208,
+            "range": "± 1561",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21594474,
+            "range": "± 26112",
             "unit": "ns/iter"
           }
         ]
