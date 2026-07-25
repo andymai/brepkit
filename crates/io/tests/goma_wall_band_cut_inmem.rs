@@ -2,10 +2,11 @@
 //! to leave 30 free edges, so the analytic result was rejected and the whole
 //! kumiko family fell back to the mesh boolean.
 //!
-//! Root cause (#1224): phase FF's AABB in-both pre-filter sampled each raw
-//! curve 16× and, for a `Line`, gave up without the adaptive refinement it
-//! applies to every other curve type — on the stated reasoning that a straight
-//! line cannot be under-sampled. But exactness of the LINE says nothing about
+//! Root cause (diagnosed in #1223, fixed in #1224): phase FF's AABB in-both
+//! pre-filter sampled each raw curve 16× and, for a `Line`, gave up without
+//! the adaptive refinement it applies to every other curve type — on the
+//! stated reasoning that a straight line cannot be under-sampled at that
+//! granularity. But exactness of the LINE says nothing about
 //! whether a sample lands in the tiny in-both WINDOW: the section here is a
 //! full-height (~20.3mm) cylinder generator whose true in-both span is one
 //! ~0.83mm lattice opening, under the filter's ~1.27mm pitch. Whether a band
