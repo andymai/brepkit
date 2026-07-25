@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784943575142,
+  "lastUpdate": 1784948678166,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12257,6 +12257,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20019073,
             "range": "± 165428",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7a90e1875b7a8c865ec552646a078a5a6241ebdc",
+          "message": "test(algo): add an env-gated FF pair trace (#1222)\n\nReplaces #1221, which went CONFLICTING after picking up #1220's commits.\nSingle commit off current main, with both review findings from there\nfixed.\n\nContinues the goma dig past where black-box probing ran out (#1220).\nAdds `BK_FF_TRACE=<x>`, an env-gated diagnostic in `phase_ff`, and uses\nit to **rule out phase FF as the gap**.\n\n## What it showed\n\nAt the sliver's x=17.05 on the `TOOL=0` repro:\n\n```\n 64 FF_TRACE pair          (all cylinder × plane, raw_curves=1 each)\n736 FF_TRACE reject-aabb   (416 cylinder × plane)\n```\n\n**Sections are emitted.** 64 cylinder × plane pairs survive the AABB\ntest and each returns a curve; the rejections are mostly correct, since\nmost face pairs genuinely do not meet.\n\nSo phase FF is not where the four missing cylinder patches are lost. The\ndefect is **downstream of section computation** — restrict/clip,\npave-block splitting, or face building — traceable with the same ~230 ms\nrepro.\n\n## Fixed from #1221\n\n- **Misattached attribute** (Copilot). My splice landed between\n`perform`'s doc block and its `#[allow(clippy::too_many_lines)]`, so\nboth attached to the new helper and `perform` silently lost its allow.\nThe helper now sits above the doc block; verified\n`#[allow(clippy::too_many_lines)]` is immediately followed by `pub fn\nperform`.\n- **Formatting churn** (Copilot) — `cargo fmt` applied.\n\n## Diagnostic hygiene\n\nThe first version resolved `std::env::var` **inside the face-pair loop**\n— 800 iterations on this small case, far more on real geometry, so an\nenv lookup and allocation per pair in the boolean hot path. Now resolved\nonce per process behind a module-level `OnceLock`. Trace output\nunchanged; untraced path measures 229–260 ms as before.\n\nVerified: `clippy --all-targets` clean, 425 tests green across\n`brepkit-algo` and `brepkit-io`.\n\nOne correction carried over: my first read of this trace was \"zero pair\nlines, everything rejected.\" That came from a frequency-sorted top-10\nthat happened to contain only rejects. The counts above are what the\ntrace actually says.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an env-gated FF pair trace in `phase_ff` via `BK_FF_TRACE=<x>` to\nlog face-pair behavior at a chosen x. Roadmap updated: sections survive\nFF/restrict/emission; only two cylinder faces report sections, and the\nx-only filter is non-localizing — next step is to check y/z-local faces.\n\n- **New Features**\n- `BK_FF_TRACE=<x>` logs: \"reject-aabb\", `raw_curves` count, \"restrict N\n-> M\", and \"emit curve#k type\".\n- Resolves the env var once via a module `OnceLock`; untraced path\nperformance unchanged.\n  - `replay_cut_capture` prints `FF_TRACE` lines for easier inspection.\n\n- **Bug Fixes**\n- Corrected placement of `#[allow(clippy::too_many_lines)]` on\n`perform`.\n  - Formatting cleanup.\n\n<sup>Written for commit 7573772b2b9c44c401e39815e0e6edfbb3918c75.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1222?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-24T20:02:18-07:00",
+          "tree_id": "f3d554fee9e3edb5d631d0e9d2ee984d14fe8d6a",
+          "url": "https://github.com/andymai/brepkit/commit/7a90e1875b7a8c865ec552646a078a5a6241ebdc"
+        },
+        "date": 1784948677406,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 753861,
+            "range": "± 16322",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 832170,
+            "range": "± 15471",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10779,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 604866,
+            "range": "± 5034",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19879090,
+            "range": "± 431067",
             "unit": "ns/iter"
           }
         ]
