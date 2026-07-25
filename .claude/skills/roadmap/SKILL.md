@@ -691,14 +691,27 @@ plain outer wire and ZERO inner wires — so the cone-box row's predicted "inner
 outer" fix-shape does NOT transfer here, and a bayed single outer wire is the CORRECT shape for a
 quarter-cylinder bitten at its θ=90 edge. Re-reading the free-loop geometry accordingly: each
 missing outline spans y∈[−19.550,−20.750] — exactly the 1.2mm wall thickness between the inner and
-outer corner cylinders — and is bounded by TWO ELLIPSE ARCS plus lines. A plane×cylinder section is
-an ellipse and tool0 is 663 PLANES, so **the missing patches are planar TOOL-side faces (the lattice
-opening's slanted walls) trimmed by the two corner cylinders, not cylinder pieces**. Confirmed
-absent: no face in the result spans x[17.000,17.050]. START THE NEXT SESSION HERE: identify which
-tool0 plane face each of the 4 outlines belongs to, and whether that plane face is split-but-missing
-a sliver sub-face or dropped whole. Everything else in this chain is measured and solid — FF
-pairing, restrict, emission and the section map are all confirmed working; three hypotheses (the
-empty-`pave_blocks` skip, a face-id mismatch, and cylinder mis-wiring) are REFUTED. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
+outer corner cylinders. An intermediate read of that — "the missing patches are planar TOOL-side
+faces, not cylinder pieces" — was WRONG and is retracted; it inferred the surface from the rim's
+ellipse arcs without checking whether the cylinder boundary itself was notched. **THE REAL
+SIGNATURE, and the sharpest datum in this whole dig: the notch forms in 5 of 8 z-bands and is simply
+ABSENT in 3.** Dumping face 5678's 30-edge outer wire (`FACE_WIRES=1` prints per-edge geometry and
+flags free edges) shows a clean repeating bay wherever the cut worked — `line` along the tangent
+generator at x=17.000, `ellipse` out to x=17.050, `line` down the cut plane, `ellipse` back — i.e.
+the quarter-cylinder trimmed from θ=90 back to θ=89.24 across the tool's 0.05mm overshoot. In the
+three failing bands (z 11.507–12.338, 6.794–7.624, 2.700–3.192) the wire instead runs STRAIGHT along
+x=17.000 with no bay, and **those un-notched generator segments ARE the free edges** (e17959, e17965,
+e17971), free because the flat wall at y=−20.750 does have its opening there so nothing pairs.
+`FREE_OWNERS=1` confirms the whole rim: 10 faces carry all 30 free edges — the two corner cylinders
+(3 + 2) and eight planes, dominated by the cut-plane faces Id(6090) 10-of-12 and Id(6091) 4-of-9.
+CANDIDATE DISCRIMINANT (not yet confirmed): in every WORKING bay the bridging ellipse's z DECREASES
+outward (19.140→19.111), in every FAILING one it INCREASES (12.338→12.367) — kumiko diagonals slope
+alternately, so this points at a direction/orientation assumption in the notch split rather than a
+tolerance. START THE NEXT SESSION HERE: confirm or refute that slope discriminant across all 8 bands
+and both cylinders, then find the split site that declines the notch for one slope sign. Everything
+else in this chain is measured and solid — FF pairing, restrict, emission and the section map are
+all confirmed working; three hypotheses (the empty-`pave_blocks` skip, a face-id mismatch, and
+cylinder mis-wiring via a duplicated inner wire) are REFUTED. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
 adjacent `log::debug!` and `eprintln!` on the same line gave **0 vs 890** records, while
 `builder_solid`'s `log::debug!` reaches the same logger fine. Log-based probes in that file read as
 a FALSE ZERO. Use a temporary `eprintln!` gated on an env var (it trips `clippy::print_stderr`, so
