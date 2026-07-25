@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784989177341,
+  "lastUpdate": 1784990832258,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -12797,6 +12797,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21569281,
             "range": "± 29945",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "40ec0a7e01ec281c0f09a1d39bbbb29ba74bd808",
+          "message": "test(operations): pin helical sweep watertightness, refuting it as the goma cause (#1232)\n\nFollow-up to #1230/#1231. Traces how the goma bands are actually built,\nand eliminates the most obvious suspect with a test that keeps it\neliminated.\n\n## The construction\n\n`kumikoWrapBuilder.ts` in the tool builds a lattice band as the **fuse\nof dozens of struts**:\n\n- vertical struts → small-angle revolves\n- near-horizontal struts → thin partial revolves\n- **rising diagonals → `sketchHelix(...).sweepSketch(rect, {frenet:\ntrue})`**\n- falling diagonals → chord boxes (a left-handed helix is unsupported)\n\nThe odd/even split maps neatly onto that: revolve-built bands come out\nclean (`free=0 over=0`), diagonal-bearing bands come out open. So the\nhelix sweep was the natural suspect.\n\n## It is not the cause\n\n`helical_sweep` is watertight — `free=0 over=0` — at every turn count\nfrom 0.25 to 2.0 and segment density 4/8/16, at the bin's r=3.75 corner\nradius:\n\n```\nturns=0.25 segs=4:  F=26  free=0 over=0\nturns=0.5  segs=16: F=138 free=0 over=0\nturns=2.0  segs=16: F=522 free=0 over=0\n```\n\nThis PR adds `helical_sweep_is_watertight_across_turns_and_segments` so\nthe result is pinned and the next session doesn't re-suspect it.\n\n## Where that points instead\n\nA band is *assembled*, so chase the **fuse**, not the sweep. And there\nis an already-open roadmap item that fits exactly: **\"Mesh-boolean\nfallback emits OPEN meshes that get CONSUMED\"** (discovered 2026-07-16).\nIf a strut fuse falls back to the mesh boolean and that output is open,\nit gets consumed and the band comes out open — which would make the\nodd-band defect a **known** engine bug rather than a new one.\n\nSuggested probe: check `free`/`over` on the partial band after each\nstrut fuse. Use a small repro (one diagonal band) — the full export is\n844 s and blows the 600 s vitest timeout before it can report.\n\n## Verification\n\n- `cargo nextest run -p brepkit-operations`: **990 passed**, 12 skipped.\n- `cargo clippy -p brepkit-operations --all-targets`: clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd `helical_sweep_is_watertight_across_turns_and_segments` proving\n`helical_sweep` is closed and valid across turns 0.25–2.0 and segments\n4/8/16 at r=3.75. The test also runs `validate_solid`, all combos pass,\nrefuting the helix sweep as the goma cause; the roadmap is updated to\npartly refute the mesh-boolean fallback hypothesis and point instead to\nan analytic fuse accepted despite being open, with a follow-up to check\nwhich gate runs and whether the #1192 free‑edge check is reached.\n\n<sup>Written for commit 272e33975c423a646adefe9df6a6a48c83797ead.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1232?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-07-25T07:45:10-07:00",
+          "tree_id": "8477b1e56cac9ed4f66ec626d03096a89d21c21f",
+          "url": "https://github.com/andymai/brepkit/commit/40ec0a7e01ec281c0f09a1d39bbbb29ba74bd808"
+        },
+        "date": 1784990831159,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 660447,
+            "range": "± 1677",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 739254,
+            "range": "± 1290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10282,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 516464,
+            "range": "± 2007",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17709735,
+            "range": "± 16793",
             "unit": "ns/iter"
           }
         ]
