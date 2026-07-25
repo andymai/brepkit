@@ -1,0 +1,21 @@
+crates/io/examples/replay_cut_capture.rs
+  s_4be9cbc078e9c4::t_d572dfe620defd 244-282
+.claude/skills/roadmap/SKILL.md
+  s_4be9cbc078e9c4::t_ac13ce5b62aee5 684-701
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "1388286a8c43291361f45a08e66a57275835a98f",
+  "prompts": {},
+  "sessions": {
+    "s_4be9cbc078e9c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fb0e4ea1-d098-48cf-921d-3ac9562102ef",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
