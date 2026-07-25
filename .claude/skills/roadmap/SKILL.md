@@ -849,9 +849,12 @@ non-manifold**: tool1 free=405 over=38 (identical to the old capture), tool3 393
 tool7 428/40 — while tool0/2/4/6 stay a clean 0/0. Face counts shifted slightly between captures
 (tool5 714→690, tool7 764→792) so construction is not bit-identical, yet the brokenness reproduces
 every time. That kills BOTH remaining benign explanations: not a stale/bad fixture, and not a
-nondeterministic flake. So the tool's DIAGONAL kumiko lattice bands are genuinely built as malformed
-solids, and the goma odd-band failures were never a defect in the boolean engine — the cut is being
-handed garbage. CONSTRUCTION TRACED (`kumikoWrapBuilder.ts` in the tool): a band is the FUSE of dozens of struts —
+nondeterministic flake. So the DIAGONAL kumiko lattice bands really do arrive at the cut as
+malformed solids — the cut is being handed garbage. (Where that garbage comes from is answered
+further down, and the answer is NOT "the tool built it": the bands are brepkit's own mesh-fallback
+output. An intermediate note here said the failures "were never a defect in the boolean engine";
+that is retracted — they are not a defect in GFA's ANALYTIC path, but they are a brepkit defect, in
+the mesh fallback.) CONSTRUCTION TRACED (`kumikoWrapBuilder.ts` in the tool): a band is the FUSE of dozens of struts —
 vertical struts as small-angle revolves, near-horizontal as thin partial revolves, **rising diagonals
 as `sketchHelix(...).sweepSketch(rect, {frenet:true})`**, and falling diagonals as chord boxes (a
 left-handed helix is unsupported). The odd/even split maps onto that: revolve-built bands are clean,
@@ -864,7 +867,7 @@ an analytic fuse that fails the STRICT gate (`validate_boolean_result` in `boole
 which does reject `free_edges > 0` per #1192) drops to `mesh_boolean_fallback`; that function checks
 `boundary_edge_count`/`non_manifold_edge_count`, `log::warn!`s that the output is not a closed
 2-manifold, and then falls straight through to `mesh_result_to_face_specs` and uses it anyway; the
-result is finally checked by `validate_boolean_result_LENIENT`, which by design rejects only
+result is finally checked by `validate_boolean_result_lenient`, which by design rejects only
 degenerate topology (too few faces, zero edges/vertices) because it is the terminal check with no
 fallback left. So an open mesh result is accepted, exactly as the open item says.
 **CORRECTION — an earlier read of mine said the bands were "almost certainly NOT that path's output"
