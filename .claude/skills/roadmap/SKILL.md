@@ -725,9 +725,17 @@ itself open: the 4 faces were NEVER CREATED. tool1: **20 growth shells, 17 hole 
 them open with 9 faces, which trips the `gs.len() >= 4` abort. So the even mode is a
 splitter/section gap (missing faces) and the odd mode is fragmentation + the assembly guard. A
 tempting unification — "small open shells are silently dropped (<4 faces) while big ones abort" —
-was REFUTED by this probe; tool0 drops nothing. THE TARGET IS NOW the FF/section/split stage for
-the 0.05mm plane-vs-cylinder sliver (even mode), with the odd mode's fragmentation treated as
-possibly separate. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
+was REFUTED by this probe; tool0 drops nothing. (13) THE 0.05mm IS DELIBERATE, AND IT IS A TANGENCY WORKAROUND:
+`kumikoWrapBuilder.ts` has `const SLAB_OVERLAP = 0.05` — "Overlap of flat slabs past the corner
+tangent planes (boolean robustness)". The tool extends each flat slab 0.05mm PAST THE CORNER
+TANGENT PLANES specifically to avoid exact tangential contact, and that overlap is exactly where
+brepkit fails. So a workaround meant to dodge a tangency problem manufactures a thin-sliver problem
+instead; it also explains why all 8 tools fail identically (the offset is a constant, not an
+accident) and gives real evidence for the link to the tangency row above, which was previously only
+a geometric coincidence. NOTE a tool-side mitigation (different overlap) may exist, but the kernel
+defect is the real target. THE TARGET IS NOW the FF/section/split stage for the 0.05mm
+plane-vs-cylinder sliver (even mode), with the odd mode's fragmentation treated as possibly
+separate. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
 broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers
