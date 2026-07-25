@@ -706,8 +706,14 @@ harder on the second cut. LOOP GEOMETRY (`LOOP_GEOM=1`): each of the 4 outlines 
 signature — several Lines lying in the x=17.05 plane, ONE Line on the far side at x=17.00, and TWO
 short Ellipse arcs bridging 17.00 <-> 17.05. So each loop STRADDLES the 0.05mm gap and is NOT
 planar: the missing faces span from tool0's cut plane across to the base cylinder. Each covers
-roughly 1.2 x 0.83mm with a 0.05mm depth excursion. THE TARGET IS NOW: why those 4 non-planar
-sliver faces are dropped from the analytic assembly. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
+roughly 1.2 x 0.83mm with a 0.05mm depth excursion. (10) THE DEFECT IS OP-INDEPENDENT (`OP=cut|fuse|intersect` on the same
+operands): Cut F=494 free=30 over=0; Fuse F=1155 free=29 over=1; Intersect ERRs with "open growth
+shell with 6 faces would be dropped" (same error family as cut 1's 20-face version). All three fail
+in the SAME region, which points AWAY from classification — that selects different subsets per op
+and would not fail identically — and toward the shared upstream: the splitter/section machinery
+emitting a partition that cannot be assembled under any op. So these are NOT faces that were built
+and then classified out; the partition is defective before classification runs. THE TARGET IS NOW
+the FF/section/split stage for this 0.05mm plane-vs-cylinder sliver, NOT the classifier. Fixing it makes goma analytic AND ~12x faster per cut, and removes the
 broken-fallback consumption at the same time. TOOLING NOTE: V8 `--cpu-prof` does NOT work here — vitest's fork pool drops it via both
 NODE_OPTIONS and poolOptions.forks.execArgv, and vite-node is not installed; two attempts produced only
 idle parent-process profiles. Use `vi.mock` wrapping instead, and make sure the wrapper actually covers

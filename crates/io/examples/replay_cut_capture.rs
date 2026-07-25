@@ -106,12 +106,18 @@ fn main() {
         let mut acc = base;
         for (i, &tool) in tools.iter().enumerate() {
             let t = Instant::now();
-            match brepkit_algo::gfa::boolean(
-                &mut topo,
-                brepkit_algo::bop::BooleanOp::Cut,
-                acc,
-                tool,
-            ) {
+            // OP=cut|fuse|intersect — if the faces survive under a different op,
+            // the splitter created them and classification is dropping them; if
+            // every op loses them, the splitter never made them.
+            let op = match std::env::var("OP")
+                .unwrap_or_else(|_| "cut".into())
+                .as_str()
+            {
+                "fuse" => brepkit_algo::bop::BooleanOp::Fuse,
+                "intersect" => brepkit_algo::bop::BooleanOp::Intersect,
+                _ => brepkit_algo::bop::BooleanOp::Cut,
+            };
+            match brepkit_algo::gfa::boolean(&mut topo, op, acc, tool) {
                 Ok(next) => {
                     let faces = solid_faces(&topo, next).expect("faces");
                     let mut uses: HashMap<EdgeId, usize> = HashMap::new();
