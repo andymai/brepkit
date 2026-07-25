@@ -751,9 +751,23 @@ test also admits lines crossing `bb_a ∩ bb_b` while missing both faces: ungate
 two such plane×plane lines into `dovetail_a1corner_nubfuse_inmem` and took it watertight → bnd=158.
 Plane×plane keeps the sampled test and its `return false`, so it stays theoretically susceptible to
 the same aliasing; no repro exhibits it, and closing it needs a test against true FACE extents
-rather than AABBs. STILL OPEN after that fix: bands
-1/3/5/7 continue to abort with "open growth shell with N faces" (pre-existing, a SEPARATE defect —
-do not assume the line fix addresses it). Secondary lead, the inner/outer asymmetry: the inner
+rather than AABBs. **STILL OPEN after that fix — THE ODD-BAND FAMILY, now the live goma work:** bands
+1/3/5/7 abort with "open growth shell with N faces" (9, 22, 23, 36 respectively). PROVEN INDEPENDENT
+of the line fix — identical counts on pre-fix main, so do NOT assume a shared root. The abort is
+DELIBERATE (`builder_solid.rs` ~1192): an OPEN growth shell of ≥4 faces is a genuine solid lump whose
+selection left unpaired junction edges, and failing beats silently deleting its volume (the lite
+fused-foot lesson). Note the odd tools carry MORE faces than the even ones (726/737/714/764 vs a
+uniform 663) — they are structurally different lattice members (the diagonals), so they meet the
+corner cylinder at an angle rather than square on. LOCALIZED (env-gated `BK_OPEN_SHELL` probe at the
+abort site, stashed not yet committed): tool1's 9 faces are ALL PLANES clustered in the SAME (+x,−y)
+corner as the even-band defect and the SAME 1.2mm wall-thickness band — x≈17.1–18.1, y≈−19.4 to
+−20.75 — but in one narrow z window ≈8.2–9.0. SIGNATURE IS JUNCTION IDENTITY, NOT ALIASING: two face
+pairs share identical start points (Id(2696)/Id(2709) at (17.760,−20.080,8.372), Id(2721)/Id(2730)
+at (17.809,−19.418,8.466)), and the unpaired edges include MICRO-ellipses — (17.809,−19.418,8.466)→
+(17.811,−19.418,8.465) is ~0.002mm, another ~0.022mm. That is the near-duplicate-vertex/weld-band
+class (cf. the intwidth tangency and lite magnet-pad roots), so start from vertex minting in that
+corner (VERTEX_WATCH recipe) rather than from the splitter. Secondary lead, the inner/outer
+asymmetry: the inner
 cylinder Id(6088) forms SEVEN notches and fails only at z 2.700–3.192, while the outer Id(5678)
 forms five and fails at three bands — same tool, same openings, two concentric cylinders 1.2mm
 apart, different outcomes. So the decision is per-face, not per-opening. The two bands where inner
