@@ -49,7 +49,10 @@ impl log::Log for DropLogger {
             return;
         }
         let msg = format!("{}", r.args());
-        if msg.contains("growth sliver") || msg.contains("growth shell") || msg.contains("FF_TRACE")
+        if msg.contains("growth sliver")
+            || msg.contains("growth shell")
+            || msg.contains("FF_TRACE")
+            || msg.contains("SUBFACE")
         {
             println!("    [algo] {msg}");
         }

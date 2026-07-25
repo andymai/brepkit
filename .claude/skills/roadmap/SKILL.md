@@ -807,9 +807,24 @@ y[−20.749,−13.251] (the OUTER r=3.75 cylinder) and `curve#241` ellipse z[7.0
 y[−19.550,−14.450] (the INNER r=2.55 one) — both spanning the lump's z window [8.185,9.026] and its
 y range — plus `curve#334` line. So FF, restrict, emission and coverage are all CORRECT for this
 lump; **the corner-cylinder sub-face is lost DOWNSTREAM, in the face splitter or in classification,
-not at section computation.** NEXT: dump the corner-cylinder faces' section lists and the sub-faces
-the splitter produces around z 8.2–9.0, and diff against the same corner on a WORKING (even) band —
-the even bands now assemble cleanly, so they are the control. Each odd band hits a
+not at section computation.** **ROOT FOUND — IT IS A CLASSIFICATION ERROR, NOT A MISSING FACE (#1228).** A new
+`BK_SUBFACE_BOX=x0,x1,y0,y1,z0,z1` probe (in `builder/mod.rs`, reports every sub-face touching the
+box with surface kind, source, `FaceClass`, rank, selection and extent) diffed the SAME corner
+between a working and a broken band. On **tool0 (works)** the inner corner cylinder `Id(72)` yields
+8 tiny **Inside** notch slivers at x[17.000,17.050] — the 0.05mm bands #1224 restored, correctly
+removed — plus ONE big **Outside** remainder x[17.000,19.550] y[−19.550,−17.000] z[1.200,20.300]
+that is SELECTED. On **tool1 (broken)** the identically-extented full remainder
+x[17.000,19.550] y[−19.550,−17.000] z[1.200,20.300] is classified **Inside** and DROPPED, taking the
+whole inner corner wall with it and leaving the tool's cut-surface patch with nothing to pair
+against. So the splitter IS producing the face and #1227's "missing from the selection" stands, but
+the mechanism is misclassification, NOT a failure to create. Prime suspect, and it is a KNOWN class
+here: the sub-face's interior sample point. See the a1corner root ("splitter interior points of
+notched/symmetric pieces land on feature-plane intersections BY CONSTRUCTION; classification must
+survive on-plane sample points", `classifier/ray_cast.rs` per-ray degeneracy re-cast). NEXT: dump
+that remainder's `interior_point` and the classifier's verdict for tool1 vs tool0 — if the point
+lands inside a lattice opening or on a feature plane, that is the bug. CAVEAT on the probe: it tests
+VERTICES against the box, so a large unsplit face whose corners sit outside the box will not
+register — widen the box or add a face-bbox-overlap mode before concluding a face is absent. Each odd band hits a
 DIFFERENT corner (tool1 → (+x,−y) z≈8.2–9.0;
 tool3 → (+x,+y) x≈18.6–20.5 y≈+18.3–19.9 z≈6.5–9.8), consistent with one diagonal member per band.
 CORRECTION, filed then retracted within the same session: an initial read called this the

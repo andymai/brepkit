@@ -64,6 +64,76 @@ pub struct SubFace {
     pub interior_point: Option<Point3>,
 }
 
+/// `BK_SUBFACE_BOX=x0,x1,y0,y1,z0,z1`: report every sub-face whose vertices
+/// touch that box, with its surface kind, classification and selection.
+///
+/// The decisive probe for a missing result face: it separates "the splitter
+/// never produced a sub-face here" from "it did, and selection dropped it".
+/// Those need opposite fixes, so guessing between them wastes a whole dig.
+fn log_subfaces_in_box(topo: &Topology, subs: &[SubFace], selected: &[bop::SelectedFace]) {
+    let Ok(spec) = std::env::var("BK_SUBFACE_BOX") else {
+        return;
+    };
+    let v: Vec<f64> = spec
+        .split(',')
+        .filter_map(|t| t.trim().parse().ok())
+        .collect();
+    if v.len() != 6 {
+        log::debug!("BK_SUBFACE_BOX needs x0,x1,y0,y1,z0,z1");
+        return;
+    }
+    let (lo, hi) = ([v[0], v[2], v[4]], [v[1], v[3], v[5]]);
+    let chosen: std::collections::HashSet<FaceId> = selected.iter().map(|s| s.face_id).collect();
+    for sf in subs {
+        let Ok(f) = topo.face(sf.face_id) else {
+            continue;
+        };
+        let mut touches = false;
+        let mut flo = [f64::MAX; 3];
+        let mut fhi = [f64::MIN; 3];
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            let Ok(w) = topo.wire(wid) else { continue };
+            for oe in w.edges() {
+                let Ok(e) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                for vid in [e.start(), e.end()] {
+                    let Ok(vtx) = topo.vertex(vid) else { continue };
+                    let p = vtx.point();
+                    let c = [p.x(), p.y(), p.z()];
+                    for k in 0..3 {
+                        flo[k] = flo[k].min(c[k]);
+                        fhi[k] = fhi[k].max(c[k]);
+                    }
+                    if c.into_iter()
+                        .enumerate()
+                        .all(|(k, v)| v >= lo[k] && v <= hi[k])
+                    {
+                        touches = true;
+                    }
+                }
+            }
+        }
+        if touches {
+            log::debug!(
+                "SUBFACE {:?} {} src={:?} class={:?} rank={:?} selected={} x[{:.3},{:.3}] y[{:.3},{:.3}] z[{:.3},{:.3}]",
+                sf.face_id,
+                f.surface().type_tag(),
+                sf.source_face,
+                sf.classification,
+                sf.rank,
+                chosen.contains(&sf.face_id),
+                flo[0],
+                fhi[0],
+                flo[1],
+                fhi[1],
+                flo[2],
+                fhi[2]
+            );
+        }
+    }
+}
+
 /// Builder — orchestrates face splitting and classification.
 ///
 /// Owns both the `Topology` and `GfaArena`, mutating them as needed.
@@ -142,6 +212,7 @@ impl Builder {
             &self.sd_pairs,
             &self.sd_within_rank_dups,
         );
+        log_subfaces_in_box(&self.topo, &self.sub_faces, &selected);
         let cap_planes = self.partial_overlap_cap_planes(&selected);
         let solid_id = assemble::assemble_solid(&mut self.topo, &selected, &cap_planes)?;
         Ok((self.topo, solid_id))
@@ -161,6 +232,7 @@ impl Builder {
             &self.sd_pairs,
             &self.sd_within_rank_dups,
         );
+        log_subfaces_in_box(&self.topo, &self.sub_faces, &selected);
         let cap_planes = self.partial_overlap_cap_planes(&selected);
         let (solid_id, origins) =
             assemble::assemble_solid_with_origins(&mut self.topo, &selected, &cap_planes)?;
