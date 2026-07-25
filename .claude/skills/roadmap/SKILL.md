@@ -676,9 +676,14 @@ emitted 12 cylinder x plane curves. So ~10 emitted sections never reach their cy
 section list, which is why those faces are never split. NEXT STEP: `build_section_map` in fill_images_faces.rs, which SKIPS any
 `arena.curves` entry whose `pave_blocks` is empty (`continue`). REFUTED: that skip never fires — all
 **890 curves carry exactly ONE pave block, none are empty**, so this is NOT the snapClip
-deepened-notch pave-bypass root. The loss is in the `section_map` -> face lookup instead: curves are
-keyed by `curve.face_a`/`face_b`, yet 22 of 24 cylinder faces find no sections, so suspect a face-id
-mismatch between the arena's recorded faces and the faces the split loop iterates. WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
+deepened-notch pave-bypass root. Nor is it the `section_map` lookup — that map has
+**only 2 cylinder keys** (total 422: cylinder 2, plane 420), and the 22 unsplit cylinder faces are
+simply ABSENT from it (`in_map=false`), so nothing is being lost in the lookup either. Only 2 of 24
+cylinder faces ever had a section emitted for them. That sends it back UPSTREAM and reframes the
+restrict numbers: the "52 pairs 0 -> 0" had zero curves BEFORE restrict as well, i.e.
+**`compute_raw_curves` returns nothing for 52 of the 64 cylinder x plane pairs** — that is where the
+22 cylinders lose their sections. TARGET: why plane x cylinder section computation yields no curve
+for those pairs (they are generator-line cases; the 12 that do work prove the path exists). WARNING: `log::debug!` inside `fill_images_faces.rs` does NOT emit — an
 adjacent `log::debug!` and `eprintln!` on the same line gave **0 vs 890** records, while
 `builder_solid`'s `log::debug!` reaches the same logger fine. Log-based probes in that file read as
 a FALSE ZERO. Use a temporary `eprintln!` gated on an env var (it trips `clippy::print_stderr`, so
