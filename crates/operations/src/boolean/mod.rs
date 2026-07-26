@@ -2322,6 +2322,11 @@ fn mesh_boolean_fallback(
     // it needs (display tessellation drops that floor for triangle count).
     let mesh_a = crate::tessellate::tessellate_solid_for_boolean(topo, a, deflection, 0.0)?;
     let mesh_b = crate::tessellate::tessellate_solid_for_boolean(topo, b, deflection, 0.0)?;
+    log::debug!(
+        "mesh fallback {op:?}: tessellated operands to {} + {} triangles at deflection {deflection}",
+        mesh_a.indices.len() / 3,
+        mesh_b.indices.len() / 3,
+    );
 
     let mb_result = crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, tol.linear)?;
     if mb_result.boundary_edge_count > 0 || mb_result.non_manifold_edge_count > 0 {
@@ -2339,6 +2344,10 @@ fn mesh_boolean_fallback(
             reason: "mesh boolean produced no output faces".into(),
         });
     }
+    log::debug!(
+        "mesh fallback {op:?}: {} face specs -> assemble_solid_mixed",
+        face_specs.len()
+    );
     let result = assemble_solid_mixed(topo, &face_specs, tol)?;
     let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
     if opts.unify_faces {

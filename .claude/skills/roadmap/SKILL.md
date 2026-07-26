@@ -1045,6 +1045,98 @@ timeout-poisoning of later tests are ALL still open, and they will stay open unt
 lattice bands are built as closed solids. That is now the single blocking item for this whole
 family.
 
+**RE-PROBE OF THE REVOLVE ORIENTATION FIX (2026-07-25, PR #1237) — HALF A RESULT, AND THE OTHER HALF
+IS A REGRESSION THAT FIX CAUSES. DO NOT MERGE #1237 WITHOUT RESOLVING IT.** Overlay md5-verified in
+BOTH `node_modules` locations, Vite cache cleared. CONTROL EXPERIMENT (the same local 2.128.5 build,
+sole difference an `&& false` disabling the winding flip — the cleanest causation test available
+here): fix DISABLED → goma 1×1×6 exports **OK in 851s, 2,715,884 bytes** (reproducing the recorded
+849s/2.7MB baseline exactly, so the environment is validated); fix ENABLED → **THREW at 369s**. So
+the orientation fix more than halves the cost (the analytic path replacing the mesh fallback, as
+predicted) AND trips a trap. FAILURE SHAPE: `RuntimeError: unreachable` inside `compoundCut`, then
+`recursive use of an object` (the borrow-flag stranding that follows ANY wasm trap — a consequence,
+never the root). **IT IS NOT A RUST PANIC:** `lastPanicMessage()` is empty and no `[brepkit] panic:`
+line is emitted, so the hook installed by `BrepKernel::new` never ran — which points at an
+`abort()` such as `handle_alloc_error` (allocation failure bypasses the hook) rather than a `panic!`,
+a `raw_vec` capacity overflow, or a divide-by-zero, all of which WOULD be captured. Note every panic
+AND every abort lowers to `unreachable` on wasm32, so the trap kind identifies nothing by itself.
+RULED OUT, each by measurement: (1) `assembly.rs:326`'s `unreachable!()` on
+`FaceSpec::CylindricalFace` — tempting because the fix newly produces cylindrical faces where the
+fallback emitted all-planar, but the outer arm at `:191` is unguarded so it is genuinely unreachable;
+(2) a synthetic native repro — `compound_cut` of a wedge by 5 coaxial revolve struts is clean (F=26,
+7 cylinders, free=0 over=0, Pappus volume); (3) the corner construction itself — the tool's
+`kumikoWrapSpike` (annular wedge − vertical/horizontal/diagonal-helix struts, i.e. the exact failing
+shape) PASSES in 2.5s, 4/4; (4) the SSI marcher as the unbounded allocator — it is capped four ways
+(`max_steps = 200`, `max_evals`, `MAX_TURNING_POINTS`, `MAX_BRANCHES_PER_DIRECTION`). HEIGHT LADDER
+(`gomaHeightLadder.test.ts`, new in the tool's `__kernel-tests__/`; ascending, stops at the first
+trap because a trap strands the kernel): h=1 OK 1105ms/81kB, h=2 OK 150ms/178284B, h=3 OK
+150ms/**178284B — byte-identical to h=2**, h=4 OK 489s/2.05MB, h=6 THREW 387s. **TWO CAVEATS ON THAT
+TABLE, both mine:** h=2/h=3 being identical at 150ms means those heights do not exercise the lattice
+at all and are evidence of nothing (real lattice work starts at h=4); and the ladder's
+`wasmHeapMB` probe returned `?` at every height — the instrument did NOT fire, so there is still
+ZERO memory data and the OOM hypothesis is UNTESTED. Also note the ladder reuses ONE kernel across
+heights, so its h=4 489s carries accumulated arena state and is not comparable to the ~292s recorded
+elsewhere; the h=6 trap is independently confirmed on two fresh-kernel runs. NO FAST REPRO YET —
+h=4 is the smallest case that does lattice work and it costs 489s. NEXT: peak-RSS measurement
+(`/usr/bin/time -v` around the h=6 run) discriminates the two live hypotheses without touching code —
+allocation failure would show RSS climbing toward the wasm 4GB ceiling, while a wasm stack overflow
+from deep recursion (equally scale-dependent, equally message-free) would show modest RSS. After
+that, the sanctioned path is capturing the failing `compoundCut` operands and replaying them
+natively, where an abort is legible. SEVERITY FRAMING: goma was ALREADY failing pre-fix (the 850s
+export blows vitest's timeout and that single root accounts for all 14 kumiko export-integrity
+failures), so this is a CHANGED FAILURE MODE on an already-failing scenario, not a newly-broken
+passing one — but a trap is still a hard failure and blocks the merge. The engine-level defect and
+its fixtures stand on their own (`revolve_segmented_is_outward_for_either_winding` and
+`regress_kumiko_corner_wedge.rs` fail without the fix, at exactly the inverted volume).
+**TRAP LOCATED, AND IT IS NOT IN THE ANALYTIC PATH — IT IS THE MESH FALLBACK.** Captured with
+`setLogLevel('debug')` + a JS ring buffer over the 1,961,120 kernel log lines the export emits
+(`gomaLogTail.test.ts`, new in the tool's `__kernel-tests__/`; the cjs keeps `wasm.memory`
+module-local so heap size is NOT readable from JS — `setLogLevel` is the only handle). The last
+lines before the abort: `BuilderSolid: 11 shells (sizes [23,17,189,14,44,158,34,23,103,26,4])` →
+`assembled solid with 635 faces` → `Euler characteristic V-E+F = 12 is invalid (V=3588, E=4211,
+F=635)` → `GFA result not accepted, falling back` → `boolean Cut: GFA unusable — using mesh
+(co-refinement) fallback`, then the trap. So the chain is: the fix makes the band analytic → a later
+Cut's GFA result has OPEN shells and is correctly rejected (11 CLOSED pieces would give euler 22, not
+12) → `mesh_boolean_fallback` runs → **the fallback aborts**. TWO SEPARATE DEFECTS, only one caused
+by the revolve fix: (1) GFA emits open shells on this op — the deeper geometry bug the fix newly
+exposes, and the real target; (2) `mesh_boolean_fallback` can kill the whole kernel — a PRE-EXISTING
+landmine (same function as the long-open "emits OPEN meshes that get CONSUMED" row). Mechanism for
+(2), from `boolean/mod.rs::mesh_boolean_fallback`: it tessellates BOTH operands via
+`tessellate_solid_for_boolean(.., deflection, 0.0)` — angular_tol 0 plus the circle curvature floor,
+deliberately DENSE — then BVH+CDT co-refines. Pre-fix those operands were coarse mesh-derived planar
+solids; post-fix they carry real cylinders and cones, so the triangle counts explode
+(`mesh_boolean.rs:903` is `Vec::with_capacity(tri_count * 2)`). MEASUREMENTS BEHIND THE ALLOCATION
+READING: host has 61GB with 23GB free (no physical pressure) and node's wasm ceiling is 4063MB;
+peak process RSS on the trapping run is 2.74GB, i.e. BELOW that ceiling — which argues against
+gradual growth reaching the cap and for a SINGLE oversized request, since a failed `memory.grow`
+sends Rust to `handle_alloc_error` → `abort()` → `unreachable`, bypassing the panic hook exactly as
+observed. This also explains why native replay looks clean: 61GB absorbs a multi-GB allocation that
+is instantly fatal in a 4GB wasm heap, so this class of bug is INVISIBLE natively — reach for a
+capped allocator or a wasm run when a native repro of an abort refuses to reproduce.
+**ROOT FOUND — `Vec::reserve` DOUBLING THE TOPOLOGY ARENA, AND THE OOM READING ABOVE IS ONLY HALF
+RIGHT.** Bisected by stage-bracketed `log::debug!` + `setLogLevel`, four rounds, each halving the
+search: not a Rust panic (hook verified installed at `kernel.rs:57`, and the probe captures
+`console.error`) → not the analytic path → not co-refinement SIZE (the failing op is a tiny
+**7136 + 12 triangles, 497 intersecting pairs**, so the "single oversized allocation from
+degenerate geometry" theory is REFUTED too) → `mesh_boolean` itself COMPLETES (5/5 stages, 7238
+tris) → the abort is in **`assemble_solid_mixed`, inside `topo.reserve`**, whose preceding log
+reads `arena before reserve V=3207122 E=5780703 W=2787018 F=2786863`. Mechanism: the arena never
+reclaims (`dispose()` is a no-op), so a large export accumulates MILLIONS of entities; `Vec::reserve`
+then rounds a 21714-edge bulk hint up to `max(2*capacity, len+additional)` — a full DOUBLING to
+~11.5M edges — and the reallocation holds the old and new buffers at once, which fails against the
+4GB wasm cap. So the peak-RSS reading was a symptom of accumulated arena, NOT of this operation.
+FIXED in `crates/topology/src/arena.rs`: `reserve` now no-ops when capacity suffices and otherwise
+grows by `additional.max(len / 8)` — geometric (total copying stays amortized O(n)) but capping the
+transient overshoot at 12.5% instead of 100%. Plain `reserve_exact` was tried first and DOES clear
+the abort, but leaves `capacity == len` so the next hint re-copies the whole arena — O(n²) across
+thousands of booleans; test `reserve_hint_grows_a_large_arena_by_a_bounded_fraction` pins both
+halves. MEASUREMENT TRAP that nearly produced a false perf claim: the `reserve_exact` run looked
+catastrophically slower, but it ran at `LOG_LEVEL=debug` emitting **1.96 MILLION** log lines across
+the wasm→JS boundary while the 851s control had logging OFF — never compare a debug-logged export
+against a quiet one. DURABLE, and wider than kumiko: ANY brepkit export long enough to grow the
+arena into the millions is one `reserve` away from a silent wasm abort, and the same cliff applies
+to `Vec::push`'s own doubling. The real ceiling is architectural (no arena reclamation in a 4GB
+address space); this fix buys headroom, it does not remove the cliff.
+
 Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
 not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
 is NOT established; the classifier was fed a non-closed solid.**

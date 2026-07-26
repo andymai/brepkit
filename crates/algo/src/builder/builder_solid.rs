@@ -633,12 +633,8 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
         if trace {
             log::debug!(
                 "growth shell FLUX face {fid:?} {} reversed={} d={:.4}",
-                topo.face(fid)
-                    .map(|f| f.surface().type_tag())
-                    .unwrap_or("?"),
-                topo.face(fid)
-                    .map(brepkit_topology::face::Face::is_reversed)
-                    .unwrap_or(false),
+                surface.type_tag(),
+                face.is_reversed(),
                 flux - flux_before
             );
         }

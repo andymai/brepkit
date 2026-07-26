@@ -94,9 +94,29 @@ impl<T> Arena<T> {
         }
     }
 
-    /// Reserves capacity for at least `additional` more entries.
+    /// Reserves capacity for at least `additional` more entries, growing by at
+    /// most an eighth of the arena.
+    ///
+    /// Neither `Vec` primitive is usable here at CAD scale, for opposite
+    /// reasons. `reserve` rounds up to `max(2 * capacity, len + additional)`, so
+    /// a bulk-insert hint on an arena already holding millions of entries
+    /// requests a full DOUBLING whose reallocation holds the old and new buffers
+    /// at once — invisible on a 64-bit host, fatal on wasm32 (linear memory caps
+    /// at 4GB, and the failed allocation reaches `handle_alloc_error` →
+    /// `abort()`, trapping the instance with no panic message). `reserve_exact`
+    /// removes the spike but leaves `capacity == len`, so the NEXT hint copies
+    /// the whole arena again — O(n²) across the thousands of booleans a large
+    /// export runs.
+    ///
+    /// Growing by `len / 8` keeps growth geometric (so total copying stays
+    /// amortized O(n)) while capping the transient overshoot at 12.5% instead of
+    /// 100%. `Vec::push` past the hint still amortizes on its own.
     pub fn reserve(&mut self, additional: usize) {
-        self.items.reserve(additional);
+        let len = self.items.len();
+        if self.items.capacity() - len >= additional {
+            return;
+        }
+        self.items.reserve_exact(additional.max(len / 8));
     }
 
     /// Allocates a new entry in the arena and returns its typed handle.
@@ -180,6 +200,46 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    /// A bulk-insert hint on a large arena must not double it.
+    ///
+    /// `Vec::reserve` would round up to `2 * capacity`; on wasm32 that
+    /// reallocation holds both buffers and aborts the instance once the arena
+    /// reaches millions of entries (the goma export died exactly here, on an
+    /// arena of 5.78M edges). The overshoot must stay bounded — but capacity
+    /// must still grow geometrically, or the next hint re-copies everything.
+    #[test]
+    fn reserve_hint_grows_a_large_arena_by_a_bounded_fraction() {
+        let mut arena: Arena<u32> = Arena::new();
+        for i in 0..10_000 {
+            arena.alloc(i);
+        }
+        arena.items.shrink_to_fit();
+        let before = arena.items.capacity();
+
+        arena.reserve(10);
+        let after = arena.items.capacity();
+
+        assert!(after >= before + 10, "hint must satisfy the request");
+        assert!(
+            after < before * 2,
+            "must not double a large arena: {before} -> {after}"
+        );
+        // Geometric, so repeated hints amortize instead of re-copying.
+        assert!(
+            after >= before + before / 8,
+            "growth must stay geometric: {before} -> {after}"
+        );
+
+        // Already-sufficient capacity must not reallocate at all.
+        let settled = arena.items.capacity();
+        arena.reserve(1);
+        assert_eq!(
+            arena.items.capacity(),
+            settled,
+            "no-op when capacity suffices"
+        );
+    }
 
     #[test]
     fn id_from_index_valid() {

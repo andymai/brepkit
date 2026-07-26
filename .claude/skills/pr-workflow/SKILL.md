@@ -16,7 +16,7 @@ End-to-end change flow for this repo: branch, commit, push, PR, AI review gate, 
 | Compliance grep | See "Banned-name compliance" below |
 | Push (sandbox) | `git push "https://x-access-token:$(gh auth token)@github.com/andymai/brepkit.git" <branch>` |
 | Verify remote head | `gh pr view <N> --json headRefOid` (never `git rev-parse origin/<branch>`) |
-| Review-gate poll | `gh pr checks <N>` until the `Greptile Review` check is completed |
+| Review-gate poll | `gh pr checks <N>` until the `cubic · AI code reviewer` check is completed |
 | Read findings | `gh api repos/andymai/brepkit/pulls/<N>/comments` and `gh pr view <N> --comments` |
 | Merge | `gh pr merge <N> --squash --auto` (only after findings are addressed) |
 | Post-merge | `git checkout main && git pull --ff-only` |
@@ -47,15 +47,15 @@ Hard rules:
 
 ## The review gate
 
-Branch protection requires only `CI Pass`. The AI review check (`Greptile Review`) is NOT required by branch protection, so the PR can show mergeable while unread findings sit on it. Policy, not GitHub, enforces the gate:
+Branch protection requires only `CI Pass`. The AI review check (`cubic · AI code reviewer`; Greptile no longer runs on this repo) is NOT required by branch protection, so the PR can show mergeable while unread findings sit on it. Policy, not GitHub, enforces the gate:
 
-1. After `gh pr create`, work on the next independent task. Reviewers (Greptile, Copilot, cubic) comment within roughly 5 to 7 minutes.
+1. After `gh pr create`, work on the next independent task. Reviewers (cubic, Copilot) comment within roughly 5 to 7 minutes.
 2. Poll until the review check completes:
    ```bash
    gh pr view <N> --json statusCheckRollup \
-     --jq '.statusCheckRollup[] | select(.name=="Greptile Review") | .status'
+     --jq '.statusCheckRollup[] | select(.name=="cubic · AI code reviewer") | .status'
    ```
-   Expect `COMPLETED`. A background watcher may poll for this, but it must hand control back for the next step, never merge on its own.
+   Expect `COMPLETED` (its conclusion is `NEUTRAL` even with no findings — that is a pass, not a failure). Verify the reviewer ran against your CURRENT head before trusting a clean result: a stale review from an earlier push reports on files your latest commit did not touch. `CI Pass` does not appear in the rollup at all until every job it gates on finishes, so its absence is not a failure either. Any poll keyed to a check name that does not exist stays silent forever and reads exactly like "no findings" — list the rollup unfiltered once before trusting a filter. A background watcher may poll for this, but it must hand control back for the next step, never merge on its own.
 3. Read every inline finding: `gh api repos/andymai/brepkit/pulls/<N>/comments`. Fix P0/P1 findings (push a follow-up commit, which restarts CI). Reply to lower-severity findings with a reasoned response.
 4. Only then: `gh pr merge <N> --squash --auto`. Auto-merge fires once `CI Pass` is green.
 5. This applies to every PR including high-risk core changes (GFA boolean engine, public WASM API). No human review step exists; review-check completion plus addressed findings is the whole gate.
