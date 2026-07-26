@@ -1156,6 +1156,21 @@ count; the smallest is `open growth shell with 13 faces`. NOT YET MEASURED: expo
 count on the fixed kernel (needs `gomaBoundaryProbe`, control = 2567), and the 408-test
 export-integrity matrix (baseline 37 failed / 371 passed) — the net effect across OTHER scenarios is
 unknown, and the two engine fixes may well help elsewhere even as goma regresses.
+**MATRIX MEASURED, A/B, AND THE ANSWER IS ZERO CHANGE — PLUS THE OLD BASELINE IS STALE.** Both runs
+on the same day, same tooling, same 435 tests, differing ONLY in the two fixes (control = both
+disabled in-place, overlay md5 2e58be3e vs treatment 4df3f2e3): **63 failed / 372 passed in BOTH**,
+and diffing the failing test NAMES gives 63 of 63 identical — no treatment-only failure, no
+control-only failure. Durations match too (2440s vs 2463s), because goma times out under both. So
+PR #1237 is scenario-neutral: it fixes two real engine defects and changes nothing in the matrix,
+neither regressing nor improving it. **CORRECT THE BASELINE: it is 63 failed / 372 passed over 435
+tests, NOT the 37/371 over 408 recorded above** — the tool's catalog grew by 27 scenarios, and the
+two families that look like new regressions (`divider patterns` 15, `floor patterns` 11, = 26) are
+pre-existing failures in those NEW scenarios. Comparing a fresh run against the 37/371 figure
+manufactures 26 phantom regressions; that number is only valid against the 408-test catalog it was
+measured on. Current families: divider 15, kumiko 14, floor 11, permutation 6, solid cutouts 3,
+wall/edge/custom-shape/combined 2 each, then singles. ALWAYS run the control on the SAME DAY and the
+SAME catalog rather than trusting a recorded baseline — this is the second time this session that a
+stale or mismatched reference nearly produced a false conclusion.
 
 Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
 not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
