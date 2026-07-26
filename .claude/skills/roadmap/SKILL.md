@@ -1136,6 +1136,26 @@ against a quiet one. DURABLE, and wider than kumiko: ANY brepkit export long eno
 arena into the millions is one `reserve` away from a silent wasm abort, and the same cliff applies
 to `Vec::push`'s own doubling. The real ceiling is architectural (no arena reclamation in a 4GB
 address space); this fix buys headroom, it does not remove the cliff.
+**SCENARIO VERDICT — THE ABORT IS GONE AND THE EXPORT COMPLETES, BUT GOMA IS 2.6x SLOWER THAN THE
+CONTROL. THE KUMIKO FAMILY IS NOT CLOSED.** With both fixes (revolve orientation + arena growth),
+goma 1×1×6 exports **OK in 2187s / 4,153,484 bytes**, against the fix-disabled control's **851s /
+2,715,884 bytes**. Do NOT quote the revolve fix as kumiko progress at scenario level: the export
+still blows vitest's 600s timeout (by 3.6x now instead of 1.4x), so all 14 kumiko failures and the
+timeout-poisoning of later tests REMAIN. MECHANISM of the slowdown, and it is a direct consequence
+of the fix: GFA still fails these ops (`assembly failed: open growth shell with N faces would be
+dropped`, N=13/23/213/216, plus Euler and non-manifold rejects), so they still route to
+`mesh_boolean_fallback` — but the operands are now ANALYTIC (cylinders + cones) where they used to
+be coarse mesh-derived planes, and that fallback tessellates deliberately densely
+(`tessellate_solid_for_boolean(.., deflection, 0.0)`, angular_tol 0 + circle curvature floor). Same
+fallback, far more triangles: hence both the 2.6x wall-clock and the +53% STL. So making geometry
+analytic makes the FALLBACK more expensive without removing the need for it. **THE BLOCKING ITEM IS
+NOW UNAMBIGUOUS: the GFA open-shell defect.** Fix that and these ops stay analytic, the fallback is
+never reached, and both the slowdown and the non-watertight output should go with it. Repro is cheap
+and already in hand — `LOG_LEVEL=warn` on `gomaLogTail.test.ts` prints every rejection with its face
+count; the smallest is `open growth shell with 13 faces`. NOT YET MEASURED: exported boundary-edge
+count on the fixed kernel (needs `gomaBoundaryProbe`, control = 2567), and the 408-test
+export-integrity matrix (baseline 37 failed / 371 passed) — the net effect across OTHER scenarios is
+unknown, and the two engine fixes may well help elsewhere even as goma regresses.
 
 Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
 not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
