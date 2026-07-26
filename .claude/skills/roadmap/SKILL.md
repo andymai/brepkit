@@ -1221,6 +1221,27 @@ exactly, 13=13, 7=7, 23=23). TOOLING TRAP: `brepkit-render`'s `compute_mesh_lod`
 intermittently — **2 of 4 runs with AND without changes**, a pre-existing flake that aborts
 `cargo test --workspace` early and silently masks every later suite. Use
 `--exclude brepkit-render`, and never conclude a regression from one stashed-vs-restored run.
+**THIRD TERM FIXED AND THE GOMA CASCADE IS GONE — BUT THE MATRIX MOVED ONE TEST. KUMIKO IS STILL 14;
+DO NOT CALL IT CLOSED.** `components_are_disjoint_pieces` now decides nesting by RAY PARITY against
+the enclosing candidate's own tessellation (`component_encloses_point`), with AABB containment
+demoted to a pre-filter — containment is necessary for nesting but not sufficient, because a ring's
+box contains the box of a piece in its HOLE and a lattice is made of rings (that is why 217 of 226
+were still `disjoint=false`). Fixtures pin the truth table: rotated-separate disjoint, nested not
+disjoint, piece-in-a-ring's-hole disjoint. Read-only BY DESIGN — do not use
+`make_solid_from_face_subset` (needs `&mut Topology`, adds temp solids per boolean to the
+never-reclaiming arena, i.e. the #1237 cliff); uses `watertight_ray_triangle_intersect` (one hit per
+shared edge, so parity works across faces) and a √-prime direction (these pieces sit on feature-plane
+intersections where axis-aligned probes graze). goma standalone: **851s control → 2187s → 1123s →
+499s with ZERO GFA rejections**, STL 2,128,934 B. **MATRIX: 63 → 62 failed of 435, kumiko unchanged
+at 14.** The prediction "499s is inside the 600s timeout so the 14 clear" was WRONG — the same trap
+recorded for #1224. WHAT DID CHANGE, and it is large: goma runs **140s inside the matrix** instead of
+timing out, the rest of the kumiko block completes in **1–42s** instead of inheriting a poisoned
+kernel (they now fail on their own merits, not as cascade casualties), and the residual failures are
+small **boundary-edge** counts (5, 8, 12 observed) where goma previously exported **2567**. The count
+barely moves because the assertion is zero-tolerance: 5 boundary edges fails exactly as hard as 2567.
+NEXT: chase the residual handful of boundary edges per kumiko scenario — now isolated, reproducible
+in seconds rather than a 14-minute timeout, and no longer masked by poisoning. Branch
+`fix/gfa-multi-region-acceptance`, PR #1239.
 
 Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
 not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
