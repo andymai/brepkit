@@ -655,13 +655,11 @@ pub fn boolean(
                 // a piece carrying a blind pocket (a face with an inner wire)
                 // shifts raw Euler away from 2*N even at genus 0, so comparing
                 // raw Euler here rejected every pocketed piece. This mirrors the
-                // `euler_balanced(euler_eff, inner_wire_count)` correction the
-                // single-component gate above applies.
+                // `euler_balanced` correction the single-component gate above
+                // applies — which is why the bound below is `2 * components`
+                // rather than an equality against it.
                 let components_vec = crate::boolean::assembly::face_components(topo, result);
                 let components = components_vec.len();
-                #[allow(clippy::cast_possible_wrap)]
-                let expected_euler = (components as i64) * 2;
-                let euler_corrected = euler - inner_wire_count;
                 // For Cut, also verify no component is a "B-interior piece" —
                 // GFA can produce N closed manifolds where one of them is the
                 // tool's interior (sphere - cylinder example: 3 pieces =
@@ -739,9 +737,15 @@ pub fn boolean(
                      inner_wires={inner_wire_count} inner_shell_surplus={inner_shell_surplus} \
                      euler_ok={euler_ok} open_shell_ok={open_shell_ok} \
                      closed_manifold={closed_manifold} components={components} \
-                     expected_euler={expected_euler} euler_corrected={euler_corrected} \
                      cut_safe={cut_safe} intersect_safe={intersect_safe} \
-                     disjoint={}",
+                     euler_multi_ok={} surplus={} bound={} disjoint={}",
+                    euler_balanced(
+                        euler,
+                        inner_wire_count,
+                        i64::try_from(components).unwrap_or(i64::MAX)
+                    ),
+                    euler - inner_wire_count,
+                    2 * i64::try_from(components).unwrap_or(i64::MAX / 2),
                     components_are_disjoint_pieces(topo, &components_vec)
                 );
             }
