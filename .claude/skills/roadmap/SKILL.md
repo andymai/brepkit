@@ -948,19 +948,90 @@ against the base alone): all five fail "no outer shell found", tool0/tool3 with 
 (disjoint, correctly AABB-rejected) and tool1/tool2 with sections emitted, so the failure is
 downstream of sectioning in every case. NOTE the ops-level shortcut only detects CONTAINMENT
 (A⊂B, B⊂A, A=B) — **disjointness is not handled**, which is why a non-touching strut still routes
-through GFA and then the mesh fallback. FIX SHAPE: make the orientation decision correct for
-cylinder-bounded wedges (and/or short-circuit a disjoint Cut to A). Reproduce per tool by symlinking
+through GFA and then the mesh fallback. **FLUX BREAKDOWN (`BK_FLUX=1`, new) NARROWS IT TO ONE UNRESOLVED FORK — resolve
+this BEFORE writing any fix.** Per-face on the disjoint case: `Id(0) plane d=0.0000`,
+`Id(4) cylinder d=+68.3065`, `Id(3) plane reversed=true d=-320.9000`,
+`Id(2) cylinder reversed=true d=-641.4838`, `Id(1) plane d=+41.6553`, `Id(5) plane d=0.0000`,
+**total = -852.42**. Compare 3V = 3 × 284.873 = **+854.6**: the magnitudes agree to 0.3% and the SIGN
+is opposite. So the geometry is integrated correctly and the orientation is GLOBALLY inverted — this
+is not a per-face `is_reversed` slip (flipping only the reversed faces gives ±1072.4, not ±855).
+THE FORK: either (a) the flux convention is inverted and `shell_is_outward_oriented` is wrong, or
+(b) **the captured base operand is genuinely inward-oriented**, the flux test is right, and the
+defect is upstream in how the tool's wedge is built or serialized. Evidence does NOT yet separate
+them: `solid_volume` returns `total.abs()` so its +284.873 says nothing about orientation, and
+`classify_point` is ray-parity based so its Inside/Outside verdicts (material between r=1.55 and
+r=4.75, hollow inside — geometrically correct) are orientation-independent too. `brepkit-check`'s
+`integrate_face` DOES accumulate a signed volume but check is out of `brepkit-io`'s layer.
+**FORK RESOLVED — (a) IS DEAD, THE ORIENTATION TESTS ARE CORRECT.** The discriminating experiment
+(`crates/operations/examples/flux_orientation_probe.rs`: `Cut(box, far-away disjoint box)`, whose
+result shell is just the box, run with `BK_AREAS=1 BK_FLUX=1`) gives for a 10×10×10 cube:
+`signed_vol=1000.000000`, per-face flux `0/0/0/1000/1000/1000` totalling **3000.0 = 3V**,
+`outward=Some(true) -> growth`. Both tests are EXACT and correctly signed on known-good geometry, so
+the convention is not inverted and `shell_is_outward_oriented` needs no fix. **Therefore the
+captured wedge operand is GENUINELY INWARD-ORIENTED, and the defect is upstream of GFA entirely.**
+Do NOT "fix" `signed_volume_of_shell` or `shell_is_outward_oriented` — they are provably right.
+**ROOT CAUSE FOUND, FIXED, AND FIXTURED — THE SEGMENTED `revolve` PATH DID NOT NORMALIZE THE
+ORIENTATION OF THE SOLID IT EMITS.** Fix in `crates/operations/src/revolve.rs`
+(`profile_chart_is_ccw` + traversal reversal at the segmented path's entrance); fixtures
+`crates/operations/tests/regress_kumiko_corner_wedge.rs` (native wedges, both the overlapping and
+the disjoint cut) and `revolve::tests::revolve_segmented_{is_outward,full_turn_is_outward}_for_either_winding`.
+The sweep runs in `+θ = axis × e_r`, so a profile wound CCW in the (radial, axial) chart faces
+AGAINST it and revolves into a consistently-wound but globally INVERTED solid (Pappus: the swept
+signed volume carries the chart's signed area). `try_analytic_full_revolution` derives each face's
+material-outward side from that same shoelace sign; the segmented path built faces straight from
+traversal order, so it now normalizes the TRAVERSAL instead (reverse the oriented edges and negate
+the cap normal when the chart shoelace is CCW; a degenerate chart is left alone). WIDER THAN THE DIG
+RECORDED: the bug hits segmented FULL revolutions too (a profile whose surface is non-planar, so the
+analytic path declines) — `−112.833` for a `+113.1` washer — the earlier "full revolution is correct
+for both windings" reading only held because analytic profiles never reach the segmented path.
+NEW ORACLE, and the reason this survived so long: `measure::solid_volume` returns a MAGNITUDE, so no
+existing revolve test could see an inverted shell. `measure::oriented_solid_volume` (new, public)
+keeps the divergence-theorem sign — positive iff outward. Reach for it in any orientation
+assertion; the pre-fix wedges read `−143.148`.
+STALE FIXTURE, deliberately still ignored: `crates/io/tests/kumiko_corner_wedge_inmem.rs` replays
+operands captured PRE-FIX, i.e. already-inverted wedges that nothing downstream can recover. Its new
+`captured_operands_are_inward_oriented` pins exactly that (and self-reports when a re-capture lands).
+TOOL-SIDE RE-PROBE STILL OWED — see the mandatory-re-probe note below; the engine claim is closed,
+the export-integrity numbers are not.
+Historical dig record follows. Probe: `crates/io/examples/arena_roundtrip_orientation.rs`. The
+arena round-trip is INNOCENT (a serialize/deserialize copy of a box gives the same
+`signed_vol=1000.000000 outward=Some(true) -> growth` as the native one). But revolving a wedge
+profile (rectangle in the XZ plane, r 1.55→4.75, z 2.7→20.8, about Z, 45°) across all four
+combinations of profile winding and stored plane normal gives: ccw/−Y → `signed_vol=-129.010` hole,
+disjoint cut F=48 (mesh fallback); ccw/+Y → `-129.010` hole, F=48; cw/−Y → `+129.010` growth,
+**F=6 analytic**; cw/+Y → `+129.010` growth, **F=6 analytic**. So the PROFILE WINDING alone decides
+the result's orientation and the face's stored `normal` is IGNORED. Wound one way `revolve` emits a
+proper outward solid whose disjoint cut stays analytic at six faces; wound the other it emits an
+INWARD solid that fails every downstream orientation check and drops to the mesh fallback at 48
+planar faces. The tool's wedge is wound the inward way, which is why every corner cut in every
+kumiko band degrades — and why the flat-wall path, which has no revolve, is clean. **SCOPED FURTHER — IT IS AN INCONSISTENCY BETWEEN REVOLVE'S TWO PATHS, NOT A MISSING CAPABILITY.**
+Same probe, adding a 360° case: **FULL revolution is CORRECT for BOTH windings** (ccw and cw both
+`outward=Some(true) -> growth`, F=4, a washer of 2 cylinders + 2 planes), while the PARTIAL 45°
+revolve is wrong for one (ccw → hole → F=48 mesh; cw → growth → F=6 analytic). So
+`try_analytic_full_revolution` (gated on `is_full`) ALREADY normalizes orientation — its doc comment
+says as much, "face orientation comes from the profile's traversal winding in the (radial, axial)
+chart, so inward-facing walls and cap normals are exact for both CCW- and CW-wound profiles" — and
+the SEGMENTED path taken by partial revolutions never got the same treatment. The kumiko corner
+wedge is a partial revolve, so it lands on the unfixed path. FIX: apply the full path's winding
+normalization to the segmented path (compute the profile's signed area in the (radial, axial) chart
+and reverse the oriented edges when it has the inward sign), with a working reference implementation
+sitting in the same file. Incidental confirmation: the full washer reports `signed_vol=0.000000` and
+is rescued by the flux test — exactly the lone-shell path `perform_areas` documents for the
+torus−box notch band, so that path is load-bearing and must not be disturbed. Independently and still worth doing: short-circuit a disjoint Cut to A (the ops shortcut
+detects only containment), which would spare tool0/tool3 the whole path. Reproduce per tool by symlinking
 one `cut-tool<i>.bin` as `cut-tool0.bin` beside `cut-base.bin` and running
 `PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1 BK_AREAS=1 BBOX=1`. Its sibling `operands_are_clean_analytic_wedges` runs unignored and guards the
-fixture itself — an unvalidated operand already cost this campaign several passes. FIRST ACTION FOR THE NEXT SESSION: this is now a brepkit-side defect with a clear shape —
-either make the mesh co-refinement produce closed output for these operands, or make
-`mesh_boolean_fallback` REJECT a non-watertight result instead of warning and consuming it (note
-rejecting means the op fails outright, since there is no further fallback; that is a product call).
-Also worth asking WHY the strut fuses fall back at all — if the analytic path held, no band would be
-mesh-derived and the whole family would likely close.
-Probe by checking free/over on the partial band after each strut fuse; use a SMALL repro (one
-diagonal band, or a native Rust fuse of a few revolve + helix-sweep struts at the tool's
-parameters), since the full export is 844s and blows the 600s vitest timeout before reporting.
+fixture itself — an unvalidated operand already cost this campaign several passes.
+FIRST ACTION FOR THE NEXT SESSION: the engine fix is landed and fixtured, so the open work is
+MEASUREMENT — publish/overlay a build carrying it and re-run the tool's export-integrity matrix plus
+the 4 baseplate suites (baseline to beat: 37 failed / 371 passed on local main; kumiko 14 failures on
+one root; goma 1×1×6 at 844s with 2567 boundary edges). Expect the four diagonal bands to arrive
+closed, which should take them off the mesh fallback and collapse the 844s. Do NOT quote a kumiko
+closure before that re-probe. Two independent follow-ups remain, both untouched by the revolve fix:
+short-circuit a DISJOINT Cut to A (the ops shortcut detects only containment, so a non-touching strut
+still routes through GFA — tool0/tool3 are exactly this), and decide the product call on
+`mesh_boolean_fallback`, which warns that its output is not a closed 2-manifold and consumes it
+anyway (rejecting means the op fails outright, since there is no further fallback).
 
 **MANDATORY POST-GFA RE-PROBE DONE, AND THE ANSWER IS THAT #1224 MOVED THE SCENARIO NOT AT ALL.**
 `gomaBoundaryProbe` (goma 1×1×6 export + STL edge-use oracle) on the overlaid 2.128.5 build:
@@ -973,6 +1044,149 @@ export-integrity family; it is not.** The 14 kumiko failures, the 850s export an
 timeout-poisoning of later tests are ALL still open, and they will stay open until the diagonal
 lattice bands are built as closed solids. That is now the single blocking item for this whole
 family.
+
+**RE-PROBE OF THE REVOLVE ORIENTATION FIX (2026-07-25, PR #1237) — HALF A RESULT, AND THE OTHER HALF
+IS A REGRESSION THAT FIX CAUSES. DO NOT MERGE #1237 WITHOUT RESOLVING IT.** Overlay md5-verified in
+BOTH `node_modules` locations, Vite cache cleared. CONTROL EXPERIMENT (the same local 2.128.5 build,
+sole difference an `&& false` disabling the winding flip — the cleanest causation test available
+here): fix DISABLED → goma 1×1×6 exports **OK in 851s, 2,715,884 bytes** (reproducing the recorded
+849s/2.7MB baseline exactly, so the environment is validated); fix ENABLED → **THREW at 369s**. So
+the orientation fix more than halves the cost (the analytic path replacing the mesh fallback, as
+predicted) AND trips a trap. FAILURE SHAPE: `RuntimeError: unreachable` inside `compoundCut`, then
+`recursive use of an object` (the borrow-flag stranding that follows ANY wasm trap — a consequence,
+never the root). **IT IS NOT A RUST PANIC:** `lastPanicMessage()` is empty and no `[brepkit] panic:`
+line is emitted, so the hook installed by `BrepKernel::new` never ran — which points at an
+`abort()` such as `handle_alloc_error` (allocation failure bypasses the hook) rather than a `panic!`,
+a `raw_vec` capacity overflow, or a divide-by-zero, all of which WOULD be captured. Note every panic
+AND every abort lowers to `unreachable` on wasm32, so the trap kind identifies nothing by itself.
+RULED OUT, each by measurement: (1) `assembly.rs:326`'s `unreachable!()` on
+`FaceSpec::CylindricalFace` — tempting because the fix newly produces cylindrical faces where the
+fallback emitted all-planar, but the outer arm at `:191` is unguarded so it is genuinely unreachable;
+(2) a synthetic native repro — `compound_cut` of a wedge by 5 coaxial revolve struts is clean (F=26,
+7 cylinders, free=0 over=0, Pappus volume); (3) the corner construction itself — the tool's
+`kumikoWrapSpike` (annular wedge − vertical/horizontal/diagonal-helix struts, i.e. the exact failing
+shape) PASSES in 2.5s, 4/4; (4) the SSI marcher as the unbounded allocator — it is capped four ways
+(`max_steps = 200`, `max_evals`, `MAX_TURNING_POINTS`, `MAX_BRANCHES_PER_DIRECTION`). HEIGHT LADDER
+(`gomaHeightLadder.test.ts`, new in the tool's `__kernel-tests__/`; ascending, stops at the first
+trap because a trap strands the kernel): h=1 OK 1105ms/81kB, h=2 OK 150ms/178284B, h=3 OK
+150ms/**178284B — byte-identical to h=2**, h=4 OK 489s/2.05MB, h=6 THREW 387s. **TWO CAVEATS ON THAT
+TABLE, both mine:** h=2/h=3 being identical at 150ms means those heights do not exercise the lattice
+at all and are evidence of nothing (real lattice work starts at h=4); and the ladder's
+`wasmHeapMB` probe returned `?` at every height — the instrument did NOT fire, so there is still
+ZERO memory data and the OOM hypothesis is UNTESTED. Also note the ladder reuses ONE kernel across
+heights, so its h=4 489s carries accumulated arena state and is not comparable to the ~292s recorded
+elsewhere; the h=6 trap is independently confirmed on two fresh-kernel runs. NO FAST REPRO YET —
+h=4 is the smallest case that does lattice work and it costs 489s. NEXT: peak-RSS measurement
+(`/usr/bin/time -v` around the h=6 run) discriminates the two live hypotheses without touching code —
+allocation failure would show RSS climbing toward the wasm 4GB ceiling, while a wasm stack overflow
+from deep recursion (equally scale-dependent, equally message-free) would show modest RSS. After
+that, the sanctioned path is capturing the failing `compoundCut` operands and replaying them
+natively, where an abort is legible. SEVERITY FRAMING: goma was ALREADY failing pre-fix (the 850s
+export blows vitest's timeout and that single root accounts for all 14 kumiko export-integrity
+failures), so this is a CHANGED FAILURE MODE on an already-failing scenario, not a newly-broken
+passing one — but a trap is still a hard failure and blocks the merge. The engine-level defect and
+its fixtures stand on their own (`revolve_segmented_is_outward_for_either_winding` and
+`regress_kumiko_corner_wedge.rs` fail without the fix, at exactly the inverted volume).
+**TRAP LOCATED, AND IT IS NOT IN THE ANALYTIC PATH — IT IS THE MESH FALLBACK.** Captured with
+`setLogLevel('debug')` + a JS ring buffer over the 1,961,120 kernel log lines the export emits
+(`gomaLogTail.test.ts`, new in the tool's `__kernel-tests__/`; the cjs keeps `wasm.memory`
+module-local so heap size is NOT readable from JS — `setLogLevel` is the only handle). The last
+lines before the abort: `BuilderSolid: 11 shells (sizes [23,17,189,14,44,158,34,23,103,26,4])` →
+`assembled solid with 635 faces` → `Euler characteristic V-E+F = 12 is invalid (V=3588, E=4211,
+F=635)` → `GFA result not accepted, falling back` → `boolean Cut: GFA unusable — using mesh
+(co-refinement) fallback`, then the trap. So the chain is: the fix makes the band analytic → a later
+Cut's GFA result has OPEN shells and is correctly rejected (11 CLOSED pieces would give euler 22, not
+12) → `mesh_boolean_fallback` runs → **the fallback aborts**. TWO SEPARATE DEFECTS, only one caused
+by the revolve fix: (1) GFA emits open shells on this op — the deeper geometry bug the fix newly
+exposes, and the real target; (2) `mesh_boolean_fallback` can kill the whole kernel — a PRE-EXISTING
+landmine (same function as the long-open "emits OPEN meshes that get CONSUMED" row). Mechanism for
+(2), from `boolean/mod.rs::mesh_boolean_fallback`: it tessellates BOTH operands via
+`tessellate_solid_for_boolean(.., deflection, 0.0)` — angular_tol 0 plus the circle curvature floor,
+deliberately DENSE — then BVH+CDT co-refines. Pre-fix those operands were coarse mesh-derived planar
+solids; post-fix they carry real cylinders and cones, so the triangle counts explode
+(`mesh_boolean.rs:903` is `Vec::with_capacity(tri_count * 2)`). MEASUREMENTS BEHIND THE ALLOCATION
+READING: host has 61GB with 23GB free (no physical pressure) and node's wasm ceiling is 4063MB;
+peak process RSS on the trapping run is 2.74GB, i.e. BELOW that ceiling — which argues against
+gradual growth reaching the cap and for a SINGLE oversized request, since a failed `memory.grow`
+sends Rust to `handle_alloc_error` → `abort()` → `unreachable`, bypassing the panic hook exactly as
+observed. This also explains why native replay looks clean: 61GB absorbs a multi-GB allocation that
+is instantly fatal in a 4GB wasm heap, so this class of bug is INVISIBLE natively — reach for a
+capped allocator or a wasm run when a native repro of an abort refuses to reproduce.
+**ROOT FOUND — `Vec::reserve` DOUBLING THE TOPOLOGY ARENA, AND THE OOM READING ABOVE IS ONLY HALF
+RIGHT.** Bisected by stage-bracketed `log::debug!` + `setLogLevel`, four rounds, each halving the
+search: not a Rust panic (hook verified installed at `kernel.rs:57`, and the probe captures
+`console.error`) → not the analytic path → not co-refinement SIZE (the failing op is a tiny
+**7136 + 12 triangles, 497 intersecting pairs**, so the "single oversized allocation from
+degenerate geometry" theory is REFUTED too) → `mesh_boolean` itself COMPLETES (5/5 stages, 7238
+tris) → the abort is in **`assemble_solid_mixed`, inside `topo.reserve`**, whose preceding log
+reads `arena before reserve V=3207122 E=5780703 W=2787018 F=2786863`. Mechanism: the arena never
+reclaims (`dispose()` is a no-op), so a large export accumulates MILLIONS of entities; `Vec::reserve`
+then rounds a 21714-edge bulk hint up to `max(2*capacity, len+additional)` — a full DOUBLING to
+~11.5M edges — and the reallocation holds the old and new buffers at once, which fails against the
+4GB wasm cap. So the peak-RSS reading was a symptom of accumulated arena, NOT of this operation.
+FIXED in `crates/topology/src/arena.rs`: `reserve` now no-ops when capacity suffices and otherwise
+grows by `additional.max(len / 8)` — geometric (total copying stays amortized O(n)) but capping the
+transient overshoot at 12.5% instead of 100%. Plain `reserve_exact` was tried first and DOES clear
+the abort, but leaves `capacity == len` so the next hint re-copies the whole arena — O(n²) across
+thousands of booleans; test `reserve_hint_grows_a_large_arena_by_a_bounded_fraction` pins both
+halves. MEASUREMENT TRAP that nearly produced a false perf claim: the `reserve_exact` run looked
+catastrophically slower, but it ran at `LOG_LEVEL=debug` emitting **1.96 MILLION** log lines across
+the wasm→JS boundary while the 851s control had logging OFF — never compare a debug-logged export
+against a quiet one. DURABLE, and wider than kumiko: ANY brepkit export long enough to grow the
+arena into the millions is one `reserve` away from a silent wasm abort, and the same cliff applies
+to `Vec::push`'s own doubling. The real ceiling is architectural (no arena reclamation in a 4GB
+address space); this fix buys headroom, it does not remove the cliff.
+**SCENARIO VERDICT — THE ABORT IS GONE AND THE EXPORT COMPLETES, BUT GOMA IS 2.6x SLOWER THAN THE
+CONTROL. THE KUMIKO FAMILY IS NOT CLOSED.** With both fixes (revolve orientation + arena growth),
+goma 1×1×6 exports **OK in 2187s / 4,153,484 bytes**, against the fix-disabled control's **851s /
+2,715,884 bytes**. Do NOT quote the revolve fix as kumiko progress at scenario level: the export
+still blows vitest's 600s timeout (by 3.6x now instead of 1.4x), so all 14 kumiko failures and the
+timeout-poisoning of later tests REMAIN. MECHANISM of the slowdown, and it is a direct consequence
+of the fix: GFA still fails these ops (`assembly failed: open growth shell with N faces would be
+dropped`, N=13/23/213/216, plus Euler and non-manifold rejects), so they still route to
+`mesh_boolean_fallback` — but the operands are now ANALYTIC (cylinders + cones) where they used to
+be coarse mesh-derived planes, and that fallback tessellates deliberately densely
+(`tessellate_solid_for_boolean(.., deflection, 0.0)`, angular_tol 0 + circle curvature floor). Same
+fallback, far more triangles: hence both the 2.6x wall-clock and the +53% STL. So making geometry
+analytic makes the FALLBACK more expensive without removing the need for it. **THE BLOCKING ITEM IS
+NOW UNAMBIGUOUS: the GFA open-shell defect.** Fix that and these ops stay analytic, the fallback is
+never reached, and both the slowdown and the non-watertight output should go with it. Repro is cheap
+and already in hand — `LOG_LEVEL=warn` on `gomaLogTail.test.ts` prints every rejection with its face
+count; the smallest is `open growth shell with 13 faces`. NOT YET MEASURED: exported boundary-edge
+count on the fixed kernel (needs `gomaBoundaryProbe`, control = 2567), and the 408-test
+export-integrity matrix (baseline 37 failed / 371 passed) — the net effect across OTHER scenarios is
+unknown, and the two engine fixes may well help elsewhere even as goma regresses.
+**MATRIX MEASURED, A/B, AND THE ANSWER IS ZERO CHANGE — PLUS THE OLD BASELINE IS STALE.** Both runs
+on the same day, same tooling, same 435 tests, differing ONLY in the two fixes (control = both
+disabled in-place, overlay md5 2e58be3e vs treatment 4df3f2e3): **63 failed / 372 passed in BOTH**,
+and diffing the failing test NAMES gives 63 of 63 identical — no treatment-only failure, no
+control-only failure. Durations match too (2440s vs 2463s), because goma times out under both. So
+PR #1237 is scenario-neutral: it fixes two real engine defects and changes nothing in the matrix,
+neither regressing nor improving it. **CORRECT THE BASELINE: it is 63 failed / 372 passed over 435
+tests, NOT the 37/371 over 408 recorded above** — the tool's catalog grew by 27 scenarios, and the
+two families that look like new regressions (`divider patterns` 15, `floor patterns` 11, = 26) are
+pre-existing failures in those NEW scenarios. Comparing a fresh run against the 37/371 figure
+manufactures 26 phantom regressions; that number is only valid against the 408-test catalog it was
+measured on. Current families: divider 15, kumiko 14, floor 11, permutation 6, solid cutouts 3,
+wall/edge/custom-shape/combined 2 each, then singles. ALWAYS run the control on the SAME DAY and the
+SAME catalog rather than trusting a recorded baseline — this is the second time this session that a
+stale or mismatched reference nearly produced a false conclusion.
+**THE TOOL'S `__kernel-tests__` PROBES ARE UNTRACKED AND GET CLEANED — RE-CREATE, DO NOT HUNT.**
+`gomaPanicProbe`, `gomaCaptureBisect`, `gomaBisectProbe`, `gomaOpsProbe`, `gomaPhaseProbe`,
+`gomaProfile` and the two written here (`gomaLogTail`, `gomaHeightLadder`) are/were UNTRACKED files
+in `~/Git/gridfinity-layout-tool` — `git log` on them returns nothing. A `git clean` in that repo on
+2026-07-26 removed all of them, so any roadmap entry naming one is a pointer to a file that may not
+exist. Budget for re-writing the probe rather than treating its absence as a missing capability, and
+check `git status`/recent commits in the tool before running anything there: it is a SEPARATE repo
+that other sessions modify concurrently (two commits landed mid-run here). What survives a clean:
+the capture `.bin` files under `~/.cache/brepkit-parity-captures/` and everything in this repo.
+Recipe for the most useful one, ~40 min per goma run: `setLogLevel(level)` from `brepkit-wasm` is the
+ONLY handle on kernel internals from JS (the cjs keeps `wasm.memory` module-local, so heap size is
+NOT readable), a JS ring buffer over `console.log`/`warn`/`error` captures the output, and at
+`warn` the whole goma 1×1×6 export emits just **1069 lines** — small enough to keep entirely, so use
+a large KEEP and capture the chain from its START. **And note every `BK_*` knob (`BK_FLUX`,
+`BK_AREAS`, `BK_OPEN_SHELL`, `BK_FF_TRACE`, …) is NATIVE-ONLY**: `std::env::var` returns `Err` on
+wasm32-unknown-unknown, so passing them to a tool run silently does nothing.
 
 Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
 not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)

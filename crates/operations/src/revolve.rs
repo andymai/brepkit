@@ -1044,6 +1044,79 @@ fn try_circle_revolution_torus(
     Ok(Some(topo.add_solid(Solid::new(shell_id, vec![]))))
 }
 
+/// Traversal winding of a profile wire in the (radial, axial) chart about
+/// `axis`, or `None` when the chart polygon is degenerate.
+///
+/// The chart's radial basis is the direction of the profile's own
+/// farthest-off-axis sample, matching [`try_analytic_full_revolution`], so the
+/// shoelace sign is comparable between the two paths. Curved edges contribute
+/// interior samples in traversal order, so an arc-dominated profile (a single
+/// closed circle) does not degenerate to its vertex count.
+fn profile_chart_is_ccw(
+    topo: &Topology,
+    oriented: &[OrientedEdge],
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Result<Option<bool>, crate::OperationsError> {
+    let mut pts: Vec<Point3> = Vec::with_capacity(oriented.len() * 4);
+    for oe in oriented {
+        let edge = topo.edge(oe.edge())?;
+        let ns = topo.vertex(edge.start())?.point();
+        let ne = topo.vertex(edge.end())?.point();
+        pts.push(if oe.is_forward() { ns } else { ne });
+        if !matches!(edge.curve(), EdgeCurve::Line) {
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(ns, ne);
+            // Sample in the curve's NATURAL direction, then reverse to traversal
+            // order — sampling from traversal endpoints picks the CCW complement
+            // of a reversed arc.
+            let mut interior: Vec<Point3> = [0.25, 0.5, 0.75]
+                .iter()
+                .map(|f| curve.evaluate_with_endpoints((t1 - t0).mul_add(*f, t0), ns, ne))
+                .collect();
+            if !oe.is_forward() {
+                interior.reverse();
+            }
+            pts.extend(interior);
+        }
+    }
+
+    let mut e_r: Option<Vec3> = None;
+    let mut best_r = 0.0_f64;
+    for &p in &pts {
+        let v = p - axis_origin;
+        let radial = v - axis * v.dot(axis);
+        let r = radial.length();
+        if r > best_r {
+            best_r = r;
+            e_r = radial.normalize().ok();
+        }
+    }
+    let Some(e_r) = e_r else {
+        return Ok(None); // whole profile on the axis
+    };
+
+    let chart: Vec<(f64, f64)> = pts
+        .iter()
+        .map(|p| {
+            let v = *p - axis_origin;
+            (v.dot(e_r), v.dot(axis))
+        })
+        .collect();
+    let mut area2 = 0.0_f64;
+    let mut scale = 0.0_f64;
+    for i in 0..chart.len() {
+        let (x0, y0) = chart[i];
+        let (x1, y1) = chart[(i + 1) % chart.len()];
+        area2 += x0.mul_add(y1, -(x1 * y0));
+        scale = scale.max(x0.abs()).max(y0.abs());
+    }
+    if area2.abs() <= scale * scale * 1e-9 {
+        return Ok(None);
+    }
+    Ok(Some(area2 > 0.0))
+}
+
 /// Revolve a face around an axis to produce a solid of revolution.
 ///
 /// The profile surface may be planar or curved — only its boundary is used. A
@@ -1188,6 +1261,24 @@ pub fn revolve(
         }
     };
 
+    // The sweep runs in +θ = axis × e_r, so a profile whose traversal is CCW in
+    // the (radial, axial) chart faces AGAINST it and revolves into an inward
+    // solid — consistently wound, but with every normal inverted, which every
+    // downstream orientation test then rejects (the shell classifies as a hole).
+    // `try_analytic_full_revolution` derives each face's material-outward side
+    // from this same shoelace sign; the segmented path builds faces straight
+    // from traversal order, so normalize the traversal itself instead. A
+    // degenerate chart leaves the traversal alone.
+    let flip_traversal = {
+        let oes = topo.wire(input_wire_id)?.edges().to_vec();
+        profile_chart_is_ccw(topo, &oes, axis_origin, axis)?.unwrap_or(false)
+    };
+    let input_normal = if flip_traversal {
+        -input_normal
+    } else {
+        input_normal
+    };
+
     let (num_segs, seg_angle) = arc_segmentation(angle);
     let num_boundaries = if is_full { num_segs } else { num_segs + 1 };
 
@@ -1198,12 +1289,21 @@ pub fn revolve(
         let original_oriented: Vec<_> = wire.edges().to_vec();
 
         // Split closed edges (e.g. full circles) into line segments.
-        let input_oriented = crate::extrude::maybe_split_closed_wire(
+        let split_oriented = crate::extrude::maybe_split_closed_wire(
             topo,
             &original_oriented,
             tol.linear,
             crate::extrude::DEFAULT_DEFLECTION,
         )?;
+        let input_oriented: Vec<OrientedEdge> = if flip_traversal {
+            split_oriented
+                .iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect()
+        } else {
+            split_oriented
+        };
         let n = input_oriented.len();
 
         let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
@@ -2900,5 +3000,122 @@ mod tests {
             vol > 0.0,
             "full revolve of a non-planar boundary should have positive volume, got {vol}"
         );
+    }
+
+    /// The segmented revolve must emit an OUTWARD solid for either profile
+    /// winding, like the analytic full-revolution path already does.
+    ///
+    /// Wound the inward way it used to emit a consistently-wound but globally
+    /// inverted shell: every downstream orientation test classified it as a hole,
+    /// so GFA found no outer shell and every boolean against it dropped to the
+    /// mesh fallback (48 planar faces for a 6-face wedge). No existing test could
+    /// see it — `solid_volume` reports a magnitude.
+    #[test]
+    fn revolve_segmented_is_outward_for_either_winding() {
+        // The kumiko corner wedge: radius 1.55..4.75, height 2.7..20.8, in the XZ
+        // plane (which contains the Z axis), revolved 45°.
+        let (r0, r1, z0, z1) = (1.55, 4.75, 2.7, 20.8);
+        let angle = FRAC_PI_2 / 2.0;
+
+        for ccw in [true, false] {
+            for normal_y in [-1.0, 1.0] {
+                let mut topo = Topology::new();
+                let mut pts = vec![
+                    Point3::new(r0, 0.0, z0),
+                    Point3::new(r1, 0.0, z0),
+                    Point3::new(r1, 0.0, z1),
+                    Point3::new(r0, 0.0, z1),
+                ];
+                if !ccw {
+                    pts.reverse();
+                }
+                let wire =
+                    brepkit_topology::builder::make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+                let face = topo.add_face(brepkit_topology::face::Face::new(
+                    wire,
+                    vec![],
+                    FaceSurface::Plane {
+                        normal: Vec3::new(0.0, normal_y, 0.0),
+                        d: 0.0,
+                    },
+                ));
+                let solid = revolve(
+                    &mut topo,
+                    face,
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    angle,
+                )
+                .unwrap();
+
+                // Pappus: V = Δθ × centroid_radius × area.
+                let expected = angle * (0.5 * (r0 + r1)) * ((r1 - r0) * (z1 - z0));
+                let vol = crate::measure::oriented_solid_volume(&topo, solid, 0.02).unwrap();
+                assert!(
+                    vol > 0.0,
+                    "wedge (ccw={ccw} normal_y={normal_y}) must be outward-oriented, \
+                     got signed volume {vol:.3}"
+                );
+                let rel_err = (vol - expected).abs() / expected;
+                assert!(
+                    rel_err < 0.05,
+                    "wedge (ccw={ccw} normal_y={normal_y}) volume should be ~{expected:.2}, \
+                     got {vol:.2} (rel_err={rel_err:.2e})"
+                );
+            }
+        }
+    }
+
+    /// The segmented path also owns FULL revolutions whose profile surface is
+    /// non-planar (the analytic path takes planar profiles only), so the winding
+    /// normalization must cover them too.
+    #[test]
+    fn revolve_segmented_full_turn_is_outward_for_either_winding() {
+        for ccw in [true, false] {
+            let mut topo = Topology::new();
+            let mut pts = vec![
+                Point3::new(2.0, 0.0, 0.0),
+                Point3::new(4.0, 0.0, 0.0),
+                Point3::new(4.0, 3.0, 0.0),
+                Point3::new(2.0, 3.0, 0.0),
+            ];
+            if !ccw {
+                pts.reverse();
+            }
+            let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+            let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+            )
+            .unwrap();
+            let face = topo.add_face(brepkit_topology::face::Face::new(
+                wire,
+                vec![],
+                FaceSurface::Cylinder(cyl),
+            ));
+            let solid = revolve(
+                &mut topo,
+                face,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                2.0 * PI,
+            )
+            .unwrap();
+
+            let expected = 2.0 * PI * 3.0 * 6.0;
+            let vol = crate::measure::oriented_solid_volume(&topo, solid, 0.02).unwrap();
+            assert!(
+                vol > 0.0,
+                "full segmented revolve (ccw={ccw}) must be outward-oriented, \
+                 got signed volume {vol:.3}"
+            );
+            let rel_err = (vol - expected).abs() / expected;
+            assert!(
+                rel_err < 0.05,
+                "full segmented revolve (ccw={ccw}) volume should be ~{expected:.2}, \
+                 got {vol:.2} (rel_err={rel_err:.2e})"
+            );
+        }
     }
 }

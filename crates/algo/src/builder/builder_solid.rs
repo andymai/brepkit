@@ -520,7 +520,10 @@ fn face_normal_at(topo: &Topology, face_id: FaceId, point: Point3) -> Option<Vec
 fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> {
     let mut flux = 0.0_f64;
     let mut any = false;
+    let trace = std::env::var("BK_FLUX").is_ok();
     for &fid in faces {
+        // Only meaningful under BK_FLUX; skip the bookkeeping otherwise.
+        let flux_before = if trace { flux } else { 0.0 };
         let Ok(face) = topo.face(fid) else { continue };
         let surface = face.surface();
         if let FaceSurface::Plane { .. } = surface {
@@ -627,9 +630,23 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 }
             }
         }
+        if trace {
+            log::debug!(
+                "growth shell FLUX face {fid:?} {} reversed={} d={:.4}",
+                surface.type_tag(),
+                face.is_reversed(),
+                flux - flux_before
+            );
+        }
     }
     if !any || flux.abs() < 1e-9 {
         return None;
+    }
+    if trace {
+        log::debug!(
+            "growth shell FLUX total={flux:.4} -> outward={}",
+            flux > 0.0
+        );
     }
     Some(flux > 0.0)
 }

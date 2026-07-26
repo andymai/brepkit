@@ -156,6 +156,13 @@ pub(crate) fn assemble_solid_mixed(
     // Pre-allocate topology arenas based on expected output size.
     // Typical face → ~2 unique vertices, ~3 edges, 1 wire, 1 face.
     let n = face_specs.len();
+    log::debug!(
+        "assemble_solid_mixed: {n} specs; arena before reserve V={} E={} W={} F={}",
+        topo.num_vertices(),
+        topo.num_edges(),
+        topo.num_wires(),
+        topo.num_faces(),
+    );
     topo.reserve(n.saturating_mul(2), n.saturating_mul(3), n, n, 1, 1);
 
     let resolution = vertex_merge_resolution(

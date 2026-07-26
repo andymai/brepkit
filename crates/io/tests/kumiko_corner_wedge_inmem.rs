@@ -29,11 +29,26 @@
 //! `BuilderSolid: 0 growth shells, 1 hole shells` and aborts with
 //! "no outer shell found (all shells classified as holes)" — in 0ms. One shell
 //! is built and classified INWARD, so nothing is left to be the outer shell.
-//! For `Cut(wedge, strut)` the result should be a single outward shell, so the
-//! suspect is orientation or the growth-vs-hole decision in `perform_areas`,
-//! not the face splitter. Reproduce with
-//! `CAPTURE_DIR=<call4> PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1
+//! Reproduce with `CAPTURE_DIR=<call4> PREFIX=cut RAW=1 TOOL=0 SHELL_LOG=1
 //! ./target/release/examples/replay_cut_capture`.
+//!
+//! ROOT FOUND AND FIXED UPSTREAM OF GFA: `revolve`'s segmented path (which owns
+//! every partial revolution) built its faces straight from the profile's
+//! traversal order, so a profile wound CCW in the (radial, axial) chart — facing
+//! against the sweep direction — revolved into a consistently wound but globally
+//! INVERTED solid. Both orientation tests in `perform_areas` were right to
+//! reject it. The analytic full-revolution path already normalized this via its
+//! chart shoelace sign; the segmented path now does too.
+//!
+//! THESE FIXTURES CANNOT VERIFY THE FIX, and that is what `captured_operands`
+//! `_are_inward_oriented` below pins. They were captured from a PRE-FIX build, so
+//! they hold already-inverted wedges: nothing downstream can recover them, and
+//! `kumiko_corner_wedge_cut_stays_analytic` stays ignored as a re-capture task,
+//! not an open engine bug. The fix is verified natively instead, on wedges built
+//! by `revolve` itself — `crates/operations/tests/regress_kumiko_corner_wedge.rs`
+//! (which reproduces both signatures seen here: all-planar on the overlapping
+//! cut, `{"plane": 48}` on the disjoint one) and
+//! `revolve::tests::revolve_segmented_is_outward_for_either_winding`.
 //!
 //! Operands captured from the live tool on a local 2.128.5 build via
 //! `kumikoCornerCutCapture.test.ts`; full six-call capture in
@@ -110,7 +125,27 @@ fn operands_are_clean_analytic_wedges() {
 }
 
 #[test]
-#[ignore = "ready-repro — coaxial wedge cut falls back to mesh, losing both cylinders"]
+fn captured_operands_are_inward_oriented() {
+    // The diagnosis, pinned: these captures predate the revolve orientation fix,
+    // so both wedges are globally inverted. `solid_volume` reports a magnitude
+    // and cannot see it, which is exactly why the defect survived so long —
+    // `oriented_solid_volume` keeps the sign.
+    let mut topo = Topology::new();
+    for name in ["kumiko_corner_wedge.bin", "kumiko_corner_strut.bin"] {
+        let sid = load(name, &mut topo);
+        let signed = brepkit_operations::measure::oriented_solid_volume(&topo, sid, 0.05).unwrap();
+        assert!(
+            signed < 0.0,
+            "{name} is a pre-fix capture and should still be inward-oriented; \
+             a positive signed volume ({signed:.3}) means it was re-captured, so \
+             un-ignore the cut test below"
+        );
+    }
+}
+
+#[test]
+#[ignore = "operands predate the revolve orientation fix — needs a re-capture; \
+            the fix is verified natively in operations/tests/regress_kumiko_corner_wedge.rs"]
 fn kumiko_corner_wedge_cut_stays_analytic() {
     let mut topo = Topology::new();
     let wedge = load("kumiko_corner_wedge.bin", &mut topo);

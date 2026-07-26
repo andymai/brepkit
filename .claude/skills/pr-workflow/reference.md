@@ -35,7 +35,7 @@ Local pre-commit covers only fmt, clippy, taplo, machete, and the last two only 
 
 | Actor | Surface |
 |-------|---------|
-| `greptile-apps` | Inline findings with P0/P1/P2 severity; posts the `Greptile Review` status check (not branch-protection required) |
+| `cubic` | Inline findings; posts the `cubic · AI code reviewer` status check (not branch-protection required; concludes `NEUTRAL` when it has no findings) |
 | `copilot-pull-request-reviewer` | Inline review comments |
 | `cubic-dev-ai` | Review plus a `cubic · AI code reviewer` check |
 
@@ -123,8 +123,8 @@ Bumping wasm-bindgen is its own change with its own PR. Never bump it as a drive
 | commitlint prints `✖ found N problems` yet the commit succeeded | The commit-msg hook swallows commitlint failures and exits 0 by design of its fallback | Treat as a rejection: `git commit --amend` to `type(scope): subject` form |
 | pre-commit fails on clippy warnings you did not write | Pre-existing breakage on the branch base | Stop and report; never `--no-verify` |
 | `⚠️ commitlint not available` warning on commit | `node_modules` missing, but only if no `✖` lines print above it; the same warning also follows a real lint failure (see the `✖` row) because the hook's fallback fires on any nonzero commitlint exit | If `✖` lines precede it, fix the message; otherwise `npm install` at repo root. Either way the commit went through unchecked, re-verify the message manually |
-| PR shows mergeable but you have not read reviews | `Greptile Review` is not branch-protection required | Wait for the check to complete, read findings, only then `--auto` |
-| `Greptile Review` check absent minutes after PR creation | Reviewers take roughly 5 to 7 minutes to post | Keep polling `gh pr checks <N>`; do other work meanwhile |
+| PR shows mergeable but you have not read reviews | the AI review check is not branch-protection required | Wait for the check to complete, read findings, only then `--auto` |
+| AI review check absent minutes after PR creation | Reviewers take roughly 5 to 7 minutes to post | Keep polling `gh pr checks <N>`; do other work meanwhile |
 | CI `boundaries` job fails | A crate dependency violates the layer rules | Run `./scripts/check-boundaries.sh` locally; see the layer-boundaries skill |
 | CI `taplo` or `machete` fails but pre-commit passed | Tool not installed locally; the hook skips it silently | `cargo install taplo-cli cargo-machete`, fix, re-commit |
 | Compliance grep hits in a file you touched | You introduced a banned reference-kernel name, or you touched a grandfathered file | Remove new occurrences; leave grandfathered ones as-is |
