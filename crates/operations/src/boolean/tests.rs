@@ -6666,3 +6666,50 @@ fn euler_balance_allows_genus_across_components() {
     // Inner wires are subtracted before the bound applies.
     assert!(super::euler_balanced(20, 6, 7));
 }
+
+/// A piece sitting in a RING's hole is disjoint, not nested.
+///
+/// This is the case AABB containment alone cannot answer, and the reason the
+/// containment pre-filter is backed by a real ray-parity test. A torus's
+/// bounding box contains the box of anything in its hole, but the hole is void:
+/// the two are separate solids. Lattices are made of rings, so getting this
+/// wrong rejected every lattice result (217 of 226 goma rejections were
+/// `disjoint=false`).
+#[test]
+fn a_piece_in_a_rings_hole_is_disjoint() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+
+    let mut topo = Topology::new();
+    let ring = crate::primitives::make_torus(&mut topo, 10.0, 2.0, 48).unwrap();
+    let plug = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    // Centre the plug in the ring's hole.
+    crate::transform::transform_solid(&mut topo, plug, &Mat4::translation(-0.5, -0.5, -0.5))
+        .unwrap();
+
+    let (ring_bb, plug_bb) = (
+        crate::measure::solid_bounding_box(&topo, ring).unwrap(),
+        crate::measure::solid_bounding_box(&topo, plug).unwrap(),
+    );
+    // Precondition: the ring's AABB really does contain the plug's, so the
+    // pre-filter fires and the real test is what decides.
+    assert!(
+        ring_bb.min.x() <= plug_bb.min.x()
+            && ring_bb.min.y() <= plug_bb.min.y()
+            && ring_bb.min.z() <= plug_bb.min.z()
+            && ring_bb.max.x() >= plug_bb.max.x()
+            && ring_bb.max.y() >= plug_bb.max.y()
+            && ring_bb.max.z() >= plug_bb.max.z(),
+        "the ring's AABB must contain the plug's for this test to exercise the pre-filter"
+    );
+
+    let comps: Vec<Vec<FaceId>> = [ring, plug]
+        .iter()
+        .map(|&s| solid_faces(&topo, s).unwrap())
+        .collect();
+
+    assert!(
+        super::components_are_disjoint_pieces(&topo, &comps),
+        "a plug in the ring's hole is not enclosed by the ring's material"
+    );
+}

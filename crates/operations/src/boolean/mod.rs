@@ -2544,6 +2544,68 @@ fn component_aabb_centre(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
     ))
 }
 
+/// Does the closed surface made of `faces` enclose `p`?
+///
+/// Ray-parity against the component's own tessellation. Read-only by design:
+/// building a temporary solid per component would add entities to an arena that
+/// never reclaims, which is the growth cliff fixed in #1237.
+///
+/// `watertight_ray_triangle_intersect` reports exactly one hit on a shared edge,
+/// so parity is meaningful across face boundaries. The direction is deliberately
+/// irrational so the ray does not graze a face boundary or lie in a face plane —
+/// the degeneracy that makes axis-aligned probes unreliable on the feature-plane
+/// intersections these pieces are full of. Returns `None` when the component
+/// cannot be tessellated, so callers can fall back rather than guess.
+fn component_encloses_point(
+    topo: &Topology,
+    faces: &[FaceId],
+    p: Point3,
+    deflection: f64,
+) -> Option<bool> {
+    // A sqrt-prime direction: irrational in every component, so the ray cannot
+    // lie in a face plane or run along an edge — the same generic-direction
+    // escape the ray-cast classifier uses for degenerate probes.
+    let dir = Vec3::new(2.0_f64.sqrt(), 3.0_f64.sqrt(), 5.0_f64.sqrt())
+        .normalize()
+        .ok()?;
+    let mut crossings = 0usize;
+    let mut any_triangle = false;
+    for &fid in faces {
+        let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
+        let pos = &mesh.mesh.positions;
+        for tri in mesh.mesh.indices.chunks_exact(3) {
+            let (a, b, c) = (
+                pos[tri[0] as usize],
+                pos[tri[1] as usize],
+                pos[tri[2] as usize],
+            );
+            any_triangle = true;
+            if let Some(hit) =
+                brepkit_math::ray_triangle::watertight_ray_triangle_intersect(p, dir, a, b, c)
+                && hit.t > 1e-9
+            {
+                crossings += 1;
+            }
+        }
+    }
+    any_triangle.then_some(crossings % 2 == 1)
+}
+
+/// Any vertex position on `faces`, for use as a probe point.
+fn any_vertex_of(topo: &Topology, faces: &[FaceId]) -> Option<Point3> {
+    for &fid in faces {
+        let face = topo.face(fid).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        if let Some(oe) = wire.edges().first()
+            && let Ok(edge) = topo.edge(oe.edge())
+            && let Ok(v) = topo.vertex(edge.start())
+        {
+            return Some(v.point());
+        }
+    }
+    None
+}
+
 fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
     let aabbs: Vec<(Point3, Point3)> = components
         .iter()
@@ -2613,10 +2675,34 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
             && o_max.y() + eps >= i_max.y()
             && o_max.z() + eps >= i_max.z()
     };
+    // AABB containment is only the PRE-FILTER. It is necessary for nesting but
+    // far from sufficient: a ring's box contains the box of a separate piece
+    // sitting in its HOLE, and a lattice is full of rings. So a suspect pair
+    // gets a real ray-parity test against the enclosing candidate's own surface,
+    // and only genuine enclosure rejects. If the probe cannot be evaluated the
+    // pair falls back to the conservative answer.
     for i in 0..aabbs.len() {
         for j in (i + 1)..aabbs.len() {
-            if contains(aabbs[i], aabbs[j]) || contains(aabbs[j], aabbs[i]) {
+            let (outer, inner) = if contains(aabbs[i], aabbs[j]) {
+                (i, j)
+            } else if contains(aabbs[j], aabbs[i]) {
+                (j, i)
+            } else {
+                continue;
+            };
+            let (o_min, o_max) = aabbs[outer];
+            let diag = ((o_max.x() - o_min.x()).powi(2)
+                + (o_max.y() - o_min.y()).powi(2)
+                + (o_max.z() - o_min.z()).powi(2))
+            .sqrt();
+            let deflection = (diag / 200.0).max(1e-4);
+            let Some(probe) = any_vertex_of(topo, &components[inner]) else {
                 return false;
+            };
+            match component_encloses_point(topo, &components[outer], probe, deflection) {
+                Some(true) => return false,
+                Some(false) => {}
+                None => return false,
             }
         }
     }
