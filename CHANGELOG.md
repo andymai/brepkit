@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.6](https://github.com/andymai/brepkit/compare/v2.128.5...v2.128.6) (2026-07-26)
+
+
+### Bug Fixes
+
+* **operations:** normalize segmented revolve orientation ([#1237](https://github.com/andymai/brepkit/issues/1237)) ([cd7bc32](https://github.com/andymai/brepkit/commit/cd7bc3260d9babf2b9e48150fb6b8f8bfabfc444))
+
 ## [2.128.5](https://github.com/andymai/brepkit/compare/v2.128.4...v2.128.5) (2026-07-25)
 
 
