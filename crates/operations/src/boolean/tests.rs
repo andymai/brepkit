@@ -6537,3 +6537,132 @@ fn diag_tangency_count() {
         eprintln!("{label}: {msg}");
     }
 }
+
+/// Rotated-but-separate pieces must be recognised as disjoint.
+///
+/// `components_are_disjoint_pieces` gates the multi-region acceptance. It used
+/// to decide disjointness by testing whether component AABBs OVERLAP, which is
+/// equivalent to disjointness only for axis-aligned pieces: two rotated bars a
+/// clear distance apart each span the whole diagonal envelope, so their boxes
+/// interpenetrate and the test called them touching.
+///
+/// That single term is why a kumiko lattice cut — whose members are diagonal —
+/// could never be accepted, and fell back to the mesh path on every band. Every
+/// other term of the conjunction was satisfied on the goma rejections
+/// (`closed_manifold=true`, `components=4`, `euler_corrected == expected_euler
+/// == 8`, `cut_safe`, `intersect_safe`, validation Ok).
+#[test]
+fn rotated_separate_pieces_are_recognised_as_disjoint() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+
+    let mut topo = Topology::new();
+    let diag = std::f64::consts::FRAC_PI_4;
+    // 4 units of separation measured PERPENDICULAR to the bars' 45° axis.
+    // Offsetting along the axis instead would leave them collinear.
+    let perp = 4.0 / 2.0_f64.sqrt();
+
+    let bar_a = crate::primitives::make_box(&mut topo, 20.0, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, bar_a, &Mat4::rotation_z(diag)).unwrap();
+
+    let bar_b = crate::primitives::make_box(&mut topo, 20.0, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        bar_b,
+        &(Mat4::translation(-perp, perp, 0.0) * Mat4::rotation_z(diag)),
+    )
+    .unwrap();
+
+    let comps: Vec<Vec<FaceId>> = [bar_a, bar_b]
+        .iter()
+        .map(|&s| solid_faces(&topo, s).unwrap())
+        .collect();
+
+    // The bars are genuinely separate: neither one's centre lies in the other.
+    for (probe_of, against) in [(bar_a, bar_b), (bar_b, bar_a)] {
+        let bb = crate::measure::solid_bounding_box(&topo, probe_of).unwrap();
+        let centre = Point3::new(
+            (bb.min.x() + bb.max.x()) * 0.5,
+            (bb.min.y() + bb.max.y()) * 0.5,
+            (bb.min.z() + bb.max.z()) * 0.5,
+        );
+        assert_eq!(
+            crate::classify::classify_point(&topo, against, centre, 0.05, 1e-6).unwrap(),
+            crate::classify::PointClassification::Outside,
+            "bars must be disjoint for this test to mean anything"
+        );
+    }
+
+    // ...yet their AABBs overlap on every axis, which is all the gate looks at.
+    let (a_bb, b_bb) = (
+        crate::measure::solid_bounding_box(&topo, bar_a).unwrap(),
+        crate::measure::solid_bounding_box(&topo, bar_b).unwrap(),
+    );
+    assert!(
+        a_bb.min.x().max(b_bb.min.x()) < a_bb.max.x().min(b_bb.max.x())
+            && a_bb.min.y().max(b_bb.min.y()) < a_bb.max.y().min(b_bb.max.y())
+            && a_bb.min.z().max(b_bb.min.z()) < a_bb.max.z().min(b_bb.max.z()),
+        "the AABBs must overlap for this test to exercise the defect"
+    );
+
+    assert!(
+        super::components_are_disjoint_pieces(&topo, &comps),
+        "rotated-but-separate pieces must be accepted as disjoint despite overlapping AABBs"
+    );
+}
+
+/// A nested piece must still be refused as a "disjoint union".
+///
+/// This is the hazard the guard exists for and the reason it is not simply
+/// deleted: a small solid sitting inside another piece's cavity is not a
+/// multi-region result, and accepting it would let a void be kept as material.
+/// Nesting implies AABB containment, so the containment test still catches it
+/// while letting side-by-side rotated pieces through.
+#[test]
+fn nested_pieces_are_not_disjoint() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+
+    let mut topo = Topology::new();
+    let outer = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+    let inner = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, inner, &Mat4::translation(9.0, 9.0, 9.0)).unwrap();
+
+    let comps: Vec<Vec<FaceId>> = [outer, inner]
+        .iter()
+        .map(|&s| solid_faces(&topo, s).unwrap())
+        .collect();
+
+    assert!(
+        !super::components_are_disjoint_pieces(&topo, &comps),
+        "a piece nested inside another must not count as a disjoint union"
+    );
+}
+
+/// Multi-region Euler acceptance must tolerate genus per piece.
+///
+/// `euler_balanced` used to compare against a fixed bound of 2, i.e. it assumed
+/// every component was a sphere. A kumiko lattice cut yields RINGS — a closed
+/// loop of material is genus 1, chi = 0 — so a 13-piece result containing 6
+/// rings has chi = 2*7 = 14, not 2*13 = 26, and the gate rejected it. Those are
+/// the exact numbers observed on the goma rejections (components=13 with
+/// euler_corrected=14; also 7/8, 14/16, 23/34).
+#[test]
+fn euler_balance_allows_genus_across_components() {
+    // All spheres: chi == 2C is the upper bound and must pass.
+    assert!(super::euler_balanced(26, 0, 13));
+    // 6 of the 13 pieces are rings (genus 1): the real goma signature.
+    assert!(super::euler_balanced(14, 0, 13));
+    assert!(super::euler_balanced(8, 0, 7));
+    assert!(super::euler_balanced(34, 0, 23));
+    // Single component keeps its old meaning exactly.
+    assert!(super::euler_balanced(2, 0, 1));
+    assert!(super::euler_balanced(0, 0, 1));
+    // Still rejected: above 2C (more pieces than components can account for)
+    // and odd surpluses (a miscounted shell).
+    assert!(!super::euler_balanced(28, 0, 13));
+    assert!(!super::euler_balanced(13, 0, 13));
+    assert!(!super::euler_balanced(4, 0, 1));
+    // Inner wires are subtracted before the bound applies.
+    assert!(super::euler_balanced(20, 6, 7));
+}

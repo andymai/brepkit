@@ -520,8 +520,13 @@ pub fn boolean(
                 // deviates from euler==2 solely because of inner wires would
                 // still trigger an unnecessary unify_faces pass.
                 let inner_wire_count_pre = solid_inner_wire_count(topo, result)?;
+                // Deliberately single-component: this only decides whether to
+                // run `unify_faces`, and that pass can mangle a legitimate
+                // N-piece result, so widening the bound here would change which
+                // multi-region results get unified — a separate question from
+                // acceptance, and one the calibrated foils cover.
                 let euler_balanced_pre = euler_pre2 - inner_shell_surplus == 2
-                    || euler_balanced(euler_pre2 - inner_shell_surplus, inner_wire_count_pre);
+                    || euler_balanced(euler_pre2 - inner_shell_surplus, inner_wire_count_pre, 1);
 
                 // Run unify_faces if the (hole-aware) Euler is off OR if the
                 // topology has 3+-face junctions, which can occur with a
@@ -622,7 +627,7 @@ pub fn boolean(
                 let euler_eff = euler - inner_shell_surplus;
                 let euler_ok = hollow_ok
                     && (euler_eff == 2
-                        || (euler_balanced(euler_eff, inner_wire_count) && closed_manifold));
+                        || (euler_balanced(euler_eff, inner_wire_count, 1) && closed_manifold));
                 if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
                         "GFA boolean succeeded in {:.1}ms ({result_faces} faces)",
@@ -709,7 +714,7 @@ pub fn boolean(
                 // legitimately yields N disjoint chunks.
                 if matches!(op, BooleanOp::Cut | BooleanOp::Fuse | BooleanOp::Intersect)
                     && components >= 2
-                    && euler_corrected == expected_euler
+                    && euler_balanced(euler, inner_wire_count, i64::try_from(components).unwrap_or(i64::MAX))
                     && components_are_disjoint_pieces(topo, &components_vec)
                     && cut_safe
                     && intersect_safe
@@ -725,6 +730,20 @@ pub fn boolean(
                     );
                     return Ok(result);
                 }
+                // Which gate refused? Both acceptance paths are conjunctions,
+                // so the bare rejection below says nothing about the cause —
+                // and when `validate` is None the result is topologically fine
+                // and something else declined it.
+                log::debug!(
+                    "GFA reject detail {op:?}: euler={euler} euler_eff={euler_eff} \
+                     inner_wires={inner_wire_count} inner_shell_surplus={inner_shell_surplus} \
+                     euler_ok={euler_ok} open_shell_ok={open_shell_ok} \
+                     closed_manifold={closed_manifold} components={components} \
+                     expected_euler={expected_euler} euler_corrected={euler_corrected} \
+                     cut_safe={cut_safe} intersect_safe={intersect_safe} \
+                     disjoint={}",
+                    components_are_disjoint_pieces(topo, &components_vec)
+                );
             }
             log::warn!(
                 "GFA result not accepted in {:.1}ms (faces={result_faces}, \
@@ -2567,15 +2586,36 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
         })
         .collect();
 
+    // Reject NESTING, not mere AABB overlap.
+    //
+    // Callers reach here only for a result that already passed
+    // `closed_manifold` with Euler == 2 * components, so every component is a
+    // closed manifold piece — and two closed pieces of one shell are either
+    // disjoint or nested. Nesting is the hazard worth rejecting (a blob sitting
+    // inside another piece's cavity is not a disjoint union); side-by-side
+    // pieces are exactly what multi-region acceptance is for.
+    //
+    // Overlap is the wrong predicate for that, because an AABB is only tight on
+    // axis-aligned geometry. Two ROTATED bars a clear distance apart each span
+    // the whole diagonal envelope, so their boxes interpenetrate and an
+    // overlap test calls them touching — which is why a kumiko lattice cut,
+    // whose members are diagonal, could never be accepted and fell back to the
+    // mesh path on every band (see
+    // `tests::disjointness_test_is_fooled_by_rotated_pieces`). Containment is
+    // tight in the direction that matters: nesting implies it, and rotation
+    // does not manufacture it.
     let eps = 1e-7;
+    let contains = |(o_min, o_max): (Point3, Point3), (i_min, i_max): (Point3, Point3)| {
+        o_min.x() - eps <= i_min.x()
+            && o_min.y() - eps <= i_min.y()
+            && o_min.z() - eps <= i_min.z()
+            && o_max.x() + eps >= i_max.x()
+            && o_max.y() + eps >= i_max.y()
+            && o_max.z() + eps >= i_max.z()
+    };
     for i in 0..aabbs.len() {
         for j in (i + 1)..aabbs.len() {
-            let (i_min, i_max) = aabbs[i];
-            let (j_min, j_max) = aabbs[j];
-            let x_overlap = i_min.x().max(j_min.x()) + eps < i_max.x().min(j_max.x());
-            let y_overlap = i_min.y().max(j_min.y()) + eps < i_max.y().min(j_max.y());
-            let z_overlap = i_min.z().max(j_min.z()) + eps < i_max.z().min(j_max.z());
-            if x_overlap && y_overlap && z_overlap {
+            if contains(aabbs[i], aabbs[j]) || contains(aabbs[j], aabbs[i]) {
                 return false;
             }
         }
@@ -2753,18 +2793,25 @@ fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate:
     Ok(count)
 }
 
-/// Genus-aware Euler balance for a closed orientable surface with holed faces.
+/// Genus-aware Euler balance for `components` closed orientable surfaces with
+/// holed faces.
 ///
-/// Euler-Poincare for a closed surface of genus `g`: `V - E + F - L = 2(1 - g)`,
-/// so the inner-wire surplus `euler - L` equals `2 - 2g` and is valid when it
-/// is an even number no greater than 2: `2` for genus 0, `0` for genus 1, and
-/// negative even values for genus >= 2 (e.g. a thin wall pierced by N
-/// through-holes has genus N). Odd or > 2 surpluses indicate a miscounted
-/// shell. Callers must pair this with a closed-manifold check — the relation
-/// only holds for closed surfaces.
-const fn euler_balanced(euler: i64, inner_wires: i64) -> bool {
+/// Euler-Poincare over `C` closed components of total genus `G`:
+/// `V - E + F - L = 2C - 2G`, so the inner-wire surplus `euler - L` is valid
+/// when it is even and no greater than `2C` — `2C` for all-genus-0 pieces, less
+/// by two per unit of genus (a thin wall pierced by N through-holes has genus
+/// N). Odd or `> 2C` surpluses indicate a miscounted shell.
+///
+/// The `2C` bound matters as much as the parity: a multi-region result is not
+/// obliged to be a bag of spheres. A kumiko lattice cut yields RINGS, and a
+/// closed loop of material is genus 1 (`chi = 0`), so demanding `euler == 2C`
+/// exactly rejected every lattice result and forced it onto the mesh path.
+///
+/// Callers must pair this with a closed-manifold check — the relation only holds
+/// for closed surfaces.
+const fn euler_balanced(euler: i64, inner_wires: i64, components: i64) -> bool {
     let surplus = euler - inner_wires;
-    surplus <= 2 && surplus % 2 == 0
+    surplus <= 2 * components && surplus % 2 == 0
 }
 
 /// Count edge uses across ALL shells of a solid (outer + inner cavity
