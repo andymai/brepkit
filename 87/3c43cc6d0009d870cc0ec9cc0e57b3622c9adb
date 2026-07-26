@@ -1,0 +1,19 @@
+.claude/skills/roadmap/SKILL.md
+  s_8878957224ceba::t_6a4d09b473b8d8 1139-1158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "873c43cc6d0009d870cc0ec9cc0e57b3622c9adb",
+  "prompts": {},
+  "sessions": {
+    "s_8878957224ceba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "950c67c1-5fab-427c-b918-c76b5ef9c622",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
