@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784996567040,
+  "lastUpdate": 1785054971137,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13067,6 +13067,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18001853,
             "range": "± 69677",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cd7bc3260d9babf2b9e48150fb6b8f8bfabfc444",
+          "message": "fix(operations): normalize segmented revolve orientation (#1237)\n\n## What\n\nThe segmented `revolve` path built its faces straight from the profile's\ntraversal order, so a profile wound CCW in the `(radial, axial)` chart —\nfacing *against* the sweep direction `+θ = axis × e_r` — revolved into a\nconsistently wound but globally **inverted** solid. GFA classified its\nlone shell as a hole and aborted with \"no outer shell found\", dropping\nevery boolean against it to the mesh fallback.\n\n`try_analytic_full_revolution` already derives each face's\nmaterial-outward side from the chart shoelace sign. The segmented path\nnow normalizes the **traversal** itself: reverse the oriented edges and\nnegate the cap normal when the shoelace is CCW, leaving a degenerate\nchart alone.\n\nBy Pappus, the swept signed volume carries the chart's signed area, so\nthe shoelace sign is the physically meaningful invariant — the old\n`is_cw_winding` correction made the *normal* follow the traversal, which\nis self-consistent but orientation-blind.\n\n## Why it matters\n\nThis is the root of the kumiko export-integrity family. Every lattice\nband is carved from a `revolve` wedge (`cutter = cutAll(cutter,\nfamily)`), so every corner cut fell back to the mesh path, four of the\neight goma bands reached the export non-watertight (`free=405 over=38`\nand similar), and the 1x1x6 export took 844s — blowing vitest's timeout\nand poisoning 14 later kumiko tests on this one root.\n\n## Scope correction\n\nSegmented **full** revolutions were affected too — a profile whose\nsurface is non-planar, so the analytic path declines (`-112.833` for a\n`+113.1` washer). The earlier \"full revolution is correct for both\nwindings\" reading only held because analytic profiles never reach the\nsegmented path.\n\n## Verification\n\nEach new test was confirmed to **fail** without the fix, at exactly the\ninverted volume:\n\n- `revolve::tests::revolve_segmented_is_outward_for_either_winding` —\n`-143.148` vs `+143.3`\n-\n`revolve::tests::revolve_segmented_full_turn_is_outward_for_either_winding`\n— `-112.833` vs `+113.1`\n- `tests/regress_kumiko_corner_wedge.rs` — reproduces both documented\nsignatures natively (all-planar on the overlapping coaxial cut,\n`{\"plane\": 48}` on the disjoint one)\n\n`measure::oriented_solid_volume` is new and public because\n`solid_volume` returns a magnitude — which is why no existing revolve\ntest could see an inverted shell. The new fixture also asserts\nwelded-mesh watertightness and a Pappus volume, since the by-edge-id\nmanifold gate is blind to position-duplicate free edges.\n\nThe captured `kumiko_corner_*.bin` fixtures predate the fix and hold\nalready-inverted wedges, so they can never pass;\n`captured_operands_are_inward_oriented` pins that and self-reports when\na re-capture lands. The cut test stays ignored as a re-capture task, not\nan open engine bug.\n\n- Workspace suite: 2291 passing, 0 failures (`brepkit-render` needs\n`XDG_RUNTIME_DIR` set in this sandbox; 5/5 with it)\n- `cargo test -p brepkit-wasm --lib gridfinity`: 27/27\n- clippy `-D warnings` clean, fmt, `check-boundaries.sh` valid\n- Census: all 6 `revolve` rows still `exact analytic`\n\n## Not claimed\n\nEngine-level closure only. The tool-side export-integrity re-probe is\n**not** done — the baseline to beat is 37 failed / 371 passed, and per\nthe roadmap a fix that looks real can move the scenario numbers zero. No\nkumiko parity claim until that re-probe runs.\n\nThe earlier commits on this branch are the diagnostic instrumentation\n(`BK_FLUX`, `BK_AREAS`, `BBOX`) and probes that located the root.",
+          "timestamp": "2026-07-26T01:33:48-07:00",
+          "tree_id": "1a2298115b5cc0d78d82130913d619c57917e6ef",
+          "url": "https://github.com/andymai/brepkit/commit/cd7bc3260d9babf2b9e48150fb6b8f8bfabfc444"
+        },
+        "date": 1785054969654,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 830196,
+            "range": "± 42580",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 920880,
+            "range": "± 5392",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11986,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661951,
+            "range": "± 709",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21759032,
+            "range": "± 85612",
             "unit": "ns/iter"
           }
         ]
