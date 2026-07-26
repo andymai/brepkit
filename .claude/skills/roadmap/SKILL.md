@@ -1171,6 +1171,22 @@ measured on. Current families: divider 15, kumiko 14, floor 11, permutation 6, s
 wall/edge/custom-shape/combined 2 each, then singles. ALWAYS run the control on the SAME DAY and the
 SAME catalog rather than trusting a recorded baseline — this is the second time this session that a
 stale or mismatched reference nearly produced a false conclusion.
+**THE TOOL'S `__kernel-tests__` PROBES ARE UNTRACKED AND GET CLEANED — RE-CREATE, DO NOT HUNT.**
+`gomaPanicProbe`, `gomaCaptureBisect`, `gomaBisectProbe`, `gomaOpsProbe`, `gomaPhaseProbe`,
+`gomaProfile` and the two written here (`gomaLogTail`, `gomaHeightLadder`) are/were UNTRACKED files
+in `~/Git/gridfinity-layout-tool` — `git log` on them returns nothing. A `git clean` in that repo on
+2026-07-26 removed all of them, so any roadmap entry naming one is a pointer to a file that may not
+exist. Budget for re-writing the probe rather than treating its absence as a missing capability, and
+check `git status`/recent commits in the tool before running anything there: it is a SEPARATE repo
+that other sessions modify concurrently (two commits landed mid-run here). What survives a clean:
+the capture `.bin` files under `~/.cache/brepkit-parity-captures/` and everything in this repo.
+Recipe for the most useful one, ~40 min per goma run: `setLogLevel(level)` from `brepkit-wasm` is the
+ONLY handle on kernel internals from JS (the cjs keeps `wasm.memory` module-local, so heap size is
+NOT readable), a JS ring buffer over `console.log`/`warn`/`error` captures the output, and at
+`warn` the whole goma 1×1×6 export emits just **1069 lines** — small enough to keep entirely, so use
+a large KEEP and capture the chain from its START. **And note every `BK_*` knob (`BK_FLUX`,
+`BK_AREAS`, `BK_OPEN_SHELL`, `BK_FF_TRACE`, …) is NATIVE-ONLY**: `std::env::var` returns `Err` on
+wasm32-unknown-unknown, so passing them to a tool run silently does nothing.
 
 Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
 not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
