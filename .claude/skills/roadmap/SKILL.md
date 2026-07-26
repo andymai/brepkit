@@ -1187,6 +1187,40 @@ NOT readable), a JS ring buffer over `console.log`/`warn`/`error` captures the o
 a large KEEP and capture the chain from its START. **And note every `BK_*` knob (`BK_FLUX`,
 `BK_AREAS`, `BK_OPEN_SHELL`, `BK_FF_TRACE`, …) is NATIVE-ONLY**: `std::env::var` returns `Err` on
 wasm32-unknown-unknown, so passing them to a tool run silently does nothing.
+**GFA IS THE SEED OF THE GOMA CHAIN, NOT THE MESH FALLBACK — AND THE BLOCKER IS THE MULTI-REGION
+ACCEPTANCE GATE (2026-07-26).** Ordering from a complete warn-level log (1069 lines, untruncated):
+first GFA rejection at line 11, first `open growth shell` at 28, first `mesh fallback output is NOT a
+closed 2-manifold` at **65**. So the long-open open-mesh-consumption item AMPLIFIES the cascade but
+does not start it; chase GFA. The rejected results are topologically fine (`validate=None`), so the
+refusal is one term of the acceptance conjunction — and since both gates are conjunctions, the bare
+rejection log says nothing. The `GFA reject detail` debug log added in that PR names the term; use it
+first. TWO TERMS FIXED (branch `fix/gfa-multi-region-acceptance`, goma **2187s → 1123s** and STL
+4,153,484 → 2,725,284 B, i.e. back within 0.35% of the control): (1)
+`components_are_disjoint_pieces` tested AABB OVERLAP, which equals disjointness only for
+axis-aligned pieces — two rotated bars a clear distance apart each span the whole diagonal envelope,
+so a lattice could never be accepted (fixture
+`tests::rotated_separate_pieces_are_recognised_as_disjoint`); now tests containment, since callers
+reach it only after `closed_manifold` + balanced Euler, so pieces are closed and hence disjoint-or-
+nested. (2) `euler_balanced` bounded the surplus at 2, assuming every component is a SPHERE — a
+lattice cut yields RINGS and a closed loop is genus 1 (χ=0), so 13 pieces containing 6 rings give
+χ=14 not 26; the bound is now `2·components` (fixture
+`euler_balance_allows_genus_across_components`). The pre-unify check stays single-component
+deliberately: it only decides whether `unify_faces` runs, and that pass can mangle a legitimate
+N-piece result. **STILL OPEN, and the exact next step: 217 of 226 remaining rejections are
+`disjoint=false`** (measured directly, not inferred) because AABB CONTAINMENT is also wrong for
+rings — a ring's box contains the box of a separate piece sitting in its HOLE. Closing it needs a
+REAL containment test; the read-only pieces exist (`tessellate::face::tessellate_with_uvs` +
+`brepkit_math::ray_triangle::watertight_ray_triangle_intersect`, whose shared-edge guarantee suits
+parity counting), gated behind the cheap AABB pre-filter. Do NOT reach for
+`make_solid_from_face_subset`: it needs `&mut Topology` and would add temp solids per boolean to an
+arena that never reclaims — the cliff fixed in #1237. REFUTED en route, do not re-chase: the Euler
+validator in `validate.rs` (logged as a WARNING only, never gates — "hard-failing would reject ~25%
+of currently working booleans"); absent multi-region acceptance (it exists and covers Cut); and
+phantom components from position-duplicate edges (a position-keyed count matched the edge-id count
+exactly, 13=13, 7=7, 23=23). TOOLING TRAP: `brepkit-render`'s `compute_mesh_lod` SIGSEGVs
+intermittently — **2 of 4 runs with AND without changes**, a pre-existing flake that aborts
+`cargo test --workspace` early and silently masks every later suite. Use
+`--exclude brepkit-render`, and never conclude a regression from one stashed-vs-restored run.
 
 Everything below this line about the odd bands describes behaviour observed on BROKEN INPUT and must
 not be treated as an engine defect: **RETRACTED — the "GFA classifier misjudgement" reading (#1229)
