@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785055391226,
+  "lastUpdate": 1785250359327,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13175,6 +13175,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17641674,
             "range": "± 22454",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4f8e78d8949cf046ee1288c2a63532b4d476fd4b",
+          "message": "chore(deps): update syn requirement from 2 to 3 (#1240)",
+          "timestamp": "2026-07-28T07:50:11-07:00",
+          "tree_id": "c3d42a1d39536e745e206eadd8c0b6cb07b6607b",
+          "url": "https://github.com/andymai/brepkit/commit/4f8e78d8949cf046ee1288c2a63532b4d476fd4b"
+        },
+        "date": 1785250358523,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 893571,
+            "range": "± 18923",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 960051,
+            "range": "± 8870",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13161,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 665591,
+            "range": "± 7415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22747473,
+            "range": "± 107185",
             "unit": "ns/iter"
           }
         ]
