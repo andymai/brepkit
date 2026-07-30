@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785250513973,
+  "lastUpdate": 1785394563585,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13283,6 +13283,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21786302,
             "range": "± 112915",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c35c99af840ef7d341fea37e217d1a6b768feb31",
+          "message": "fix(operations): accept multi-region booleans with rotated or ring pieces (#1239)\n\nThree terms of GFA's multi-region acceptance gate rejected topologically\nsound results, forcing every kumiko lattice cut onto the mesh fallback.\n\n- components_are_disjoint_pieces tested AABB overlap, which equals\n  disjointness only for axis-aligned pieces. Containment is now a\n  pre-filter and nesting is decided by ray parity against the enclosing\n  candidate's own tessellation.\n- euler_balanced bounded the inner-wire surplus at 2, assuming every\n  component was a sphere. A lattice yields rings (genus 1), so the bound\n  is now a saturating 2 * components.\n- Adds a GFA reject detail debug log naming every acceptance term, which\n  is what located all three defects.\n\ngoma 1x1x6: 2187s -> 499s with zero GFA rejections, STL 4,153,484 ->\n2,128,934 B. Matrix 63 -> 62 of 435; the kumiko block remains at 14 and\nis not closed by this change.",
+          "timestamp": "2026-07-29T23:53:40-07:00",
+          "tree_id": "00f1d38899ee4b33c5efc595b1860fffc5bd531a",
+          "url": "https://github.com/andymai/brepkit/commit/c35c99af840ef7d341fea37e217d1a6b768feb31"
+        },
+        "date": 1785394561953,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 824436,
+            "range": "± 12901",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 916484,
+            "range": "± 29346",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12185,
+            "range": "± 214",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 660345,
+            "range": "± 2242",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21714469,
+            "range": "± 92080",
             "unit": "ns/iter"
           }
         ]
