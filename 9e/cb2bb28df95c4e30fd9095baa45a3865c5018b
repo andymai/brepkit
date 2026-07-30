@@ -1,0 +1,49 @@
+crates/io/examples/wedge_cut_anatomy.rs
+  s_99f37687cd028e::t_40bf5d6a8011a4 45-48,73-77,119-124
+  s_99f37687cd028e::t_4a2355d1e46b46 1-44,49-72,78-118,125-130
+crates/algo/src/builder/mod.rs
+  s_99f37687cd028e::t_c5f6d51d3be29b 119,122-123
+crates/io/tests/kumiko_corner_window_inmem.rs
+  s_99f37687cd028e::t_40bf5d6a8011a4 186-189
+  s_99f37687cd028e::t_32ca05551a9ca3 1-185,190-191
+crates/algo/src/pave_filler/phase_ff.rs
+  s_99f37687cd028e::t_b292778777a34b 1160-1195,1202,1204
+crates/algo/src/builder/face_splitter/mod.rs
+  s_99f37687cd028e::t_9ca139eb95129e 4687,4692,4694-4696
+  s_99f37687cd028e::t_df4528cd34d0ea 4987,4989-5000
+  s_99f37687cd028e::t_d1a27ed099f5ea 5142-5179
+  s_99f37687cd028e::t_9c13be96c294da 4691,4693,4986,4988
+crates/io/tests/data/kumiko_corner_clip_strut.bin
+  s_99f37687cd028e::t_3c7f5a8d579faf 1
+crates/io/examples/replay_cut_capture.rs
+  s_99f37687cd028e::t_316cf37a09d183 85
+crates/io/examples/solid_watertight_report.rs
+  s_99f37687cd028e::t_40bf5d6a8011a4 111-116,120-122
+  s_99f37687cd028e::t_cf0fb7d908e11f 118-119
+  s_99f37687cd028e::t_6aeb57e5aa804c 92-110,117,123-128
+  s_99f37687cd028e::t_ce3127ad50c572 1-36,40-91,129-155,160-161,168-170
+  s_99f37687cd028e::t_8ffd047b864b9a 37-39
+  s_99f37687cd028e::t_b7bc7c407d8538 156-159,162-167
+crates/io/tests/data/kumiko_corner_wedge_base.bin
+  s_99f37687cd028e::t_3c7f5a8d579faf 1
+crates/io/tests/data/kumiko_corner_window_strut.bin
+  s_99f37687cd028e::t_3c7f5a8d579faf 1
+.claude/skills/roadmap/SKILL.md
+  s_99f37687cd028e::t_8c5ae4e2cd4e6e 1246-1304
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "9ecb2bb28df95c4e30fd9095baa45a3865c5018b",
+  "prompts": {},
+  "sessions": {
+    "s_99f37687cd028e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3ca919f9-ca03-42b9-aba8-fb55037a60b3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
