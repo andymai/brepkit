@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.7](https://github.com/andymai/brepkit/compare/v2.128.6...v2.128.7) (2026-07-30)
+
+
+### Bug Fixes
+
+* **operations:** accept multi-region booleans with rotated or ring pieces ([#1239](https://github.com/andymai/brepkit/issues/1239)) ([c35c99a](https://github.com/andymai/brepkit/commit/c35c99af840ef7d341fea37e217d1a6b768feb31))
+
 ## [2.128.6](https://github.com/andymai/brepkit/compare/v2.128.5...v2.128.6) (2026-07-26)
 
 
