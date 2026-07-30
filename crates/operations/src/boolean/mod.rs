@@ -745,7 +745,9 @@ pub fn boolean(
                         i64::try_from(components).unwrap_or(i64::MAX)
                     ),
                     euler - inner_wire_count,
-                    2 * i64::try_from(components).unwrap_or(i64::MAX / 2),
+                    i64::try_from(components)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(2),
                     components_are_disjoint_pieces(topo, &components_vec)
                 );
             }
@@ -2654,12 +2656,18 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
 
     // Reject NESTING, not mere AABB overlap.
     //
-    // Callers reach here only for a result that already passed
-    // `closed_manifold` with Euler == 2 * components, so every component is a
-    // closed manifold piece — and two closed pieces of one shell are either
-    // disjoint or nested. Nesting is the hazard worth rejecting (a blob sitting
-    // inside another piece's cavity is not a disjoint union); side-by-side
-    // pieces are exactly what multi-region acceptance is for.
+    // Nesting is the hazard worth rejecting (a blob sitting inside another
+    // piece's cavity is not a disjoint union); side-by-side pieces are exactly
+    // what multi-region acceptance is for.
+    //
+    // Assume nothing about the components handed in. The acceptance gate calls
+    // this on a GFA result that has cleared only `euler_balanced` — which is
+    // genus-tolerant, and whose `closed_manifold` companion is a LATER conjunct
+    // in the same `&&` chain, not a precondition. The input-splitting paths
+    // call it on components of a raw operand no gate has examined at all. So
+    // "every piece is a closed manifold, hence disjoint-or-nested" is not
+    // available here; the ray-parity confirmation below earns the answer
+    // instead of inferring it.
     //
     // Overlap is the wrong predicate for that, because an AABB is only tight on
     // axis-aligned geometry. Two ROTATED bars a clear distance apart each span
@@ -2667,8 +2675,8 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
     // overlap test calls them touching — which is why a kumiko lattice cut,
     // whose members are diagonal, could never be accepted and fell back to the
     // mesh path on every band (see
-    // `tests::disjointness_test_is_fooled_by_rotated_pieces`). Containment is
-    // tight in the direction that matters: nesting implies it, and rotation
+    // `tests::rotated_separate_pieces_are_recognised_as_disjoint`). Containment
+    // is tight in the direction that matters: nesting implies it, and rotation
     // does not manufacture it.
     let eps = 1e-7;
     let contains = |(o_min, o_max): (Point3, Point3), (i_min, i_max): (Point3, Point3)| {
@@ -2901,7 +2909,7 @@ fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate:
 /// for closed surfaces.
 const fn euler_balanced(euler: i64, inner_wires: i64, components: i64) -> bool {
     let surplus = euler - inner_wires;
-    surplus <= 2 * components && surplus % 2 == 0
+    surplus <= components.saturating_mul(2) && surplus % 2 == 0
 }
 
 /// Count edge uses across ALL shells of a solid (outer + inner cavity
