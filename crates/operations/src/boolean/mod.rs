@@ -520,8 +520,13 @@ pub fn boolean(
                 // deviates from euler==2 solely because of inner wires would
                 // still trigger an unnecessary unify_faces pass.
                 let inner_wire_count_pre = solid_inner_wire_count(topo, result)?;
+                // Deliberately single-component: this only decides whether to
+                // run `unify_faces`, and that pass can mangle a legitimate
+                // N-piece result, so widening the bound here would change which
+                // multi-region results get unified — a separate question from
+                // acceptance, and one the calibrated foils cover.
                 let euler_balanced_pre = euler_pre2 - inner_shell_surplus == 2
-                    || euler_balanced(euler_pre2 - inner_shell_surplus, inner_wire_count_pre);
+                    || euler_balanced(euler_pre2 - inner_shell_surplus, inner_wire_count_pre, 1);
 
                 // Run unify_faces if the (hole-aware) Euler is off OR if the
                 // topology has 3+-face junctions, which can occur with a
@@ -622,7 +627,7 @@ pub fn boolean(
                 let euler_eff = euler - inner_shell_surplus;
                 let euler_ok = hollow_ok
                     && (euler_eff == 2
-                        || (euler_balanced(euler_eff, inner_wire_count) && closed_manifold));
+                        || (euler_balanced(euler_eff, inner_wire_count, 1) && closed_manifold));
                 if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
                         "GFA boolean succeeded in {:.1}ms ({result_faces} faces)",
@@ -650,13 +655,11 @@ pub fn boolean(
                 // a piece carrying a blind pocket (a face with an inner wire)
                 // shifts raw Euler away from 2*N even at genus 0, so comparing
                 // raw Euler here rejected every pocketed piece. This mirrors the
-                // `euler_balanced(euler_eff, inner_wire_count)` correction the
-                // single-component gate above applies.
+                // `euler_balanced` correction the single-component gate above
+                // applies — which is why the bound below is `2 * components`
+                // rather than an equality against it.
                 let components_vec = crate::boolean::assembly::face_components(topo, result);
                 let components = components_vec.len();
-                #[allow(clippy::cast_possible_wrap)]
-                let expected_euler = (components as i64) * 2;
-                let euler_corrected = euler - inner_wire_count;
                 // For Cut, also verify no component is a "B-interior piece" —
                 // GFA can produce N closed manifolds where one of them is the
                 // tool's interior (sphere - cylinder example: 3 pieces =
@@ -709,7 +712,7 @@ pub fn boolean(
                 // legitimately yields N disjoint chunks.
                 if matches!(op, BooleanOp::Cut | BooleanOp::Fuse | BooleanOp::Intersect)
                     && components >= 2
-                    && euler_corrected == expected_euler
+                    && euler_balanced(euler, inner_wire_count, i64::try_from(components).unwrap_or(i64::MAX))
                     && components_are_disjoint_pieces(topo, &components_vec)
                     && cut_safe
                     && intersect_safe
@@ -725,6 +728,28 @@ pub fn boolean(
                     );
                     return Ok(result);
                 }
+                // Which gate refused? Both acceptance paths are conjunctions,
+                // so the bare rejection below says nothing about the cause —
+                // and when `validate` is None the result is topologically fine
+                // and something else declined it.
+                log::debug!(
+                    "GFA reject detail {op:?}: euler={euler} euler_eff={euler_eff} \
+                     inner_wires={inner_wire_count} inner_shell_surplus={inner_shell_surplus} \
+                     euler_ok={euler_ok} open_shell_ok={open_shell_ok} \
+                     closed_manifold={closed_manifold} components={components} \
+                     cut_safe={cut_safe} intersect_safe={intersect_safe} \
+                     euler_multi_ok={} surplus={} bound={} disjoint={}",
+                    euler_balanced(
+                        euler,
+                        inner_wire_count,
+                        i64::try_from(components).unwrap_or(i64::MAX)
+                    ),
+                    euler - inner_wire_count,
+                    i64::try_from(components)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(2),
+                    components_are_disjoint_pieces(topo, &components_vec)
+                );
             }
             log::warn!(
                 "GFA result not accepted in {:.1}ms (faces={result_faces}, \
@@ -2525,6 +2550,68 @@ fn component_aabb_centre(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
     ))
 }
 
+/// Does the closed surface made of `faces` enclose `p`?
+///
+/// Ray-parity against the component's own tessellation. Read-only by design:
+/// building a temporary solid per component would add entities to an arena that
+/// never reclaims, which is the growth cliff fixed in #1237.
+///
+/// `watertight_ray_triangle_intersect` reports exactly one hit on a shared edge,
+/// so parity is meaningful across face boundaries. The direction is deliberately
+/// irrational so the ray does not graze a face boundary or lie in a face plane —
+/// the degeneracy that makes axis-aligned probes unreliable on the feature-plane
+/// intersections these pieces are full of. Returns `None` when the component
+/// cannot be tessellated, so callers can fall back rather than guess.
+fn component_encloses_point(
+    topo: &Topology,
+    faces: &[FaceId],
+    p: Point3,
+    deflection: f64,
+) -> Option<bool> {
+    // A sqrt-prime direction: irrational in every component, so the ray cannot
+    // lie in a face plane or run along an edge — the same generic-direction
+    // escape the ray-cast classifier uses for degenerate probes.
+    let dir = Vec3::new(2.0_f64.sqrt(), 3.0_f64.sqrt(), 5.0_f64.sqrt())
+        .normalize()
+        .ok()?;
+    let mut crossings = 0usize;
+    let mut any_triangle = false;
+    for &fid in faces {
+        let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
+        let pos = &mesh.mesh.positions;
+        for tri in mesh.mesh.indices.chunks_exact(3) {
+            let (a, b, c) = (
+                pos[tri[0] as usize],
+                pos[tri[1] as usize],
+                pos[tri[2] as usize],
+            );
+            any_triangle = true;
+            if let Some(hit) =
+                brepkit_math::ray_triangle::watertight_ray_triangle_intersect(p, dir, a, b, c)
+                && hit.t > 1e-9
+            {
+                crossings += 1;
+            }
+        }
+    }
+    any_triangle.then_some(crossings % 2 == 1)
+}
+
+/// Any vertex position on `faces`, for use as a probe point.
+fn any_vertex_of(topo: &Topology, faces: &[FaceId]) -> Option<Point3> {
+    for &fid in faces {
+        let face = topo.face(fid).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        if let Some(oe) = wire.edges().first()
+            && let Ok(edge) = topo.edge(oe.edge())
+            && let Ok(v) = topo.vertex(edge.start())
+        {
+            return Some(v.point());
+        }
+    }
+    None
+}
+
 fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
     let aabbs: Vec<(Point3, Point3)> = components
         .iter()
@@ -2567,16 +2654,67 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
         })
         .collect();
 
+    // Reject NESTING, not mere AABB overlap.
+    //
+    // Nesting is the hazard worth rejecting (a blob sitting inside another
+    // piece's cavity is not a disjoint union); side-by-side pieces are exactly
+    // what multi-region acceptance is for.
+    //
+    // Assume nothing about the components handed in. The acceptance gate calls
+    // this on a GFA result that has cleared only `euler_balanced` — which is
+    // genus-tolerant, and whose `closed_manifold` companion is a LATER conjunct
+    // in the same `&&` chain, not a precondition. The input-splitting paths
+    // call it on components of a raw operand no gate has examined at all. So
+    // "every piece is a closed manifold, hence disjoint-or-nested" is not
+    // available here; the ray-parity confirmation below earns the answer
+    // instead of inferring it.
+    //
+    // Overlap is the wrong predicate for that, because an AABB is only tight on
+    // axis-aligned geometry. Two ROTATED bars a clear distance apart each span
+    // the whole diagonal envelope, so their boxes interpenetrate and an
+    // overlap test calls them touching — which is why a kumiko lattice cut,
+    // whose members are diagonal, could never be accepted and fell back to the
+    // mesh path on every band (see
+    // `tests::rotated_separate_pieces_are_recognised_as_disjoint`). Containment
+    // is tight in the direction that matters: nesting implies it, and rotation
+    // does not manufacture it.
     let eps = 1e-7;
+    let contains = |(o_min, o_max): (Point3, Point3), (i_min, i_max): (Point3, Point3)| {
+        o_min.x() - eps <= i_min.x()
+            && o_min.y() - eps <= i_min.y()
+            && o_min.z() - eps <= i_min.z()
+            && o_max.x() + eps >= i_max.x()
+            && o_max.y() + eps >= i_max.y()
+            && o_max.z() + eps >= i_max.z()
+    };
+    // AABB containment is only the PRE-FILTER. It is necessary for nesting but
+    // far from sufficient: a ring's box contains the box of a separate piece
+    // sitting in its HOLE, and a lattice is full of rings. So a suspect pair
+    // gets a real ray-parity test against the enclosing candidate's own surface,
+    // and only genuine enclosure rejects. If the probe cannot be evaluated the
+    // pair falls back to the conservative answer.
     for i in 0..aabbs.len() {
         for j in (i + 1)..aabbs.len() {
-            let (i_min, i_max) = aabbs[i];
-            let (j_min, j_max) = aabbs[j];
-            let x_overlap = i_min.x().max(j_min.x()) + eps < i_max.x().min(j_max.x());
-            let y_overlap = i_min.y().max(j_min.y()) + eps < i_max.y().min(j_max.y());
-            let z_overlap = i_min.z().max(j_min.z()) + eps < i_max.z().min(j_max.z());
-            if x_overlap && y_overlap && z_overlap {
+            let (outer, inner) = if contains(aabbs[i], aabbs[j]) {
+                (i, j)
+            } else if contains(aabbs[j], aabbs[i]) {
+                (j, i)
+            } else {
+                continue;
+            };
+            let (o_min, o_max) = aabbs[outer];
+            let diag = ((o_max.x() - o_min.x()).powi(2)
+                + (o_max.y() - o_min.y()).powi(2)
+                + (o_max.z() - o_min.z()).powi(2))
+            .sqrt();
+            let deflection = (diag / 200.0).max(1e-4);
+            let Some(probe) = any_vertex_of(topo, &components[inner]) else {
                 return false;
+            };
+            match component_encloses_point(topo, &components[outer], probe, deflection) {
+                Some(true) => return false,
+                Some(false) => {}
+                None => return false,
             }
         }
     }
@@ -2753,18 +2891,25 @@ fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate:
     Ok(count)
 }
 
-/// Genus-aware Euler balance for a closed orientable surface with holed faces.
+/// Genus-aware Euler balance for `components` closed orientable surfaces with
+/// holed faces.
 ///
-/// Euler-Poincare for a closed surface of genus `g`: `V - E + F - L = 2(1 - g)`,
-/// so the inner-wire surplus `euler - L` equals `2 - 2g` and is valid when it
-/// is an even number no greater than 2: `2` for genus 0, `0` for genus 1, and
-/// negative even values for genus >= 2 (e.g. a thin wall pierced by N
-/// through-holes has genus N). Odd or > 2 surpluses indicate a miscounted
-/// shell. Callers must pair this with a closed-manifold check — the relation
-/// only holds for closed surfaces.
-const fn euler_balanced(euler: i64, inner_wires: i64) -> bool {
+/// Euler-Poincare over `C` closed components of total genus `G`:
+/// `V - E + F - L = 2C - 2G`, so the inner-wire surplus `euler - L` is valid
+/// when it is even and no greater than `2C` — `2C` for all-genus-0 pieces, less
+/// by two per unit of genus (a thin wall pierced by N through-holes has genus
+/// N). Odd or `> 2C` surpluses indicate a miscounted shell.
+///
+/// The `2C` bound matters as much as the parity: a multi-region result is not
+/// obliged to be a bag of spheres. A kumiko lattice cut yields RINGS, and a
+/// closed loop of material is genus 1 (`chi = 0`), so demanding `euler == 2C`
+/// exactly rejected every lattice result and forced it onto the mesh path.
+///
+/// Callers must pair this with a closed-manifold check — the relation only holds
+/// for closed surfaces.
+const fn euler_balanced(euler: i64, inner_wires: i64, components: i64) -> bool {
     let surplus = euler - inner_wires;
-    surplus <= 2 && surplus % 2 == 0
+    surplus <= components.saturating_mul(2) && surplus % 2 == 0
 }
 
 /// Count edge uses across ALL shells of a solid (outer + inner cavity
