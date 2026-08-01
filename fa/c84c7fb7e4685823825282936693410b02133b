@@ -1,0 +1,27 @@
+crates/algo/src/builder/builder_solid.rs
+  s_4d29bdcd922200::t_0e9c8fd0169d68 1470-1491
+  s_4d29bdcd922200::t_f5a82f922825e8 3028-3066
+crates/operations/src/shell_op.rs
+  s_4d29bdcd922200::t_9b7e16209168b6 711
+  s_4d29bdcd922200::t_6e56be61bffb09 192-210,219-225
+  s_4d29bdcd922200::t_74a5864344ee5b 684-710,712
+crates/operations/src/shell_op/tests.rs
+  s_4d29bdcd922200::t_ba64b408156e6c 865-934
+  s_4d29bdcd922200::t_183330770ce1f3 864,935-983
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "fac84c7fb7e4685823825282936693410b02133b",
+  "prompts": {},
+  "sessions": {
+    "s_4d29bdcd922200": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e911a193-bda2-4dfa-8b36-a1ed3a295646",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
