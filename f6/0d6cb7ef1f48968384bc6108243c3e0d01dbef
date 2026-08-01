@@ -1,0 +1,29 @@
+crates/io/examples/replay_pair.rs
+  s_4d29bdcd922200::t_5ee7402e1803c2 80
+  s_4d29bdcd922200::t_a75d86d348795f 1-79,81-90
+  s_4d29bdcd922200::t_7461ede56c6bae 91-95
+crates/io/tests/thickwall_sharp_cavity_fuse_inmem.rs
+  s_4d29bdcd922200::t_6df0c51a67af8e 1-135
+.claude/skills/roadmap/SKILL.md
+  s_4d29bdcd922200::t_ffa914ad792efd 1840-1863
+crates/io/tests/data/thickwall_socket_assembly.bin
+  s_4d29bdcd922200::t_014e88c7a3050a 1
+crates/io/tests/data/thickwall_sharp_cavity_body.bin
+  s_4d29bdcd922200::t_014e88c7a3050a 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "f60d6cb7ef1f48968384bc6108243c3e0d01dbef",
+  "prompts": {},
+  "sessions": {
+    "s_4d29bdcd922200": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e911a193-bda2-4dfa-8b36-a1ed3a295646",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
