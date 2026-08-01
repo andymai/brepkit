@@ -1,0 +1,27 @@
+crates/io/tests/data/kumiko_corner_sixtool_cutter.bin
+  s_4d29bdcd922200::t_32fc92b14bd0ec 1
+crates/algo/src/builder/classify_2d.rs
+  s_4d29bdcd922200::t_8c23727c4f7a96 303-308,310-314,317-319,323-326
+  s_4d29bdcd922200::t_e7f7d6a9ddba6d 107-116,118
+  s_4d29bdcd922200::t_ff17e49d137ac1 302,309,315-316,320-322,327-344
+  s_4d29bdcd922200::t_444bb105883c6e 58
+  s_4d29bdcd922200::t_82b3f43b1475d8 117
+crates/io/tests/kumiko_corner_window_inmem.rs
+  s_4d29bdcd922200::t_e7ab0e843893c1 289-338
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "1d41afea21c5702e4ea5f8221bd619ba2aba62fa",
+  "prompts": {},
+  "sessions": {
+    "s_4d29bdcd922200": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e911a193-bda2-4dfa-8b36-a1ed3a295646",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
