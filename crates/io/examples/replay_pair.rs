@@ -82,6 +82,26 @@ fn main() {
         _ => brepkit_algo::bop::BooleanOp::Fuse,
     };
 
+    // POINT_IN=x,y,z classifies a point against BOTH operands with the
+    // independent operations-level oracle. For a Fuse, a face is needed
+    // wherever one side of a surface is inside the union and the other is not.
+    if let Ok(spec) = std::env::var("POINT_IN") {
+        let c: Vec<f64> = spec
+            .split(',')
+            .filter_map(|t| t.trim().parse().ok())
+            .collect();
+        if c.len() == 3 {
+            let p = brepkit_math::vec::Point3::new(c[0], c[1], c[2]);
+            for (label, sid) in [("A", a), ("B", b)] {
+                match brepkit_operations::classify::classify_point(&topo, sid, p, 0.01, 1e-7) {
+                    Ok(v) => println!("  POINT_IN {label}: {v:?}"),
+                    Err(e) => println!("  POINT_IN {label}: ERR {e}"),
+                }
+            }
+        }
+        return;
+    }
+
     // TOOLS=<comma-separated paths> replays a compound_cut, which is how the
     // kumiko wrap chain is actually built; a pairwise replay cannot reach it.
     if let Ok(list) = std::env::var("TOOLS") {

@@ -239,13 +239,27 @@ plane), so it can only be a trimmed piece of an INPUT face; a boolean emits noth
 uncovered 0.000000. Scanning ALL source faces, only one fails to tile and by 8e-6, i.e. fan-
 triangulation noise. So every source face is fully covered and the quad is not a missing piece of
 any of them.
-So both natural readings are now dead: the sections are not lost at FF (refuted #1) and the faces
-are not under-partitioned (refuted #2). THE REMAINING HYPOTHESIS, and the one to test next: the
-67-face lump may be a SPURIOUS selection rather than a real chunk missing its cap — the guard exists
-because dropping a real lump deletes material, but if this lump should not have been selected at all
-then its openness is a symptom. Test by classifying interior points of the lump's faces against both
-operands with the independent `classify_point` oracle: if the lump is genuinely outside the union,
-the defect is in selection, not in face creation.
+**AND THE "MISSING FACE" FRAMING IS ITSELF OVERTURNED (refuted #3, the important one).** Classifying
+either side of the quad with the independent operations oracle (`POINT_IN` on `replay_pair`, now
+wired; instrument verified — a far-away point reads Outside/Outside):
+
+| point | vs A | vs B |
+|---|---|---|
+| quad + normal | **Inside** | Outside |
+| quad − normal | **Inside** | Inside |
+| lump interior (36.257,-40.550,30.530) | **Inside** | Outside |
+
+Both sides of the quad are INSIDE the union, so **no face belongs there at all** — one would be an
+internal membrane. And the lump's own interior is inside operand A, i.e. the 67 faces enclose
+material A already accounts for. So this was never a missing face: **the lump is an internal
+artifact and dropping it is the CORRECT outcome.** The `>= 4 faces` fail-safe is misfiring — it
+exists because dropping a real lump silently deletes material (the lite fused-foot: 72 faces,
+~2700 units^3), and it cannot currently tell that case from this one.
+PROPOSED DISCRIMINATOR, to try next and measure against the foils: a growth shell whose INTERIOR
+classifies inside one of the operands is not new boundary and can be dropped; the fused-foot lump
+was genuinely outside both. Note `brepkit-algo` cannot call `operations::classify_point` (layer
+rules) and must use its own `classifier/ray_cast.rs`, and that an OPEN shell cannot be classified
+reliably — classify against the closed OPERANDS, as the measurements above do.
 CAUTION on `BK_SUBFACE_BOX`: it tests face VERTICES against the box, so a face whose corners sit
 outside will not register; do not conclude a face is absent from that probe alone (the quad's own
 corners ARE its vertices, which is why it is a valid conclusion here).
