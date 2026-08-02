@@ -1260,7 +1260,12 @@ fn log_open_growth_shell(
     // the lump entirely). A legitimate union boundary face has one side inside
     // the union and the other outside; a face with BOTH sides on the same side
     // is an internal membrane and should not be in the result.
-    if std::env::var("BK_OPEN_SHELL_FACEPTS").is_ok() {
+    if let Ok(faceopt) = std::env::var("BK_OPEN_SHELL_FACEPTS") {
+        // Offset distance is tunable because a fixed one is not safe on this
+        // geometry: too small and the sample lands ON a coincident operand
+        // surface (OnBoundary, useless), too large and it leaves the local
+        // feature entirely. Read two distances and keep only agreeing verdicts.
+        let d: f64 = faceopt.trim().parse().unwrap_or(0.02);
         for &fid in gs.iter().take(24) {
             let Ok(f) = topo.face(fid) else { continue };
             let Some(p) = topo.wire(f.outer_wire()).ok().and_then(|w| {
@@ -1280,7 +1285,6 @@ fn log_open_growth_shell(
             if f.is_reversed() {
                 n = -n;
             }
-            let d = 0.02;
             log::debug!(
                 "OPENSHELL facept {fid:?} plus={:.4},{:.4},{:.4} minus={:.4},{:.4},{:.4}",
                 p.x() + n.x() * d,

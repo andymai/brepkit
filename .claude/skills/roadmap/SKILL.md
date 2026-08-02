@@ -296,13 +296,19 @@ and the MINUS side splits:
 | Outside A / Inside B | 6 | legitimate union boundary |
 | Inside / Inside | 2 | legitimate |
 | OnBoundary A / Inside B | 1 | legitimate |
-| OnBoundary A / Outside B | 7 | ambiguous: 0.02 lands ON A's surface, retry with a larger offset |
+| OnBoundary A / Outside B | 7 | COINCIDENT with A's surface — see below, not an artifact |
+
+**Offset-stability check (0.02 / 0.05 / 0.15) settles both groups.** The `Outside/Outside` count is
+**8 at every offset** — an offset-independent fact, not a sampling accident. And the `OnBoundary A`
+rows persist at 0.15 too, which is far past any tolerance: those faces are genuinely COINCIDENT with
+operand A's surface rather than ambiguously sampled. So the stable decomposition of the 24 sampled
+faces is roughly **8 bounding nothing + 7 coincident with A + 7 legitimate boundary**.
 
 So the lump is neither "all real material" (which the guard assumes) nor "all internal artifact"
-(the withdrawn claim): roughly a third of its faces bound empty space on both sides. That is
-consistent with the quad result — no face belongs there — and it means the guard is refusing to drop
-a shell that is partly junk. A discriminator therefore cannot be a single whole-lump verdict; it has
-to be per-face, and the 7 OnBoundary rows must be resolved first or they will bias any threshold.
+(the withdrawn claim): a third of its faces bound empty space on both sides, and another third sit
+on an operand surface — which puts the coincident-face/same-domain machinery in scope as a likely
+contributor. A discriminator therefore cannot be a single whole-lump verdict; it has to be per-face,
+and it now has a measured signature to key on.
 CAUTION on `BK_SUBFACE_BOX`: it tests face VERTICES against the box, so a face whose corners sit
 outside will not register; do not conclude a face is absent from that probe alone (the quad's own
 corners ARE its vertices, which is why it is a valid conclusion here).
