@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785395023027,
+  "lastUpdate": 1785633300762,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13391,6 +13391,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21816791,
             "range": "± 68233",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dea642fb745a6825864310919607c38905705e9c",
+          "message": "fix(operations): collapse a shell fillet the thickness swallows to a sharp corner (#1243)\n\n## What\n\n`shell()` silently dropped a corner cylinder whose radius the thickness\nexceeded. The `new_radius > tol` arm has no `else`, so no inner face was\nemitted and no error raised — while the `Sphere` arm directly below\nerrors for the same condition. The two neighbouring walls then kept\ntheir original *tangent* extent instead of meeting, overshooting each\nother by `thickness − radius`.\n\nOn a gridfinity bin at `wallThickness` 3.8 against a 3.75 corner radius\nthat leaves a 0.05 mm overshoot joined by a 0.07 mm diagonal. The body\nstays **closed and manifold**, so nothing complains — but the next fuse\naborts with `open hole shell with 9 faces`, drops to the mesh fallback,\nand that fallback's open output poisons every later fuse in the export.\n\nA swallowed fillet collapses to a sharp edge where the two neighbouring\noffset surfaces meet, so each vertex of the collapsing face now\ncontributes both of its extreme normals and the existing miter resolves\nit.\n\n## Measured\n\nExported STL boundary edges, 1×1×10 halfSockets bin:\n\n| wallThickness | 3.6 | 3.7 | 3.8 | 3.9 | 4.0 |\n|---|---|---|---|---|---|\n| before | 0 | 0 | 149 | 159 | 160 |\n| after | 0 | 0 | **23** | **19** | **17** |\n\n2×2 cases: 832 → **20** (wall 4) and 898 → **20** (wall 6).\n\nA large improvement, **not a closure** — a residual remains above the\ncorner radius, tracked by the shipped fixture.\n\n## Blast radius\n\nThe gate only fires when `thickness` reaches the fillet radius. Ordinary\nwall thicknesses (1.2–3.7 here) take the unchanged path, which is why\neverything at or below 3.7 measures identical before and after.\n\n## Also included\n\n- **2D interior sampler**: the edge-midpoint fallback accepted a\ncandidate that a *grazing* ray placed exactly on the boundary (2.7e-15),\nwhile the centroid branch above it already required clearance. Unit test\npins the verbatim f64 literals — rounding them stops the case\nreproducing.\n- Two `#[ignore]`d ready-repro fixtures for residuals this exposes, each\nwith a passing guard test that validates the operands (clean, manifold,\noutward — a magnitude-only volume cannot see an inverted shell).\n- `replay_pair` example for replaying a captured boolean pair or\n`compound_cut` natively.\n\n## Verification\n\n- Full workspace **2658 passed / 0 failed** (`--exclude brepkit-render`,\nwhose `compute_mesh_lod` SIGSEGVs intermittently and masks later suites)\n- `cargo test -p brepkit-wasm --lib gridfinity` 27/27\n- Calibrated foils green: honeycomb, snapclip deepened-notch,\ngroove-mouth, lite-pad-graze, junction-disc, a1corner-nubfuse\n- clippy `-D warnings`, fmt, and `check-boundaries.sh` clean\n- Both engine fixes differentially verified (each test fails with the\nfix disabled, at the exact production value)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `shell()` to collapse a corner fillet when the wall thickness\nreaches the fillet radius, producing a sharp corner so neighbouring\noffsets meet cleanly. Prevents overshoot and analytic fuse aborts, with\na large drop in exported STL boundary edges.\n\n- **Bug Fixes**\n- Shell: when `thickness >= radius` on a convex corner, collapse the\nfillet to a sharp edge by feeding each vertex the face’s two extreme\nnormals so the miter intersects the neighbouring offsets. Previously the\ninner face was dropped and walls overshot by `thickness − radius`,\ncausing “open shell” aborts and mesh fallbacks.\n- 2D interior sampler: require midpoint clearance from the boundary to\navoid grazing-ray midpoints landing exactly on the loop edge.\n- Only triggers at the radius threshold; normal wall ranges stay\nunchanged. Measured STL boundary edges at 3.8/3.9/4.0 mm drop from\n149/159/160 to 23/19/17; 2×2 cases 832/898 → 20.\n\n- **New Features**\n- `replay_pair` example in `brepkit-io` for replaying captured boolean\npairs or `compound_cut`.\n- Two ready-repro fixtures (ignored tests) for the exposed residuals,\nplus guards that validate operands are clean, manifold, and outward.\n\n<sup>Written for commit d7e7c441e0dd3631be63205acb3b8d1933e0cbe1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1243?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-01T18:12:31-07:00",
+          "tree_id": "419b75b4a218f7b9b49be72b933b2b1e18a652de",
+          "url": "https://github.com/andymai/brepkit/commit/dea642fb745a6825864310919607c38905705e9c"
+        },
+        "date": 1785633299309,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 828074,
+            "range": "± 17760",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 920600,
+            "range": "± 12864",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11879,
+            "range": "± 98",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663508,
+            "range": "± 14937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22043237,
+            "range": "± 112834",
             "unit": "ns/iter"
           }
         ]
