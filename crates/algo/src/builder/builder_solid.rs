@@ -1194,6 +1194,40 @@ fn log_open_growth_shell(
             }
         }
     }
+    // Vertex centroid of the whole lump. A BBOX centre is not a usable interior
+    // sample for a non-convex shell (it can sit outside the lump entirely), and
+    // reading one as "the lump's interior" is how a classification probe
+    // silently answers about the wrong region.
+    let mut c = [0.0_f64; 3];
+    let mut nv = 0.0_f64;
+    for &fid in gs {
+        let Ok(f) = topo.face(fid) else { continue };
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            let Ok(w) = topo.wire(wid) else { continue };
+            for oe in w.edges() {
+                let Ok(e) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                for vid in [e.start(), e.end()] {
+                    if let Ok(v) = topo.vertex(vid) {
+                        let p = v.point();
+                        c[0] += p.x();
+                        c[1] += p.y();
+                        c[2] += p.z();
+                        nv += 1.0;
+                    }
+                }
+            }
+        }
+    }
+    if nv > 0.0 {
+        log::debug!(
+            "growth shell OPENSHELL centroid ({:.4},{:.4},{:.4})",
+            c[0] / nv,
+            c[1] / nv,
+            c[2] / nv
+        );
+    }
     log::debug!(
         "growth shell OPENSHELL faces={} signed_volume={:.6}",
         gs.len(),

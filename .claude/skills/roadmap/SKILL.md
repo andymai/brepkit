@@ -247,14 +247,27 @@ wired; instrument verified — a far-away point reads Outside/Outside):
 |---|---|---|
 | quad + normal | **Inside** | Outside |
 | quad − normal | **Inside** | Inside |
-| lump interior (36.257,-40.550,30.530) | **Inside** | Outside |
 
 Both sides of the quad are INSIDE the union, so **no face belongs there at all** — one would be an
-internal membrane. And the lump's own interior is inside operand A, i.e. the 67 faces enclose
-material A already accounts for. So this was never a missing face: **the lump is an internal
-artifact and dropping it is the CORRECT outcome.** The `>= 4 faces` fail-safe is misfiring — it
-exists because dropping a real lump silently deletes material (the lite fused-foot: 72 faces,
-~2700 units^3), and it cannot currently tell that case from this one.
+internal membrane. That much is solid: the samples sit immediately either side of a real boundary,
+offset along its normal.
+
+**CORRECTION, and the method lesson behind it.** An earlier pass added "and the lump's own interior
+is inside A", concluding the whole lump is an internal artifact. That is NOT established and the
+claim is withdrawn. It rested on a BBOX-CENTRE sample; adding a vertex-CENTROID sample (now printed
+by the `BK_OPEN_SHELL` probe) contradicts it outright:
+
+| pair | bbox centre | vertex centroid |
+|---|---|---|
+| 1+2 | Inside A | **Outside / Outside** |
+| 2+3 | Outside / Outside | **Inside A** |
+| 3+4 | Outside / Inside B | Outside / Inside B |
+
+**For a non-convex OPEN shell neither a bbox centre nor a vertex centroid is a valid interior
+sample** — both can land outside the lump, and here they disagree on two pairs out of three. Only
+points taken adjacent to an actual face and offset along its normal mean anything. So the standing,
+supported finding is the narrow one: no face belongs at the quad, hence the faces owning those four
+free edges are what needs explaining. Whether the lump as a whole is spurious is OPEN.
 PROPOSED DISCRIMINATOR: a growth shell whose INTERIOR classifies inside one of the operands is not
 new boundary and can be dropped; the fused-foot lump was genuinely outside both.
 
@@ -271,12 +284,10 @@ to prevent a silent material-deleting regression.
 **SYSTEMATIC BUT PAIR-SPECIFIC.** Within op29's tool merges, `1+2` (67 faces), `2+3` (33) and `3+4`
 (65) all abort while `1+3` and `1+4` fuse clean (F=872 / F=1024, free=0). So it is neither a one-off
 nor universal — it depends on the pair.
-**EVIDENCE LIMIT, stated so nobody over-reads it:** the internal-artifact conclusion is established
-only for the `1+2` lump, where two independent probes agree (both sides of the quad AND the lump
-interior read Inside A). For `2+3` (Outside/Outside) and `3+4` (Outside/Inside B) only a BBOX-CENTRE
-point was tested, and a bbox centre need not lie inside a non-convex shell — those two readings are
-inconclusive, not evidence of a different mechanism. Before generalizing, sample a genuinely
-interior point per lump.
+**EVIDENCE LIMIT:** see the correction above — the internal-artifact conclusion is WITHDRAWN. No
+whole-lump classification currently stands, because no valid interior sample has been taken for any
+of the three lumps. Getting one needs a point adjacent to a face of the lump, offset along that
+face's normal, not a centre-of-mass shortcut.
 CAUTION on `BK_SUBFACE_BOX`: it tests face VERTICES against the box, so a face whose corners sit
 outside will not register; do not conclude a face is absent from that probe alone (the quad's own
 corners ARE its vertices, which is why it is a valid conclusion here).
