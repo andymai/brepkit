@@ -81,11 +81,11 @@ Quick reference — find the right file for any task:
 | 3D curves (Line, Circle, Ellipse, Parabola, Hyperbola) | `curves.rs` |
 | 2D curves (Line2D, Circle2D, Ellipse2D) | `curves2d.rs` |
 | Analytic surfaces (Cylinder, Cone, Sphere, Torus) | `surfaces.rs` |
-| Surface-surface intersection | `nurbs/intersection.rs` |
+| Surface-surface intersection | `nurbs/intersection/` (mod, surface_marching, surface_seeding, curve_surface, plane, line, chaining, tests) |
 | Analytic-analytic intersection | `analytic_intersection.rs` |
 | AABB / bounding boxes | `aabb.rs` |
 | BVH (bounding volume hierarchy) | `bvh.rs` |
-| CDT (constrained Delaunay) | `cdt.rs` |
+| CDT (constrained Delaunay) | `cdt/` (mod, insert, locate, constraints, adjacency, tests) |
 | Convex hull | `convex_hull.rs` |
 | Filtered exact predicates | `filtered.rs` |
 | Float tolerance | `tolerance.rs` |
@@ -150,7 +150,7 @@ Quick reference — find the right file for any task:
 | Pave block splitting + edge creation | `pave_filler/make_blocks.rs`, `make_split_edges.rs` |
 | FaceInfo population | `pave_filler/fill_face_info.rs` |
 | Builder (face splitting + assembly) | `builder/mod.rs`, `builder/assemble.rs` |
-| Face splitting (UV-space) | `builder/face_splitter.rs`, `builder/classify_2d.rs` |
+| Face splitting (UV-space) | `builder/face_splitter/` (mod, containment, conversion, edge_splitting, sampling, special_cases), `builder/classify_2d.rs` |
 | PCurve computation | `builder/pcurve_compute.rs` |
 | Plane frame (3D↔UV projection) | `builder/plane_frame.rs` |
 | Wire loop reconstruction | `builder/wire_builder.rs` |
@@ -309,6 +309,8 @@ Quick reference — find the right file for any task:
 | Blend v2 wrappers (fillet/chamfer) | `blend_ops.rs` |
 | Offset v2 (delegates to brepkit-offset) | `offset_v2.rs` |
 | Shared winding utilities | `winding.rs` |
+| Edge projection with hidden-line removal | `projection.rs` |
+| Shared loft/sweep/pipe/revolve end caps | `cap.rs` |
 
 ### L3: io (`crates/io/src/`)
 | Task | File(s) |
@@ -320,6 +322,17 @@ Quick reference — find the right file for any task:
 | OBJ read/write | `obj/reader.rs`, `obj/writer.rs` |
 | PLY read/write | `ply/reader.rs`, `ply/writer.rs` |
 | glTF read/write | `gltf/reader.rs`, `gltf/writer.rs` |
+
+### L4: render (`crates/render/src/`)
+| Task | File(s) |
+|------|---------|
+| Public API, `RenderOpts`, `RenderOutput` | `lib.rs` |
+| Camera and view/projection matrices | `camera.rs` |
+| Solid → GPU vertex/index/edge buffers | `mesh.rs` |
+| wgpu device setup, render passes, readback | `pipeline.rs` |
+| GPU compute mesher for analytic quadrics | `compute_mesh.rs` |
+| Interactive viewer (feature = `window`) | `viewer.rs` |
+| Error types | `error.rs` |
 
 ### L4: wasm (`crates/wasm/src/`)
 | Task | File(s) |
@@ -515,14 +528,20 @@ Pattern: see `obj/` module (simplest), `step/` (most complex)
 
 1. **Create module** `io/src/format/mod.rs`, `reader.rs`, `writer.rs`
 2. **Add module** to `io/src/lib.rs`
-3. **Writer signature**: `pub fn write_format(topo: &Topology, solid_id: SolidId) -> Result<Vec<u8>, IoError>`
-4. **Reader signature**: `pub fn read_format(topo: &mut Topology, data: &[u8]) -> Result<SolidId, IoError>`
+3. **Writer signature**: text formats return `String`, binary formats return `Vec<u8>`:
+   - B-Rep, text: `pub fn write_step(topo: &Topology, solids: &[SolidId]) -> Result<String, IoError>`
+   - Mesh, binary: `pub fn write_ply(..., deflection: f64) -> Result<Vec<u8>, IoError>`
+4. **Reader signature**: the input comes first, `topo` second, and B-Rep readers return
+   every solid in the file:
+   - B-Rep: `pub fn read_step(input: &str, topo: &mut Topology) -> Result<Vec<SolidId>, IoError>`
+   - Mesh formats pair a `read_ply(data) -> TriangleMesh` with a
+     `read_ply_solid(..) -> SolidId` that also needs `&mut Topology`
 5. **Add WASM bindings** `importFormat` / `exportFormat` in `bindings/io.rs`
 6. **Add to `executeBatch` dispatch** in `bindings/batch.rs` if commonly used
 
 ### Recipe 3: Add a new operation
 
-Pattern: see `extrude.rs` (basic), `boolean.rs` (complex)
+Pattern: see `extrude.rs` (basic), `boolean/` (complex)
 
 1. **Create file** `operations/src/op_name.rs`
 2. **Define function**: `pub fn op_name(topo: &mut Topology, ...) -> Result<SolidId, OperationsError>`
@@ -572,6 +591,7 @@ cargo clippy --all-targets -- -D warnings  # Lint
 cargo fmt --all                            # Format
 cargo build -p brepkit-wasm --target wasm32-unknown-unknown  # WASM
 ./scripts/check-boundaries.sh              # Verify layer deps
+./scripts/check-doc-paths.sh               # Verify doc file paths still resolve
 ```
 
 ### Profiling
