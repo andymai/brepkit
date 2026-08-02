@@ -1,0 +1,21 @@
+crates/algo/src/builder/builder_solid.rs
+  s_4d29bdcd922200::t_cc4a54495870f5 1263-1268
+.claude/skills/roadmap/SKILL.md
+  s_4d29bdcd922200::t_1514664b3cf921 299-305,308-311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "3c18ec87a2ceb3552c08521ad53c81814576a8a5",
+  "prompts": {},
+  "sessions": {
+    "s_4d29bdcd922200": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e911a193-bda2-4dfa-8b36-a1ed3a295646",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
