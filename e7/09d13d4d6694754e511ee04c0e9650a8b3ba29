@@ -1,0 +1,33 @@
+README.md
+  s_b074f95655b0c0::t_c63cfcda981c31 151-160
+  s_b074f95655b0c0::t_f98834e69b9870 162
+  s_b074f95655b0c0::t_6bb464c1482632 161
+crates/operations/src/fillet/tests.rs
+  s_b074f95655b0c0::t_7c5c68d7648198 239-257
+  s_b074f95655b0c0::t_2bdb0f454d3469 258,269-284,1196,1198,1392,1396
+crates/operations/benches/cad_operations.rs
+  s_b074f95655b0c0::t_2bdb0f454d3469 29,295-298,300,311-326,675
+crates/operations/src/fillet/rolling_ball.rs
+  s_b074f95655b0c0::t_2bdb0f454d3469 7,1562-1583,1585-1620,2006-2013,2238-2249,2417-2421,2423-2430,2432-2437
+  s_b074f95655b0c0::t_e370d2d0ce00b4 1584,2422
+  s_b074f95655b0c0::t_31b0de94a436cb 2431
+  s_b074f95655b0c0::t_9d1dcfddfc4a9f 2438
+crates/operations/src/query.rs
+  s_b074f95655b0c0::t_2bdb0f454d3469 194-195,199,202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "e709d13d4d6694754e511ee04c0e9650a8b3ba29",
+  "prompts": {},
+  "sessions": {
+    "s_b074f95655b0c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b37ad85-24e0-4014-a18b-3e25edc2183a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
