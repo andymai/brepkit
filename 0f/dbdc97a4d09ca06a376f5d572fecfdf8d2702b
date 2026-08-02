@@ -1,0 +1,28 @@
+.claude/skills/roadmap/SKILL.md
+  s_4d29bdcd922200::t_b3def00313157c 189-201,205-206
+crates/io/tests/kumiko_lattice_fuse_inmem.rs
+  s_4d29bdcd922200::t_01fdbaad5ac0c2 1-109
+crates/io/tests/data/kumiko_lattice_band_a.bin
+  s_4d29bdcd922200::t_1e3ced0dbf1dcd 1
+crates/io/tests/data/kumiko_lattice_band_b.bin
+  s_4d29bdcd922200::t_1e3ced0dbf1dcd 1
+crates/io/examples/replay_pair.rs
+  s_4d29bdcd922200::t_fc513bf7541e92 85-110
+  s_4d29bdcd922200::t_5e5e03e2a05197 111-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "0fdbdc97a4d09ca06a376f5d572fecfdf8d2702b",
+  "prompts": {},
+  "sessions": {
+    "s_4d29bdcd922200": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e911a193-bda2-4dfa-8b36-a1ed3a295646",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
