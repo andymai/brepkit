@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785633300762,
+  "lastUpdate": 1785633701774,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13445,6 +13445,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22043237,
             "range": "± 112834",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7189209dc850c50729ec3a6d0280b377f3b50494",
+          "message": "chore(main): release 2.128.8 (#1244)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.8](https://github.com/andymai/brepkit/compare/v2.128.7...v2.128.8)\n(2026-08-02)\n\n\n### Bug Fixes\n\n* **operations:** collapse a shell fillet the thickness swallows to a\nsharp corner ([#1243](https://github.com/andymai/brepkit/issues/1243))\n([dea642f](https://github.com/andymai/brepkit/commit/dea642fb745a6825864310919607c38905705e9c))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.8 for `brepkit-wasm` with a fix to shell fillet behavior.\nPrevents fillets from collapsing into a sharp corner when shell\nthickness swallows the fillet, improving geometry robustness.\n\n<sup>Written for commit db7ea96da9ad6044bac9f8bba6ea0abb37e40bf0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1244?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-02T01:19:31Z",
+          "tree_id": "31e8ec28d103251b2e00663e6f6adf1a2bd8eb12",
+          "url": "https://github.com/andymai/brepkit/commit/7189209dc850c50729ec3a6d0280b377f3b50494"
+        },
+        "date": 1785633700554,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 679701,
+            "range": "± 12325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 734682,
+            "range": "± 924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10130,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 512073,
+            "range": "± 3062",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17802974,
+            "range": "± 73060",
             "unit": "ns/iter"
           }
         ]
