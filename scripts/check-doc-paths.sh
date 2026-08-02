@@ -13,7 +13,8 @@ set -euo pipefail
 
 DOCS=(
   "CLAUDE.md"
-  .claude/skills/*/SKILL.md
+  .claude/skills/*.md
+  .claude/skills/*/*.md
 )
 
 # Paths that do not resolve on main by design.
@@ -25,6 +26,9 @@ ALLOWLIST=(
   # records as must-not-ship. Delete this entry if that branch ever lands.
   "crates/io/tests/kumiko_corner_window_inmem.rs"
   "kumiko_corner_window_inmem.rs"
+  # Named by fillet-blend/reference.md as a pass to design, not existing code.
+  # That paragraph states outright that no such file exists.
+  "reconcile.rs"
 )
 
 FAIL=0

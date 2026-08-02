@@ -29,8 +29,8 @@ layers below it, never above or sideways.
 | `brepkit-math` | L0 | External crates only |
 | `brepkit-geometry` | L1 | `brepkit-math` |
 | `brepkit-topology` | L1 | `brepkit-math` |
-| `brepkit-algo` | L2 | `math`, `topology`, `geometry` |
-| `brepkit-blend` | L2 | `math`, `topology`, `geometry` |
+| `brepkit-algo` | L2 | `math`, `topology` |
+| `brepkit-blend` | L2 | `math`, `topology` |
 | `brepkit-check` | L2 | `math`, `topology`, `geometry` |
 | `brepkit-heal` | L2 | `math`, `topology`, `geometry` |
 | `brepkit-offset` | L2 | `math`, `topology`, `geometry` |

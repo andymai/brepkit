@@ -1,7 +1,7 @@
 //! Pins the Rust example in README.md so an API change cannot silently rot it.
 //!
-//! Keep the body byte-identical to the README fence. If this test needs an edit,
-//! the README needs the same edit.
+//! The calls and their arguments mirror the README fence; the assertions below
+//! are extra. If a call or argument here has to change, change the README too.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
