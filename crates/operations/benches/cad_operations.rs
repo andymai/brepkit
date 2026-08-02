@@ -26,7 +26,7 @@ use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::copy::copy_solid;
 #[allow(deprecated)]
-use brepkit_operations::fillet::fillet;
+use brepkit_operations::fillet::{fillet, fillet_rolling_ball};
 use brepkit_operations::measure;
 use brepkit_operations::pattern;
 use brepkit_operations::primitives;
@@ -292,15 +292,34 @@ fn bench_box_chamfer_all(c: &mut Criterion) {
     });
 }
 
-/// `box(20,20,20)` + fillet all edges r=1.
+/// `box(20,20,20)` + fillet all edges r=1, flat-bevel engine.
+///
+/// This is NOT the engine the `fillet` JS binding selects; see
+/// `bench_box_fillet_all_rolling_ball` for that one.
 fn bench_box_fillet_all(c: &mut Criterion) {
-    c.bench_function("box+fillet", |b| {
+    c.bench_function("box+fillet (bevel)", |b| {
         b.iter(|| {
             let mut topo = Topology::new();
             let solid = primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
             let edges = collect_edges(&topo, solid);
             #[allow(deprecated)]
             black_box(fillet(&mut topo, solid, &edges, 1.0).unwrap());
+        });
+    });
+}
+
+/// `box(20,20,20)` + fillet all edges r=1, rolling-ball engine.
+///
+/// `try_fillet` tries rolling-ball first and accepts it whenever the shell
+/// closes, so this is what the public `fillet` binding actually costs.
+fn bench_box_fillet_all_rolling_ball(c: &mut Criterion) {
+    c.bench_function("box+fillet", |b| {
+        b.iter(|| {
+            let mut topo = Topology::new();
+            let solid = primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+            let edges = collect_edges(&topo, solid);
+            #[allow(deprecated)]
+            black_box(fillet_rolling_ball(&mut topo, solid, &edges, 1.0).unwrap());
         });
     });
 }
@@ -653,6 +672,7 @@ criterion_group! {
     targets =
         bench_box_chamfer_all,
         bench_box_fillet_all,
+        bench_box_fillet_all_rolling_ball,
         bench_multi_boolean,
 }
 

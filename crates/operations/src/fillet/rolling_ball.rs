@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
+use brepkit_math::surfaces::CylindricalSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -1558,12 +1559,69 @@ pub fn fillet_rolling_ball(
         let strip_normal = fillet_surface.normal(0.5, 0.5).unwrap_or(bisector_ref);
         let strip_reversed = strip_normal.dot(bisector_ref) > 0.0;
 
-        all_specs.push(FaceSpec::Surface {
-            vertices: vec![contact1_start, contact2_start, contact2_end, contact1_end],
-            surface: FaceSurface::Nurbs(fillet_surface),
-            reversed: strip_reversed,
-            inner_wires: vec![],
-        });
+        // A straight edge between two planar faces (the `n_v == 2` case above,
+        // which builds an exact rational-quadratic arc swept linearly) rolls an
+        // exact quarter-cylinder: axis along the edge, radius = the fillet
+        // radius. Emit it as an analytic `CylindricalFace` rather than the
+        // equivalent NURBS so the wall stays exact for downstream booleans and
+        // STEP export, and so area/tessellation take their analytic paths. The
+        // NURBS form is kept as the fallback whenever the corners do not sit on
+        // the cylinder we derived, so a mis-derived axis can never ship.
+        let strip_vertices = vec![contact1_start, contact2_start, contact2_end, contact1_end];
+        let analytic_strip = if n_v == 2 {
+            // The ball centre sits one radius off a contact point along that
+            // face's normal, on the material side. Pick the sign that lands
+            // equidistant from BOTH contacts.
+            let snap = tol.linear * 100.0;
+            [-1.0_f64, 1.0]
+                .into_iter()
+                .find_map(|sgn| {
+                    let center = Point3::new(
+                        contact1_start.x() + sgn * n1_start.x() * radius,
+                        contact1_start.y() + sgn * n1_start.y() * radius,
+                        contact1_start.z() + sgn * n1_start.z() * radius,
+                    );
+                    (((contact2_start - center).length() - radius).abs() < snap).then_some(center)
+                })
+                .and_then(|center| CylindricalSurface::new(center, edge_dir, radius).ok())
+                .filter(|cyl| {
+                    strip_vertices.iter().all(|p| {
+                        let d = *p - cyl.origin();
+                        let axial = d.dot(cyl.axis());
+                        let radial = d - cyl.axis() * axial;
+                        (radial.length() - radius).abs() < snap
+                    })
+                })
+        } else {
+            None
+        };
+
+        if let Some(cylinder) = analytic_strip {
+            // A cylinder's own normal runs radially outward from its axis, so
+            // derive the flag from that rather than reusing the NURBS surface's
+            // (the two parameterizations need not agree on orientation).
+            // Project the axis component out before testing: only the radial
+            // part is the surface normal, so an axial drift in either the
+            // contacts or `bisector_ref` cannot flip the comparison.
+            let mid_span =
+                (contact1_start - cylinder.origin()) + (contact2_start - cylinder.origin());
+            let mid_radial = (mid_span - cylinder.axis() * mid_span.dot(cylinder.axis()))
+                .normalize()
+                .unwrap_or(bisector_ref);
+            all_specs.push(FaceSpec::CylindricalFace {
+                vertices: strip_vertices,
+                cylinder,
+                reversed: mid_radial.dot(bisector_ref) > 0.0,
+                inner_wires: vec![],
+            });
+        } else {
+            all_specs.push(FaceSpec::Surface {
+                vertices: strip_vertices,
+                surface: FaceSurface::Nurbs(fillet_surface),
+                reversed: strip_reversed,
+                inner_wires: vec![],
+            });
+        }
 
         // Record contact points at each vertex for vertex blend detection.
         let start_vi = edge.start().index();
@@ -1949,6 +2007,14 @@ pub fn fillet_rolling_ball(
                 let cap_norm = cap_surface.normal(0.5, 0.5).unwrap_or(outward);
                 let cap_reversed = cap_norm.dot(outward) < 0.0;
 
+                // This corner is geometrically a spherical triangle, but it is
+                // NOT emitted as `FaceSurface::Sphere`: a sphere face bounded by
+                // a triangular wire measures its own area over the wrong extent
+                // (9.42 = 3pi per corner instead of the octant's pi/2), which
+                // drops a filleted 10-cube from 975.59 to 973.70. Until sphere
+                // faces carry a correct trimmed extent, the rational patch above
+                // is the accurate representation even though it only tracks the
+                // sphere to within a few percent.
                 all_specs.push(FaceSpec::Surface {
                     vertices: ordered_points,
                     surface: FaceSurface::Nurbs(cap_surface),
@@ -2173,6 +2239,18 @@ pub fn fillet_rolling_ball(
         .map_err(crate::OperationsError::Topology)?;
     let area_floor = (radius * radius) * 1e-6;
     for fid in faces {
+        // Fast accept first. `face_area` tessellates NURBS faces, and the
+        // corner patch's degenerate column subdivides far past what its
+        // curvature warrants (up to 1490 triangles for a patch the size of a
+        // sphere octant), so measuring every face that way cost more than
+        // building the whole fillet. A boundary wire that already encloses real
+        // area cannot bound a collapsed face, so clearing the floor on the
+        // cheap polygon is conclusive; anything it cannot clear still goes
+        // through the exact measurement below, leaving the guard's verdict
+        // unchanged.
+        if boundary_polygon_area(topo, fid)? > area_floor {
+            continue;
+        }
         let area = crate::measure::face_area(topo, fid, radius * 0.1)?;
         if area <= area_floor {
             return Err(crate::OperationsError::InvalidInput {
@@ -2339,4 +2417,26 @@ fn build_two_edge_corner_patch(
         reversed,
         inner_wires: vec![],
     })
+}
+
+/// Area of a face's outer boundary wire, via Newell's method.
+///
+/// A lower bound on the face's true area for the blend patches this engine
+/// emits, used only as a fast "clearly not degenerate" test.
+fn boundary_polygon_area(topo: &Topology, face_id: FaceId) -> Result<f64, crate::OperationsError> {
+    let pts = crate::boolean::face_polygon(topo, face_id)?;
+    if pts.len() < 3 {
+        return Ok(0.0);
+    }
+    let mut n = Vec3::new(0.0, 0.0, 0.0);
+    for i in 0..pts.len() {
+        let a = pts[i];
+        let b = pts[(i + 1) % pts.len()];
+        n += Vec3::new(
+            a.y() * b.z() - a.z() * b.y(),
+            a.z() * b.x() - a.x() * b.z(),
+            a.x() * b.y() - a.y() * b.x(),
+        );
+    }
+    Ok(n.length() * 0.5)
 }

@@ -191,15 +191,17 @@ mod tests {
         let sh = topo
             .shell(topo.solid(filleted).unwrap().outer_shell())
             .unwrap();
-        let nurbs: HashSet<usize> = sh
+        // The blend face, whatever surface type it carries. A straight box
+        // edge blends to an exact cylinder; only curved neighbours give NURBS.
+        let blend_faces: HashSet<usize> = sh
             .faces()
             .iter()
-            .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .filter(|&&f| !topo.face(f).unwrap().surface().is_planar())
             .map(|f| f.index())
             .collect();
         assert!(
-            !nurbs.is_empty(),
-            "first fillet must create a NURBS blend face"
+            !blend_faces.is_empty(),
+            "first fillet must create a blend face"
         );
 
         let mut ef: HashMap<usize, HashSet<FaceId>> = HashMap::new();
@@ -218,7 +220,7 @@ mod tests {
             let Some(fs) = ef.get(&e.index()) else {
                 continue;
             };
-            if fs.len() != 2 || !fs.iter().any(|f| nurbs.contains(&f.index())) {
+            if fs.len() != 2 || !fs.iter().any(|f| blend_faces.contains(&f.index())) {
                 continue;
             }
             if edge_is_tangent(&topo, e, fs).unwrap() {

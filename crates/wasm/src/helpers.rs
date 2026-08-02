@@ -649,7 +649,6 @@ mod fillet_tests {
     fn try_fillet_nurbs_blend_neighbor_is_watertight() {
         use std::collections::HashMap;
 
-        use brepkit_topology::face::FaceSurface;
         use brepkit_topology::validation::{validate_shell_closed, validate_shell_manifold};
 
         // #834 via the consumer path: a single fillet creates a NURBS blend
@@ -666,19 +665,19 @@ mod fillet_tests {
             validate_shell_closed(sh, &topo).expect("first fillet should be watertight");
         }
 
-        let nurbs: HashSet<usize> = {
+        let blend_faces: HashSet<usize> = {
             let sh = topo
                 .shell(topo.solid(first).unwrap().outer_shell())
                 .unwrap();
             sh.faces()
                 .iter()
-                .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Nurbs(_)))
+                .filter(|&&f| !topo.face(f).unwrap().surface().is_planar())
                 .map(|f| f.index())
                 .collect()
         };
         assert!(
-            !nurbs.is_empty(),
-            "first fillet must create a NURBS blend face"
+            !blend_faces.is_empty(),
+            "first fillet must create a blend face"
         );
 
         let mut ef: HashMap<usize, HashSet<usize>> = HashMap::new();
@@ -711,7 +710,7 @@ mod fillet_tests {
                 filletable.contains(&e.index())
                     && ef
                         .get(&e.index())
-                        .is_some_and(|fs| fs.iter().any(|f| nurbs.contains(f)))
+                        .is_some_and(|fs| fs.iter().any(|f| blend_faces.contains(f)))
             })
             .expect("a filletable edge bordering the NURBS blend face");
 
