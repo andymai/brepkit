@@ -1,0 +1,21 @@
+crates/io/tests/readme_sample.rs
+  s_b074f95655b0c0::t_daac31e4ca29a1 18-19,21-22,25-26,28-31,33-34,36-37
+  s_b074f95655b0c0::t_b3a09aa6757c3d 40
+  s_b074f95655b0c0::t_7a43afbc6d24f3 1-17,20,23-24,27,32,35,38-39,41-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "37b6270efcd634ab78d06bf6d23ff04799fa6072",
+  "prompts": {},
+  "sessions": {
+    "s_b074f95655b0c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b37ad85-24e0-4014-a18b-3e25edc2183a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
