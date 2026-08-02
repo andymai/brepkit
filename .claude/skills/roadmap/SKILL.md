@@ -230,9 +230,21 @@ suite number.
 and the standing note that plane-plane "stays theoretically susceptible ... no repro exhibits it".
 Ungating #1224's exact slab clip to plane-plane leaves the fuse failing IDENTICALLY (same 67-face
 lump, 368 ms). So this repro does not exhibit that hazard and the gate should stay as it is.
-NEXT: find why no sub-face is emitted for that quad. The neighbours at the same x-gap ARE emitted,
-so the splitter reaches this region — start from what distinguishes the missing quad from
-Id(1447)/Id(1961), which are the same 0.05 mm width in the same gap.
+**NARROWED to an incomplete partition of ONE oblique source face.** The quad's four corners are
+coplanar (normal ~(0.570,-0.244,-0.777) — a slanted lattice-strut plane, not axis-aligned), so it
+must be a trimmed piece of an INPUT face; booleans only emit trimmed patches of input surfaces.
+`BK_SUBFACE_BOX` tight on the quad identifies the source: **`src=Id(371)`**, which splits into
+- `Id(1446)` x[32.792,38.050] y[-42.950,-38.150] z[26.253,29.289] — Outside, SELECTED
+- `Id(1447)` x[38.000,38.050] **y[-40.932,-39.699]** z[29.260,29.289] — Inside, dropped (correct
+  for a Fuse)
+
+and the missing quad occupies x[38.000,38.050] **y[-42.750,-40.909]** z[29.260,29.866] — the
+ADJACENT y-band in the same 0.05 mm x-gap, which receives NO sub-face at all. So the defect is not
+selection and not classification: the splitter's partition of `Id(371)` does not cover the whole
+face. Start by measuring the pieces' total area against the source face's.
+NOTE the neighbouring 0.05 mm slivers on OTHER sources (Id 1961 from Id(860), Id 1966 from Id(862))
+are emitted and correctly classified Inside, so the splitter does reach this region generally —
+whatever fails is specific to `Id(371)`'s partition.
 
 ## Live campaign: kumiko / goma
 
