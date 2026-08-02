@@ -55,6 +55,7 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
     // boundary so the downstream point-in-solid test is stable.
     let area = signed_area_2d(loop_pts);
     let n = loop_pts.len();
+    let eps = boundary_eps(loop_pts);
     let mut best: Option<(Point2, f64)> = None;
     for i in 0..n {
         let j = (i + 1) % n;
@@ -103,7 +104,18 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
             t_hit > bt + 1e-12
                 || ((t_hit - bt).abs() <= 1e-12 && (cand.x(), cand.y()) < (bp.x(), bp.y()))
         });
-        if point_in_polygon_2d(cand, loop_pts) && better {
+        // The chord midpoint must also clear the boundary. When the inward ray
+        // runs exactly ALONG a boundary edge instead of crossing it, it slips
+        // past that edge's endpoint and reports the far side of the loop, so a
+        // grazing ray wins the longest-chord contest with a chord that is not
+        // interior at all and a midpoint that sits on the boundary. That
+        // happens whenever an edge midpoint lands on a reflex feature, which
+        // symmetric geometry produces exactly (a notch at half the face width),
+        // not approximately -- so no epsilon nudge upstream avoids it.
+        if better
+            && point_in_polygon_2d(cand, loop_pts)
+            && distance_to_polygon_boundary(cand, loop_pts) > eps
+        {
             best = Some((cand, t_hit));
         }
     }
@@ -283,6 +295,49 @@ mod tests {
         assert!(
             point_in_polygon_2d(interior, &l_shape),
             "interior ({}, {}) should be inside L-shape",
+            interior.x(),
+            interior.y()
+        );
+    }
+
+    /// A notch whose wall sits a few ulps off half the face width: the midpoint
+    /// of the opposite edge then falls just short of that wall, so the inward
+    /// ray slips past the notch corner instead of crossing it and reports the
+    /// far side of the loop. That spuriously long chord used to win the
+    /// longest-chord contest, putting the sample 2.7e-15 from the boundary
+    /// where the even-odd test is a coin flip.
+    ///
+    /// Verbatim from the kumiko corner cut (a strut wall straddling the base's
+    /// bottom plane), where it kept a cutter face lying outside the base and
+    /// left the result non-manifold. The literals matter: rounding them, or
+    /// deriving the notch as `w * 0.5`, makes the ray hit the corner exactly
+    /// and the case no longer reproduces.
+    #[test]
+    fn interior_of_notched_polygon_clears_the_boundary() {
+        let w = 1.016_138_123_637_824_2_f64;
+        let notch_x = 0.508_069_061_818_914_8_f64;
+        assert!(notch_x > w * 0.5, "the notch must sit just past half-width");
+        let c_shape = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(w, 0.0),
+            Point2::new(w, 0.499_999_999_999_999_6),
+            Point2::new(notch_x, 0.499_999_999_999_999_67),
+            Point2::new(notch_x, 3.700_000_000_000_000_6),
+            Point2::new(w, 3.700_000_000_000_000_6),
+            Point2::new(w, 4.2),
+            Point2::new(0.0, 4.2),
+        ];
+        let interior = sample_interior_point(&c_shape);
+        assert!(
+            point_in_polygon_2d(interior, &c_shape),
+            "interior ({}, {}) should be inside the notched loop",
+            interior.x(),
+            interior.y()
+        );
+        let clearance = distance_to_polygon_boundary(interior, &c_shape);
+        assert!(
+            clearance > boundary_eps(&c_shape),
+            "interior ({}, {}) sits on the boundary (clearance {clearance:e})",
             interior.x(),
             interior.y()
         );
