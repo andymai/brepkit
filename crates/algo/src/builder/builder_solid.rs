@@ -1268,15 +1268,25 @@ fn log_open_growth_shell(
         let d: f64 = faceopt.trim().parse().unwrap_or(0.02);
         for &fid in gs.iter().take(24) {
             let Ok(f) = topo.face(fid) else { continue };
+            // Sample the face's INTERIOR, not an edge midpoint. A point on a
+            // boundary edge is not usable: at a convex edge, offsetting
+            // perpendicular to the face exits the material on BOTH sides, which
+            // reads as "this face bounds nothing" for perfectly good faces.
             let Some(p) = topo.wire(f.outer_wire()).ok().and_then(|w| {
-                let e = topo.edge(w.edges().first()?.edge()).ok()?;
-                let a = topo.vertex(e.start()).ok()?.point();
-                let b = topo.vertex(e.end()).ok()?.point();
-                Some(brepkit_math::vec::Point3::new(
-                    (a.x() + b.x()) * 0.5,
-                    (a.y() + b.y()) * 0.5,
-                    (a.z() + b.z()) * 0.5,
-                ))
+                let mut acc = [0.0_f64; 3];
+                let mut n = 0.0_f64;
+                for oe in w.edges() {
+                    let e = topo.edge(oe.edge()).ok()?;
+                    for vid in [e.start(), e.end()] {
+                        let q = topo.vertex(vid).ok()?.point();
+                        acc[0] += q.x();
+                        acc[1] += q.y();
+                        acc[2] += q.z();
+                        n += 1.0;
+                    }
+                }
+                (n > 0.0)
+                    .then(|| brepkit_math::vec::Point3::new(acc[0] / n, acc[1] / n, acc[2] / n))
             }) else {
                 continue;
             };
@@ -1285,8 +1295,9 @@ fn log_open_growth_shell(
             if f.is_reversed() {
                 n = -n;
             }
+            let src = face_source.get(&fid).copied().flatten();
             log::debug!(
-                "OPENSHELL facept {fid:?} plus={:.4},{:.4},{:.4} minus={:.4},{:.4},{:.4}",
+                "OPENSHELL facept {fid:?} src={src:?} plus={:.4},{:.4},{:.4} minus={:.4},{:.4},{:.4}",
                 p.x() + n.x() * d,
                 p.y() + n.y() * d,
                 p.z() + n.z() * d,

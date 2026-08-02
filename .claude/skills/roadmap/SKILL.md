@@ -268,6 +268,44 @@ sample** — both can land outside the lump, and here they disagree on two pairs
 points taken adjacent to an actual face and offset along its normal mean anything. So the standing,
 supported finding is the narrow one: no face belongs at the quad, hence the faces owning those four
 free edges are what needs explaining. Whether the lump as a whole is spurious is OPEN.
+**NEXT: chase SHELL CONNECTIVITY, not a drop-it discriminator.** The earlier proposal — drop a
+growth shell whose interior looks internal — is retargeted: the faces are legitimate, so dropping is
+never right here. The question is why the shell walker emits this set as a SEPARATE shell instead of
+joining it across the quad region. Useful context if that work needs the operands: they are NOT in
+scope at assembly (`build_solid`/`build_solid_with_origins` take only `selected: &[SelectedFace]`
+plus cap planes, and `SelectedFace` carries `face_id`, `source_face`, `reversed` — no operand tag),
+and `brepkit-algo` cannot call `operations::classify_point` under the layer rules.
+
+**SYSTEMATIC BUT PAIR-SPECIFIC.** Within op29's tool merges, `1+2` (67 faces), `2+3` (33) and `3+4`
+(65) all abort while `1+3` and `1+4` fuse clean (F=872 / F=1024, free=0). So it is neither a one-off
+nor universal — it depends on the pair.
+**RESOLVED: every lump face is a LEGITIMATE union boundary; the lump is real material that failed
+to CONNECT.** Sampling per face either side along its own normal, with the sample taken at the face
+INTERIOR (vertex centroid of the outer wire), over 24 faces of the `1+2` lump:
+
+| side | reading | count |
+|---|---|---|
+| minus | Inside A or Inside B | **24 of 24** |
+| plus | Outside / Outside | 23 of 24 |
+
+Material behind every face, empty in front — that is exactly what a union boundary face looks like.
+Combined with the quad result (material on BOTH sides there, so no cap belongs), the coherent
+picture is: **the lump is a genuine piece of the union whose faces are correct, and the failure is
+that the shell walker put it in a SEPARATE shell instead of connecting it** to the neighbouring
+faces across the quad region. Not a missing face, not a spurious selection, not an under-partition.
+So the assembly guard is RIGHT to refuse to drop it, and a "drop it when it looks internal"
+discriminator would have been the wrong fix — chase shell connectivity instead.
+
+**RETRACTED, with the method lesson.** An earlier pass reported "8 of 24 faces bound empty space on
+both sides, stable across offsets 0.02/0.05/0.15" and built a per-face-discriminator plan on it.
+That was an artifact of sampling the midpoint of the face's first boundary EDGE: at a convex edge,
+offsetting perpendicular to the face exits the material on BOTH sides, so perfectly good faces read
+as bounding nothing. Offset-stability did not save it (the artifact is offset-independent), and
+neither did deflection-stability (identical verdicts at 0.01/0.002/0.0005) — both looked like
+robustness and were measuring the same wrong point. **When classifying which side of a face carries
+material, sample the face INTERIOR; an edge or vertex point is never valid.** The same rule already
+appears here for notched sub-face seeds; this is the classification-probe form of it.
+
 PROPOSED DISCRIMINATOR: a growth shell whose INTERIOR classifies inside one of the operands is not
 new boundary and can be dropped; the fused-foot lump was genuinely outside both.
 
