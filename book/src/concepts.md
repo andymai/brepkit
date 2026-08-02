@@ -18,7 +18,8 @@ brepkit separates **topology** (how things are connected) from
 **geometry** (where things are in space):
 
 - **Topology**: Vertex → Edge → Wire → Face → Shell → Solid
-- **Geometry**: Points, curves (NURBS), surfaces (NURBS)
+- **Geometry**: Points; curves (line, circle, ellipse, NURBS); surfaces
+  (plane, cylinder, cone, sphere, torus, NURBS)
 
 A `Face` knows which `Wire` forms its boundary (topology) and which
 `Surface` defines its shape (geometry). This separation is key to

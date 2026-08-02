@@ -23,18 +23,27 @@ cargo test --workspace
 cargo build -p brepkit-wasm --target wasm32-unknown-unknown
 ```
 
-## Using from TypeScript
+## Using from JavaScript and TypeScript
+
+The maintained JS surface is the `brepkit-wasm` package, built from
+`crates/wasm`. It ships its own TypeScript declarations.
 
 ```bash
-cd bindings/ts
-npm install
-npm run build
+npm install brepkit-wasm
 ```
 
 ```typescript
-import { initBrepkit } from '@brepkit/wasm';
+import { BrepKernel } from 'brepkit-wasm';
 
-await initBrepkit();
+const kernel = new BrepKernel();
+const solid = kernel.makeBox(10, 20, 30);
+```
+
+To build it from a checkout instead of installing the release:
+
+```bash
+cargo xtask wasm-build
+node scripts/test-wasm-smoke.mjs
 ```
 
 ## Development
