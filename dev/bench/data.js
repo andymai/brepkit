@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785659052294,
+  "lastUpdate": 1785659617014,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13553,6 +13553,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21922297,
             "range": "± 201626",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b93c10540569cca42cac20b396e83b5c01507e3",
+          "message": "docs(readme): re-measure the performance table on brepkit 2.128.8 (#1247)\n\nRefreshes the README perf table, which was stamped 2026-06-23. Every\nfigure below was measured today; nothing is carried over.\n\n## Method\n\nThe old table was produced by the brepjs bench suite, which resolves\n`brepkit-wasm` from `node_modules`. On 2026-06-23 brepjs pinned\n**2.116.1**, so the table described a published release rather than\nbrepkit main. This run aliases `brepkit-wasm` to a local `wasm-pack\n--target nodejs --release` build of this commit, via a scratch vitest\nconfig (the procedure in the `parity-benchmarking` skill). Figures are\nthe median of three runs.\n\nThe alias was verified load-bearing before any number was taken:\npointing it at a nonexistent path makes the suite still report **23/23\npassing** while silently emitting zero brepkit rows. A green run is not\nevidence that brepkit was measured; the `[brepkit]` rows in `latest.md`\nare.\n\n## What actually moved\n\n- **`cut(box, cylinder)` improved 3x**, 59.6 to 19.7 ms in WASM, and\n24.1 to 8.7 ms natively.\n- **`mesh sphere` roughly halved natively**, 1.5 ms to 720 µs, with WASM\nflat.\n- Everything else is within run-to-run noise.\n\n## `box + fillet` is not a regression\n\nThe row goes from a claimed 21x faster to 5x slower, so I chased it\nbefore publishing:\n\n1. Both kernels agree. 2.116.1 and 2.128.8 both take ~31 ms and return\nan identical result (volume 7949.5, 26 faces).\n2. `try_fillet` is byte-identical at the old commit, and the\nrolling-ball engine already cost 17 ms natively there.\n3. Running **today's harness against 2.116.1** reproduces `fuse` (0.5),\n`cut` (58.3), `intersect` (0.3) and `chamfer` (0.1) within noise, but\ngives **30.9 ms** for the fillet.\n\nSo the published 0.3 ms never described this operation on either kernel.\nThe cause is that one row name covers two engines: the JS binding goes\nthrough `try_fillet`, which prefers `fillet_rolling_ball` (~31 ms,\nG1-continuous NURBS blends), while the criterion case calls `fillet`\ndirectly (~74 µs, planar). The old table put the planar number in a\ncolumn measuring the rolling-ball path. Both are now stated, with a\nfootnote saying the native cell is not comparable.\n\nNot fixed here, per instruction to identify the cause and stop. Worth\nnoting separately: **both** engines in that chain are `#[deprecated]`,\nand the deprecated rolling-ball one is what the public `fillet` binding\nselects.\n\n## Verification\n\n- 3 runs, medians reported; the fillet row was stable at 32.0 / 31.3 /\n31.7 ms.\n- Kernel identity confirmed by A/B against a `npm pack\nbrepkit-wasm@2.116.1` extract.\n- The bench's own comment says \"Punch 4 holes\" but the loop is 4x4, so\nthe README's \"16 holes\" label is correct and unchanged.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRefreshes the README performance table with fresh measurements on\nbrepkit 2.128.8 using a local `brepkit-wasm` build. Highlights:\n`cut(box, cylinder)` is 3x faster; native `mesh sphere` roughly halved;\nother rows are within noise.\n\n- **Bug Fixes**\n- Corrects the `box + fillet` row: the JS binding uses the rolling-ball\nengine (~31 ms) while the native criterion case measures the planar\nengine (~74 µs). Adds a footnote to mark the native cell as not\ncomparable.\n- Updates benchmark notes (method, date) and OCCT figures from\n`occt-wasm`.\n\n<sup>Written for commit 6cd63baeccb2ab9e83be3bc30f9419a0bd455298.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1247?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-02T01:31:13-07:00",
+          "tree_id": "af04c562df9cc772a82669cab0e71a6e069d6371",
+          "url": "https://github.com/andymai/brepkit/commit/5b93c10540569cca42cac20b396e83b5c01507e3"
+        },
+        "date": 1785659616150,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 831947,
+            "range": "± 2546",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 922213,
+            "range": "± 12788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12115,
+            "range": "± 311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 671779,
+            "range": "± 1781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22054171,
+            "range": "± 59670",
             "unit": "ns/iter"
           }
         ]
