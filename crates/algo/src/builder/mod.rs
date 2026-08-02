@@ -97,13 +97,30 @@ fn log_source_face_partition(topo: &Topology, subs: &[SubFace], selected: &[bop:
                 e.2 += 1;
             }
         }
+        let by_src2 = by_src.clone();
         let mut rows: Vec<_> = by_src
             .into_iter()
             .map(|(src, (tot, n, sel))| (face_area_estimate(topo, src) - tot, src, tot, n, sel))
             .filter(|(gap, _, _, _, _)| gap.abs() > 1e-6)
             .collect();
         rows.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
-        log::debug!("SRCPART scan: {} source faces do not tile", rows.len());
+        // A source whose pieces TILE it but where NONE was selected leaves a
+        // hole in the result boundary just as surely as an under-partition, and
+        // an area-gap scan cannot see it — the pieces all exist.
+        let mut dropped: Vec<_> = by_src2
+            .iter()
+            .filter(|(_, (_, _, sel))| *sel == 0)
+            .map(|(src, (tot, n, _))| (*src, *tot, *n))
+            .collect();
+        dropped.sort_by(|a, b| b.1.total_cmp(&a.1));
+        log::debug!(
+            "SRCPART scan: {} source faces do not tile, {} fully dropped (no piece selected)",
+            rows.len(),
+            dropped.len()
+        );
+        for (src, tot, n) in dropped.iter().take(12) {
+            log::debug!("SRCPART fully-dropped src={src:?} pieces={n} area={tot:.6}");
+        }
         for (gap, src, tot, n, sel) in rows.iter().take(12) {
             log::debug!(
                 "SRCPART gap={gap:.6} src={src:?} pieces={n} selected={sel} pieceTotal={tot:.6}"

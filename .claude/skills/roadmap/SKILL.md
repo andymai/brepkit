@@ -268,6 +268,20 @@ sample** — both can land outside the lump, and here they disagree on two pairs
 points taken adjacent to an actual face and offset along its normal mean anything. So the standing,
 supported finding is the narrow one: no face belongs at the quad, hence the faces owning those four
 free edges are what needs explaining. Whether the lump as a whole is spurious is OPEN.
+**Connectivity probe so far, and an honest status.** `BK_SUBFACE_SRC=all` now also reports sources
+whose pieces TILE but where NONE was selected — a hole an area-gap scan cannot see. There are three
+such sources, all tiny (areas 0.040, 0.009, 0.001), none matching the ~0.117 quad. So the boundary
+gap is not a fully-dropped source either, and the four free edges still have no face anywhere
+sharing their positions (`same_id_outside=0 coincident_other_id=0`).
+
+**Take stock before continuing.** This single failure has now had five successive diagnoses, four of
+them overturned by later measurement (FF aliasing, incomplete partition, missing face, spurious
+lump). The refutations are durable and the probes are reusable, but the rate of progress toward a
+FIX is low and each pass has cost a full iteration. `debugging-doctrine` exists for exactly this
+shape. Anyone picking this up should consider whether a different entry point is cheaper than
+continuing the current thread — for example instrumenting the shell WALKER directly (why it starts a
+new shell at these edges) rather than continuing to characterise the result it produced.
+
 **NEXT: chase SHELL CONNECTIVITY, not a drop-it discriminator.** The earlier proposal — drop a
 growth shell whose interior looks internal — is retargeted: the faces are legitimate, so dropping is
 never right here. The question is why the shell walker emits this set as a SEPARATE shell instead of
