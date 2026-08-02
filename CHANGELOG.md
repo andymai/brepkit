@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.8](https://github.com/andymai/brepkit/compare/v2.128.7...v2.128.8) (2026-08-02)
+
+
+### Bug Fixes
+
+* **operations:** collapse a shell fillet the thickness swallows to a sharp corner ([#1243](https://github.com/andymai/brepkit/issues/1243)) ([dea642f](https://github.com/andymai/brepkit/commit/dea642fb745a6825864310919607c38905705e9c))
+
 ## [2.128.7](https://github.com/andymai/brepkit/compare/v2.128.6...v2.128.7) (2026-07-30)
 
 
