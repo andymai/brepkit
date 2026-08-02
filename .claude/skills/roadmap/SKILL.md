@@ -255,11 +255,28 @@ material A already accounts for. So this was never a missing face: **the lump is
 artifact and dropping it is the CORRECT outcome.** The `>= 4 faces` fail-safe is misfiring — it
 exists because dropping a real lump silently deletes material (the lite fused-foot: 72 faces,
 ~2700 units^3), and it cannot currently tell that case from this one.
-PROPOSED DISCRIMINATOR, to try next and measure against the foils: a growth shell whose INTERIOR
-classifies inside one of the operands is not new boundary and can be dropped; the fused-foot lump
-was genuinely outside both. Note `brepkit-algo` cannot call `operations::classify_point` (layer
-rules) and must use its own `classifier/ray_cast.rs`, and that an OPEN shell cannot be classified
-reliably — classify against the closed OPERANDS, as the measurements above do.
+PROPOSED DISCRIMINATOR: a growth shell whose INTERIOR classifies inside one of the operands is not
+new boundary and can be dropped; the fused-foot lump was genuinely outside both.
+
+**COST AND BLAST RADIUS, measured before attempting it — this is why it is not done yet.** The
+operands are NOT in scope at assembly: `build_solid`/`build_solid_with_origins` take only
+`selected: &[SelectedFace]` plus cap planes, and `SelectedFace` carries `face_id`, `source_face`,
+`reversed` — no operand tag and no solid. So the discriminator needs either the operand solids
+plumbed down (changes a load-bearing signature) or `assemble` returning open lumps for the caller to
+judge. `brepkit-algo` also cannot call `operations::classify_point` (layer rules) and must use its
+own `classifier/ray_cast.rs`; and an OPEN shell cannot be classified reliably, so any test must run
+against the closed OPERANDS as the measurements above do. Do not rush this into a guard that exists
+to prevent a silent material-deleting regression.
+
+**SYSTEMATIC BUT PAIR-SPECIFIC.** Within op29's tool merges, `1+2` (67 faces), `2+3` (33) and `3+4`
+(65) all abort while `1+3` and `1+4` fuse clean (F=872 / F=1024, free=0). So it is neither a one-off
+nor universal — it depends on the pair.
+**EVIDENCE LIMIT, stated so nobody over-reads it:** the internal-artifact conclusion is established
+only for the `1+2` lump, where two independent probes agree (both sides of the quad AND the lump
+interior read Inside A). For `2+3` (Outside/Outside) and `3+4` (Outside/Inside B) only a BBOX-CENTRE
+point was tested, and a bbox centre need not lie inside a non-convex shell — those two readings are
+inconclusive, not evidence of a different mechanism. Before generalizing, sample a genuinely
+interior point per lump.
 CAUTION on `BK_SUBFACE_BOX`: it tests face VERTICES against the box, so a face whose corners sit
 outside will not register; do not conclude a face is absent from that probe alone (the quad's own
 corners ARE its vertices, which is why it is a valid conclusion here).
