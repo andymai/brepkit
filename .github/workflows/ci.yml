@@ -205,6 +205,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: ./scripts/check-boundaries.sh
 
+  doc-paths:
+    name: Doc Paths
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: ./scripts/check-doc-paths.sh
+
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest

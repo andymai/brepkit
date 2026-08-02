@@ -20,8 +20,10 @@ a comment. This is a one-time requirement.
 2. Make your changes
 3. Run `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings`
 4. Run `cargo test --workspace`
-5. Commit with a [conventional commit](https://www.conventionalcommits.org/) message
-6. Open a pull request
+5. If you changed crate dependencies or moved a file named in the docs, run
+   `./scripts/check-boundaries.sh` and `./scripts/check-doc-paths.sh` (CI runs both)
+6. Commit with a [conventional commit](https://www.conventionalcommits.org/) message
+7. Open a pull request
 
 ## Commit Messages
 
