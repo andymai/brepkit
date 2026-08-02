@@ -284,10 +284,25 @@ to prevent a silent material-deleting regression.
 **SYSTEMATIC BUT PAIR-SPECIFIC.** Within op29's tool merges, `1+2` (67 faces), `2+3` (33) and `3+4`
 (65) all abort while `1+3` and `1+4` fuse clean (F=872 / F=1024, free=0). So it is neither a one-off
 nor universal — it depends on the pair.
-**EVIDENCE LIMIT:** see the correction above — the internal-artifact conclusion is WITHDRAWN. No
-whole-lump classification currently stands, because no valid interior sample has been taken for any
-of the three lumps. Getting one needs a point adjacent to a face of the lump, offset along that
-face's normal, not a centre-of-mass shortcut.
+**VALID SAMPLING DONE — the lump MIXES real boundary with faces that bound nothing.**
+`BK_OPEN_SHELL_FACEPTS=1` emits, per lump face, a point either side offset 0.02 along that face's
+own normal (the only sound sample for a non-convex open shell), and `POINT_IN` now takes a
+semicolon-separated batch. Over 24 faces of the `1+2` lump, every PLUS-side point is Outside/Outside,
+and the MINUS side splits:
+
+| minus-side | count | reading |
+|---|---|---|
+| Outside / Outside | **8** | empty on BOTH sides — bounds nothing, spurious |
+| Outside A / Inside B | 6 | legitimate union boundary |
+| Inside / Inside | 2 | legitimate |
+| OnBoundary A / Inside B | 1 | legitimate |
+| OnBoundary A / Outside B | 7 | ambiguous: 0.02 lands ON A's surface, retry with a larger offset |
+
+So the lump is neither "all real material" (which the guard assumes) nor "all internal artifact"
+(the withdrawn claim): roughly a third of its faces bound empty space on both sides. That is
+consistent with the quad result — no face belongs there — and it means the guard is refusing to drop
+a shell that is partly junk. A discriminator therefore cannot be a single whole-lump verdict; it has
+to be per-face, and the 7 OnBoundary rows must be resolved first or they will bias any threshold.
 CAUTION on `BK_SUBFACE_BOX`: it tests face VERTICES against the box, so a face whose corners sit
 outside will not register; do not conclude a face is absent from that probe alone (the quad's own
 corners ARE its vertices, which is why it is a valid conclusion here).

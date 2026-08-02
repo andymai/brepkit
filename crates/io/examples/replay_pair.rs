@@ -11,6 +11,7 @@
 #![allow(clippy::print_stdout, clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use brepkit_io::arena_io::deserialize_solid;
@@ -86,18 +87,29 @@ fn main() {
     // independent operations-level oracle. For a Fuse, a face is needed
     // wherever one side of a surface is inside the union and the other is not.
     if let Ok(spec) = std::env::var("POINT_IN") {
-        let c: Vec<f64> = spec
-            .split(',')
-            .filter_map(|t| t.trim().parse().ok())
-            .collect();
-        if c.len() == 3 {
+        // Semicolon-separated points, so a batch is classified in one process
+        // instead of one process per point.
+        for (i, one) in spec.split(';').filter(|t| !t.trim().is_empty()).enumerate() {
+            let c: Vec<f64> = one
+                .split(',')
+                .filter_map(|t| t.trim().parse().ok())
+                .collect();
+            if c.len() != 3 {
+                continue;
+            }
             let p = brepkit_math::vec::Point3::new(c[0], c[1], c[2]);
+            let mut row = format!("  POINT_IN[{i}] ({:.3},{:.3},{:.3})", c[0], c[1], c[2]);
             for (label, sid) in [("A", a), ("B", b)] {
                 match brepkit_operations::classify::classify_point(&topo, sid, p, 0.01, 1e-7) {
-                    Ok(v) => println!("  POINT_IN {label}: {v:?}"),
-                    Err(e) => println!("  POINT_IN {label}: ERR {e}"),
+                    Ok(v) => {
+                        let _ = write!(row, "  {label}={v:?}");
+                    }
+                    Err(_) => {
+                        let _ = write!(row, "  {label}=ERR");
+                    }
                 }
             }
+            println!("{row}");
         }
         return;
     }

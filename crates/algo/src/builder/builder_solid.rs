@@ -1254,6 +1254,45 @@ fn log_open_growth_shell(
             ),
         }
     }
+    // Per-face samples offset either side of the face along its own normal.
+    // This is the ONLY kind of interior sample that means anything for a
+    // non-convex open shell (a bbox centre or vertex centroid can sit outside
+    // the lump entirely). A legitimate union boundary face has one side inside
+    // the union and the other outside; a face with BOTH sides on the same side
+    // is an internal membrane and should not be in the result.
+    if std::env::var("BK_OPEN_SHELL_FACEPTS").is_ok() {
+        for &fid in gs.iter().take(24) {
+            let Ok(f) = topo.face(fid) else { continue };
+            let Some(p) = topo.wire(f.outer_wire()).ok().and_then(|w| {
+                let e = topo.edge(w.edges().first()?.edge()).ok()?;
+                let a = topo.vertex(e.start()).ok()?.point();
+                let b = topo.vertex(e.end()).ok()?.point();
+                Some(brepkit_math::vec::Point3::new(
+                    (a.x() + b.x()) * 0.5,
+                    (a.y() + b.y()) * 0.5,
+                    (a.z() + b.z()) * 0.5,
+                ))
+            }) else {
+                continue;
+            };
+            let (u, v) = f.surface().project_point(p).unwrap_or((0.0, 0.0));
+            let mut n = f.surface().normal(u, v);
+            if f.is_reversed() {
+                n = -n;
+            }
+            let d = 0.02;
+            log::debug!(
+                "OPENSHELL facept {fid:?} plus={:.4},{:.4},{:.4} minus={:.4},{:.4},{:.4}",
+                p.x() + n.x() * d,
+                p.y() + n.y() * d,
+                p.z() + n.z() * d,
+                p.x() - n.x() * d,
+                p.y() - n.y() * d,
+                p.z() - n.z() * d
+            );
+        }
+    }
+
     // What else was SELECTED near the lump? If the missing partners are base
     // faces that were never created, nothing of the base appears here; if they
     // exist but were not walked in, they show up.
