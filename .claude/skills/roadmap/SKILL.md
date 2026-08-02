@@ -209,6 +209,31 @@ CAVEAT on probe numbers here: a standalone probe run of `scenario-dividers-on` r
 notes record (in-matrix runs are cache-warm); do NOT compare a standalone probe number against a
 suite number.
 
+## Open growth shell: the 364 ms lattice fuse, characterized
+
+`crates/io/tests/kumiko_lattice_fuse_inmem.rs` is the first sub-second repro this family has had.
+`BK_OPEN_SHELL=1` with `replay_pair` gives the anatomy directly:
+
+- The lump is **67 planar faces, signed volume +153.5**, bbox x[32.792,39.722] y[-42.950,-38.150]
+  z[26.253,34.800] — a genuine chunk, not a sliver, which is why the guard refuses to drop it.
+- Its unpaired edges are **exactly four, and they form a CLOSED QUADRILATERAL**
+  (38.050,-42.748,29.866) -> (38.000,-42.750,29.830) -> (38.000,-40.932,29.260) ->
+  (38.050,-40.909,29.289). So this is ONE MISSING FACE, not a tear.
+- That quad BRIDGES x=38.000 and x=38.050, i.e. it caps the tool's deliberate
+  **`SLAB_OVERLAP = 0.05`** gap — the same 0.05 mm overlap the goma notes record.
+- Every one of the four carries `same_id_outside=0 coincident_other_id=0`: the partner exists
+  nowhere in the selection under any identity, so it was never created rather than mis-selected.
+- `BK_SUBFACE_BOX` over the gap shows neighbouring 0.05 mm slivers ARE created and classified
+  `Inside` (Id 1447, 1961, 1966), which is correct for a Fuse — but nothing covers the quad itself.
+
+**REFUTED: plane-plane FF aliasing is NOT the mechanism**, despite the matching 0.05 mm signature
+and the standing note that plane-plane "stays theoretically susceptible ... no repro exhibits it".
+Ungating #1224's exact slab clip to plane-plane leaves the fuse failing IDENTICALLY (same 67-face
+lump, 368 ms). So this repro does not exhibit that hazard and the gate should stay as it is.
+NEXT: find why no sub-face is emitted for that quad. The neighbours at the same x-gap ARE emitted,
+so the splitter reaches this region — start from what distinguishes the missing quad from
+Id(1447)/Id(1961), which are the same 0.05 mm width in the same gap.
+
 ## Live campaign: kumiko / goma
 
 **State:** branch `fix/kumiko-corner-window-cut` closes four real engine defects with fixtures
