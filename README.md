@@ -146,20 +146,28 @@ Layered Cargo workspace. Each crate depends only on the same or lower layers, an
 
 Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs/tree/main/benchmarks) (5 iterations, Node.js, Linux x86_64). WASM is single-threaded. Native benchmarks use criterion.
 
-| Operation                    | brepkit (WASM) | OCCT (WASM) | Speedup | brepkit (native) |
-| ---------------------------- | -------------- | ----------- | ------- | ---------------- |
-| fuse(box, box) (×10)         | 0.5 ms         | 43.3 ms     | 87x     | 122 µs           |
-| cut(box, cylinder) (×10)     | 59.6 ms        | 72.0 ms     | 1.2x    | 24.1 ms          |
-| intersect(box, sphere) (×10) | 0.3 ms         | 62.6 ms     | 209x    | 104 µs           |
-| box + chamfer                | 0.1 ms         | 5.6 ms      | 56x     | 44 µs            |
-| box + fillet                 | 0.3 ms         | 6.3 ms      | 21x     | 73 µs            |
-| multi-boolean (16 holes)     | 7.0 ms         | 31.2 ms     | 4.5x    | 4.1 ms           |
-| mesh sphere (tol=0.01)       | 33.4 ms        | 49.7 ms     | 1.5x    | 1.5 ms           |
-| exportSTEP (×10)             | 1.1 ms         | 18.6 ms     | 17x     | n/a              |
+| Operation                    | brepkit (WASM) | OCCT (WASM) | Speedup    | brepkit (native) |
+| ---------------------------- | -------------- | ----------- | ---------- | ---------------- |
+| fuse(box, box) (×10)         | 0.5 ms         | 44.3 ms     | 89x        | 121 µs           |
+| cut(box, cylinder) (×10)     | 19.7 ms        | 65.4 ms     | 3.3x       | 8.7 ms           |
+| intersect(box, sphere) (×10) | 0.3 ms         | 58.7 ms     | 196x       | 103 µs           |
+| box + chamfer                | 0.2 ms         | 5.7 ms      | 29x        | 45 µs            |
+| box + fillet                 | 31.7 ms        | 6.1 ms      | 0.2x       | 74 µs \*         |
+| multi-boolean (16 holes)     | 8.0 ms         | 30.4 ms     | 3.8x       | 4.4 ms           |
+| mesh sphere (tol=0.01)       | 35.5 ms        | 49.8 ms     | 1.4x       | 720 µs           |
+| exportSTEP (×10)             | 0.8 ms         | 14.9 ms     | 19x        | n/a              |
 
 Booleans preserve analytic surfaces, so face counts stay low across chained operations. A nine-step compound boolean settles at 72 faces while a mesh-based approach would reach roughly 7,000.
 
-> The OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js. Boolean and `exportSTEP` rows are timed as batches of ten operations. Native benchmarks: `cargo bench -p brepkit-operations --bench cad_operations`. Full benchmark source: [brepjs/benchmarks](https://github.com/andymai/brepjs/tree/main/benchmarks). Measured 2026-06-23.
+`box + fillet` is the one row where brepkit loses, by 5x. The JS `fillet` binding
+routes through the rolling-ball blend engine, which produces G1-continuous NURBS
+blend surfaces and costs about 31 ms on this case.
+
+\* The native `box + fillet` figure is not comparable to the WASM one: the criterion
+case calls the planar fillet directly, a different engine from the one the binding
+selects. Read that cell as the planar engine's cost, not as the same operation.
+
+> The OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js. Boolean and `exportSTEP` rows are timed as batches of ten operations. WASM figures are the median of three runs of `kernel-comparison.bench.test.ts` against a local `wasm-pack --target nodejs --release` build. Native benchmarks: `cargo bench -p brepkit-operations --bench cad_operations`. Full benchmark source: [brepjs/benchmarks](https://github.com/andymai/brepjs/tree/main/benchmarks). Measured 2026-08-02 on brepkit 2.128.8.
 
 ## Data Exchange
 
