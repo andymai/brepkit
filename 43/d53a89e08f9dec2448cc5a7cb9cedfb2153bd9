@@ -1,0 +1,24 @@
+scripts/check-doc-paths.sh
+  s_b074f95655b0c0::t_db72a46bef8cc9 29-31
+  s_b074f95655b0c0::t_b0e713f233d300 16-17
+crates/io/tests/readme_sample.rs
+  s_b074f95655b0c0::t_9b3df77389350b 3-4
+book/src/architecture.md
+  s_b074f95655b0c0::t_e8a7b74abc51ca 32-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "43d53a89e08f9dec2448cc5a7cb9cedfb2153bd9",
+  "prompts": {},
+  "sessions": {
+    "s_b074f95655b0c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b37ad85-24e0-4014-a18b-3e25edc2183a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
