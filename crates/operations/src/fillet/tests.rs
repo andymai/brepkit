@@ -236,7 +236,26 @@ fn rolling_ball_fillet_single_edge() {
 }
 
 #[test]
-fn rolling_ball_fillet_has_nurbs_face() {
+fn rolling_ball_rejects_closed_rim_so_dispatcher_falls_through() {
+    // The degeneracy guard's whole purpose: a cylinder's closed circular rim
+    // collapses its blend strip to zero area, and `try_fillet` relies on the
+    // error to fall through to the walking engine. The guard clears healthy
+    // faces via a cheap boundary-polygon area, so this pins that the shortcut
+    // cannot accept a collapsed face and silently ship the corrupt solid.
+    let mut topo = Topology::new();
+    let cyl = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).expect("cylinder");
+    let edges = solid_edge_ids(&topo, cyl);
+
+    let err = fillet_rolling_ball(&mut topo, cyl, &edges, 0.5)
+        .expect_err("rolling-ball must reject a closed circular rim");
+    assert!(
+        err.to_string().contains("degenerate face"),
+        "expected the degeneracy guard to fire, got: {err}"
+    );
+}
+
+#[test]
+fn rolling_ball_straight_edge_wall_is_exact_cylinder() {
     let mut topo = Topology::new();
     let cube = make_unit_cube_manifold(&mut topo);
 
@@ -247,14 +266,22 @@ fn rolling_ball_fillet_has_nurbs_face() {
     let s = topo.solid(result).expect("result solid");
     let sh = topo.shell(s.outer_shell()).expect("shell");
 
-    // At least one face should be a NURBS surface (the fillet).
-    let has_nurbs = sh.faces().iter().any(|&fid| {
-        matches!(
-            topo.face(fid).expect("face").surface(),
-            FaceSurface::Nurbs(_)
-        )
-    });
-    assert!(has_nurbs, "rolling-ball fillet should produce NURBS faces");
+    // A straight edge between two planar faces rolls an EXACT quarter-cylinder,
+    // so the blend wall must be a Cylinder, not a NURBS approximation of one.
+    // Degrading it to NURBS costs downstream booleans their analytic path and
+    // makes the wall tessellate far denser than its curvature warrants.
+    let walls: Vec<_> = sh
+        .faces()
+        .iter()
+        .filter(|&&fid| !topo.face(fid).expect("face").surface().is_planar())
+        .collect();
+    assert_eq!(walls.len(), 1, "one blend wall expected");
+    let surface = topo.face(*walls[0]).expect("face").surface();
+    assert!(
+        matches!(surface, FaceSurface::Cylinder(cyl) if (cyl.radius() - 0.1).abs() < 1e-9),
+        "straight-edge blend wall must be an exact r=0.1 Cylinder, got {:?}",
+        surface.type_tag()
+    );
 }
 
 #[test]
@@ -1166,9 +1193,9 @@ fn fillet_rolling_ball_second_pass_on_nurbs_solid() {
         let sh = topo.shell(s.outer_shell()).unwrap();
         sh.faces()
             .iter()
-            .any(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .any(|&fid| !topo.face(fid).unwrap().surface().is_planar())
     };
-    assert!(has_nurbs, "first fillet must produce a NURBS face");
+    assert!(has_nurbs, "first fillet must produce a blend face");
 
     // Second fillet on a different edge.
     let edges2 = solid_edge_ids(&topo, result1);
@@ -1362,14 +1389,11 @@ fn fillet_edge_adjacent_to_nurbs_blend_is_watertight() {
             .unwrap();
         sh.faces()
             .iter()
-            .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .filter(|&&f| !topo.face(f).unwrap().surface().is_planar())
             .map(|f| f.index())
             .collect()
     };
-    assert!(
-        !nurbs.is_empty(),
-        "first fillet must create a NURBS blend face"
-    );
+    assert!(!nurbs.is_empty(), "first fillet must create a blend face");
 
     let mut ef: HashMap<usize, Vec<FaceId>> = HashMap::new();
     {
