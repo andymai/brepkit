@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.9](https://github.com/andymai/brepkit/compare/v2.128.8...v2.128.9) (2026-08-02)
+
+
+### Performance
+
+* **fillet:** stop tessellating every face to check for degeneracy ([#1248](https://github.com/andymai/brepkit/issues/1248)) ([73a4c2c](https://github.com/andymai/brepkit/commit/73a4c2cefa253bae9133c07b872412c9be9f33bf))
+
 ## [2.128.8](https://github.com/andymai/brepkit/compare/v2.128.7...v2.128.8) (2026-08-02)
 
 
