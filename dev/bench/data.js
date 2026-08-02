@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785633701774,
+  "lastUpdate": 1785659052294,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13499,6 +13499,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17802974,
             "range": "± 73060",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c8da01f3f7edec50584d57beef36a851e9c5a8b",
+          "message": "docs: correct README, book, and agent-doc drift; guard it in CI (#1246)\n\nThe README, CLAUDE.md, and the book had drifted from the code. This\ncorrects what is verifiably wrong and adds a CI check so the file-path\nclass of drift cannot recur.\n\n## What was wrong\n\n**README** (last content edit 2026-06-23)\n- The `Scope` section said brepkit deliberately does not render, and\ntold readers that \"camera, lighting, and shading belong to the caller\n(Three.js, wgpu, and the like)\". `crates/render` landed three days later\nand does exactly that. The bullet now describes `brepkit-render` as an\noptional, non-required L4 crate, and the architecture table and status\ntable list it.\n- The headline example's comment claimed \"a block with a cylindrical\nhole\". Primitives are origin-anchored (`make_box` corner at origin,\n`make_cylinder` axis on z), so the cylinder overlaps only the +x+y\nquarter and takes a corner notch. Measured: it removes 203 of 6000,\nwhere a through-hole would remove 785. The comment now says what the\ncode does and points at `transform_solid` for placement.\n\n**CLAUDE.md**\n- Four module-map paths pointed at files that had been split into\ndirectories: `math/src/cdt.rs`, `math/src/nurbs/intersection.rs`,\n`algo/src/builder/face_splitter.rs`, and Recipe 3's `boolean.rs`.\n- Recipe 2's IO signatures were wrong in three ways: readers take the\ninput first and `topo` second (not the reverse), B-Rep readers return\n`Vec<SolidId>` (not `SolidId`), and text formats return `String` while\nonly binary formats return `Vec<u8>`.\n- No module map existed for `brepkit-render`;\n`operations/src/projection.rs` and `cap.rs` were undocumented.\n\n**book/** (last touched 2026-03-21)\n- The layer model showed 5 crates across L0 to L3. There are 14 across\nL0 to L4, and `operations`, `io`, and `wasm` were all listed at the\nwrong layer with the wrong dependencies.\n- The geometry chapter claimed \"No special-casing for different\ncurve/surface types\". That is the opposite of the design: `FaceSurface`\nand `EdgeCurve` are enums whose analytic variants are deliberately\npreserved through operations and written natively to STEP.\n- Getting-started pointed users at `bindings/ts` (`@brepkit/wasm`), a\n70-line scaffold that is not a workspace member, not referenced by any\nCI workflow, and never tested. The maintained surface is `brepkit-wasm`.\n\n## What is new\n\n- `scripts/check-doc-paths.sh` asserts every backticked `*.rs` path in\nCLAUDE.md and the skill files resolves under `crates/`, `xtask/src/`, or\n`tests/`. It runs as a hard-failing `Doc Paths` CI job and is verified\nin both directions (it fails on an injected bad path and passes on a\nclean tree). Two cookbook templates and one file that lives on the\nparked `fix/kumiko-corner-window-cut` branch are allowlisted with their\nreasons.\n- `crates/io/tests/readme_sample.rs` compiles and runs the README's Rust\nexample and asserts the quarter-cylinder volume, so the prose cannot\ndrift back.\n\n## Verification\n\n- Both README samples were executed. The Rust one runs as a test; the JS\none ran against a local `wasm-pack --target nodejs` build of this commit\nand returns a `Uint8Array` STEP payload as its comment claims.\n- Checked and found **accurate**, so left alone: every `Known\nLimitations` entry (inertia tensor absent from `operations` and `wasm`,\nPLY import not bound, defeaturing planar-only, IGES planar\nplaceholders), the Data Exchange table (all 7 formats have both a reader\nand a writer), every Status-table feature, and the book's \"no C/C++\ndependencies\" claim (`cc` enters only via `criterion`, a dev-dependency,\nand never reaches `brepkit-wasm`).\n- The perf table is deliberately untouched. It is stamped 2026-06-23 and\nis now the oldest claim in the README; refreshing it needs the brepjs\nhead-to-head harness and is a separate PR.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes doc drift in README, `CLAUDE.md`, and the book, and adds a CI\nguard that validates doc file paths across all agent docs. Also pins the\nREADME Rust example and documents the optional `brepkit-render` crate.\n\n- **Bug Fixes**\n- README: correct headline example (corner notch vs. hole), update\nmeasure/export code, and note optional `brepkit-render` in scope and\ncrate table.\n- `CLAUDE.md`: fix split-path references (CDT, NURBS intersections, face\nsplitter, boolean), correct IO recipe signatures (argument order, return\ntypes, plurality), add missing `projection.rs`/`cap.rs`, and include an\nL4 `render` module map.\n- Book: update layer model to L0–L4 with accurate crate placement and\ncorrected L2 deps (e.g., `algo`/`blend` depend only on math/topology;\n`render` is a leaf), clarify analytic geometry is preserved (not\ncollapsed to NURBS), and point getting-started to `brepkit-wasm` with a\nsimple usage snippet.\n\n- **New Features**\n- CI guard: `scripts/check-doc-paths.sh` verifies every backticked\n`*.rs` path in `CLAUDE.md` and `.claude/skills/**/*.md` resolves; added\nas a “Doc Paths” job in CI with an allowlist for templates, a parked\ntest file, and a deliberate `reconcile.rs` reference.\n- Test: `crates/io/tests/readme_sample.rs` compiles/runs the README Rust\nsample, asserts a quarter-cylinder notch is removed, and checks the STEP\nheader.\n- Contributor docs: `CONTRIBUTING.md` now calls out running\n`check-boundaries.sh` and `check-doc-paths.sh` (both run in CI).\n\n<sup>Written for commit 43d53a89e08f9dec2448cc5a7cb9cedfb2153bd9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1246?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-02T01:21:53-07:00",
+          "tree_id": "1dff6aec7d9be273ee4c57e7b145c870ed0ce230",
+          "url": "https://github.com/andymai/brepkit/commit/9c8da01f3f7edec50584d57beef36a851e9c5a8b"
+        },
+        "date": 1785659051254,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 828558,
+            "range": "± 8585",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 919505,
+            "range": "± 5688",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12133,
+            "range": "± 234",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 662419,
+            "range": "± 1430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21922297,
+            "range": "± 201626",
             "unit": "ns/iter"
           }
         ]
