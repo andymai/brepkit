@@ -230,21 +230,25 @@ suite number.
 and the standing note that plane-plane "stays theoretically susceptible ... no repro exhibits it".
 Ungating #1224's exact slab clip to plane-plane leaves the fuse failing IDENTICALLY (same 67-face
 lump, 368 ms). So this repro does not exhibit that hazard and the gate should stay as it is.
-**NARROWED to an incomplete partition of ONE oblique source face.** The quad's four corners are
-coplanar (normal ~(0.570,-0.244,-0.777) — a slanted lattice-strut plane, not axis-aligned), so it
-must be a trimmed piece of an INPUT face; booleans only emit trimmed patches of input surfaces.
-`BK_SUBFACE_BOX` tight on the quad identifies the source: **`src=Id(371)`**, which splits into
-- `Id(1446)` x[32.792,38.050] y[-42.950,-38.150] z[26.253,29.289] — Outside, SELECTED
-- `Id(1447)` x[38.000,38.050] **y[-40.932,-39.699]** z[29.260,29.289] — Inside, dropped (correct
-  for a Fuse)
+The quad's four corners are coplanar (normal ~(0.570,-0.244,-0.777) — a slanted lattice-strut
+plane), so it can only be a trimmed piece of an INPUT face; a boolean emits nothing else.
 
-and the missing quad occupies x[38.000,38.050] **y[-42.750,-40.909]** z[29.260,29.866] — the
-ADJACENT y-band in the same 0.05 mm x-gap, which receives NO sub-face at all. So the defect is not
-selection and not classification: the splitter's partition of `Id(371)` does not cover the whole
-face. Start by measuring the pieces' total area against the source face's.
-NOTE the neighbouring 0.05 mm slivers on OTHER sources (Id 1961 from Id(860), Id 1966 from Id(862))
-are emitted and correctly classified Inside, so the splitter does reach this region generally —
-whatever fails is specific to `Id(371)`'s partition.
+**REFUTED #2: it is NOT an incomplete face partition.** `BK_SUBFACE_SRC=<id>|all` (new, in
+`builder/mod.rs`) totals a source face's pieces against the source's own area. The obvious suspect
+`Id(371)` — whose pieces bracket the quad — tiles EXACTLY: 29.143651 = 29.076256 + 0.067395,
+uncovered 0.000000. Scanning ALL source faces, only one fails to tile and by 8e-6, i.e. fan-
+triangulation noise. So every source face is fully covered and the quad is not a missing piece of
+any of them.
+So both natural readings are now dead: the sections are not lost at FF (refuted #1) and the faces
+are not under-partitioned (refuted #2). THE REMAINING HYPOTHESIS, and the one to test next: the
+67-face lump may be a SPURIOUS selection rather than a real chunk missing its cap — the guard exists
+because dropping a real lump deletes material, but if this lump should not have been selected at all
+then its openness is a symptom. Test by classifying interior points of the lump's faces against both
+operands with the independent `classify_point` oracle: if the lump is genuinely outside the union,
+the defect is in selection, not in face creation.
+CAUTION on `BK_SUBFACE_BOX`: it tests face VERTICES against the box, so a face whose corners sit
+outside will not register; do not conclude a face is absent from that probe alone (the quad's own
+corners ARE its vertices, which is why it is a valid conclusion here).
 
 ## Live campaign: kumiko / goma
 
