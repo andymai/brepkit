@@ -861,3 +861,123 @@ fn shell_rounded_rect_watertight() {
         );
     }
 }
+
+/// CW-wound rounded-rect prism (the brepjs bin profile): half-extents `w/2` and
+/// `d/2`, corner radius `r`, extruded `h` in +Z.
+fn rounded_rect_prism(topo: &mut Topology, w: f64, d: f64, h: f64, r: f64) -> SolidId {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let tol = Tolerance::new();
+    let hw = w / 2.0;
+    let hd = d / 2.0;
+    let pts = [
+        Point3::new(-hw + r, -hd, 0.0),
+        Point3::new(hw - r, -hd, 0.0),
+        Point3::new(hw, -hd + r, 0.0),
+        Point3::new(hw, hd - r, 0.0),
+        Point3::new(hw - r, hd, 0.0),
+        Point3::new(-hw + r, hd, 0.0),
+        Point3::new(-hw, hd - r, 0.0),
+        Point3::new(-hw, -hd + r, 0.0),
+    ];
+    let vids: Vec<_> = pts
+        .iter()
+        .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
+        .collect();
+
+    let z_axis = Vec3::new(0.0, 0.0, 1.0);
+    let mk_line = |topo: &mut Topology, s, e| topo.add_edge(Edge::new(s, e, EdgeCurve::Line));
+    let mk_arc = |topo: &mut Topology, s, e, center: Point3| {
+        let circle = Circle3D::new(center, z_axis, r).unwrap();
+        topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle)))
+    };
+
+    let e_bot = mk_line(topo, vids[0], vids[1]);
+    let e_br = mk_arc(topo, vids[1], vids[2], Point3::new(hw - r, -hd + r, 0.0));
+    let e_right = mk_line(topo, vids[2], vids[3]);
+    let e_tr = mk_arc(topo, vids[3], vids[4], Point3::new(hw - r, hd - r, 0.0));
+    let e_top = mk_line(topo, vids[4], vids[5]);
+    let e_tl = mk_arc(topo, vids[5], vids[6], Point3::new(-hw + r, hd - r, 0.0));
+    let e_left = mk_line(topo, vids[6], vids[7]);
+    let e_bl = mk_arc(topo, vids[7], vids[0], Point3::new(-hw + r, -hd + r, 0.0));
+
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_bot, true),
+            OrientedEdge::new(e_br, true),
+            OrientedEdge::new(e_right, true),
+            OrientedEdge::new(e_tr, true),
+            OrientedEdge::new(e_top, true),
+            OrientedEdge::new(e_tl, true),
+            OrientedEdge::new(e_left, true),
+            OrientedEdge::new(e_bl, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wire_id = topo.add_wire(wire);
+    let face = Face::new(
+        wire_id,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    );
+    let face_id = topo.add_face(face);
+    crate::extrude::extrude(topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap()
+}
+
+/// A thickness that exceeds the corner radius collapses the corner fillet to a
+/// SHARP edge: the two neighbouring offset walls must meet at their own
+/// intersection, `half - thickness`. Before the collapse was handled they each
+/// kept the original tangent extent `half - radius` and overshot past each
+/// other by `thickness - radius`, leaving a sub-tolerance chamfer that later
+/// booleans could not fuse against.
+///
+/// From the gridfinity bin at `wallThickness` 3.8 against a 3.75 corner radius,
+/// where the overshoot was 0.05mm and broke the export.
+#[test]
+fn shell_thickness_past_corner_radius_gives_a_sharp_corner() {
+    let w = 41.5_f64;
+    let r = 3.75_f64;
+    let thickness = 3.8_f64;
+    let half = w / 2.0;
+
+    let mut topo = Topology::new();
+    let solid = rounded_rect_prism(&mut topo, w, w, 21.0, r);
+    let top = find_faces_by_normal(&topo, solid, Vec3::new(0.0, 0.0, 1.0));
+    let shelled = shell(&mut topo, solid, thickness, &top).unwrap();
+
+    // Every cavity vertex must lie inside the sharp corner, i.e. no coordinate
+    // may exceed `half - thickness`. The overshoot put them at `half - r`.
+    let sharp = half - thickness;
+    let tangent = half - r;
+    assert!(tangent > sharp, "the test geometry must actually collapse");
+
+    let mut worst = 0.0_f64;
+    for fid in brepkit_topology::explorer::solid_faces(&topo, shelled).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                let e = topo.edge(oe.edge()).unwrap();
+                for vid in [e.start(), e.end()] {
+                    let p = topo.vertex(vid).unwrap().point();
+                    // Only the INNER cavity is at issue; outer walls sit at `half`.
+                    if p.x().abs() <= half - 0.001 && p.y().abs() <= half - 0.001 {
+                        worst = worst.max(p.x().abs().max(p.y().abs()));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        worst <= sharp + 0.01,
+        "cavity reaches {worst:.4}, past the sharp corner at {sharp:.4} \
+         (the collapsed-fillet overshoot lands at {tangent:.4})"
+    );
+}

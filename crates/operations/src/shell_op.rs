@@ -189,6 +189,25 @@ pub fn shell(
         let face = topo.face(fid)?;
         let is_open = open_set.contains(&fid.index());
 
+        // A convex fillet whose radius the thickness swallows does not offset
+        // to a smaller fillet — it collapses to a sharp edge where the two
+        // NEIGHBOURING offset surfaces meet. Its own normal is useless for
+        // that: at each tangent vertex it equals the neighbour's normal, so
+        // the miter sees one direction, offsets perpendicular only, and the
+        // neighbours overshoot past each other by (thickness - radius) instead
+        // of meeting. Feeding every vertex of the collapsing face BOTH extreme
+        // normals puts the miter on the intersection of the two offset
+        // surfaces, which is exactly the sharp corner.
+        let collapsing = match face.surface() {
+            FaceSurface::Cylinder(cyl) => cyl.radius() - thickness <= tol.linear,
+            _ => false,
+        };
+        let extreme_normals = if collapsing {
+            extreme_face_normals(&face_surface_normals(face, verts))
+        } else {
+            None
+        };
+
         for v in verts {
             let (u, v_param) = face.surface().project_point(*v).unwrap_or((0.0, 0.0));
             let mut normal = face.surface().normal(u, v_param);
@@ -197,10 +216,13 @@ pub fn shell(
             if face.is_reversed() {
                 normal = -normal;
             }
-            vertex_normals
-                .entry(quantize_pt(*v))
-                .or_default()
-                .push((normal, is_open));
+            let entry = vertex_normals.entry(quantize_pt(*v)).or_default();
+            if let Some((n_a, n_b)) = extreme_normals {
+                entry.push((n_a, is_open));
+                entry.push((n_b, is_open));
+            } else {
+                entry.push((normal, is_open));
+            }
         }
     }
 
@@ -659,3 +681,32 @@ fn sort_edges_into_loops(
 
 #[cfg(test)]
 mod tests;
+
+/// Outward normals of `face` at each of `verts`, honouring the reversal flag.
+fn face_surface_normals(face: &brepkit_topology::face::Face, verts: &[Point3]) -> Vec<Vec3> {
+    verts
+        .iter()
+        .map(|v| {
+            let (u, vp) = face.surface().project_point(*v).unwrap_or((0.0, 0.0));
+            let n = face.surface().normal(u, vp);
+            if face.is_reversed() { -n } else { n }
+        })
+        .collect()
+}
+
+/// The two most widely separated normals in `normals` (the ends of a fillet's
+/// angular sweep), or `None` if they are all effectively parallel — a face that
+/// spans no angle has no sharp corner to collapse to.
+fn extreme_face_normals(normals: &[Vec3]) -> Option<(Vec3, Vec3)> {
+    let mut best: Option<(f64, Vec3, Vec3)> = None;
+    for (i, a) in normals.iter().enumerate() {
+        for b in &normals[i + 1..] {
+            let d = a.dot(*b);
+            if best.is_none_or(|(bd, _, _)| d < bd) {
+                best = Some((d, *a, *b));
+            }
+        }
+    }
+    // cos > 0.999 is under a couple of degrees: not a real corner.
+    best.filter(|&(d, _, _)| d < 0.999).map(|(_, a, b)| (a, b))
+}
