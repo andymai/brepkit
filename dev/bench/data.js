@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785659617014,
+  "lastUpdate": 1785664579339,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13607,6 +13607,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22054171,
             "range": "± 59670",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "73a4c2cefa253bae9133c07b872412c9be9f33bf",
+          "message": "perf(fillet): stop tessellating every face to check for degeneracy (#1248)\n\n`box + fillet` was the one head-to-head row brepkit lost: **31.7 ms in\nwasm against the reference kernel's 6.1 ms**, a 5x loss. It is now **0.3\nms, 20x faster**.\n\n```\nbox+fillet   17.054 ms -> 127.18 us   native (criterion, same machine)\nbox+fillet   31.7 ms   -> 0.3 ms      wasm (vs 6.1 ms reference)\n```\n\n## Where the time went\n\nPhase-timing the engine put **19.3 ms of a 19.8 ms run in the degeneracy\nguard** at the end. Building the fillet took 0.4 ms; assembly was 93 µs.\n\nThe guard calls `face_area` on every face at deflection `radius * 0.1`.\n`face_area` tessellates NURBS faces, and the corner blend is a\ndegree-(2,2) rational patch with a **degenerate column** (a triangular\nregion forced onto a square domain). The resulting singular corner makes\nadaptive subdivision emit up to **1490 triangles for a patch the size of\na sphere octant**, where 128 suffices:\n\n| corner patch | triangles | face_area |\n|---|---|---|\n| 3 of 8 | 128 to 362 | 0.36 to 0.82 ms |\n| 5 of 8 | 806 to 1490 | 1.7 to 3.0 ms |\n\nSame geometry, different cost: the point ordering decides which physical\ncorner the singularity lands on. Coarsening the deflection does not help\nat all (the mesher floors out at 128 triangles by deflection 0.1 and\nstays there through 10.0), which is why this is a patch-structure\nproblem rather than a tolerance one.\n\n## The fix\n\n**Guard.** Clear a face on its boundary-polygon area (Newell) first, and\nfall back to the exact `face_area` only when that cheap bound cannot\nclear the floor. A wire that already encloses real area cannot bound a\ncollapsed face, so the verdict is unchanged and every borderline face is\nstill measured exactly.\n\nThe guard exists so `try_fillet` gets an error on a closed circular rim\nand falls through to the walking engine. That rejection still fires, and\nthere is now a test pinning it so the shortcut cannot silently swallow\nit.\n\n**Analytic wall.** A straight edge between two planar faces rolls an\nexact quarter-cylinder; it was emitted as the equivalent rational NURBS.\nIt is now a `CylindricalFace` whenever the derived axis actually carries\nall four corners, with the NURBS form retained as the fallback. Worth\n~20% on its own, and it keeps the wall analytic for downstream booleans\nand STEP export. Assembly already builds true `Circle3D` arcs for the\nangular edges of a cylindrical face, so the boundary is shared correctly\nwith the corner patches.\n\n## Verification\n\n- **Topology identical**: 26 faces, 48 edges, 24 vertices before and\nafter.\n- **Volume slightly closer to truth**: 7949.4916 to 7949.5373, against\nan exact Minkowski value of 7949.8348 for a 20-cube filleted at r=1.\n- Cylindrical wall areas are now exact: 12 x 4pi = 150.7964.\n- Full workspace suite green (2677 passed). The `brepkit-render`\n`compute_mesh_lod` SIGSEGV reproduces on unmodified `main` with these\nchanges stashed, uses no fillet, and its three assertions pass; it is a\npre-existing wgpu teardown crash, not from this PR.\n- README table refreshed from the same run, and its `box + fillet`\nfootnote (which existed only because the criterion case measured a\ndifferent engine) is gone: the bench now drives the rolling-ball path\nthe binding actually selects, with the flat-bevel engine kept as\n`box+fillet (bevel)`.\n\n## Deliberately not done\n\nThe corner patch is geometrically a spherical triangle, and emitting\n`FaceSurface::Sphere` would make it exact rather than the current\nfew-percent approximation. I tried it and reverted: a sphere face\nbounded by a triangular wire measures its own area over the wrong extent\n(**9.42 = 3pi per corner instead of the octant's pi/2**), dropping a\nfilleted 10-cube from 975.59 to 973.70. That needs trimmed-extent\nsupport on sphere faces first, so it is left as a follow-up with the\nfinding recorded in a comment at the site.\n\nEngine order in `try_fillet` is untouched, per the product decision\nrecorded in the fillet-blend skill.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nStops tessellating every face in the rolling-ball fillet guard and adds\nanalytic cylinders for straight-edge walls. Box + fillet drops from 31.7\nms to 0.3 ms in WASM and from 17.05 ms to 127 µs native.\n\n- **Performance**\n- Degeneracy guard checks boundary polygon area first; falls back to\nexact `face_area` only when needed.\n  - Keeps the closed circular rim rejection and pins it with a test.\n- Bench suite separates `box+fillet (bevel)` from the rolling-ball case;\nREADME benchmark table updated to measure the rolling-ball engine.\n- Cylinder wall orientation now projects the axis component out before\ncomparison to avoid reversal flips.\n\n- **New Features**\n- Straight edge between planar faces emits a `CylindricalFace` when the\nderived axis carries all corners; NURBS remains as fallback.\n- Tests recognize any non-planar blend face (cylinder or NURBS) to match\nthe exact wall; analytic cylinder preserves area and improves downstream\nbooleans and STEP export.\n\n<sup>Written for commit ff9b498577e5d362b9cbd17eb49f9473c3c27800.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1248?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-02T02:53:57-07:00",
+          "tree_id": "4794eff7b9efebe9a19b67749820285a05c45f70",
+          "url": "https://github.com/andymai/brepkit/commit/73a4c2cefa253bae9133c07b872412c9be9f33bf"
+        },
+        "date": 1785664578172,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 821567,
+            "range": "± 1397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 907748,
+            "range": "± 1368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11956,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 659055,
+            "range": "± 51375",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21632605,
+            "range": "± 396507",
             "unit": "ns/iter"
           }
         ]
