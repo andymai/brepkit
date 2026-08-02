@@ -1600,10 +1600,14 @@ pub fn fillet_rolling_ball(
             // A cylinder's own normal runs radially outward from its axis, so
             // derive the flag from that rather than reusing the NURBS surface's
             // (the two parameterizations need not agree on orientation).
-            let mid_radial = ((contact1_start - cylinder.origin())
-                + (contact2_start - cylinder.origin()))
-            .normalize()
-            .unwrap_or(bisector_ref);
+            // Project the axis component out before testing: only the radial
+            // part is the surface normal, so an axial drift in either the
+            // contacts or `bisector_ref` cannot flip the comparison.
+            let mid_span =
+                (contact1_start - cylinder.origin()) + (contact2_start - cylinder.origin());
+            let mid_radial = (mid_span - cylinder.axis() * mid_span.dot(cylinder.axis()))
+                .normalize()
+                .unwrap_or(bisector_ref);
             all_specs.push(FaceSpec::CylindricalFace {
                 vertices: strip_vertices,
                 cylinder,

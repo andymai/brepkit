@@ -248,9 +248,13 @@ fn rolling_ball_rejects_closed_rim_so_dispatcher_falls_through() {
 
     let err = fillet_rolling_ball(&mut topo, cyl, &edges, 0.5)
         .expect_err("rolling-ball must reject a closed circular rim");
+    let reason = match &err {
+        crate::OperationsError::InvalidInput { reason } => reason,
+        other => unreachable!("expected InvalidInput from the degeneracy guard, got: {other:?}"),
+    };
     assert!(
-        err.to_string().contains("degenerate face"),
-        "expected the degeneracy guard to fire, got: {err}"
+        reason.contains("degenerate face"),
+        "expected the degeneracy guard to fire, got: {reason}"
     );
 }
 
@@ -1187,7 +1191,8 @@ fn fillet_rolling_ball_second_pass_on_nurbs_solid() {
     let result1 = fillet_rolling_ball(&mut topo, solid, &[edges1[0]], 0.1)
         .expect("first rolling-ball fillet should succeed");
 
-    // Confirm NURBS face was created.
+    // Confirm a blend face was created (a cylinder here, NURBS for curved
+    // neighbours).
     let has_nurbs = {
         let s = topo.solid(result1).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
@@ -1383,7 +1388,7 @@ fn fillet_edge_adjacent_to_nurbs_blend_is_watertight() {
     let vol1 = crate::measure::solid_volume(&topo, first, 0.05).unwrap();
 
     // Collect NURBS blend faces and edge→faces adjacency.
-    let nurbs: HashSet<usize> = {
+    let blend_faces: HashSet<usize> = {
         let sh = topo
             .shell(topo.solid(first).unwrap().outer_shell())
             .unwrap();
@@ -1393,7 +1398,10 @@ fn fillet_edge_adjacent_to_nurbs_blend_is_watertight() {
             .map(|f| f.index())
             .collect()
     };
-    assert!(!nurbs.is_empty(), "first fillet must create a blend face");
+    assert!(
+        !blend_faces.is_empty(),
+        "first fillet must create a blend face"
+    );
 
     let mut ef: HashMap<usize, Vec<FaceId>> = HashMap::new();
     {
@@ -1418,7 +1426,7 @@ fn fillet_edge_adjacent_to_nurbs_blend_is_watertight() {
         .find(|&e| {
             ef.get(&e.index()).is_some_and(|fs| {
                 fs.len() == 2
-                    && fs.iter().any(|f| nurbs.contains(&f.index()))
+                    && fs.iter().any(|f| blend_faces.contains(&f.index()))
                     && dihedral_deg(&topo, e, fs) > 5.0
             })
         })
