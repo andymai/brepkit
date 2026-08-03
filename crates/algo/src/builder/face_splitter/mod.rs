@@ -1251,20 +1251,260 @@ fn split_sections_at_seam_meridian(
     out
 }
 
+/// Split a u-periodic cylinder/cone lateral into TWO bands along a
+/// seam-anchored section chain that winds the periodic direction — the chain
+/// generalization of [`split_periodic_face_into_bands`], whose separator must
+/// be a closed circle. Mirrors its structure: same boundary preconditions
+/// (two closed rim circles + seam lines), same per-band wire shape
+/// (rim, seam, separator, seam), same precomputed interior points.
+///
+/// Returns `None` (caller falls through) unless: the boundary is exactly two
+/// closed rims + seam edges; ALL sections belong to one winding chain; the
+/// chain has a vertex on the seam meridian (the seam-anchoring pre-step
+/// guarantees this for winding chains); and every chain sample stays
+/// strictly between the rims.
+#[allow(clippy::too_many_lines)]
+fn split_periodic_face_by_winding_chain(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use std::f64::consts::{PI, TAU};
+
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let close_tol = tol * 100.0;
+
+    let (chain, _winding) = winding_section_chain(sections, surface, tol)?;
+    if chain.len() != sections.len() {
+        // Sections outside the chain would be silently dropped — defer.
+        return None;
+    }
+
+    // Boundary: exactly two closed rim circles plus seam Line edges.
+    let mut boundary_circles: Vec<&OrientedPCurveEdge> = Vec::new();
+    let mut seam_edges: Vec<&OrientedPCurveEdge> = Vec::new();
+    for e in boundary_edges {
+        let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
+        match (&e.curve_3d, is_closed) {
+            (EdgeCurve::Circle(_), true) => boundary_circles.push(e),
+            (EdgeCurve::Line, false) => seam_edges.push(e),
+            _ => return None,
+        }
+    }
+    if boundary_circles.len() != 2 || seam_edges.is_empty() {
+        return None;
+    }
+    let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
+    let wrap_pi = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
+
+    let circle_v = |e: &OrientedPCurveEdge| -> Option<f64> {
+        let (_, v) = surface.project_point(e.start_3d)?;
+        let on_seam = surface.evaluate(seam_u, v)?;
+        ((on_seam - e.start_3d).length() < close_tol).then_some(v)
+    };
+    let v0 = circle_v(boundary_circles[0])?;
+    let v1 = circle_v(boundary_circles[1])?;
+    let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {
+        (v0, boundary_circles[0], v1, boundary_circles[1])
+    } else {
+        (v1, boundary_circles[1], v0, boundary_circles[0])
+    };
+    if v_top - v_bot < close_tol {
+        return None;
+    }
+
+    // Rotate the chain to start at its seam-anchored vertex.
+    let traversal_start = |&(idx, fwd): &(usize, bool)| -> Point3 {
+        let s = &sections[idx];
+        if fwd { s.start } else { s.end }
+    };
+    let seam_pos = chain.iter().position(|entry| {
+        surface
+            .project_point(traversal_start(entry))
+            .is_some_and(|(u, _)| wrap_pi(u - seam_u).abs() < 1e-6)
+    })?;
+    let mut chain: Vec<(usize, bool)> = chain;
+    chain.rotate_left(seam_pos);
+    let (_, v_x) = surface.project_point(traversal_start(&chain[0]))?;
+
+    // Every chain sample must sit strictly between the rims, and the chain's
+    // v profile is recorded per sample for the interior-point lookup below.
+    let mut samples_uv: Vec<(f64, f64)> = Vec::new();
+    for &(idx, _) in &chain {
+        let s = &sections[idx];
+        for k in 0..=8 {
+            let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+            let t = d0 + (d1 - d0) * (f64::from(k) / 8.0);
+            let p = s.curve_3d.evaluate_with_endpoints(t, s.start, s.end);
+            let (u, v) = surface.project_point(p)?;
+            if v < v_bot + close_tol || v > v_top - close_tol {
+                return None;
+            }
+            samples_uv.push((u, v));
+        }
+    }
+
+    // Traversal tangent of the chain at its seam start, compared with the
+    // bottom rim's traversal tangent there (the circle-band rule): the chain
+    // list as ordered plays the LOWER role when aligned, else it is flipped.
+    let ref_tan = {
+        let EdgeCurve::Circle(c) = &bot_edge.curve_3d else {
+            return None;
+        };
+        let t = c.tangent(c.project(bot_edge.start_3d));
+        if bot_edge.forward { t } else { -t }
+    };
+    let chain_tan = {
+        let (idx, fwd) = chain[0];
+        let s = &sections[idx];
+        let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+        let t_at = if fwd { d0 } else { d1 };
+        let tan = s.curve_3d.tangent_with_endpoints(t_at, s.start, s.end);
+        if fwd { tan } else { -tan }
+    };
+    let chain_is_lower_role = chain_tan.dot(ref_tan) > 0.0;
+
+    // Materialize the chain as pcurve edges in a given traversal direction,
+    // walking UV u with nearest-copy continuity from the seam.
+    let build_chain = |as_ordered: bool| -> Option<Vec<OrientedPCurveEdge>> {
+        let entries: Vec<(usize, bool)> = if as_ordered {
+            chain.clone()
+        } else {
+            chain.iter().rev().map(|&(i, f)| (i, !f)).collect()
+        };
+        let mut out = Vec::with_capacity(entries.len());
+        let mut u_prev = seam_u;
+        for (idx, fwd) in entries {
+            let s = &sections[idx];
+            let (from, to) = if fwd {
+                (s.start, s.end)
+            } else {
+                (s.end, s.start)
+            };
+            let (u_raw0, v0) = surface.project_point(from)?;
+            let (u_raw1, v1) = surface.project_point(to)?;
+            let u0 = u_prev + wrap_pi(u_raw0 - u_prev);
+            let u1 = u0 + wrap_pi(u_raw1 - u_raw0);
+            u_prev = u1;
+            let pcurve = match rank {
+                Rank::A => s.pcurve_a.clone(),
+                Rank::B => s.pcurve_b.clone(),
+            };
+            out.push(OrientedPCurveEdge {
+                curve_3d: s.curve_3d.clone(),
+                pcurve,
+                start_uv: Point2::new(u0, v0),
+                end_uv: Point2::new(u1, v1),
+                start_3d: from,
+                end_3d: to,
+                forward: fwd,
+                source_edge_idx: None,
+                pave_block_id: s.pave_block_id,
+            });
+        }
+        Some(out)
+    };
+    let chain_lower = build_chain(chain_is_lower_role)?;
+    let chain_upper = build_chain(!chain_is_lower_role)?;
+
+    let mk_seam = |va: f64, vb: f64| -> Option<OrientedPCurveEdge> {
+        let pa = surface.evaluate(seam_u, va)?;
+        let pb = surface.evaluate(seam_u, vb)?;
+        let dir = brepkit_math::vec::Vec2::new(0.0, if vb > va { 1.0 } else { -1.0 });
+        let pcurve = brepkit_math::curves2d::Curve2D::Line(
+            brepkit_math::curves2d::Line2D::new(Point2::new(seam_u, va), dir).ok()?,
+        );
+        Some(OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve,
+            start_uv: Point2::new(seam_u, va),
+            end_uv: Point2::new(seam_u, vb),
+            start_3d: pa,
+            end_3d: pb,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        })
+    };
+
+    // Interior points: the chain's v at the antipodal meridian, from the
+    // sample nearest u = seam_u + π.
+    let u_q = (seam_u + PI).rem_euclid(TAU);
+    let v_at_q = samples_uv
+        .iter()
+        .min_by(|a, b| {
+            wrap_pi(a.0 - u_q)
+                .abs()
+                .partial_cmp(&wrap_pi(b.0 - u_q).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|&(_, v)| v)?;
+    let lower_interior = surface.evaluate(u_q, f64::midpoint(v_bot, v_at_q))?;
+    let upper_interior = surface.evaluate(u_q, f64::midpoint(v_at_q, v_top))?;
+
+    // Lower band: bottom rim, seam up to the chain's seam vertex, the chain
+    // in the upper role, seam back down. Upper band symmetric.
+    let mut lower_wire = vec![bot_edge.clone(), mk_seam(v_bot, v_x)?];
+    lower_wire.extend(chain_upper);
+    lower_wire.push(mk_seam(v_x, v_bot)?);
+    let mut upper_wire = chain_lower;
+    upper_wire.push(mk_seam(v_x, v_top)?);
+    upper_wire.push(top_edge.clone());
+    upper_wire.push(mk_seam(v_top, v_x)?);
+
+    Some(vec![
+        SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: lower_wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(lower_interior),
+        },
+        SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: upper_wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(upper_interior),
+        },
+    ])
+}
+
 /// Whether the sections chain into a loop that WINDS the surface's periodic
-/// u direction (|net signed u-progress| > π after chaining by endpoint
-/// position). Non-periodic surfaces never wind. Chains that fail to close
-/// are conservatively reported as non-winding — the internal-loops path has
-/// its own closure requirements.
+/// u direction. See [`winding_section_chain`].
 fn sections_form_winding_chain(sections: &[SectionEdge], surface: &FaceSurface, tol: f64) -> bool {
+    winding_section_chain(sections, surface, tol).is_some()
+}
+
+/// The ordered section chain forming a loop that WINDS the surface's
+/// periodic u direction (|net signed u-progress| > π after chaining by
+/// endpoint position), as `(piece index, traversed start→end)` entries, with
+/// the signed winding. Non-periodic surfaces never wind. Chains that fail to
+/// close are conservatively reported as non-winding — the internal-loops
+/// path has its own closure requirements.
+fn winding_section_chain(
+    sections: &[SectionEdge],
+    surface: &FaceSurface,
+    tol: f64,
+) -> Option<(Vec<(usize, bool)>, f64)> {
     use std::collections::HashMap;
     use std::f64::consts::{PI, TAU};
 
     let (Some(_), _) = super::pcurve_compute::surface_periods(surface) else {
-        return false;
+        return None;
     };
     if sections.len() < 2 {
-        return false;
+        return None;
     }
     let proj_u = |p: Point3| -> Option<f64> { surface.project_point(p).map(|(u, _)| u) };
     let qscale = 1.0 / tol.max(1e-12);
@@ -1294,8 +1534,10 @@ fn sections_form_winding_chain(sections: &[SectionEdge], surface: &FaceSurface, 
         let mut forward = true;
         let origin = q3(sections[start].start);
         let mut closed = false;
+        let mut chain: Vec<(usize, bool)> = Vec::new();
         for _ in 0..sections.len() {
             used[cur] = true;
+            chain.push((cur, forward));
             let s = &sections[cur];
             let (from, to) = if forward {
                 (s.start, s.end)
@@ -1303,7 +1545,7 @@ fn sections_form_winding_chain(sections: &[SectionEdge], surface: &FaceSurface, 
                 (s.end, s.start)
             };
             let (Some(u0), Some(u1)) = (proj_u(from), proj_u(to)) else {
-                return false;
+                return None;
             };
             winding += wrap_pi(u1 - u0);
             let to_key = q3(to);
@@ -1321,10 +1563,10 @@ fn sections_form_winding_chain(sections: &[SectionEdge], surface: &FaceSurface, 
             cur = next.0;
         }
         if closed && winding.abs() > PI {
-            return true;
+            return Some((chain, winding));
         }
     }
-    false
+    None
 }
 
 /// [`wire_loops_have_degenerate_area`] with period-aware sampling: a valid
@@ -4386,6 +4628,27 @@ fn split_face_2d_impl(
         return band;
     }
 
+    // Seam-anchor a winding section chain: a chain that winds the periodic
+    // direction must connect to the seam in the trace graph, or it floats as
+    // an island and every wire builder mis-handles it (the closed-circle
+    // band shortcut gets this via the seam-anchor pre-pass; a chain of arcs
+    // and conic pieces gets it here). Splitting the crossing piece at the
+    // seam meridian makes the crossing point a section ENDPOINT, so the
+    // boundary-splitting below anchors the seam edge at the same 3D point
+    // and the graphs share a vertex.
+    let seam_anchored_sections: Vec<SectionEdge>;
+    let sections: &[SectionEdge] = if !is_plane
+        && super::pcurve_compute::surface_periods(&surface).0.is_some()
+        && sections_form_winding_chain(sections, &surface, tol.linear)
+        && let Some(seam_u) = boundary_seam_u(&boundary_edges, &surface, tol.linear)
+    {
+        seam_anchored_sections =
+            split_sections_at_seam_meridian(sections, &surface, seam_u, tol.linear);
+        &seam_anchored_sections
+    } else {
+        sections
+    };
+
     // Band shortcut: closed section circles on a u-periodic face split it
     // into stacked bands, not discs. Requires seam-anchored circles (see
     // the seam-anchor pre-pass in fill_images_faces); falls through to the
@@ -4394,6 +4657,28 @@ fn split_face_2d_impl(
         && !is_plane
         && original_inner_wires.is_empty()
         && let Some(bands) = split_periodic_face_into_bands(
+            &surface,
+            &boundary_edges,
+            sections,
+            rank,
+            reversed,
+            face_id,
+            tol.linear,
+        )
+    {
+        return bands;
+    }
+
+    // Chain-band shortcut: a seam-anchored section chain that WINDS the
+    // periodic direction separates the lateral into two bands, exactly like
+    // a closed section circle but with a wavy separator (the circle-outside
+    // cone∪box fuse: 4 corner ring-arcs + 4 wall arches). The greedy and
+    // DCEL both mistrace the chain's identical-tangent parallel twins, so
+    // the bands are emitted directly.
+    if u_periodic
+        && !is_plane
+        && original_inner_wires.is_empty()
+        && let Some(bands) = split_periodic_face_by_winding_chain(
             &surface,
             &boundary_edges,
             sections,
@@ -4474,27 +4759,6 @@ fn split_face_2d_impl(
             &wire_pts,
         );
     }
-
-    // Seam-anchor a winding section chain: a chain that winds the periodic
-    // direction must connect to the seam in the trace graph, or it floats as
-    // an island and every wire builder mis-handles it (the closed-circle
-    // band shortcut gets this via the seam-anchor pre-pass; a chain of arcs
-    // and conic pieces gets it here). Splitting the crossing piece at the
-    // seam meridian makes the crossing point a section ENDPOINT, so the
-    // boundary-splitting below anchors the seam edge at the same 3D point
-    // and the graphs share a vertex.
-    let seam_anchored_sections: Vec<SectionEdge>;
-    let sections: &[SectionEdge] = if !is_plane
-        && super::pcurve_compute::surface_periods(&surface).0.is_some()
-        && sections_form_winding_chain(sections, &surface, tol.linear)
-        && let Some(seam_u) = boundary_seam_u(&boundary_edges, &surface, tol.linear)
-    {
-        seam_anchored_sections =
-            split_sections_at_seam_meridian(sections, &surface, seam_u, tol.linear);
-        &seam_anchored_sections
-    } else {
-        sections
-    };
 
     let mut split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
     split_pts_3d.append(&mut outer_clip_anchors);
