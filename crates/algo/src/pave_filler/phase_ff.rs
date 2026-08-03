@@ -262,7 +262,50 @@ pub fn perform(
                             (FaceClip::Range(a), FaceClip::Range(b)) => {
                                 let f0 = a.0.max(b.0);
                                 let f1 = a.1.min(b.1);
-                                trim_raw_line(&raw, f0, f1, tol)
+                                trim_raw_line(&raw, f0, f1, tol).and_then(|mut piece| {
+                                    // The trim fractions carry accumulated clip
+                                    // rounding (the kumiko lattice chain ends
+                                    // measured up to ~2e-5 off their face
+                                    // boundaries), so pull each endpoint to its
+                                    // exact triple junction when a boundary is
+                                    // within the wide trigger band; refinement
+                                    // is exact, and BOTH faces receive the same
+                                    // snapped copy. A piece that collapses
+                                    // (a sub-weld micro-fragment riding a
+                                    // junction) is dropped.
+                                    let band = tol.linear * 1000.0;
+                                    let weld = tol.linear * 100.0;
+                                    // Only adopt a snap that moves the
+                                    // endpoint beyond the weld band — closer
+                                    // endpoints are already handled by the
+                                    // weld-scale boundary anchor, and
+                                    // perturbing them mints zero-length
+                                    // junction slivers.
+                                    let sn = snap_to_boundary_junction_band(
+                                        topo,
+                                        fa,
+                                        fb,
+                                        piece.p_start,
+                                        tol,
+                                        band,
+                                    );
+                                    if (sn - piece.p_start).length() > weld {
+                                        piece.p_start = sn;
+                                    }
+                                    let en = snap_to_boundary_junction_band(
+                                        topo,
+                                        fa,
+                                        fb,
+                                        piece.p_end,
+                                        tol,
+                                        band,
+                                    );
+                                    if (en - piece.p_end).length() > weld {
+                                        piece.p_end = en;
+                                    }
+                                    ((piece.p_start - piece.p_end).length() > tol.linear * 10.0)
+                                        .then_some(piece)
+                                })
                             }
                             // One face produced an interval, the other could
                             // not build a usable polygon (degenerate wire,
@@ -1693,9 +1736,24 @@ fn snap_to_boundary_junction(
     p: Point3,
     tol: Tolerance,
 ) -> Point3 {
+    snap_to_boundary_junction_band(topo, fa, fb, p, tol, tol.linear * 100.0)
+}
+
+/// [`snap_to_boundary_junction`] with an explicit trigger band. The refine
+/// step is exact regardless of the trigger, so a wider band only extends
+/// WHICH endpoints get pulled to their true triple junction; the kumiko
+/// lattice chain ends carry up to ~2e-5 of accumulated trim rounding and sit
+/// outside the default weld band.
+fn snap_to_boundary_junction_band(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    p: Point3,
+    tol: Tolerance,
+    weld: f64,
+) -> Point3 {
     const NS: usize = 64;
     let surf_of = |fid: FaceId| topo.face(fid).ok().map(|f| f.surface().clone());
-    let weld = tol.linear * 100.0;
     // (distance, foot, foot's curve param, owning face, edge)
     let mut best: Option<(f64, Point3, f64, FaceId, brepkit_topology::edge::EdgeId)> = None;
     for fid in [fa, fb] {
