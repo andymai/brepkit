@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.15](https://github.com/andymai/brepkit/compare/v2.128.14...v2.128.15) (2026-08-03)
+
+
+### Bug Fixes
+
+* **operations:** per-face tessellation and classification of wavy-band faces ([#1265](https://github.com/andymai/brepkit/issues/1265)) ([458d0f7](https://github.com/andymai/brepkit/commit/458d0f72276743b78c7443bce5dbcd972be23fd6))
+
 ## [2.128.14](https://github.com/andymai/brepkit/compare/v2.128.13...v2.128.14) (2026-08-03)
 
 
