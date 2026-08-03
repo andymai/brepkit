@@ -55,6 +55,65 @@ fn ff_trace_x() -> Option<f64> {
 ///
 /// Returns [`AlgoError`] if any topology lookup or intersection computation fails.
 #[allow(clippy::too_many_lines)]
+/// Cross-pair triple-junction registry: endpoints of trimmed plane-plane
+/// sections that land near a face-boundary corner are pulled to ONE shared
+/// junction point per corner, first refiner wins. Pairwise refinement alone
+/// gives each pair its own solution (~1e-5 apart at a lattice corner where
+/// four faces meet), and the disagreeing copies mint micro-sliver free edges.
+#[derive(Default)]
+struct JunctionRegistry {
+    cells: std::collections::HashMap<(i64, i64, i64), Point3>,
+}
+
+impl JunctionRegistry {
+    const CELL: f64 = 1e-4;
+
+    fn key(p: Point3) -> (i64, i64, i64) {
+        #[allow(clippy::cast_possible_truncation)]
+        let q = |v: f64| (v / Self::CELL).round() as i64;
+        (q(p.x()), q(p.y()), q(p.z()))
+    }
+
+    fn lookup(&self, p: Point3, band: f64) -> Option<Point3> {
+        let (kx, ky, kz) = Self::key(p);
+        let mut best: Option<(f64, Point3)> = None;
+        for dx in -1..=1_i64 {
+            for dy in -1..=1_i64 {
+                for dz in -1..=1_i64 {
+                    if let Some(&j) = self.cells.get(&(kx + dx, ky + dy, kz + dz)) {
+                        let d = (j - p).length();
+                        if d <= band && best.is_none_or(|(bd, _)| d < bd) {
+                            best = Some((d, j));
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, j)| j)
+    }
+
+    fn resolve(
+        &mut self,
+        topo: &Topology,
+        fa: FaceId,
+        fb: FaceId,
+        p: Point3,
+        tol: Tolerance,
+    ) -> Point3 {
+        let band = tol.linear * 1000.0;
+        if let Some(j) = self.lookup(p, band) {
+            return j;
+        }
+        match snap_to_boundary_junction_band(topo, fa, fb, p, tol, band) {
+            Some(j) => {
+                self.cells.insert(Self::key(j), j);
+                j
+            }
+            None => p,
+        }
+    }
+}
+
 pub fn perform(
     topo: &mut Topology,
     solid_a: SolidId,
@@ -64,6 +123,8 @@ pub fn perform(
 ) -> Result<(), AlgoError> {
     let faces_a = brepkit_topology::explorer::solid_faces(topo, solid_a)?;
     let faces_b = brepkit_topology::explorer::solid_faces(topo, solid_b)?;
+
+    let mut junction_registry = JunctionRegistry::default();
 
     // Pre-compute face AABBs for rejection
     let bboxes_a = compute_face_bboxes(topo, &faces_a, tol)?;
@@ -263,46 +324,18 @@ pub fn perform(
                                 let f0 = a.0.max(b.0);
                                 let f1 = a.1.min(b.1);
                                 trim_raw_line(&raw, f0, f1, tol).and_then(|mut piece| {
-                                    // The trim fractions carry accumulated clip
-                                    // rounding (the kumiko lattice chain ends
-                                    // measured up to ~2e-5 off their face
-                                    // boundaries), so pull each endpoint to its
-                                    // exact triple junction when a boundary is
-                                    // within the wide trigger band; refinement
-                                    // is exact, and BOTH faces receive the same
-                                    // snapped copy. A piece that collapses
-                                    // (a sub-weld micro-fragment riding a
-                                    // junction) is dropped.
-                                    let band = tol.linear * 1000.0;
-                                    let weld = tol.linear * 100.0;
-                                    // Only adopt a snap that moves the
-                                    // endpoint beyond the weld band — closer
-                                    // endpoints are already handled by the
-                                    // weld-scale boundary anchor, and
-                                    // perturbing them mints zero-length
-                                    // junction slivers.
-                                    let sn = snap_to_boundary_junction_band(
-                                        topo,
-                                        fa,
-                                        fb,
-                                        piece.p_start,
-                                        tol,
-                                        band,
-                                    );
-                                    if (sn - piece.p_start).length() > weld {
-                                        piece.p_start = sn;
-                                    }
-                                    let en = snap_to_boundary_junction_band(
-                                        topo,
-                                        fa,
-                                        fb,
-                                        piece.p_end,
-                                        tol,
-                                        band,
-                                    );
-                                    if (en - piece.p_end).length() > weld {
-                                        piece.p_end = en;
-                                    }
+                                    // Unify junction endpoints ACROSS pairs:
+                                    // at a lattice corner more than one pair
+                                    // meets, and each pair's independent
+                                    // refinement lands ~1e-5 apart, minting
+                                    // micro-sliver free edges between the
+                                    // copies. First refiner registers the
+                                    // junction; every later endpoint within
+                                    // the band adopts it EXACTLY.
+                                    piece.p_start =
+                                        junction_registry.resolve(topo, fa, fb, piece.p_start, tol);
+                                    piece.p_end =
+                                        junction_registry.resolve(topo, fa, fb, piece.p_end, tol);
                                     ((piece.p_start - piece.p_end).length() > tol.linear * 10.0)
                                         .then_some(piece)
                                 })
@@ -1736,7 +1769,7 @@ fn snap_to_boundary_junction(
     p: Point3,
     tol: Tolerance,
 ) -> Point3 {
-    snap_to_boundary_junction_band(topo, fa, fb, p, tol, tol.linear * 100.0)
+    snap_to_boundary_junction_band(topo, fa, fb, p, tol, tol.linear * 100.0).unwrap_or(p)
 }
 
 /// [`snap_to_boundary_junction`] with an explicit trigger band. The refine
@@ -1751,7 +1784,7 @@ fn snap_to_boundary_junction_band(
     p: Point3,
     tol: Tolerance,
     weld: f64,
-) -> Point3 {
+) -> Option<Point3> {
     const NS: usize = 64;
     let surf_of = |fid: FaceId| topo.face(fid).ok().map(|f| f.surface().clone());
     // (distance, foot, foot's curve param, owning face, edge)
@@ -1810,9 +1843,7 @@ fn snap_to_boundary_junction_band(
             }
         }
     }
-    let Some((_, foot, tm, owner_fid, eid)) = best else {
-        return p;
-    };
+    let (_, foot, tm, owner_fid, eid) = best?;
     // The foot lies ON the boundary curve but is displaced along it by the
     // section's fit error. The true junction is where that boundary curve
     // meets the PARTNER face's surface — refine to it so every section
@@ -1820,10 +1851,10 @@ fn snap_to_boundary_junction_band(
     // independently) mints the SAME vertex.
     let other = if owner_fid == fa { fb } else { fa };
     let (Some(other_surf), Ok(edge)) = (surf_of(other), topo.edge(eid)) else {
-        return foot;
+        return Some(foot);
     };
     let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-        return foot;
+        return Some(foot);
     };
     let (sp, ep) = (sv.point(), ev.point());
     let dist_to_surf = |q: Point3| -> f64 {
@@ -1852,9 +1883,9 @@ fn snap_to_boundary_junction_band(
     let tj = 0.5 * (lo + hi);
     let junction = edge.curve().evaluate_with_endpoints(tj, sp, ep);
     if dist_to_surf(junction) <= tol.linear * 10.0 && (junction - foot).length() <= weld {
-        junction
+        Some(junction)
     } else {
-        foot
+        Some(foot)
     }
 }
 
