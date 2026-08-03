@@ -322,30 +322,33 @@ fn sample_edge_to_uv_via_frame(
 
 /// Unwrap periodic UV parameters to remove seam jumps.
 ///
-/// Detects jumps > half-period in consecutive points and adjusts subsequent
-/// points by +/-period to maintain continuity.
+/// Shifts each point by the whole number of periods that brings it to the
+/// copy nearest its predecessor, maintaining continuity across any copy
+/// distance (a mixed-copy wire can jump multiple periods at once).
 fn unwrap_periodic_params(pts: &mut [Point2], u_period: Option<f64>, v_period: Option<f64>) {
     if pts.len() < 2 {
         return;
     }
 
+    // Shift each point to the period copy NEAREST its predecessor. A single
+    // ±period step (the old form) cannot recover a multi-period jump, which
+    // arises when a wire mixes period copies (an edge stored with a negative-u
+    // endpoint following edges unwrapped upward) — the walk then folds and a
+    // valid band loop measures zero area. Rounding the jump handles any copy
+    // distance and is identical to the single step for ordinary seam jumps.
     for i in 1..pts.len() {
         if let Some(period) = u_period {
-            let half = period * 0.5;
             let du = pts[i].x() - pts[i - 1].x();
-            if du > half {
-                pts[i] = Point2::new(pts[i].x() - period, pts[i].y());
-            } else if du < -half {
-                pts[i] = Point2::new(pts[i].x() + period, pts[i].y());
+            let k = (du / period).round();
+            if k != 0.0 {
+                pts[i] = Point2::new(period.mul_add(-k, pts[i].x()), pts[i].y());
             }
         }
         if let Some(period) = v_period {
-            let half = period * 0.5;
             let dv = pts[i].y() - pts[i - 1].y();
-            if dv > half {
-                pts[i] = Point2::new(pts[i].x(), pts[i].y() - period);
-            } else if dv < -half {
-                pts[i] = Point2::new(pts[i].x(), pts[i].y() + period);
+            let k = (dv / period).round();
+            if k != 0.0 {
+                pts[i] = Point2::new(pts[i].x(), period.mul_add(-k, pts[i].y()));
             }
         }
     }

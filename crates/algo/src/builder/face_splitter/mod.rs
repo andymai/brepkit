@@ -1103,19 +1103,56 @@ fn split_coendpoint_loop_arcs(loops: &mut [Vec<OrientedPCurveEdge>], surface: &F
                 rebuilt.push(e);
                 continue;
             };
-            // Pick the period copy of the projected u nearest the endpoints'
-            // average so a seam-adjacent arc keeps a monotone UV image.
-            let u_avg = 0.5 * (e.start_uv.x() + e.end_uv.x());
-            let mu = u_avg + (mu_raw - u_avg + TAU / 2.0).rem_euclid(TAU) - TAU / 2.0;
-            let mid_uv = Point2::new(mu, mv);
+            // Each piece takes the period copy of the projected mid-u nearest
+            // its OWN retained endpoint. A seam-wrapping arc (stored e.g.
+            // 4.71→1.57 through 2π) has its true midpoint at the wrap; the
+            // endpoints' average sits half a period away and would fold the
+            // piece across the middle of the domain. The two pieces may
+            // legitimately land on different copies — that is exactly the
+            // unwrapped representation of a seam-crossing split.
+            let nearest_copy = |anchor: f64| -> f64 {
+                anchor + (mu_raw - anchor + TAU / 2.0).rem_euclid(TAU) - TAU / 2.0
+            };
+            let mid_uv_first = Point2::new(nearest_copy(e.start_uv.x()), mv);
+            let mid_uv_second = Point2::new(nearest_copy(e.end_uv.x()), mv);
+            // A cross-section rim arc's UV image is a straight constant-v
+            // segment, so the pieces get an exact Line pcurve. Keeping the
+            // parent's curved pcurve would make period-aware samplers walk
+            // the WHOLE parent curve per piece (they sample non-Line pcurves
+            // over their full range), folding the loop polygon to zero area.
+            let piece_pcurve = |a: Point2, b: Point2| -> Option<brepkit_math::curves2d::Curve2D> {
+                if (a.y() - b.y()).abs() > 1e-9 {
+                    return None;
+                }
+                let d = b - a;
+                if d.length() < 1e-12 {
+                    return None;
+                }
+                brepkit_math::curves2d::Line2D::new(a, d)
+                    .ok()
+                    .map(brepkit_math::curves2d::Curve2D::Line)
+            };
+            // Pieces drop the parent's pave block id, matching
+            // `presplit_sections_at_registry`: the id keys a cross-face
+            // edge-sharing cache, so two distinct sub-spans carrying the
+            // parent's id could alias; the position-based merge welds the
+            // shared pieces instead.
             let mut first = e.clone();
             first.end_3d = mid_3d;
-            first.end_uv = mid_uv;
+            first.end_uv = mid_uv_first;
             first.source_edge_idx = None;
+            first.pave_block_id = None;
+            if let Some(pc) = piece_pcurve(first.start_uv, first.end_uv) {
+                first.pcurve = pc;
+            }
             let mut second = e;
             second.start_3d = mid_3d;
-            second.start_uv = mid_uv;
+            second.start_uv = mid_uv_second;
             second.source_edge_idx = None;
+            second.pave_block_id = None;
+            if let Some(pc) = piece_pcurve(second.start_uv, second.end_uv) {
+                second.pcurve = pc;
+            }
             rebuilt.push(first);
             rebuilt.push(second);
         }
@@ -1158,6 +1195,13 @@ fn wire_loops_have_degenerate_area_periodic(
 ///
 /// Edge identity is the unordered pair of quantized UV endpoints plus the 3D
 /// curve kind, so a chord and its co-endpoint arc never alias.
+///
+/// Also detects the WITHIN-loop form: the same geometric circle arc traversed
+/// twice inside one loop (the 2-tangency grand tour, where the greedy hands
+/// back a single loop that rides the section ring out and back instead of
+/// splitting). Within-loop identity additionally includes the arc's 3D
+/// midpoint: the two half-rims of one full circle share both endpoints inside
+/// a perfectly valid band loop, and only a repeat of the SAME arc is broken.
 fn wire_loops_duplicate_cover(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
     let qscale = 1.0 / tol.max(1e-12);
     let qkey = |p: Point2| -> (i64, i64) {
@@ -1176,6 +1220,38 @@ fn wire_loops_duplicate_cover(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bo
         };
         if a <= b { (a, b, kind) } else { (b, a, kind) }
     };
+    let q3 = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * qscale).round() as i64,
+            (p.y() * qscale).round() as i64,
+            (p.z() * qscale).round() as i64,
+        )
+    };
+    let arc_mid_key = |e: &OrientedPCurveEdge| -> Option<(i64, i64, i64)> {
+        let EdgeCurve::Circle(ref c) = e.curve_3d else {
+            return None;
+        };
+        let (ns, ne) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let s_ang = c.project(ns);
+        let span = (c.project(ne) - s_ang).rem_euclid(std::f64::consts::TAU);
+        if span < 1e-9 {
+            return None;
+        }
+        Some(q3(c.evaluate(s_ang + 0.5 * span)))
+    };
+    for lp in loops {
+        let mut seen: std::collections::HashSet<_> = std::collections::HashSet::new();
+        for e in lp {
+            let Some(mid) = arc_mid_key(e) else { continue };
+            if !seen.insert((ekey(e), mid)) {
+                return true;
+            }
+        }
+    }
     for (i, small) in loops.iter().enumerate() {
         if small.is_empty() {
             continue;
@@ -1318,6 +1394,102 @@ struct ArrInput {
     is_section: bool,
 }
 
+/// Split co-endpoint SECTION arc pairs in an arrangement's input list at
+/// their geometric midpoints (see the call site in
+/// [`split_plane_face_by_arrangement`]). Only section arcs with a colliding
+/// unordered chord-endpoint pair AND distinct midpoints are split; boundary
+/// edges and identical duplicates are left untouched.
+fn split_coendpoint_section_arc_inputs(inputs: &mut Vec<ArrInput>, frame: &PlaneFrame, tol: f64) {
+    use std::collections::HashMap;
+    type Q2 = (i64, i64);
+    let qscale = 1.0 / tol.max(1e-12);
+    let q2 = |p: Point2| -> Q2 {
+        (
+            (p.x() * qscale).round() as i64,
+            (p.y() * qscale).round() as i64,
+        )
+    };
+    let arc_mid = |e: &OrientedPCurveEdge| -> Option<Point3> {
+        let EdgeCurve::Circle(ref c) = e.curve_3d else {
+            return None;
+        };
+        let (ns, ne) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let s_ang = c.project(ns);
+        let span = (c.project(ne) - s_ang).rem_euclid(std::f64::consts::TAU);
+        if span < 1e-9 {
+            return None;
+        }
+        Some(c.evaluate(s_ang + 0.5 * span))
+    };
+    let mut pair_mids: HashMap<(Q2, Q2), Vec<Q2>> = HashMap::new();
+    for inp in inputs.iter() {
+        if !(inp.is_section && inp.is_arc) {
+            continue;
+        }
+        let Some(mid) = arc_mid(&inp.edge) else {
+            continue;
+        };
+        let (a, b) = (q2(inp.a), q2(inp.b));
+        let key = if a <= b { (a, b) } else { (b, a) };
+        pair_mids
+            .entry(key)
+            .or_default()
+            .push(q2(frame.project(mid)));
+    }
+    let colliding: std::collections::HashSet<(Q2, Q2)> = pair_mids
+        .into_iter()
+        .filter(|(_, mids)| mids.iter().any(|m| *m != mids[0]))
+        .map(|(k, _)| k)
+        .collect();
+    if colliding.is_empty() {
+        return;
+    }
+    let mut rebuilt: Vec<ArrInput> = Vec::with_capacity(inputs.len() + 2);
+    for inp in inputs.drain(..) {
+        let (a, b) = (q2(inp.a), q2(inp.b));
+        let key = if a <= b { (a, b) } else { (b, a) };
+        let mid3 = if inp.is_section && inp.is_arc && colliding.contains(&key) {
+            arc_mid(&inp.edge)
+        } else {
+            None
+        };
+        let Some(mid_3d) = mid3 else {
+            rebuilt.push(inp);
+            continue;
+        };
+        let mid_uv = frame.project(mid_3d);
+        let mut first_edge = inp.edge.clone();
+        first_edge.end_3d = mid_3d;
+        first_edge.end_uv = mid_uv;
+        first_edge.source_edge_idx = None;
+        first_edge.pave_block_id = None;
+        let mut second_edge = inp.edge;
+        second_edge.start_3d = mid_3d;
+        second_edge.start_uv = mid_uv;
+        second_edge.source_edge_idx = None;
+        second_edge.pave_block_id = None;
+        rebuilt.push(ArrInput {
+            a: inp.a,
+            b: mid_uv,
+            edge: first_edge,
+            is_arc: true,
+            is_section: true,
+        });
+        rebuilt.push(ArrInput {
+            a: mid_uv,
+            b: inp.b,
+            edge: second_edge,
+            is_arc: true,
+            is_section: true,
+        });
+    }
+    *inputs = rebuilt;
+}
+
 /// Decompose a planar face into its minimal interior regions via a 2D
 /// arrangement of its boundary and section edges.
 ///
@@ -1398,6 +1570,16 @@ fn split_plane_face_by_arrangement(
             is_section: true,
         });
     }
+    // Two SECTION arcs sharing both endpoints (a 2-tangency section circle's
+    // half-rims) have the SAME CHORD, so the chord-based subdivision would
+    // collapse them into one segment and lose the region between them (the
+    // box∪cylinder 2-tangency bottom face lost its far half this way). Split
+    // each such arc at its geometric midpoint: the quarter chords are
+    // distinct, the subdivision sees the ring, and each piece is still a
+    // whole arc input emitted with true geometry. Identical duplicates (same
+    // midpoint) stay whole — their chord collapse is the intended dedup.
+    split_coendpoint_section_arc_inputs(&mut inputs, frame, tol);
+
     // Section-only entry point: keep the historical max-area drop + flat
     // emission (these faces have no integrated holes).
     arrangement_regions_from_inputs(
@@ -5201,7 +5383,23 @@ fn split_face_2d_impl(
         // (an early loop steals edges from later regions — the grand tour);
         // the DCEL trace's successor is a pure function of the graph, so try
         // it first and adopt when strictly healthier.
-        let dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
+        //
+        // On the duplicated-ring signature, split co-endpoint arc pairs in
+        // the trace INPUT first: two half-rims sharing both endpoints (a
+        // 2-tangency section circle, or a primitive's half-circle rims) are
+        // PARALLEL edges, which make the angular successor at those nodes
+        // ill-defined — the raw trace grand-tours the whole face and
+        // re-emits the duplicate ring. The same split is required downstream
+        // anyway (the endpoint-pair merge key), so this only moves it before
+        // the trace.
+        let dcel_input: Vec<OrientedPCurveEdge> = if ring_duplicated {
+            let mut wrapped = vec![all_edges.clone()];
+            split_coendpoint_loop_arcs(&mut wrapped, &surface);
+            wrapped.swap_remove(0)
+        } else {
+            all_edges.clone()
+        };
+        let dcel = build_wire_loops_dcel(&dcel_input, tol.linear, u_periodic, v_periodic);
         // No pinch-split on the DCEL result: this branch is u-periodic by its
         // gate, and on a full-period face the band orbit legitimately
         // revisits the glued seam node with both visits stored at the same
