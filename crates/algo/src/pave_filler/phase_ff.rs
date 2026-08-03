@@ -391,12 +391,27 @@ pub fn perform(
                     if (0..=N).map(|i| sample(i, N)).any(in_both) {
                         return true;
                     }
-                    // Remaining (plane×plane) lines keep their original
-                    // treatment: no refinement, because refining every far pair
-                    // would be pure cost and the exact test above is the answer
-                    // wherever it is safe to apply.
+                    // Plane×plane lines that the sampled test missed get the
+                    // exact answer against the faces' TRUE OUTLINES (the fix
+                    // the AABB slab-clip could not safely provide here: an
+                    // inflated AABB grossly over-approximates a planar face
+                    // and admitted spurious lines into the A1-corner nub
+                    // fuse). The in-both window of a lattice facet can be far
+                    // under the sample pitch — a mitsukude band's 0.05 mm
+                    // side facets lost 80+ real sections to this aliasing and
+                    // sent every wall-pattern fuse to the mesh fallback.
+                    // Polygon clips are hull ranges on non-convex outlines,
+                    // so this can only over-admit (downstream trims);
+                    // indeterminate polygons keep the historical drop.
                     if matches!(raw.curve, EdgeCurve::Line) {
-                        return false;
+                        let ca = clip_line_to_face(topo, fa, raw);
+                        let cb = clip_line_to_face(topo, fb, raw);
+                        return match (ca, cb) {
+                            (FaceClip::Range(a), FaceClip::Range(b)) => {
+                                a.0.max(b.0) < a.1.min(b.1) - 1e-9
+                            }
+                            _ => false,
+                        };
                     }
                     let approx_len: f64 = (0..N)
                         .map(|i| (sample(i + 1, N) - sample(i, N)).length())
