@@ -192,16 +192,19 @@ micro-section (a REAL lattice end-facet feature, 20000×tol, not noise) was graz
 sampled in-both filter, the arrangement then rejects the pendant chain, and the face under-splits.
 SHIPPED prerequisite: F1's plane×plane Line filter now uses the exact polygon clip instead of
 16-sample aliasing (the fix the old comment said "needs a test against true face extents" — the
-AABB version regressed A1 to bnd=158; the polygon version keeps every foil green). REMAINING (third pass, 2026-08-03 — root A CLOSED, abort moved 67 to 86 faces):
-the "0.002 real geometry" claim from pass two was a DISPLAY-ROUNDING artifact of the probe
-targets; full-precision measurement put the chain ends 2.1e-7 and 2.3e-7 off face 845's boundary
-edges — the canonical recurring trap (exact-tol gate meeting few-tol section rounding).
-`find_splits_on_line`'s boundary-anchor distance now accepts at weld scale (100·tol), matching
-the dedup band in the same function; the 845 quad closes and the abort moves to a NEW 86-face
-lump at z 13..19 with a different signature: 11+ free edges and some with `coincident_other_id=1`
-(partition mismatch between coincident selected faces, not a missing face). Sequential peeling —
-expect more roots. Probe recipe unchanged (BK_OPEN_SHELL first; the free-edge dump names the
-region).
+AABB version regressed A1 to bnd=158; the polygon version keeps every foil green). REMAINING (fourth pass, 2026-08-03 — roots A+B of N; abort at 86 faces):
+Root A (chain ends 2e-7 off the boundary; exact-tol anchor gate) CLOSED by the weld-scale
+anchor + foot return (find_splits_on_line). Root B localized at the z 18.9 crossing, SAME
+partial-strip signature on face 965 (this crossing's analog of 845): the chain end lands
+1.85e-5 from 965's boundary — ABOVE the weld band and probably PAST the corner vertex — with
+an 8e-6 micro-fragment (sec1, x 37.999992..38.000000) riding the end. Do NOT widen the anchor
+band again (each crossing presents progressively larger rounding; 185·tol here). Fix shape:
+snap section-chain ENDS to boundary JUNCTION VERTICES when within a junction band (machinery
+precedent: FF's snap_to_boundary_junction for closed-curve windows), and absorb sub-weld
+micro-fragments into the neighbouring piece's endpoint. A third crossing at z 13.5 shows more
+free edges plus reversed position-twin pairs — expect at least one more root beyond B.
+Probe recipe unchanged; the per-face section probe with boundary distances is the decisive
+instrument (pattern in git history at 56de1ee7's parent).
 CAPTURE GAP worth fixing once: `compoundCut(base, tools[])` passes its tools as an ARRAY, so a
 number-only argument filter captures the base and silently drops every tool — the op then cannot be
 replayed at all. Flatten arrays and typed arrays in any boolean-capture hook.
