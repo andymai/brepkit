@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785792926229,
+  "lastUpdate": 1785795143866,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14471,6 +14471,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21987389,
             "range": "± 270057",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "458d0f72276743b78c7443bce5dbcd972be23fd6",
+          "message": "fix(operations): per-face tessellation and classification of wavy-band faces (#1265)\n\n## Summary\n\nCloses the last residual of the tangent-circle family: the per-face\nroute (no shared edge pool) mis-handled winding-chain band faces in\nthree places, found by walking one failing classify probe through the\nstack:\n\n1. **`tessellate_band_face_local`**: the cycle-rim zipper with locally\nsampled rims, tried by the per-face cone path for NURBS-bounded wires.\nThe plain analytic sweep ignores the boundary entirely and skins the\nfull parametric band (measured area 268.2 vs 244.6 analytic; now 244.4).\nThe previously-attempted boundary-CDT (recorded on the roadmap) is\nsuperseded.\n2. **`check::wire_polygon` samples open curved edges** along their\nendpoint-trimmed span — a single vertex represented each wall arch by\nits chord, so UV/polygon containment rejected real hits between the\nchord and the true curve. Two subtleties: the sampled polyline is\noriented to the traversal *positionally* (a marched conic's stored\ndirection can oppose its vertex order — the bow-tied wall polygon was\nexactly this), and the positional chaining fallback applies to OPEN\nedges only — the first draft applied it to closed edges too and the\n`partial_torus_band_interior_points` foil caught the rim phase-coherence\nbreak immediately.\n3. **`ray_plane_crossings` uses the check-crate polygon**: the\nboolean-side `face_polygon` chords open arcs for its calibrated\nfragment-sharing consumers and must stay as-is; a plane face bitten by a\nconic arch counted hits inside the removed bite.\n\n## Verification\n\n- `circle_outside_cone_box_fuse_is_watertight` now additionally pins:\nall four wall lobes classify Inside via dual-ray consensus, per-face\nband area within 0.2 of analytic.\n- Full workspace green (107 suites, `--exclude brepkit-render`),\nincluding the partial-torus landscape foil; clippy `-D warnings` clean;\ncensus BOOLEAN rows all exact analytic with unchanged timings.\n- Roadmap row removed — the tangent-circle family is closed with no\nresiduals.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes per-face tessellation and point classification for wavy-band\ncone/cylinder faces bounded by NURBS chains. Per-face meshes now follow\nthe true boundary, so wall lobes classify Inside and areas match\nanalytic.\n\n- **Bug Fixes**\n- Per-face cone tessellation: adds `tessellate_band_face_local`, which\nlocally samples both rim cycles and zippers them by angle; tried first\nfor NURBS-bounded wires, then falls back to the analytic sweep.\n- `check::wire_polygon`: samples OPEN curved edges along their\nendpoint-trimmed span and orients samples by position for OPEN edges\nonly; avoids bow‑tied polygons and chord-based containment misses.\n- `classify::ray_plane_crossings`: uses\n`brepkit_check::util::face_polygon` (includes sampled open arcs) so\nplane faces with arch bites don’t count hits inside the removed region;\ntest `circle_outside_cone_box_fuse_is_watertight` pins four wall lobes\nas Inside.\n\n- **Refactors**\n- `check::wire_polygon`: use squared distances for orientation checks\nand rename to `traversal_start` for clarity; no behavior change.\n\n<sup>Written for commit 25350d218d7a8a833aaaa8e3db9e70504dcc80ff.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1265?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T15:10:00-07:00",
+          "tree_id": "dff5f343633b900e24d4dfe3ac674ad3bf950aad",
+          "url": "https://github.com/andymai/brepkit/commit/458d0f72276743b78c7443bce5dbcd972be23fd6"
+        },
+        "date": 1785795142627,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 858472,
+            "range": "± 10412",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 936403,
+            "range": "± 9698",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11865,
+            "range": "± 74",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 684881,
+            "range": "± 15692",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21985461,
+            "range": "± 30438",
             "unit": "ns/iter"
           }
         ]
