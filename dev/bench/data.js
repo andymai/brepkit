@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785799332243,
+  "lastUpdate": 1785799513540,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14849,6 +14849,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23035698,
             "range": "± 22798",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "56de1ee7e9bf3d716167d77e1e71300bd33f95b6",
+          "message": "fix(algo): line splits return the foot; pin the weld-band contract (#1272)\n\nFollow-up to #1270's review comments: `find_splits_on_line` now returns\nthe exact foot on the line rather than the raw candidate (which can sit\nanywhere in the weld band — the boundary-split consumer already\nre-evaluated for lines, but section T-junction splits thread the\nreturned point into wires verbatim), and a focused unit test pins the\nweld-band contract in both directions (a few-tol probe anchors and\nyields the on-line foot; a beyond-band probe is rejected). Ops suite and\nclippy green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nLine split detection now returns the exact foot on the line instead of\nthe raw weld-band candidate to keep section T‑junction wires on‑edge.\nAdds a unit test that pins the weld-band contract: a few‑tol probe\nanchors to the foot; a beyond‑band probe is rejected.\n\n<sup>Written for commit ffe55baa6f257b0fdfb65e358e126d4f203700d1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1272?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T16:22:50-07:00",
+          "tree_id": "41341e28d67e57ed73e261a311cd12d33647bafd",
+          "url": "https://github.com/andymai/brepkit/commit/56de1ee7e9bf3d716167d77e1e71300bd33f95b6"
+        },
+        "date": 1785799511917,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 565614,
+            "range": "± 39738",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 692745,
+            "range": "± 40469",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8239,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 440525,
+            "range": "± 737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15465879,
+            "range": "± 22923",
             "unit": "ns/iter"
           }
         ]
