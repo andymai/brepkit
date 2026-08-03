@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.16](https://github.com/andymai/brepkit/compare/v2.128.15...v2.128.16) (2026-08-03)
+
+
+### Bug Fixes
+
+* **algo:** exact polygon clip for plane-plane lines in the FF prefilter ([#1267](https://github.com/andymai/brepkit/issues/1267)) ([c9847a4](https://github.com/andymai/brepkit/commit/c9847a44e968a0c0d751c4c4502502d490b0f871))
+
 ## [2.128.15](https://github.com/andymai/brepkit/compare/v2.128.14...v2.128.15) (2026-08-03)
 
 
