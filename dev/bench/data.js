@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785792299881,
+  "lastUpdate": 1785792781936,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14363,6 +14363,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22135903,
             "range": "± 51379",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2a84506f00066beeda4ab72da2f8cfebb6693c30",
+          "message": "chore(main): release 2.128.14 (#1263)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.14](https://github.com/andymai/brepkit/compare/v2.128.13...v2.128.14)\n(2026-08-03)\n\n\n### Bug Fixes\n\n* **algo:** emit ellipse section arcs in sub-π spans\n([#1262](https://github.com/andymai/brepkit/issues/1262))\n([f427b46](https://github.com/andymai/brepkit/commit/f427b46a84afb97eba9181484024fe1a2aefd2bc))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes ellipse section arc emission for sub-π spans and publishes\n`brepkit-wasm` v2.128.14.\n\n- **Bug Fixes**\n- Emit ellipse section arcs in spans shorter than π to generate correct\narc segments.\n\n<sup>Written for commit 404ff42ddfb30f5ef9336f699be5d6e4f94463af.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1263?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-03T21:30:16Z",
+          "tree_id": "4cd1ebbd693b97ba67024b03a5ab207027d6a478",
+          "url": "https://github.com/andymai/brepkit/commit/2a84506f00066beeda4ab72da2f8cfebb6693c30"
+        },
+        "date": 1785792780439,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 848916,
+            "range": "± 1903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 927837,
+            "range": "± 2808",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11985,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 682065,
+            "range": "± 2304",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22573018,
+            "range": "± 163018",
             "unit": "ns/iter"
           }
         ]
