@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.11](https://github.com/andymai/brepkit/compare/v2.128.10...v2.128.11) (2026-08-03)
+
+
+### Bug Fixes
+
+* **algo:** close the quadric-box inscribed-rim fuse (4-tangency cone/cylinder ∪ box) ([#1254](https://github.com/andymai/brepkit/issues/1254)) ([20f2d44](https://github.com/andymai/brepkit/commit/20f2d447ce432855bc772619fb48fe105fc07d1a))
+
 ## [2.128.10](https://github.com/andymai/brepkit/compare/v2.128.9...v2.128.10) (2026-08-03)
 
 
