@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785665149698,
+  "lastUpdate": 1785782183229,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13715,6 +13715,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21606443,
             "range": "± 1204648",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "47ef2cbf6afb04f8274d7d4b6b3b6f1d77061625",
+          "message": "perf(operations): short-circuit disjoint Cut to a target copy (#1252)\n\n## Summary\n\nA cut whose tool has a clear gap from every connected component of the\ntarget removes nothing, so `A − B` is exactly `A`. `boolean()` now\ndetects this with the same per-component disjointness witness the\ndisjoint-Fuse fast path (#893) uses and returns a copy of the target,\ninstead of routing a non-touching tool through the GFA (where it has\npreviously ended in the mesh fallback, e.g. on the kumiko corner\nstruts).\n\nSoundness of the gate:\n- Component AABBs are conservative outer bounds (curvature-expanded),\nand the witness demands a strictly positive gap, so touching or\noverlapping tools still route to GFA for welding.\n- A tool floating inside the target can never look disjoint: its boxes\nnest inside the target's, which is overlap, not separation. Containment\nshortcuts also run earlier.\n- The copy keeps the result independent of the inputs, matching the\nboolean contract.\n\nThe roadmap skill's DEFERRED row for this item is removed in the same\ncommit.\n\n## Tests\n\n- `cut_disjoint_tool_between_multi_piece_target_returns_target`:\ntwo-piece target whose overall AABB spans the tool, so only the\nper-component witness can prove disjointness. Asserts both pieces and\nfull volume survive.\n- `cut_overlapping_tool_removes_material_via_gfa`: foil asserting the\nremoved-overlap volume, which would fail if the fast path ever fired on\noverlap.\n- Verified with a temporary probe that the new path fires on both\ndisjoint cut tests and stays cold on the foil.\n- Full workspace suites green (2662 tests, `--exclude brepkit-render`\nfor its known intermittent SIGSEGV), including `cargo test -p\nbrepkit-wasm --lib gridfinity`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nShort-circuits `Cut` when the tool is provably disjoint from every\ntarget component by returning a copy of the target (`A − B = A`). This\navoids routing non-touching tools through GFA/mesh and keeps the result\nindependent of inputs.\n\n- **Refactors**\n- Reuses the disjoint `Fuse` per-component AABB witness with a strict\npositive gap.\n- Adds a fast path in `boolean()` using `solids_provably_disjoint(...)`\nand `copy_solid`.\n- Adds tests for a multi-piece disjoint target and an overlapping-tool\nfoil.\n  - Removes the roadmap DEFERRED entry for this item.\n\n<sup>Written for commit 5550b259dd6a9d788de45d345cff54308e4bc443.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1252?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T11:33:47-07:00",
+          "tree_id": "527fa15af5f4a9be2c2179916d6a5a570108414f",
+          "url": "https://github.com/andymai/brepkit/commit/47ef2cbf6afb04f8274d7d4b6b3b6f1d77061625"
+        },
+        "date": 1785782182126,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 810331,
+            "range": "± 3409",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 890691,
+            "range": "± 2688",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12154,
+            "range": "± 170",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 629581,
+            "range": "± 550",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21311364,
+            "range": "± 58719",
             "unit": "ns/iter"
           }
         ]
