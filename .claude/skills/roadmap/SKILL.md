@@ -192,18 +192,16 @@ micro-section (a REAL lattice end-facet feature, 20000×tol, not noise) was graz
 sampled in-both filter, the arrangement then rejects the pendant chain, and the face under-splits.
 SHIPPED prerequisite: F1's plane×plane Line filter now uses the exact polygon clip instead of
 16-sample aliasing (the fix the old comment said "needs a test against true face extents" — the
-AABB version regressed A1 to bnd=158; the polygon version keeps every foil green). REMAINING (map deepened 2026-08-03, second pass):
-the chain's ends are crossings with the PARTNER face's outline (face 370), landing ~5e-4 OFF
-845's own boundary line — `find_splits_on_line`'s exact-tol (1e-7) anchor gate correctly rejects
-them (do NOT widen it to model scale; the 0.002 gaps are real geometry, not fit error). The
-partition needs the CLOSING micro-section from the (845 × A-band-end-facet) pair, which never
-reaches the splitter. Hunt that pair with targeted FF logging; candidate deaths, in order:
-pair-level reject-aabb on the flat facet's degenerate AABB; `clip_line_to_polygon_general`'s
-`hi − lo < 1e-6` fraction floor (a 0.002 window can sit under it when the raw line is long);
-the sample-clip graze drop. Every lattice band end has these micro-facets, so one death site
-likely accounts for many of the 82 op29 fuse failures at once. Probe recipe: BK_OPEN_SHELL →
-BK_SUBFACE_BOX around the quad → per-face section probes at split_face_2d entry (pattern in
-git history at c9847a44's parent).
+AABB version regressed A1 to bnd=158; the polygon version keeps every foil green). REMAINING (third pass, 2026-08-03 — root A CLOSED, abort moved 67 to 86 faces):
+the "0.002 real geometry" claim from pass two was a DISPLAY-ROUNDING artifact of the probe
+targets; full-precision measurement put the chain ends 2.1e-7 and 2.3e-7 off face 845's boundary
+edges — the canonical recurring trap (exact-tol gate meeting few-tol section rounding).
+`find_splits_on_line`'s boundary-anchor distance now accepts at weld scale (100·tol), matching
+the dedup band in the same function; the 845 quad closes and the abort moves to a NEW 86-face
+lump at z 13..19 with a different signature: 11+ free edges and some with `coincident_other_id=1`
+(partition mismatch between coincident selected faces, not a missing face). Sequential peeling —
+expect more roots. Probe recipe unchanged (BK_OPEN_SHELL first; the free-edge dump names the
+region).
 CAPTURE GAP worth fixing once: `compoundCut(base, tools[])` passes its tools as an ARRAY, so a
 number-only argument filter captures the base and silently drops every tool — the op then cannot be
 replayed at all. Flatten arrays and typed arrays in any boolean-capture hook.
