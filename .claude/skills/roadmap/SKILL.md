@@ -183,19 +183,19 @@ five kumiko roots (`9ecb2bb2`, `e58fec63`, `2fa915e9`, `de6bdcb8`, `1d41afea`); 
 under it. So the corner-cut work does not reach this configuration, and "overlay the parked branch
 and see" is a dead experiment. VERIFY WHICH BRANCH A MEASURED KERNEL CAME FROM before proposing a
 branch-comparison — that check turned a planned experiment into an already-answered one.
-**FULLY REDUCED TO A 364 ms FIXTURE — `crates/io/tests/kumiko_lattice_fuse_inmem.rs`.** All 31
-booleans of the export were replayed natively:
-- ops 0-28 are clean, analytic, `free=0 over=0`.
-- **`op29`** cuts the bin body (F=78, 12 cones + 24 cylinders) with 8 lattice tools, takes **99 s**,
-  and returns **`F=5716 ALL-PLANAR free=2 over=3`** — every curved face gone, the fallback tell.
-- `op30` then fuses that already-broken body, so it is pure GIGO; do not start there.
-`compound_cut` batches by merging its tools into ONE solid first, so those merges are FUSES — and
-inside op29 they fail **82 times**, 80 with `open growth shell`, each dropping to a mesh fallback
-whose own output is not a closed 2-manifold. Isolating one merge gives the fixture:
-**`fuse(F=414 band, F=653 band)`, both clean and planar, aborts in 364 ms with `open growth shell
-with 67 faces`.** Same family as the kumiko corner campaign — so the `divider` and `kumiko` matrix
-families share machinery. NOTE the parked branch does NOT fix it (see above: the capture kernel
-contained all five of its roots).
+**FULLY REDUCED TO A 364 ms FIXTURE — `crates/io/tests/kumiko_lattice_fuse_inmem.rs` — AND THE
+ROOT CHAIN IS NOW LOCALIZED TO ONE MISSING QUAD (2026-08-03).** The 67-face open lump has exactly
+FOUR free edges bounding one 0.05-wide skewed quad. Probe chain (BK_OPEN_SHELL → BK_SUBFACE_BOX →
+BK_FF_TRACE → per-face section probes): the quad is a strip of B-slant face 845 that never split
+at x=38.05 because its section CHAIN dangles 0.002 short of 845's boundary — the closing 0.002
+micro-section (a REAL lattice end-facet feature, 20000×tol, not noise) was graze-dropped by the
+sampled in-both filter, the arrangement then rejects the pendant chain, and the face under-splits.
+SHIPPED prerequisite: F1's plane×plane Line filter now uses the exact polygon clip instead of
+16-sample aliasing (the fix the old comment said "needs a test against true face extents" — the
+AABB version regressed A1 to bnd=158; the polygon version keeps every foil green). REMAINING:
+admit exact-clip-verified micro Line sections (or extend `rescue_corner_crossing`'s gates) so a
+0.002 chain-closing piece survives the graze filter — the lattice bands have such micro-facets at
+every band end, so this likely accounts for many of the 82 op29 fuse failures at once.
 CAPTURE GAP worth fixing once: `compoundCut(base, tools[])` passes its tools as an ARRAY, so a
 number-only argument filter captures the base and silently drops every tool — the op then cannot be
 replayed at all. Flatten arrays and typed arrays in any boolean-capture hook.
