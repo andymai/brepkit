@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785785601759,
+  "lastUpdate": 1785787215301,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13931,6 +13931,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21992739,
             "range": "± 80494",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b468fccdc7183549c5ea22d228531b27f85bc365",
+          "message": "fix(algo): close the 2-tangency quadric-box fuse (parallel half-arc sections) (#1257)\n\n## Summary\n\nCloses the surviving half of the tangent-circle family (#1254 closed the\n4-tangency case): a box tangent to a cone/cylinder section circle on\nonly **two** walls splits the circle into two half-arcs that share\n**both** endpoints — a parallel-edge pair that broke three separate\nmachines:\n\n1. **Plane arrangement** (`split_plane_face_by_arrangement`): arcs are\nrepresented by their chords, and the two halves' identical chords dedup\ninto one segment — the ring disappears from the subdivision and the box\nbottom loses the region on the far side (observed as the fuse's free\nedges).\n2. **DCEL trace**: the angular successor at a node with parallel edges\nis ill-defined, so the trace grand-toured the entire lateral face\ninstead of separating the bands.\n3. **Cone greedy trace**: handed back a *single* loop riding the ring\nout-and-back, invisible to the cross-loop duplicated-ring signature from\n#1254.\n\n## Fixes (all the sanctioned splitter-side midpoint-split pattern)\n\n- `split_coendpoint_section_arc_inputs`: split colliding section arcs in\narrangement inputs at their geometric midpoints; identical duplicates\n(same midpoint) keep the intended chord-collapse dedup, and boundary\narcs keep the historical path.\n- Pre-split the DCEL trace input on the duplicated-ring signature, with\ntwo robustness details discovered by the cone foils: each piece takes\nthe period copy of the midpoint-u nearest **its own** endpoint (an\nendpoint-average pick folds seam-wrapping arcs), and constant-v pieces\nget exact Line pcurves (period-aware samplers walk non-Line pcurves over\ntheir full range, so inherited parent pcurves folded the loop polygon).\n- `wire_loops_duplicate_cover` gains a within-loop form keyed on arc\nidentity **including the 3D midpoint** — two half-rims of one circle\nlegitimately share both endpoints inside a valid band loop, so only a\nsame-arc-twice repeat marks the trace broken.\n- `unwrap_periodic_params` now unwraps to the **nearest** period copy\n(`round(du/period)`): the old single ±period step could not recover the\nmulti-period jumps a mixed-copy wire produces (an edge stored with a\nnegative-u endpoint following edges unwrapped upward), which measured\nvalid band loops as zero-area and vetoed the rescue.\n\n## Verification\n\n- New `two_tangency_box_fuse_is_analytic_watertight` pins both quadrics\nwith the full oracles: analytic faces only, zero non-manifold edges,\nwatertight tessellation, volume exact (cyl: 96π + 1152; cone: 152π +\n1152, within 1.0).\n- The #1254 regressions (`cone_union_box_should_be_analytic`,\n`cylinder_union_inscribed_box_is_analytic_watertight`) stay green — the\ncone 4-tangency case actually exercised every new robustness detail as a\nfoil during development.\n- `diag_tangency_count`: 0/1/2/4 tangent walls all CLEAN.\n- `approx_census` BOOLEAN section: all rows exact analytic, timings\nunchanged.\n- Full workspace suites green (107 suites, `--exclude brepkit-render`\nfor its known intermittent SIGSEGV); clippy `-D warnings` clean.\n\n## Remaining (roadmap updated in this PR)\n\nThe \"circle outside\" configuration (box smaller than the section circle,\narcs meeting box corners; 1 free boundary edge) is a different topology\nand stays on the roadmap as the only surviving family member.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes box ∪ cone/cylinder fuses where the section circle is tangent on\ntwo walls (parallel half-arc sections). Results are analytic and\nwatertight for both quadrics; covered by\n`two_tangency_box_fuse_is_analytic_watertight`.\n\n- **Bug Fixes**\n- Split co-endpoint section arcs at geometric midpoints in\nplane-arrangement inputs to prevent chord dedup from deleting the ring\nregion (`split_coendpoint_section_arc_inputs` in\n`split_plane_face_by_arrangement`).\n- Pre-split DCEL trace inputs on the duplicated-ring signature; pick the\nmidpoint‑u nearest each piece’s own endpoint, assign exact Line pcurves\nfor constant‑v segments, and clear `pave_block_id` on split pieces to\navoid cross-face cache aliasing (`split_coendpoint_loop_arcs` path).\n- Detect within-loop duplicate cover by including the arc’s 3D midpoint\nin the identity, catching same-arc‑twice grand tours while allowing\nvalid half-rims (`wire_loops_duplicate_cover`).\n- Unwrap periodic UV to the nearest period copy by rounding multi-period\njumps, fixing zero-area loops from mixed-copy wires\n(`unwrap_periodic_params`).\n\n<sup>Written for commit ed25f46e2f782125fa1388558bd98d18667c6171.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1257?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T12:57:53-07:00",
+          "tree_id": "dfc3b1588ca7bc40e6d5b2b0ec2d79b3627ebfdf",
+          "url": "https://github.com/andymai/brepkit/commit/b468fccdc7183549c5ea22d228531b27f85bc365"
+        },
+        "date": 1785787213681,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 684172,
+            "range": "± 2697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 755229,
+            "range": "± 10860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9459,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 539934,
+            "range": "± 1116",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18158505,
+            "range": "± 469682",
             "unit": "ns/iter"
           }
         ]
