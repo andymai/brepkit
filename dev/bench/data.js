@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785787215301,
+  "lastUpdate": 1785787703179,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13985,6 +13985,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18158505,
             "range": "± 469682",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e0b81eb4456a4b24870fc404e51e89a58fe5768b",
+          "message": "chore(main): release 2.128.12 (#1258)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.12](https://github.com/andymai/brepkit/compare/v2.128.11...v2.128.12)\n(2026-08-03)\n\n\n### Bug Fixes\n\n* **algo:** close the 2-tangency quadric-box fuse (parallel half-arc\nsections) ([#1257](https://github.com/andymai/brepkit/issues/1257))\n([b468fcc](https://github.com/andymai/brepkit/commit/b468fccdc7183549c5ea22d228531b27f85bc365))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.12 for `brepkit-wasm`. Fixes the algorithm to close the\n2-tangency quadric-box fuse with parallel half-arc sections, preventing\ngaps in the generated geometry.\n\n<sup>Written for commit 8b8cc0c06273d6e401df6eaa681c77eab238466f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1258?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-03T20:05:53Z",
+          "tree_id": "cf84b44ff3a2e2567e71f46d2b70fdbc214a3ce3",
+          "url": "https://github.com/andymai/brepkit/commit/e0b81eb4456a4b24870fc404e51e89a58fe5768b"
+        },
+        "date": 1785787702013,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 880003,
+            "range": "± 41841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 954004,
+            "range": "± 6430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13031,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675407,
+            "range": "± 27146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23072610,
+            "range": "± 87882",
             "unit": "ns/iter"
           }
         ]
