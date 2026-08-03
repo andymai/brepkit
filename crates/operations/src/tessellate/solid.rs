@@ -823,72 +823,77 @@ pub(super) fn tessellate_face_with_shared_edges(
         face_data.surface(),
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
     ) {
-        let is_standard_rect = {
+        let all_line_circle = {
             let wire = topo.wire(face_data.outer_wire())?;
-            wire.edges().len() <= 4
-                && wire.edges().iter().all(|oe| {
-                    topo.edge(oe.edge())
-                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_)))
-                })
+            wire.edges().iter().all(|oe| {
+                topo.edge(oe.edge())
+                    .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_)))
+            })
         };
+        let is_standard_rect =
+            all_line_circle && topo.wire(face_data.outer_wire())?.edges().len() <= 4;
 
-        if is_standard_rect {
-            // Prefer a structured band built from the shared rim vertices — it
-            // is watertight by construction and avoids the snap path's proximity
-            // reconciliation, which cracks drilled holes at certain radius/
-            // deflection combos (issue #696). Falls back to snap for faces that
-            // aren't a simple two-rim full-revolution band.
-            let handled =
-                tessellate_revolution_band_shared(topo, face_data, edge_global_indices, merged)?;
-            if !handled {
-                // Partial (non-full-revolution) hole-free bands have a genuine
-                // simple polygon UV boundary, so CDT over the shared pool ids
-                // is watertight by construction. The snap path re-samples the
-                // rim independently and cracks at fine deflections when its
-                // segment count diverges from the pool's (the #696 class, seen
-                // on gridfinity socket cone/cylinder corner rings). Faces WITH
-                // inner wires must keep the snap path: this CDT does not
-                // constrain inner wires and would skin the holes over.
-                let mut cdt_handled = false;
-                if face_data.inner_wires().is_empty() {
-                    let pos_save = merged.positions.len();
-                    let nrm_save = merged.normals.len();
-                    let idx_save = merged.indices.len();
-                    let cdt_ok = tessellate_nonplanar_cdt(
-                        topo,
-                        face_id,
-                        face_data,
-                        deflection,
-                        angular_tol,
-                        circle_floor,
-                        edge_global_indices,
-                        merged,
-                        point_to_global,
-                    );
-                    if cdt_ok.is_err() || merged.indices.len() == idx_save {
-                        merged.positions.truncate(pos_save);
-                        merged.normals.truncate(nrm_save);
-                        merged.indices.truncate(idx_save);
-                        // The CDT attempt may have registered merge-map entries
-                        // for the now-truncated vertices; a later lookup would
-                        // return a global id past `positions.len()`.
-                        point_to_global.retain(|_, gid| (*gid as usize) < pos_save);
-                    } else {
-                        cdt_handled = true;
-                    }
+        // Prefer a structured band built from the shared rim vertices — it
+        // is watertight by construction and avoids the snap path's proximity
+        // reconciliation, which cracks drilled holes at certain radius/
+        // deflection combos (issue #696). Tried for ANY Line/Circle wire, not
+        // just the 4-edge canonical shape: a boolean can deliver a full band
+        // whose rims are split into arc chains (cone∪box inscribed-rim), which
+        // the band mesher now handles; it still returns false for anything
+        // that is not a two-full-rim band.
+        let band_handled = all_line_circle
+            && tessellate_revolution_band_shared(topo, face_data, edge_global_indices, merged)?;
+
+        if band_handled {
+            // done — watertight structured band emitted
+        } else if is_standard_rect {
+            // Partial (non-full-revolution) hole-free bands have a genuine
+            // simple polygon UV boundary, so CDT over the shared pool ids
+            // is watertight by construction. The snap path re-samples the
+            // rim independently and cracks at fine deflections when its
+            // segment count diverges from the pool's (the #696 class, seen
+            // on gridfinity socket cone/cylinder corner rings). Faces WITH
+            // inner wires must keep the snap path: this CDT does not
+            // constrain inner wires and would skin the holes over.
+            let mut cdt_handled = false;
+            if face_data.inner_wires().is_empty() {
+                let pos_save = merged.positions.len();
+                let nrm_save = merged.normals.len();
+                let idx_save = merged.indices.len();
+                let cdt_ok = tessellate_nonplanar_cdt(
+                    topo,
+                    face_id,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                    edge_global_indices,
+                    merged,
+                    point_to_global,
+                );
+                if cdt_ok.is_err() || merged.indices.len() == idx_save {
+                    merged.positions.truncate(pos_save);
+                    merged.normals.truncate(nrm_save);
+                    merged.indices.truncate(idx_save);
+                    // The CDT attempt may have registered merge-map entries
+                    // for the now-truncated vertices; a later lookup would
+                    // return a global id past `positions.len()`.
+                    point_to_global.retain(|_, gid| (*gid as usize) < pos_save);
+                } else {
+                    cdt_handled = true;
                 }
-                if !cdt_handled {
-                    tessellate_nonplanar_snap(
-                        topo,
-                        face_id,
-                        face_data,
-                        deflection,
-                        angular_tol,
-                        edge_global_indices,
-                        merged,
-                        point_to_global,
-                    )?;
-                }
+            }
+            if !cdt_handled {
+                tessellate_nonplanar_snap(
+                    topo,
+                    face_id,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    edge_global_indices,
+                    merged,
+                    point_to_global,
+                )?;
             }
         } else {
             let pos_save = merged.positions.len();

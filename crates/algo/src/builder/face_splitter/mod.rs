@@ -1020,6 +1020,179 @@ fn wire_loops_self_cross(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
     false
 }
 
+/// Break co-endpoint circle-arc collisions inside adopted loops by splitting
+/// every colliding arc at its angular midpoint — the sanctioned splitter-side
+/// pattern for [`merge_duplicate_edges`]'s endpoint-pair key. Two
+/// complementary half-rims share both endpoints; left whole, the merge
+/// collapses them into one edge used out-and-back, the spur excision then
+/// removes that pair, and the freed seam pair becomes wrap-adjacent and is
+/// excised too — the cone∪box inscribed-rim fuse lost its entire base rim
+/// and base disc this way. Splitting at midpoints gives every piece a unique
+/// endpoint pair; `split_arc_edges_at_collinear_vertices` propagates the same
+/// cuts to the neighbouring face's coincident rim so both partitions match.
+///
+/// Only groups whose members have DISTINCT arc midpoints are split: identical
+/// twins (the same rim arc appearing once per adjacent band) must stay whole
+/// so the merge can weld them, and complementary halves are exactly the
+/// distinct-midpoint case. Line pairs are never touched — a cut-annulus band
+/// legitimately traverses its seam edge twice, and that pair merging into one
+/// edge used forward+reverse is correct topology.
+fn split_coendpoint_loop_arcs(loops: &mut [Vec<OrientedPCurveEdge>], surface: &FaceSurface) {
+    use std::collections::HashMap;
+    use std::f64::consts::TAU;
+
+    type QP = (i64, i64, i64);
+    const QSCALE: f64 = 1e7;
+    let q3 = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * QSCALE).round() as i64,
+            (p.y() * QSCALE).round() as i64,
+            (p.z() * QSCALE).round() as i64,
+        )
+    };
+    let arc_mid = |e: &OrientedPCurveEdge| -> Option<Point3> {
+        let EdgeCurve::Circle(ref c) = e.curve_3d else {
+            return None;
+        };
+        let (ns, ne) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let s_ang = c.project(ns);
+        let span = (c.project(ne) - s_ang).rem_euclid(TAU);
+        if span < 1e-9 {
+            return None; // closed or degenerate arc
+        }
+        Some(c.evaluate(s_ang + 0.5 * span))
+    };
+
+    let mut pair_mids: HashMap<(QP, QP), Vec<QP>> = HashMap::new();
+    for lp in loops.iter() {
+        for e in lp {
+            let Some(mid) = arc_mid(e) else { continue };
+            let (a, b) = (q3(e.start_3d), q3(e.end_3d));
+            let key = if a <= b { (a, b) } else { (b, a) };
+            pair_mids.entry(key).or_default().push(q3(mid));
+        }
+    }
+    let colliding: std::collections::HashSet<(QP, QP)> = pair_mids
+        .into_iter()
+        .filter(|(_, mids)| mids.iter().any(|m| *m != mids[0]))
+        .map(|(k, _)| k)
+        .collect();
+    if colliding.is_empty() {
+        return;
+    }
+
+    for lp in loops.iter_mut() {
+        let mut rebuilt: Vec<OrientedPCurveEdge> = Vec::with_capacity(lp.len() + 2);
+        for e in lp.drain(..) {
+            let (a, b) = (q3(e.start_3d), q3(e.end_3d));
+            let key = if a <= b { (a, b) } else { (b, a) };
+            let mid = if colliding.contains(&key) {
+                arc_mid(&e)
+            } else {
+                None
+            };
+            let Some(mid_3d) = mid else {
+                rebuilt.push(e);
+                continue;
+            };
+            let Some((mu_raw, mv)) = surface.project_point(mid_3d) else {
+                rebuilt.push(e);
+                continue;
+            };
+            // Pick the period copy of the projected u nearest the endpoints'
+            // average so a seam-adjacent arc keeps a monotone UV image.
+            let u_avg = 0.5 * (e.start_uv.x() + e.end_uv.x());
+            let mu = u_avg + (mu_raw - u_avg + TAU / 2.0).rem_euclid(TAU) - TAU / 2.0;
+            let mid_uv = Point2::new(mu, mv);
+            let mut first = e.clone();
+            first.end_3d = mid_3d;
+            first.end_uv = mid_uv;
+            first.source_edge_idx = None;
+            let mut second = e;
+            second.start_3d = mid_3d;
+            second.start_uv = mid_uv;
+            second.source_edge_idx = None;
+            rebuilt.push(first);
+            rebuilt.push(second);
+        }
+        *lp = rebuilt;
+    }
+}
+
+/// [`wire_loops_have_degenerate_area`] with period-aware sampling: a valid
+/// full-period band loop's raw UV polygon folds to ~zero area at the seam
+/// crossing, so the absolute check misjudges it. Downstream classification
+/// measures periodic loops with the same period-aware sampler, so this is the
+/// faithful degeneracy judgment for a periodic face.
+fn wire_loops_have_degenerate_area_periodic(
+    loops: &[Vec<OrientedPCurveEdge>],
+    tol: f64,
+    u_period: Option<f64>,
+    v_period: Option<f64>,
+) -> bool {
+    loops.iter().any(|wl| {
+        let pts = sample_wire_loop_uv_periodic(wl, u_period, v_period);
+        if pts.len() < 3 {
+            return true;
+        }
+        let area = signed_area_2d(&pts);
+        let mut perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+            perimeter += (*last - *first).length();
+        }
+        area.abs() <= perimeter * tol
+    })
+}
+
+/// Whether one loop's edges are entirely duplicated by another loop — the
+/// signature of a full ring section whose twin copies closed as a bare circle
+/// while a band tour consumed the same arcs (a box tangent to a cone/cylinder
+/// on all four walls: the section circle splits into four arcs, the greedy
+/// spends them on an out-and-back seam tour, and the twins close as a
+/// duplicate ring that later nests as an inner wire equal to the outer's own
+/// rim while the true far rim is dropped from every loop).
+///
+/// Edge identity is the unordered pair of quantized UV endpoints plus the 3D
+/// curve kind, so a chord and its co-endpoint arc never alias.
+fn wire_loops_duplicate_cover(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
+    let qscale = 1.0 / tol.max(1e-12);
+    let qkey = |p: Point2| -> (i64, i64) {
+        (
+            (p.x() * qscale).round() as i64,
+            (p.y() * qscale).round() as i64,
+        )
+    };
+    let ekey = |e: &OrientedPCurveEdge| -> ((i64, i64), (i64, i64), u8) {
+        let (a, b) = (qkey(e.start_uv), qkey(e.end_uv));
+        let kind = match e.curve_3d {
+            EdgeCurve::Line => 0u8,
+            EdgeCurve::Circle(_) => 1,
+            EdgeCurve::Ellipse(_) => 2,
+            EdgeCurve::NurbsCurve(_) => 3,
+        };
+        if a <= b { (a, b, kind) } else { (b, a, kind) }
+    };
+    for (i, small) in loops.iter().enumerate() {
+        if small.is_empty() {
+            continue;
+        }
+        for (j, big) in loops.iter().enumerate() {
+            if i == j || big.len() < small.len() {
+                continue;
+            }
+            let keys: std::collections::HashSet<_> = big.iter().map(&ekey).collect();
+            if small.iter().all(|e| keys.contains(&ekey(e))) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Whether the greedy wire loops form an INVALID (overlapping) partition: one
 /// OUTER (positive-area) loop's material directly covers another outer loop,
 /// with no hole region between them.
@@ -4767,7 +4940,6 @@ fn split_face_2d_impl(
 
     // Build wire loops via angular-sorting traversal.
     let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
-
     // Clockwise-boundary handling: this face's UV frame derives from the raw
     // surface normal, not the effective face orientation, so an inner-shell
     // (cavity) wall winds CW in UV while the outer wall winds CCW. Two effects
@@ -4976,6 +5148,12 @@ fn split_face_2d_impl(
     let greedy_broken = wire_loops_self_cross(&loops, tol.linear)
         || greedy_outer_loops_nested(&loops, cw_loops)
         || wire_loops_have_degenerate_area(&loops, tol.linear);
+    // A ring section's twin copies closed as a bare duplicate of arcs another
+    // loop already consumed (box tangent on all four walls). The partition
+    // double-covers the ring and orphans the far rim, so it is broken even
+    // though no loop self-crosses. Detected separately from `greedy_broken`
+    // so the cone arm below can gate on exactly this signature.
+    let ring_duplicated = wire_loops_duplicate_cover(&loops, tol.linear);
     // Sector rescue for an UNDER-split u-periodic lateral: one full-height
     // ruling plus the glued seam should sector the strip, but to the glued
     // walker an annulus cut once is a single wrapped region (the mid-wall
@@ -5003,8 +5181,8 @@ fn split_face_2d_impl(
     if u_periodic
         && !v_periodic
         && !sections.is_empty()
-        && matches!(&surface, FaceSurface::Cylinder(_))
-        && greedy_broken
+        && (matches!(&surface, FaceSurface::Cylinder(_)) && (greedy_broken || ring_duplicated)
+            || matches!(&surface, FaceSurface::Cone(_)) && ring_duplicated)
     {
         if let Some(result) = split_cylinder_band_by_arrangement(
             &surface,
@@ -5030,14 +5208,27 @@ fn split_face_2d_impl(
         // period copy — the pinch splitter would shear the band there into
         // wrong fragments (three over-shared wall sub-faces on the lite
         // diagonal-pad fuse).
-        let dcel_adopted = !wire_loops_have_degenerate_area(&dcel, tol.linear)
+        // The duplicated-ring rescue judges the DCEL's area health with
+        // period-aware sampling (a full-period band folds under the raw
+        // sampler); every other path keeps the original absolute veto.
+        let dcel_ring_ok = ring_duplicated
+            && !wire_loops_duplicate_cover(&dcel, tol.linear)
+            && !wire_loops_have_degenerate_area_periodic(
+                &dcel,
+                tol.linear,
+                Some(std::f64::consts::TAU),
+                None,
+            );
+        let dcel_adopted = ((!wire_loops_have_degenerate_area(&dcel, tol.linear)
+            && (dcel.len() > loops.len() || wire_loops_have_degenerate_area(&loops, tol.linear)))
+            || dcel_ring_ok)
             && (!wire_loops_self_cross(&dcel, tol.linear)
                 || wire_loops_self_cross(&loops, tol.linear))
             && (!greedy_outer_loops_nested(&dcel, cw_loops)
-                || greedy_outer_loops_nested(&loops, cw_loops))
-            && (dcel.len() > loops.len() || wire_loops_have_degenerate_area(&loops, tol.linear));
+                || greedy_outer_loops_nested(&loops, cw_loops));
         if dcel_adopted {
             loops = dcel;
+            split_coendpoint_loop_arcs(&mut loops, &surface);
         } else {
             // The mirrored turn rule as a legacy fallback: adopt the retry only
             // when it is strictly healthier — more loops and none of the broken

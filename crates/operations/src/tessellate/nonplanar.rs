@@ -6,6 +6,8 @@ use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
+use std::f64::consts::TAU;
+
 use super::edge_sampling::{sample_edge, segments_for_chord_deviation_a};
 use super::{MERGE_GRID, TriangleMesh, point_merge_key};
 
@@ -29,9 +31,27 @@ type NormalFn = Box<dyn Fn(f64, f64) -> Vec3>;
 ///
 /// Returns `Ok(true)` when the face is a simple two-rim band that was handled
 /// here, `Ok(false)` when it is not (the caller then falls back to the snap or
-/// CDT path). A "simple band" has no inner wires, exactly two **closed**
-/// rim-circle edges (everything else a seam line), and matching shared-vertex
-/// counts on the two rims.
+/// CDT path). A "simple band" has no inner wires and exactly two rims
+/// (everything else a seam line). Each rim is either one **closed** circle
+/// edge or a CHAIN of open circle arcs at one constant `v` whose spans sum to
+/// a full revolution — a boolean that splits a rim at tangency or crossing
+/// points (e.g. the cone∪box inscribed-rim fuse, whose z=6 rim arrives as
+/// four arcs each shared with a different corner face) still gets the
+/// structured watertight band. Rims with equal shared-vertex counts sweep
+/// index-paired exactly as before; unequal counts (each rim's sampling is
+/// dictated by its own neighbours) are stitched with an angular zipper merge.
+/// One rim of a revolution band: the circle edges at one constant surface `v`
+/// and their accumulated angular span (in each circle's own frame).
+struct RimGroup {
+    v: f64,
+    edge_idxs: Vec<usize>,
+    span: f64,
+}
+
+/// Rim-level grouping band: rim levels are separated by the band height,
+/// while arcs of one rim share the exact circle, so a tight band is safe.
+const RIM_V_GROUP_TOL: f64 = 1e-6;
+
 pub(super) fn tessellate_revolution_band_shared(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -60,50 +80,81 @@ pub(super) fn tessellate_revolution_band_shared(
         _ => return Ok(false),
     };
 
-    // Collect the two closed rim-circle edges; everything else must be a seam line.
+    // Collect rim circle edges grouped by their constant surface `v`;
+    // everything else must be a seam line. A rim is one closed circle or a
+    // chain of open arcs whose natural CCW spans sum to a full revolution.
     let wire = topo.wire(face_data.outer_wire())?;
-    let mut rim_edge_ids: Vec<usize> = Vec::new();
+    let mut groups: Vec<RimGroup> = Vec::new();
     for oe in wire.edges() {
         let e = topo.edge(oe.edge())?;
-        let closed = e.start() == e.end();
         match e.curve() {
-            // Only closed circles are rims here. The caller gates this path on
-            // `is_standard_rect` (Line | Circle edges only), so ellipse rims
-            // never reach it — they take the CDT path instead.
-            EdgeCurve::Circle(_) if closed => {
+            // The caller gates this path on Line | Circle edges only, so
+            // ellipse rims never reach it — they take the CDT path instead.
+            EdgeCurve::Circle(circ) => {
+                let closed = e.start() == e.end();
+                let sp = topo.vertex(e.start())?.point();
+                let ep = topo.vertex(e.end())?.point();
+                let (_, vs) = project(sp);
+                // The stored arc spans CCW start→end in the CIRCLE's own
+                // frame (independent of wire traversal AND of the surface's
+                // u direction, which can be the circle's mirror when the rim
+                // normal opposes the surface axis).
+                let span = if closed {
+                    TAU
+                } else {
+                    (circ.project(ep) - circ.project(sp)).rem_euclid(TAU)
+                };
                 let idx = oe.edge().index();
-                if !rim_edge_ids.contains(&idx) {
-                    rim_edge_ids.push(idx);
+                if let Some(g) = groups
+                    .iter_mut()
+                    .find(|g| (g.v - vs).abs() < RIM_V_GROUP_TOL)
+                {
+                    if !g.edge_idxs.contains(&idx) {
+                        g.edge_idxs.push(idx);
+                        g.span += span;
+                    }
+                } else {
+                    groups.push(RimGroup {
+                        v: vs,
+                        edge_idxs: vec![idx],
+                        span,
+                    });
                 }
             }
             EdgeCurve::Line => {}
-            // An open arc rim, a NURBS boundary, or an open circle is not a
-            // simple full-revolution band — let the caller handle it.
+            // A NURBS boundary is not a simple revolution band — let the
+            // caller handle it.
             _ => return Ok(false),
         }
     }
-    if rim_edge_ids.len() != 2 {
+    if groups.len() != 2 {
+        return Ok(false);
+    }
+    // Each rim must cover exactly one full revolution: a partial band (arcs
+    // bounded by non-seam generators) must NOT be swept as a ring — that
+    // would skin the mesh across the removed sector.
+    if groups.iter().any(|g| (g.span - TAU).abs() > 1e-6) {
         return Ok(false);
     }
 
-    // Pull each rim's shared global vertex IDs, drop the closing duplicate, and
-    // require matching counts so the rings connect index-for-index.
+    // Pull each rim's shared global vertex IDs. Chained arcs share their
+    // joint vertices through the pool, so id-dedup merges the chain into one
+    // ring; a closed circle carries its closing duplicate instead.
     let mut rims: Vec<Vec<u32>> = Vec::with_capacity(2);
-    for &re in &rim_edge_ids {
-        let Some(ids) = edge_global_indices.get(&re) else {
-            return Ok(false);
-        };
-        let mut ids = ids.clone();
-        if ids.len() > 1 && ids.first() == ids.last() {
-            ids.pop();
+    for g in &groups {
+        let mut ids: Vec<u32> = Vec::new();
+        for re in &g.edge_idxs {
+            let Some(edge_ids) = edge_global_indices.get(re) else {
+                return Ok(false);
+            };
+            ids.extend_from_slice(edge_ids);
         }
+        ids.sort_unstable();
+        ids.dedup();
         if ids.len() < 3 {
             return Ok(false);
         }
         rims.push(ids);
-    }
-    if rims[0].len() != rims[1].len() {
-        return Ok(false);
     }
     let n = rims[0].len();
 
@@ -141,12 +192,74 @@ pub(super) fn tessellate_revolution_band_shared(
         merged.indices.extend_from_slice(&tri);
     };
 
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let (b0, b1) = (rims[0][i], rims[0][j]);
-        let (t0, t1) = (rims[1][i], rims[1][j]);
-        emit(merged, b0, b1, t1);
-        emit(merged, b0, t1, t0);
+    let m = rims[1].len();
+    if n == m {
+        // Equal counts: the historical index-paired sweep (kept byte-identical
+        // for the calibrated closed-rim cases).
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let (b0, b1) = (rims[0][i], rims[0][j]);
+            let (t0, t1) = (rims[1][i], rims[1][j]);
+            emit(merged, b0, b1, t1);
+            emit(merged, b0, t1, t0);
+        }
+        return Ok(true);
+    }
+
+    // Unequal counts: angular zipper merge. Advance whichever ring's next
+    // vertex comes first in angle, emitting one triangle per advance; after
+    // n + m advances both rings close and every boundary segment is used
+    // exactly once, so the band is watertight against both neighbours.
+    let ang0: Vec<f64> = rims[0].iter().map(|&g| angle_of(g, merged)).collect();
+    // Rotate ring 1 so its start sits just after ring 0's start angle,
+    // keeping the initial quad local instead of spanning the whole circle.
+    let start1 = (0..m)
+        .min_by(|&a, &b| {
+            let ka = (angle_of(rims[1][a], merged) - ang0[0]).rem_euclid(TAU);
+            let kb = (angle_of(rims[1][b], merged) - ang0[0]).rem_euclid(TAU);
+            ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(0);
+    rims[1].rotate_left(start1);
+    let base = ang0[0];
+    let unwrap = |a: f64| (a - base).rem_euclid(TAU);
+    let a0: Vec<f64> = rims[0]
+        .iter()
+        .map(|&g| unwrap(angle_of(g, merged)))
+        .collect();
+    let a1: Vec<f64> = rims[1]
+        .iter()
+        .map(|&g| unwrap(angle_of(g, merged)))
+        .collect();
+
+    let (mut i, mut j) = (0usize, 0usize);
+    let (mut done0, mut done1) = (0usize, 0usize);
+    while done0 < n || done1 < m {
+        let next0 = if done0 >= n {
+            f64::INFINITY
+        } else if i + 1 < n {
+            a0[i + 1]
+        } else {
+            a0[0] + TAU
+        };
+        let next1 = if done1 >= m {
+            f64::INFINITY
+        } else if j + 1 < m {
+            a1[j + 1]
+        } else {
+            a1[0] + TAU
+        };
+        if next0 <= next1 {
+            let ni = (i + 1) % n;
+            emit(merged, rims[0][i], rims[1][j], rims[0][ni]);
+            i = ni;
+            done0 += 1;
+        } else {
+            let nj = (j + 1) % m;
+            emit(merged, rims[0][i], rims[1][j], rims[1][nj]);
+            j = nj;
+            done1 += 1;
+        }
     }
 
     Ok(true)
