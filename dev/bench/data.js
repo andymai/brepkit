@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785787703179,
+  "lastUpdate": 1785789806736,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14039,6 +14039,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23072610,
             "range": "± 87882",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "39fe55060a81ad64b754db18c85674d050ae9c9a",
+          "message": "chore(deps-dev): bump prettier from 3.9.5 to 3.9.6 in the npm group (#1250)\n\nBumps the npm group with 1 update:\n[prettier](https://github.com/prettier/prettier).\n\nUpdates `prettier` from 3.9.5 to 3.9.6\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/releases\">prettier's\nreleases</a>.</em></p>\n<blockquote>\n<h2>3.9.6</h2>\n<h2>What's Changed</h2>\n<ul>\n<li>Preserve quotes for methods named <code>new</code> (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19621\">prettier/prettier#19621</a>\nby <a href=\"https://github.com/kovsu\"><code>@​kovsu</code></a>)</li>\n<li>Support <code>import defer</code> in <code>typescript</code> parser\n(<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19624\">prettier/prettier#19624</a>,\n<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19675\">prettier/prettier#19675</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</li>\n<li>Added a new official plugin <a\nhref=\"https://github.com/prettier/prettier/tree/3.9.6/packages/plugin-yuku\"><code>@prettier/plugin-yuku</code>\n🚀</a> (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19628\">prettier/prettier#19628</a>,\n<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19629\">prettier/prettier#19629</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</li>\n</ul>\n<p>🔗 <a\nhref=\"https://github.com/prettier/prettier/blob/3.9.6/CHANGELOG.md#396\">Changelog</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/blob/main/CHANGELOG.md\">prettier's\nchangelog</a>.</em></p>\n<blockquote>\n<h1>3.9.6</h1>\n<p><a\nhref=\"https://github.com/prettier/prettier/compare/3.9.5...3.9.6\">diff</a></p>\n<h4>TypeScript: Preserve quotes for methods named <code>new</code> (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19621\">#19621</a>\nby <a href=\"https://github.com/kovsu\"><code>@​kovsu</code></a>)</h4>\n<!-- raw HTML omitted -->\n<pre lang=\"tsx\"><code>// Input\ninterface Container {\n  &quot;new&quot;(id: string): number;\n}\n<p>// Prettier 3.9.5<br />\ninterface Container {<br />\nnew(id: string): number;<br />\n}</p>\n<p>// Prettier 3.9.6<br />\ninterface Container {<br />\n&quot;new&quot;(id: string): number;<br />\n}<br />\n</code></pre></p>\n<h4>TypeScript: Support <code>import defer</code> (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19624\">#19624</a>,\n<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19675\">#19675</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</h4>\n<!-- raw HTML omitted -->\n<pre lang=\"tsx\"><code>// Input\nimport defer * as foo from &quot;foo&quot;;\n<p>// Prettier 3.9.5<br />\nimport * as foo from &quot;foo&quot;;</p>\n<p>// Prettier 3.9.6<br />\nimport defer * as foo from &quot;foo&quot;;<br />\n</code></pre></p>\n<h4>JavaScript: Added a new official plugin\n<code>@prettier/plugin-yuku</code> (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19628\">#19628</a>,\n<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/19629\">#19629</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</h4>\n<p><code>@prettier/plugin-yuku</code> is powered by <a\nhref=\"https://yuku.fyi/\">Yuku</a> (A high-performance\nJavaScript/TypeScript compiler toolchain written in Zig).</p>\n<p>This plugin includes two new parsers: <code>yuku</code> (JavaScript\nsyntax) and <code>yuku-ts</code> (TypeScript syntax).</p>\n<p><strong>To use this plugin:</strong></p>\n<ol>\n<li>\n<p>Install the plugin:</p>\n<pre lang=\"bash\"><code>yarn add --dev prettier @prettier/plugin-yuku\n</code></pre>\n</li>\n</ol>\n<!-- raw HTML omitted -->\n</blockquote>\n<p>... (truncated)</p>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/8f0c95057cc91d5836409466cd9d9af3bb901e84\"><code>8f0c950</code></a>\nRelease 3.9.6</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/e9107647d0497d8ff1cacbb0f970d4543df77c1c\"><code>e910764</code></a>\nUpdate changelog</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/ec3f1c7bd74495992bc6954323a1a7fc8368808e\"><code>ec3f1c7</code></a>\nUpdate typescript-eslint to v8.65.0 (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19675\">#19675</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/73d2efc2c6cba6f579585c88ef171132d90834ec\"><code>73d2efc</code></a>\nUpdate Yuku parser to v0.7.0 (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19664\">#19664</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/dd5e24eabeab1f75ad573c79781e5fd408bcfad3\"><code>dd5e24e</code></a>\nPreserve quotes for <code>TSMethodSignature</code> nodes named\n<code>new</code> (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19621\">#19621</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/c03ab4e71c23154d6b11537eee3c938f0d0f67d3\"><code>c03ab4e</code></a>\nUpdate dependency eslint-plugin-unicorn to v72 (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19633\">#19633</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/b74dd53076c7208291a6b2e585c310844b41d35f\"><code>b74dd53</code></a>\nUpdate Yuku parser to v0.6.5 (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19654\">#19654</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/f1b594ea1db1520c383d0e281d623551f671f824\"><code>f1b594e</code></a>\nUpdate dependency eslint-plugin-simple-import-sort to v14 (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19655\">#19655</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/0d9dfb61530986373000dd107ea58ceebb79e233\"><code>0d9dfb6</code></a>\nUpdate Yuku parser to v0.6.4 (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19650\">#19650</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/3bbb8159eb55575d4042653aa99f5f92a1416c19\"><code>3bbb815</code></a>\nRemove <code>typescript-only</code> directory (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/19636\">#19636</a>)</li>\n<li>Additional commits viewable in <a\nhref=\"https://github.com/prettier/prettier/compare/3.9.5...3.9.6\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\n[![Dependabot compatibility\nscore](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=prettier&package-manager=npm_and_yarn&previous-version=3.9.5&new-version=3.9.6)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore <dependency name> major version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's major version (unless you unignore this specific\ndependency's major version or upgrade to it yourself)\n- `@dependabot ignore <dependency name> minor version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's minor version (unless you unignore this specific\ndependency's minor version or upgrade to it yourself)\n- `@dependabot ignore <dependency name>` will close this group update PR\nand stop Dependabot creating any more for the specific dependency\n(unless you unignore this specific dependency or upgrade to it yourself)\n- `@dependabot unignore <dependency name>` will remove all of the ignore\nconditions of the specified dependency\n- `@dependabot unignore <dependency name> <ignore condition>` will\nremove the ignore condition of the specified dependency and ignore\nconditions\n\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate dev dependency `prettier` from 3.9.5 to 3.9.6 to pick up\nTypeScript formatting fixes (e.g., preserving quotes on methods named\n\"new\" and `import defer` support). No runtime impact.\n\n- **Dependencies**\n  - `prettier`: 3.9.5 → 3.9.6\n\n<sup>Written for commit a78a343d5fc6092331b6f90e23bd6d8b1c061d84.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1250?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-03T13:40:50-07:00",
+          "tree_id": "c6749d592e18c29c633595b5b914d0316a2678b4",
+          "url": "https://github.com/andymai/brepkit/commit/39fe55060a81ad64b754db18c85674d050ae9c9a"
+        },
+        "date": 1785789804025,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 834333,
+            "range": "± 1835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 912774,
+            "range": "± 3043",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11836,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 666586,
+            "range": "± 1638",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21962872,
+            "range": "± 77600",
             "unit": "ns/iter"
           }
         ]
