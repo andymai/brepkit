@@ -36,6 +36,10 @@ pub fn polygon_normal(verts: &[Point3]) -> Vec3 {
 /// Number of sample points for closed-curve edges.
 pub const CLOSED_CURVE_SAMPLES: usize = 32;
 
+/// Number of samples for an OPEN curved edge (arc or marched conic piece) in
+/// wire polygons; sized for sub-degree angular steps on typical arcs.
+pub const OPEN_CURVE_SAMPLES: usize = 32;
+
 /// Sample a closed-edge curve at `n` evenly spaced parameter values.
 ///
 /// Returns an empty vector for `Line` edges (geometry determined by vertices).
@@ -98,7 +102,7 @@ pub fn wire_polygon(
     wire_id: brepkit_topology::wire::WireId,
 ) -> Result<Vec<Point3>, CheckError> {
     let wire = topo.wire(wire_id)?;
-    let mut pts = Vec::new();
+    let mut pts: Vec<Point3> = Vec::new();
     let mut prev_end: Option<brepkit_topology::vertex::VertexId> = None;
 
     for oe in wire.edges() {
@@ -109,7 +113,24 @@ pub fn wire_polygon(
         let forward = match prev_end {
             Some(pe) if start_vid == pe && end_vid != pe => true,
             Some(pe) if end_vid == pe && start_vid != pe => false,
-            _ => oe.is_forward(),
+            // A closed edge's endpoints coincide, so positional chaining is
+            // meaningless — keep the stored traversal flag (the partial-turn
+            // torus band's rim phase coherence depends on it).
+            _ if start_vid == end_vid => oe.is_forward(),
+            // OPEN edges: consecutive wire edges can hold position-equal but
+            // DISTINCT vertex ids (assembly refinement mints sub-edge
+            // vertices from a different pool than the neighbours). Fall back
+            // to positional chaining against the last emitted point; an
+            // orientation-flag guess can bow-tie the polygon and flip
+            // containment inside the mis-ordered region.
+            _ => match pts.last() {
+                Some(&last) => {
+                    let sp = topo.vertex(start_vid)?.point();
+                    let ep = topo.vertex(end_vid)?.point();
+                    (sp - last).length_squared() <= (ep - last).length_squared()
+                }
+                None => oe.is_forward(),
+            },
         };
         let is_closed_edge = start_vid == end_vid
             && matches!(
@@ -171,9 +192,42 @@ pub fn wire_polygon(
             };
             pts.extend(sampled);
             prev_end = Some(start_vid);
-        } else {
+        } else if matches!(curve, EdgeCurve::Line) {
             let vid = if forward { start_vid } else { end_vid };
             pts.push(topo.vertex(vid)?.point());
+            prev_end = Some(if forward { end_vid } else { start_vid });
+        } else {
+            // Open curved edge (an arc or a marched conic piece): sample its
+            // endpoint-trimmed span. A single vertex would represent the edge
+            // by its chord, and any UV containment built from the polygon
+            // then rejects real hits between the chord and the true curve —
+            // a winding-chain band's wall lobes classified Outside this way.
+            // Forward covers [t0, t1); reversed covers (t0, t1] walked
+            // backwards — the next edge supplies the closing point, matching
+            // the closed-edge convention above.
+            let sp = topo.vertex(start_vid)?.point();
+            let ep = topo.vertex(end_vid)?.point();
+            let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+            let n = OPEN_CURVE_SAMPLES;
+            #[allow(clippy::cast_precision_loss)]
+            let mut seq: Vec<Point3> = (0..=n)
+                .map(|i| {
+                    curve.evaluate_with_endpoints(t0 + (t1 - t0) * (i as f64) / (n as f64), sp, ep)
+                })
+                .collect();
+            // The parametric walk follows the CURVE's own direction, which
+            // can oppose the vertex order (a marched conic stores whichever
+            // direction the fit produced). Orient to the traversal start
+            // positionally, then drop the far endpoint — the next edge
+            // supplies it, matching the closed-edge convention above.
+            let traversal_start = if forward { sp } else { ep };
+            if (seq[0] - traversal_start).length_squared()
+                > (seq[n] - traversal_start).length_squared()
+            {
+                seq.reverse();
+            }
+            seq.pop();
+            pts.extend(seq);
             prev_end = Some(if forward { end_vid } else { start_vid });
         }
     }
