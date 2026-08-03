@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785800276802,
+  "lastUpdate": 1785801267072,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15011,6 +15011,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18225085,
             "range": "± 122026",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd8d2bf4567ad3a395ecd5f1d51b7bb1f597dfe0",
+          "message": "docs(roadmap): kumiko root B fix parked with measured effects (#1275)\n\nFifth probe pass: the junction-snap fix (parked on\n`diag/kumiko-junction-snap`, foil-green) measurably closes root B at the\nsection level — face 965's chain ends land exactly on the boundary and\nthe 8-micron fragment collapses — but the fixture still aborts at 88\nfaces because neighbouring pairs' old micro-fragments now collapse to\nexactly-zero-length free edges that `remove_zero_length_edges` misses.\nThe row records the two questions gating shipment (stripper miss\nmechanism; whether other trim arms need the same snap) and keeps main\nfree of the unverified change per verify-or-revert. Roadmap-only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap to record the measured effects of the parked\njunction-snap on `diag/kumiko-junction-snap`. The snap closes root B\n(section chain ends land on the boundary; the 8-micron fragment\ncollapses), but the fixture still aborts at 88 faces due to\nexactly-zero-length free edges missed by `remove_zero_length_edges`, so\nthe snap stays parked while we investigate the stripper miss and whether\nother trim arms need the same snap.\n\n<sup>Written for commit e9f6f0dc60c943229c68bd58897abd943cf59966.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1275?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T16:51:46-07:00",
+          "tree_id": "ff075ab75ab669859748bd2c8ff0c79932b83d69",
+          "url": "https://github.com/andymai/brepkit/commit/bd8d2bf4567ad3a395ecd5f1d51b7bb1f597dfe0"
+        },
+        "date": 1785801265599,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 900872,
+            "range": "± 1636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 956967,
+            "range": "± 2760",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13059,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 677516,
+            "range": "± 3612",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23120593,
+            "range": "± 227060",
             "unit": "ns/iter"
           }
         ]
