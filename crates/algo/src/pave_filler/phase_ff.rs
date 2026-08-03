@@ -2023,13 +2023,32 @@ fn trim_ellipse_to_boundary_crossings(
         if (t1 - t0) < 1e-6 {
             continue;
         }
-        arcs.push(RawCurve {
-            curve: sec.edge_curve(),
-            bbox: raw.bbox,
-            t_range: (t0, t1),
-            p_start: p0,
-            p_end: p1,
-        });
+        // Split into sub-arcs each spanning strictly less than π, mirroring
+        // the closed-circle window emitter: downstream consumers interpret an
+        // open Circle/Ellipse edge as the SHORTER arc between its endpoints,
+        // so a span ≥ π would flip to the complementary arc, and a diametric
+        // pair would collide in the endpoint-keyed edge merge.
+        let span = t1 - t0;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n_sub = (span / (std::f64::consts::PI * 0.999)).ceil().max(1.0) as usize;
+        #[allow(clippy::cast_precision_loss)]
+        let step = span / n_sub as f64;
+        let mut prev_t = t0;
+        let mut prev_p = p0;
+        for k in 1..=n_sub {
+            #[allow(clippy::cast_precision_loss)]
+            let tk = if k == n_sub { t1 } else { t0 + step * k as f64 };
+            let pk = if k == n_sub { p1 } else { sec.evaluate(tk) };
+            arcs.push(RawCurve {
+                curve: sec.edge_curve(),
+                bbox: raw.bbox,
+                t_range: (prev_t, tk),
+                p_start: prev_p,
+                p_end: pk,
+            });
+            prev_t = tk;
+            prev_p = pk;
+        }
     }
 
     if arcs.is_empty() { None } else { Some(arcs) }
