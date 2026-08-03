@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785797284380,
+  "lastUpdate": 1785797649543,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14687,6 +14687,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22042478,
             "range": "± 28080",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1a105461c039da8312d7d37601e328b0361f648d",
+          "message": "docs(roadmap): kumiko lattice second-pass map (#1269)\n\nRecords the second probe pass on the kumiko lattice fixture: the section\nchain's ends are crossings with the PARTNER face's outline, ~5e-4 off\nface 845's own boundary line — `find_splits_on_line`'s exact-tol anchor\ngate rejects them correctly (the 0.002 gaps are real lattice geometry,\nnot fit error; widening the gate to model scale would be wrong). The\nrequired closing micro-section comes from the (845 × A-band-end-facet)\npair and never reaches the splitter. The row lists the candidate death\nsites in priority order (pair reject-aabb on the flat facet, the 1e-6\nfraction floor in `clip_line_to_polygon_general`, the sample-clip graze)\nand the probe recipe. Roadmap-only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDeepens the kumiko lattice roadmap with a second-pass probe map to guide\ndebugging of the under-split. Clarifies that partner-outline crossings\n(~5e-4 off face 845) are rightly rejected by `find_splits_on_line`,\nidentifies the missing closing micro-section from the 845 ×\nband‑end‑facet pair, lists likely kill points (`reject-aabb`,\n`clip_line_to_polygon_general` fraction floor, sample‑clip graze), and\nadds a focused probe recipe without widening tolerances.\n\n<sup>Written for commit 39633c29a85a93b33e9f65938d8c6711d07755db.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1269?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T15:51:33-07:00",
+          "tree_id": "90b72d5525b4826dd04e1fdbc3f7652118d2e13f",
+          "url": "https://github.com/andymai/brepkit/commit/1a105461c039da8312d7d37601e328b0361f648d"
+        },
+        "date": 1785797647846,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 841819,
+            "range": "± 40192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 919247,
+            "range": "± 31429",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12046,
+            "range": "± 355",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674785,
+            "range": "± 5793",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22042642,
+            "range": "± 39915",
             "unit": "ns/iter"
           }
         ]
