@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785789806736,
+  "lastUpdate": 1785789973760,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14093,6 +14093,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21962872,
             "range": "± 77600",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5758ab31eaacf412e0e8b8fc9f6c5076e5f87648",
+          "message": "chore(deps-dev): bump fast-uri from 3.1.3 to 3.1.5 (#1256)\n\nBumps [fast-uri](https://github.com/fastify/fast-uri) from 3.1.3 to\n3.1.5.\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/fastify/fast-uri/releases\">fast-uri's\nreleases</a>.</em></p>\n<blockquote>\n<h2>v3.1.5</h2>\n<h2>⚠️ Security Warning</h2>\n<p>Fix for <a\nhref=\"https://github.com/fastify/fast-uri/security/advisories/GHSA-7p8r-x3mc-p8w7\">https://github.com/fastify/fast-uri/security/advisories/GHSA-7p8r-x3mc-p8w7</a></p>\n<p><strong>Full Changelog</strong>: <a\nhref=\"https://github.com/fastify/fast-uri/compare/v3.1.4...v3.1.5\">https://github.com/fastify/fast-uri/compare/v3.1.4...v3.1.5</a></p>\n<h2>v3.1.4</h2>\n<h2>⚠️ Security Release</h2>\n<p>Fix for <a\nhref=\"https://github.com/fastify/fast-uri/security/advisories/GHSA-v2hh-gcrm-f6hx\">https://github.com/fastify/fast-uri/security/advisories/GHSA-v2hh-gcrm-f6hx</a></p>\n<p><strong>Full Changelog</strong>: <a\nhref=\"https://github.com/fastify/fast-uri/compare/v3.1.3...v3.1.4\">https://github.com/fastify/fast-uri/compare/v3.1.3...v3.1.4</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/fastify/fast-uri/commit/5e179cbb4636d5f773ed21126e5bd3068e87e94e\"><code>5e179cb</code></a>\nBumped v3.1.5</li>\n<li><a\nhref=\"https://github.com/fastify/fast-uri/commit/2cad02d6ed428a720499bb7a3c3d6c3d41f10f5a\"><code>2cad02d</code></a>\nMerge commit from fork</li>\n<li><a\nhref=\"https://github.com/fastify/fast-uri/commit/6aeece669e4166b2446a89f17c07a3b15dfb7ed4\"><code>6aeece6</code></a>\nBumped v3.1.4</li>\n<li><a\nhref=\"https://github.com/fastify/fast-uri/commit/2d50fbabc80e4d0884fe0f6a98fe118ce6faa353\"><code>2d50fba</code></a>\nfix: reject literal backslash in URI authority</li>\n<li>See full diff in <a\nhref=\"https://github.com/fastify/fast-uri/compare/v3.1.3...v3.1.5\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\n[![Dependabot compatibility\nscore](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=fast-uri&package-manager=npm_and_yarn&previous-version=3.1.3&new-version=3.1.5)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore this major version` will close this PR and stop\nDependabot creating any more for this major version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this minor version` will close this PR and stop\nDependabot creating any more for this minor version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this dependency` will close this PR and stop\nDependabot creating any more for this dependency (unless you reopen the\nPR or upgrade to it yourself)\nYou can disable automated security fix PRs for this repo from the\n[Security Alerts\npage](https://github.com/andymai/brepkit/network/alerts).\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpgrade dev dependency `fast-uri` from 3.1.3 to 3.1.5 to address\nsecurity advisories (GHSA-v2hh-gcrm-f6hx, GHSA-7p8r-x3mc-p8w7) and\ntighten URI authority validation. Lockfile-only change; no app code\nmodifications.\n\n<sup>Written for commit 84735e3aaeb1bf40c3805993593819371fb402ca.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1256?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-03T13:40:58-07:00",
+          "tree_id": "0d29f210de650394147b193edbcbe24d8f6379f1",
+          "url": "https://github.com/andymai/brepkit/commit/5758ab31eaacf412e0e8b8fc9f6c5076e5f87648"
+        },
+        "date": 1785789972624,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 870104,
+            "range": "± 32908",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 959744,
+            "range": "± 7566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13246,
+            "range": "± 91",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 681573,
+            "range": "± 3037",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23662285,
+            "range": "± 144442",
             "unit": "ns/iter"
           }
         ]
