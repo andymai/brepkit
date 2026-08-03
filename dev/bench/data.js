@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785791437712,
+  "lastUpdate": 1785792299881,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14309,6 +14309,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23165278,
             "range": "± 52703",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f427b46a84afb97eba9181484024fe1a2aefd2bc",
+          "message": "fix(algo): emit ellipse section arcs in sub-π spans (#1262)\n\n## Summary\n\n`trim_ellipse_to_boundary_crossings` emitted each kept interval of a\nclosed plane×analytic section as a single arc regardless of span.\nDownstream consumers (tessellation's `shorter_arc_range`, wire sampling)\ninterpret an open Circle/Ellipse edge as the **shorter** arc between its\nendpoints, so a span past π would flip to the complementary arc; a\ndiametric pair would additionally collide in the endpoint-keyed edge\nmerge. The closed-circle window emitter already splits into sub-π pieces\nfor exactly these reasons — this mirrors that split at the ellipse\nemission site.\n\nCloses the roadmap's \"ellipse sections spanning > π\" row (theoretical\ncontract gap; no known repro — the existing oblique-section fixtures pin\nthe sub-π path, and full workspace suites are green: 798 operations\ntests, 107 suites, clippy `-D warnings` clean).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSplit emitted ellipse section intervals into sub-π arcs to honor the\n“shorter-arc” contract. This prevents complementary-arc flips and\ndiametric endpoint merge collisions in downstream consumers.\n\n- **Bug Fixes**\n- Subdivide each kept ellipse interval into arcs with span < π,\nmirroring the closed-circle emitter.\n- Preserve bbox and endpoints; evaluate midpoints only for sub-arc\nboundaries.\n- Closes the roadmap gap for “ellipse sections spanning > π”; no\nbehavior change for sub-π spans.\n\n<sup>Written for commit b47c3387270b84c52af559dd9ee5d814cb856dff.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1262?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T14:22:33-07:00",
+          "tree_id": "14031729275945230725fd6ab0e8e3f21d7cb0fb",
+          "url": "https://github.com/andymai/brepkit/commit/f427b46a84afb97eba9181484024fe1a2aefd2bc"
+        },
+        "date": 1785792298738,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 845144,
+            "range": "± 1890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 923533,
+            "range": "± 1468",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12110,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675447,
+            "range": "± 961",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22135903,
+            "range": "± 51379",
             "unit": "ns/iter"
           }
         ]
