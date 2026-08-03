@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785798832747,
+  "lastUpdate": 1785799332243,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14795,6 +14795,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23109725,
             "range": "± 23459",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e39f746637db7ddd2d8f50501e17ed35af5e4d3",
+          "message": "chore(main): release 2.128.17 (#1271)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.17](https://github.com/andymai/brepkit/compare/v2.128.16...v2.128.17)\n(2026-08-03)\n\n\n### Bug Fixes\n\n* **algo:** weld-scale boundary anchoring for line splits\n([#1270](https://github.com/andymai/brepkit/issues/1270))\n([5fbb836](https://github.com/andymai/brepkit/commit/5fbb83612b5fc714fe9c3aa1399f20d95888a724))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release 2.128.17 for `brepkit-wasm` fixes weld-scale boundary\nanchoring for line splits, improving accuracy and stability around scale\nboundaries.\n\n<sup>Written for commit 0ab9894dc9aae951875df7ba0777d9540d91aa6d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1271?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-03T23:19:52Z",
+          "tree_id": "a3f13520fc0d94f5d06645140e63b4cfa9d3495d",
+          "url": "https://github.com/andymai/brepkit/commit/9e39f746637db7ddd2d8f50501e17ed35af5e4d3"
+        },
+        "date": 1785799331047,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 898517,
+            "range": "± 15621",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 953032,
+            "range": "± 8705",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13149,
+            "range": "± 126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 676153,
+            "range": "± 1302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23035698,
+            "range": "± 22798",
             "unit": "ns/iter"
           }
         ]
