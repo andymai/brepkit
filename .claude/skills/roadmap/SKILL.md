@@ -192,19 +192,18 @@ micro-section (a REAL lattice end-facet feature, 20000×tol, not noise) was graz
 sampled in-both filter, the arrangement then rejects the pendant chain, and the face under-splits.
 SHIPPED prerequisite: F1's plane×plane Line filter now uses the exact polygon clip instead of
 16-sample aliasing (the fix the old comment said "needs a test against true face extents" — the
-AABB version regressed A1 to bnd=158; the polygon version keeps every foil green). REMAINING (fourth pass, 2026-08-03 — roots A+B of N; abort at 86 faces):
-Root A (chain ends 2e-7 off the boundary; exact-tol anchor gate) CLOSED by the weld-scale
-anchor + foot return (find_splits_on_line). Root B localized at the z 18.9 crossing, SAME
-partial-strip signature on face 965 (this crossing's analog of 845): the chain end lands
-1.85e-5 from 965's boundary — ABOVE the weld band and probably PAST the corner vertex — with
-an 8e-6 micro-fragment (sec1, x 37.999992..38.000000) riding the end. Do NOT widen the anchor
-band again (each crossing presents progressively larger rounding; 185·tol here). Fix shape:
-snap section-chain ENDS to boundary JUNCTION VERTICES when within a junction band (machinery
-precedent: FF's snap_to_boundary_junction for closed-curve windows), and absorb sub-weld
-micro-fragments into the neighbouring piece's endpoint. A third crossing at z 13.5 shows more
-free edges plus reversed position-twin pairs — expect at least one more root beyond B.
-Probe recipe unchanged; the per-face section probe with boundary distances is the decisive
-instrument (pattern in git history at 56de1ee7's parent).
+AABB version regressed A1 to bnd=158; the polygon version keeps every foil green). REMAINING (fifth pass, 2026-08-03 — root B mechanics CONFIRMED, fix parked; abort at 88):
+Branch `diag/kumiko-junction-snap` (146c09a1) carries a foil-green junction snap for plane-plane
+trim endpoints (band 1000·tol via snap_to_boundary_junction_band, adopted only when the move
+exceeds the weld band). MEASURED: it closes root B at the section level — face 965's chain ends
+land at d=0.0 and 3.6e-15 and the 8-micron fragment collapses — but the fixture still aborts at
+88 faces: the NEIGHBOURING pairs' old micro-fragments now collapse to EXACTLY zero-length free
+edges that `remove_zero_length_edges` fails to strip. Two questions gate shipping the snap:
+(1) why the stripper misses exactly-degenerate Line edges here (kept-face wire path? MERGE_TOL
+quantization?), and (2) whether the other trim arms (Range×Indeterminate, the sample-clip) need
+the same snap so every copy of a junction endpoint agrees. Do not ship the snap without closing
+(1) — the debris it reshapes is otherwise ambiguous between old fragments and new mints.
+Probe recipe unchanged; per-face section probe with boundary distances is decisive.
 CAPTURE GAP worth fixing once: `compoundCut(base, tools[])` passes its tools as an ARRAY, so a
 number-only argument filter captures the base and silently drops every tool — the op then cannot be
 replayed at all. Flatten arrays and typed arrays in any boolean-capture hook.
