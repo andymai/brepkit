@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.12](https://github.com/andymai/brepkit/compare/v2.128.11...v2.128.12) (2026-08-03)
+
+
+### Bug Fixes
+
+* **algo:** close the 2-tangency quadric-box fuse (parallel half-arc sections) ([#1257](https://github.com/andymai/brepkit/issues/1257)) ([b468fcc](https://github.com/andymai/brepkit/commit/b468fccdc7183549c5ea22d228531b27f85bc365))
+
 ## [2.128.11](https://github.com/andymai/brepkit/compare/v2.128.10...v2.128.11) (2026-08-03)
 
 
