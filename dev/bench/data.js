@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785792781936,
+  "lastUpdate": 1785792926229,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14417,6 +14417,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22573018,
             "range": "± 163018",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "409efbb7d2bb2a47942ebfe73ce2231244f84944",
+          "message": "docs(roadmap): record torus-arm re-probe result (#1264)\n\nRe-probed the torus-box landscapes per the roadmap row's instruction:\nall green as of 2026-08-03 (lib torus tests, parity_boolean_curved, the\ntorus-notch fixture, and the census torus−box row). The missing\nclassifier arm is therefore preventive with no failing repro, ranked\nbelow repro-backed work; the row now also records the layering\nconstraint (check's quartic solver would need to move to math).\nRoadmap-only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRe-probed all torus landscapes (all green) and updated the roadmap to\nmark the `algo` torus ray-cast classifier arm as preventive as of\n2026-08-03, ranked below repro-backed work. The row now notes a layering\nconstraint: the quartic solver used in\n`check/src/classify/ray_surface.rs` must live in `math` for `algo` to\nuse it.\n\n<sup>Written for commit aa3a139d357d23ef1a0e7df65138e30f2c01bee1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1264?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T14:32:17-07:00",
+          "tree_id": "84259c5e806840fad8db212c03244a889cc73f31",
+          "url": "https://github.com/andymai/brepkit/commit/409efbb7d2bb2a47942ebfe73ce2231244f84944"
+        },
+        "date": 1785792925317,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 837328,
+            "range": "± 2479",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 917898,
+            "range": "± 1533",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11974,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 671134,
+            "range": "± 8173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21987389,
+            "range": "± 270057",
             "unit": "ns/iter"
           }
         ]
