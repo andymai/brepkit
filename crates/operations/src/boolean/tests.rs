@@ -392,6 +392,51 @@ fn cut_disjoint_returns_a() {
     assert_eq!(check_result(&topo, result), 6);
 }
 
+/// A two-piece accumulator whose overall box spans the tool: whole-solid
+/// AABBs overlap, so only the per-component witness can prove the tool
+/// touches nothing. The cut must return the target unchanged.
+#[test]
+fn cut_disjoint_tool_between_multi_piece_target_returns_target() {
+    use crate::boolean::assembly::face_components;
+
+    let mut topo = Topology::new();
+    let p1 = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let p2 = make_unit_cube_manifold_at(&mut topo, 10.0, 0.0, 0.0);
+    let acc = boolean(&mut topo, BooleanOp::Fuse, p1, p2).unwrap();
+    let tool = make_unit_cube_manifold_at(&mut topo, 5.0, 0.0, 0.0);
+
+    let result = boolean(&mut topo, BooleanOp::Cut, acc, tool).unwrap();
+    let comps = face_components(&topo, result);
+    assert_eq!(
+        comps.len(),
+        2,
+        "disjoint cut must keep both target pieces, got {}",
+        comps.len()
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - 2.0).abs() < 1e-6,
+        "disjoint cut must preserve target volume 2.0, got {vol}"
+    );
+}
+
+/// The disjoint-cut fast path must NOT fire on an overlapping tool: if it
+/// did, the result would keep the full target volume instead of losing the
+/// overlap.
+#[test]
+fn cut_overlapping_tool_removes_material_via_gfa() {
+    let mut topo = Topology::new();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+    let result = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - 0.5).abs() < 1e-3,
+        "overlapping cut must remove the shared half, got {vol}"
+    );
+}
+
 #[test]
 fn intersect_disjoint_returns_empty() {
     use brepkit_topology::explorer::solid_faces;

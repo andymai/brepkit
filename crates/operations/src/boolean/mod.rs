@@ -411,6 +411,19 @@ pub fn boolean(
         return Ok(merged);
     }
 
+    // Disjoint-cut fast path: a tool with a clear gap from every component of
+    // the target removes nothing, so A − B is exactly A. Same disjointness
+    // witness as the fuse path above (per-component conservative boxes, strict
+    // positive gap), so a touching or overlapping tool still routes to GFA.
+    // A tool floating inside the target can never reach here: its boxes nest
+    // inside the target's, which is overlap, not separation. The copy keeps
+    // the result independent of the inputs, preserving the boolean contract.
+    if op == BooleanOp::Cut && solids_provably_disjoint(topo, a, b, tol.linear) {
+        let copy_a = crate::copy::copy_solid(topo, a)?;
+        log::debug!("Cut short-circuited: disjoint tool removes nothing");
+        return Ok(copy_a);
+    }
+
     let algo_op = match op {
         BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
         BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
