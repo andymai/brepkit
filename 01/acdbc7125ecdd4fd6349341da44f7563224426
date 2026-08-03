@@ -1,0 +1,21 @@
+crates/algo/src/builder/builder_solid.rs
+  s_7ff36fc7322bef::t_a94388ebe05741 2199-2202
+crates/operations/src/tessellate/nonplanar.rs
+  s_7ff36fc7322bef::t_a94388ebe05741 88-90,101-107,119-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "01acdbc7125ecdd4fd6349341da44f7563224426",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
