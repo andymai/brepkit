@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785799979331,
+  "lastUpdate": 1785800276802,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14957,6 +14957,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22009262,
             "range": "± 38262",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b7d411aa5360b4ad820afa2660e57f250372d0eb",
+          "message": "docs(roadmap): kumiko root B localized (#1274)\n\nFourth probe pass on the kumiko lattice fixture: root B repeats root A's\npartial-strip signature at the z 18.9 crossing (face 965), but its chain\nend lands 1.85e-5 off the boundary — above the weld band and probably\npast the corner vertex — with an 8-micron fragment riding the end.\nRecords why widening the anchor band again is wrong (progressive\nrounding per crossing), the junction-vertex snapping fix shape with its\nmachinery precedent, and the third crossing's distinct signature.\nRoadmap-only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nLocalizes kumiko root B at the z 18.9 crossing, matching root A’s\npartial‑strip signature on face 965; the chain end sits 1.85e‑5 past the\nboundary (above the weld band) with an 8e‑6 fragment. Documents the fix\ndirection: don’t widen the anchor band—snap section‑chain ends to\nboundary junction vertices and absorb sub‑weld micro‑fragments; notes a\nthird crossing at z 13.5; probe recipe unchanged.\n\n<sup>Written for commit 89c1b42331b622768ed4a4cbdafa0228b2410448.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1274?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T16:35:27-07:00",
+          "tree_id": "b59515eb004a9e5923ddabf764275d341afe433a",
+          "url": "https://github.com/andymai/brepkit/commit/b7d411aa5360b4ad820afa2660e57f250372d0eb"
+        },
+        "date": 1785800275388,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 686031,
+            "range": "± 3591",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 758348,
+            "range": "± 2489",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9663,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 540863,
+            "range": "± 1364",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18225085,
+            "range": "± 122026",
             "unit": "ns/iter"
           }
         ]
