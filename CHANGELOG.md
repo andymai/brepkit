@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.10](https://github.com/andymai/brepkit/compare/v2.128.9...v2.128.10) (2026-08-03)
+
+
+### Performance
+
+* **operations:** short-circuit disjoint Cut to a target copy ([#1252](https://github.com/andymai/brepkit/issues/1252)) ([47ef2cb](https://github.com/andymai/brepkit/commit/47ef2cbf6afb04f8274d7d4b6b3b6f1d77061625))
+
 ## [2.128.9](https://github.com/andymai/brepkit/compare/v2.128.8...v2.128.9) (2026-08-02)
 
 
