@@ -127,7 +127,7 @@ pub fn wire_polygon(
                 Some(&last) => {
                     let sp = topo.vertex(start_vid)?.point();
                     let ep = topo.vertex(end_vid)?.point();
-                    (sp - last).length() <= (ep - last).length()
+                    (sp - last).length_squared() <= (ep - last).length_squared()
                 }
                 None => oe.is_forward(),
             },
@@ -220,8 +220,10 @@ pub fn wire_polygon(
             // direction the fit produced). Orient to the traversal start
             // positionally, then drop the far endpoint — the next edge
             // supplies it, matching the closed-edge convention above.
-            let t_start = if forward { sp } else { ep };
-            if (seq[0] - t_start).length() > (seq[n] - t_start).length() {
+            let traversal_start = if forward { sp } else { ep };
+            if (seq[0] - traversal_start).length_squared()
+                > (seq[n] - traversal_start).length_squared()
+            {
                 seq.reverse();
             }
             seq.pop();
