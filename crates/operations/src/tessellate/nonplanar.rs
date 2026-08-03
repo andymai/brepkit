@@ -85,6 +85,9 @@ pub(super) fn tessellate_revolution_band_shared(
     for oe in wire.edges() {
         let e = topo.edge(oe.edge())?;
         match e.curve() {
+            // A closed single-edge NURBS loop has no by-construction winding
+            // (unlike a closed circle) — decline rather than guess.
+            EdgeCurve::NurbsCurve(_) if e.start() == e.end() => return Ok(false),
             EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) => {
                 if seen.insert(oe.edge().index()) {
                     curved.push((oe.edge().index(), e.start(), e.end()));
@@ -95,7 +98,13 @@ pub(super) fn tessellate_revolution_band_shared(
             EdgeCurve::Ellipse(_) => return Ok(false),
         }
     }
-    // Walk cycles by shared vertices.
+    // Walk cycles by shared vertices (vertex→edge adjacency built once).
+    let mut by_vertex: std::collections::HashMap<brepkit_topology::vertex::VertexId, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (j, &(_, sv, ev)) in curved.iter().enumerate() {
+        by_vertex.entry(sv).or_default().push(j);
+        by_vertex.entry(ev).or_default().push(j);
+    }
     let mut used = vec![false; curved.len()];
     let mut cycles: Vec<Vec<usize>> = Vec::new();
     for start in 0..curved.len() {
@@ -107,8 +116,9 @@ pub(super) fn tessellate_revolution_band_shared(
         let mut cycle = vec![start];
         let mut closed = curved[start].1 == curved[start].2 || at == origin;
         while !closed {
-            let Some(next) =
-                (0..curved.len()).find(|&j| !used[j] && (curved[j].1 == at || curved[j].2 == at))
+            let Some(&next) = by_vertex
+                .get(&at)
+                .and_then(|c| c.iter().find(|&&j| !used[j]))
             else {
                 break;
             };

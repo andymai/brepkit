@@ -2196,9 +2196,10 @@ fn split_arc_edges_at_collinear_vertices(
         // is metrically equivalent to `snap`. A degenerate near-zero radius has
         // no meaningful interior to split, so leave the edge whole.
         //
-        // Only arcs reach here (the collection loop filters on `is_arc`); the
-        // non-arc arms are unreachable but kept explicit per the exhaustive-
-        // match convention so a future curve variant can't be silently skipped.
+        // Only circle/ellipse arcs reach here (NURBS edges took the
+        // parameter-space branch above; Lines are filtered at collection);
+        // the unreachable arms stay explicit per the exhaustive-match
+        // convention so a future curve variant can't be silently skipped.
         // Open marched-NURBS sections (plane×cone conics and friends) are
         // refined in PARAMETER space: two faces sharing the curve can split
         // it at different points (the winding-chain seam anchoring splits
