@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785782635947,
+  "lastUpdate": 1785785125944,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -13823,6 +13823,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17915039,
             "range": "± 15541",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "20f2d447ce432855bc772619fb48fe105fc07d1a",
+          "message": "fix(algo): close the quadric-box inscribed-rim fuse (4-tangency cone/cylinder ∪ box) (#1254)\n\n## Summary\n\nCloses the last primitive-boolean mesh fallback in `approx_census`:\n`cone ∪ box` with the section circle inscribed in the box square\n(tangent on all four walls), plus its cylinder twin.\n\n**Root chain.** The four tangency points split the section circle into\nfour arcs. The greedy wire trace spent them on an out-and-back seam\ntour, and their twin copies closed as a bare duplicate ring — leaving\nthe far (z=0) rim in no loop at all. Downstream, `merge_duplicate_edges`\n(endpoint-pair keyed, deliberately so) collapsed the two co-endpoint\nhalf-rims into one edge used forward+reverse, spur excision removed that\nadjacent pair, the freed seam pair became wrap-adjacent and was excised\ntoo, and the base disc's own wire collapsed the same way. The by-edge-id\nmanifold gate cannot see position-duplicates, so the broken result\nvalidated.\n\n**Fix (three coordinated pieces):**\n1. **Duplicated-ring trigger** (`wire_loops_duplicate_cover`): a loop\nwhose edges are entirely duplicated by another loop marks the greedy\npartition broken. Cylinders enter the existing DCEL rescue on it; cone\nlaterals enter on exactly this signature only (narrow-case doctrine).\nThe DCEL adoption bar judges the candidate's area health with\nperiod-aware sampling — a valid full-period band folds to ~zero area\nunder the raw sampler.\n2. **Splitter-side midpoint splits** (`split_coendpoint_loop_arcs`):\nadopted loops get co-endpoint half-rim arcs split at their angular\nmidpoints, so no two emitted edges share both endpoints. This is the\nsanctioned pattern for the endpoint-pair merge key (same as the\ndisk-chords lens split); `merge_duplicate_edges` itself is untouched.\nGroups whose members share a midpoint (true twins that must weld) are\nleft whole; the seam Line pair is never touched (merging it into one\nedge used twice is correct cut-annulus topology).\n3. **Band tessellator generalization**:\n`tessellate_revolution_band_shared` now accepts rims that are chains of\nopen arcs summing to a full revolution (spans measured in each circle's\nown frame — the surface's u can be the rim circle's mirror) and stitches\nrims of unequal shared-vertex counts with an angular zipper merge.\nEqual-count rims keep the historical index-paired sweep byte-for-byte.\nThe band attempt now runs for any Line/Circle wire, not just the 4-edge\ncanonical shape; it still declines anything that is not a two-full-rim\nband (partial bands fail the full-turn span check).\n\n## Verification\n\n- `cone_union_box_should_be_analytic` (previously `#[ignore]`d\nready-repro) now asserts the full acceptance bar: 11 typed analytic\nfaces, base disc present, zero non-manifold edges, watertight\ntessellation (0 boundary edges), volume exact (512 + 152π ≈ 989.51\nwithin 1.0).\n- New `cylinder_union_inscribed_box_is_analytic_watertight` pins the\ncylinder twin (96π + 512).\n- `approx_census`: **cone ∪ box flips FALLBACK → exact analytic (21.9\nms, faces=11)** — every BOOLEAN census row is now exact analytic.\n- Full workspace suites green (`--exclude brepkit-render` for its known\nintermittent SIGSEGV): 107 suites, including all calibrated\nface-splitter foils (d4 gridfinity, honeycomb, divider-lip,\ngroove-mouth, junction-disc, cylinder-slot, a1corner live in these\nsuites) and `cargo test -p brepkit-wasm --lib gridfinity`.\n- Clippy `-D warnings` clean; fmt clean.\n\n## Remaining\n\nThe 2-tangency variant (box tangent on two walls) splits the circle into\ntwo arcs and fails differently (open chain, 4 free edges). It needs its\nown trigger and stays on the roadmap — the roadmap entry is updated in\nthis PR.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes cone/cylinder ∪ box when the section circle is inscribed (tangent\non all four walls). The result is analytic and watertight (no mesh\nfallback); `approx_census` now reports exact geometry and volume checks\npass.\n\n- Bug Fixes\n- Detect and rescue the duplicated-ring loop case with a DCEL trace on\nperiodic cone/cylinder laterals (`wire_loops_duplicate_cover`), using\nperiod-aware area checks.\n- Split co-endpoint half-rim arcs at their angular midpoints after\nadoption (`split_coendpoint_loop_arcs`) to prevent endpoint-pair edge\nmerges; true twins and the seam line are left intact.\n- Generalize the revolution band mesher to accept rim arc chains that\nsum to a full turn and to zip rims with unequal shared-vertex counts;\nstill declines partial bands. Enabled for any Line/Circle wire, not just\nthe 4-edge shape.\n- Tests: enable `cone_union_box_should_be_analytic`, add the cylinder\ntwin; assert 11 analytic faces, watertight tessellation, and correct\nvolume. The 2-tangency variant remains on the roadmap.\n\n<sup>Written for commit 1cbb1fda2b6c3bbcb30c47d7d9d4e33d21c72e7c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1254?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T12:22:48-07:00",
+          "tree_id": "c06c9e628545c34478431b4f00dc130f383cf74f",
+          "url": "https://github.com/andymai/brepkit/commit/20f2d447ce432855bc772619fb48fe105fc07d1a"
+        },
+        "date": 1785785124758,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 836832,
+            "range": "± 2803",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 915175,
+            "range": "± 2797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12072,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673192,
+            "range": "± 14816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21966450,
+            "range": "± 69999",
             "unit": "ns/iter"
           }
         ]
