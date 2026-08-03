@@ -1132,10 +1132,16 @@ fn split_coendpoint_loop_arcs(loops: &mut [Vec<OrientedPCurveEdge>], surface: &F
                     .ok()
                     .map(brepkit_math::curves2d::Curve2D::Line)
             };
+            // Pieces drop the parent's pave block id, matching
+            // `presplit_sections_at_registry`: the id keys a cross-face
+            // edge-sharing cache, so two distinct sub-spans carrying the
+            // parent's id could alias; the position-based merge welds the
+            // shared pieces instead.
             let mut first = e.clone();
             first.end_3d = mid_3d;
             first.end_uv = mid_uv_first;
             first.source_edge_idx = None;
+            first.pave_block_id = None;
             if let Some(pc) = piece_pcurve(first.start_uv, first.end_uv) {
                 first.pcurve = pc;
             }
@@ -1143,6 +1149,7 @@ fn split_coendpoint_loop_arcs(loops: &mut [Vec<OrientedPCurveEdge>], surface: &F
             second.start_3d = mid_3d;
             second.start_uv = mid_uv_second;
             second.source_edge_idx = None;
+            second.pave_block_id = None;
             if let Some(pc) = piece_pcurve(second.start_uv, second.end_uv) {
                 second.pcurve = pc;
             }

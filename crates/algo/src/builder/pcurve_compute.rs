@@ -322,8 +322,9 @@ fn sample_edge_to_uv_via_frame(
 
 /// Unwrap periodic UV parameters to remove seam jumps.
 ///
-/// Detects jumps > half-period in consecutive points and adjusts subsequent
-/// points by +/-period to maintain continuity.
+/// Shifts each point by the whole number of periods that brings it to the
+/// copy nearest its predecessor, maintaining continuity across any copy
+/// distance (a mixed-copy wire can jump multiple periods at once).
 fn unwrap_periodic_params(pts: &mut [Point2], u_period: Option<f64>, v_period: Option<f64>) {
     if pts.len() < 2 {
         return;
