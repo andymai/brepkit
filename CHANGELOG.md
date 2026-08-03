@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.13](https://github.com/andymai/brepkit/compare/v2.128.12...v2.128.13) (2026-08-03)
+
+
+### Bug Fixes
+
+* **algo:** close the circle-outside cone∪box fuse (winding-chain band splitting) ([#1259](https://github.com/andymai/brepkit/issues/1259)) ([4ac422d](https://github.com/andymai/brepkit/commit/4ac422d81e44bbdeeeaca8a8e17bdf4bc32a689f))
+
 ## [2.128.12](https://github.com/andymai/brepkit/compare/v2.128.11...v2.128.12) (2026-08-03)
 
 
