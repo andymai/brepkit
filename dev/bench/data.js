@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785797649543,
+  "lastUpdate": 1785798832747,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14741,6 +14741,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22042642,
             "range": "± 39915",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5fbb83612b5fc714fe9c3aa1399f20d95888a724",
+          "message": "fix(algo): weld-scale boundary anchoring for line splits (#1270)\n\n## Summary\n\n`find_splits_on_line` gated the boundary-anchor distance at exact\ntolerance (1e-7), but plane×plane section endpoints carry a few tol of\nclip/trim rounding — full-precision probes put the kumiko lattice chain\nends **2.1e-7 and 2.3e-7** off their boundary edges. The rejected anchor\nleft the section chain a pendant, the plane arrangement (correctly)\nrefused it, the face under-split, and the fuse aborted on an open growth\nshell. This is the codebase's canonical recurring trap (exact-tol gate\nmeeting section rounding; the same function's dedup already uses the\nweld band).\n\nThe acceptance now uses weld scale (100·tol). The split point takes the\nfoot on the line, so boundary sub-pieces remain exactly on the edge; the\nnear-miss endpoint welds downstream as before.\n\n## Status\n\nPeels the first root of the kumiko lattice fixture: the 67-face abort\n(the 845 quad, now closed) moves to an 86-face lump with a different\nsignature (partition mismatches, `coincident_other_id=1`). Sequential\npeeling continues; the roadmap row carries the updated map — including\nthe correction that pass two's \"0.002 real geometry\" reading was a\ndisplay-rounding artifact of the probe targets.\n\n## Verification\n\n- Full workspace green (107 suites, `--exclude brepkit-render`) — every\nplane-face boolean foil passes with the widened anchor; clippy `-D\nwarnings` clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAccept boundary anchors at weld scale (100·tol) in `find_splits_on_line`\nto handle small rounding on plane–plane section endpoints and avoid\nunder-split faces. This closes the 845 quad in the kumiko lattice\nfixture and advances the failure to a new 86-face partition mismatch.\n\n- **Bug Fixes**\n- Changed anchor check from `dist < tol` to `dist < tol * 100.0`\n(matches the function’s weld-band dedup); the split point uses the foot\non the line so boundary pieces stay exact.\n- Prevents rejected anchors that left pendant chains and led to\nopen-shell fuse aborts; plane-face boolean foils pass with the widened\nanchor.\n\n<sup>Written for commit 4ddc1871828558c889a0903ba2d6e99251994edf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1270?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T16:11:27-07:00",
+          "tree_id": "6385745554b21d399d92fa5cd63a220f40eae416",
+          "url": "https://github.com/andymai/brepkit/commit/5fbb83612b5fc714fe9c3aa1399f20d95888a724"
+        },
+        "date": 1785798831792,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 902995,
+            "range": "± 15375",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 956335,
+            "range": "± 1563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13055,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 676630,
+            "range": "± 25123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23109725,
+            "range": "± 23459",
             "unit": "ns/iter"
           }
         ]
