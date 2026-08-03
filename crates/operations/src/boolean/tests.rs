@@ -6860,3 +6860,113 @@ fn two_tangency_box_fuse_is_analytic_watertight() {
         );
     }
 }
+
+/// Ready-repro for the "circle outside" cone∪box fuse — the last member of
+/// the tangent-circle family (box SMALLER than the section circle, corners
+/// poking out). The correct cone boundary is a single closed chain that
+/// WINDS the cone: 4 corner ring-arcs alternating with 4 wall arches
+/// (plane×cone conic pieces, NURBS-fit by phase-FF and confirmed emitted by
+/// `BK_FF_TRACE`).
+///
+/// State of the dig (all confirmed by probes, in order):
+/// 1. The internal-loops shortcut used to swallow the chain as a
+///    contractible hole (an annulus loop with winding 1 bounds no disc) —
+///    fixed by the `sections_form_winding_chain` veto.
+/// 2. The chain then floated as an ISLAND in the trace graph — fixed by
+///    `split_sections_at_seam_meridian` (the chain-piece × seam crossing
+///    becomes a shared vertex, mirroring the closed-circle seam-anchor
+///    pre-pass).
+/// 3. REMAINING: with the graph connected, the greedy double-covers the
+///    chain out-and-back and the DCEL walk still returns one grand tour —
+///    every chain vertex carries identical-tangent parallel twins of wavy
+///    NURBS pieces, and the angular successor cannot order them. The
+///    missing component is a chain-band splitter: generalize
+///    `split_periodic_face_into_bands` from closed seam-anchored circles to
+///    a winding CHAIN as the band separator (walk the chain once, emit the
+///    two bands directly). Expected result: base disc + lower band bounded
+///    by the chain + 4 box-corner triangles + box faces.
+///
+/// In production this configuration falls to the mesh fallback both before
+/// and after the two shipped steps (GFA validation rejects both partial
+/// results), so the groundwork is behavior-neutral at the `boolean()` level.
+#[test]
+#[ignore = "ready-repro — circle-outside cone∪box needs a chain-band splitter; see doc comment"]
+fn diag_circle_outside_inventory() {
+    use brepkit_math::mat::Mat4;
+    struct StderrLog;
+    impl log::Log for StderrLog {
+        fn enabled(&self, _: &log::Metadata) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record) {
+            if record.args().to_string().contains("FF_TRACE") {
+                eprintln!("{}", record.args());
+            }
+        }
+        fn flush(&self) {}
+    }
+    static LOGGER: StderrLog = StderrLog;
+    let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Debug));
+    let mut topo = Topology::new();
+    let cone = crate::primitives::make_cone(&mut topo, 6.0, 2.0, 12.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 6.0, 6.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(-3.0, -3.0, 6.0)).unwrap();
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cone, b).unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let mut edge_use: std::collections::HashMap<EdgeId, usize> = std::collections::HashMap::new();
+    for &fid in &faces {
+        let f = topo.face(fid).unwrap();
+        let mut desc: Vec<String> = Vec::new();
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *edge_use.entry(oe.edge()).or_default() += 1;
+                let e = topo.edge(oe.edge()).unwrap();
+                let s = topo.vertex(e.start()).unwrap().point();
+                let t = topo.vertex(e.end()).unwrap().point();
+                desc.push(format!(
+                    "e{}({:.1},{:.1},{:.1})->({:.1},{:.1},{:.1})",
+                    oe.edge().index(),
+                    s.x(),
+                    s.y(),
+                    s.z(),
+                    t.x(),
+                    t.y(),
+                    t.z()
+                ));
+            }
+        }
+        eprintln!(
+            "face {} {} inners={}: {}",
+            fid.index(),
+            f.surface().type_tag(),
+            f.inner_wires().len(),
+            desc.join(" ")
+        );
+    }
+    for (eid, n) in &edge_use {
+        if *n != 2 {
+            let e = topo.edge(*eid).unwrap();
+            let s = topo.vertex(e.start()).unwrap().point();
+            let t = topo.vertex(e.end()).unwrap().point();
+            eprintln!(
+                "FREE-ish e{} used {n}x kind={} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                eid.index(),
+                e.curve().type_tag(),
+                s.x(),
+                s.y(),
+                s.z(),
+                t.x(),
+                t.y(),
+                t.z()
+            );
+        }
+    }
+    let mesh = crate::tessellate::tessellate_solid(&topo, result, 0.05).unwrap();
+    eprintln!(
+        "mesh boundary = {}",
+        crate::tessellate::boundary_edge_count(&mesh)
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    eprintln!("volume = {vol:.3}");
+}

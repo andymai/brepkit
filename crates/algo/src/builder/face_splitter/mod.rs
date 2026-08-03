@@ -1160,6 +1160,173 @@ fn split_coendpoint_loop_arcs(loops: &mut [Vec<OrientedPCurveEdge>], surface: &F
     }
 }
 
+/// The seam meridian's `u` from a face's boundary edges: the (unique)
+/// non-degenerate boundary Line whose endpoints project to one `u` is the
+/// generator the periodic face was cut open along.
+fn boundary_seam_u(
+    boundary_edges: &[OrientedPCurveEdge],
+    surface: &FaceSurface,
+    tol: f64,
+) -> Option<f64> {
+    use std::f64::consts::TAU;
+    for e in boundary_edges {
+        if !matches!(e.curve_3d, EdgeCurve::Line) || (e.start_3d - e.end_3d).length() <= tol {
+            continue;
+        }
+        let (Some((u0, _)), Some((u1, _))) = (
+            surface.project_point(e.start_3d),
+            surface.project_point(e.end_3d),
+        ) else {
+            continue;
+        };
+        let d = (u1 - u0).rem_euclid(TAU);
+        if d.min(TAU - d) < 1e-4 {
+            return Some(u0);
+        }
+    }
+    None
+}
+
+/// Split every section piece that crosses the seam meridian at the crossing
+/// point (bisected on the piece's own curve). Pieces are assumed u-monotone
+/// between their endpoints (chain pieces subtend well under a half-turn);
+/// pieces already ending on the seam, or not straddling it, pass through
+/// unchanged. Split halves clear their UV hints and pave block id, matching
+/// `presplit_sections_at_registry`.
+fn split_sections_at_seam_meridian(
+    sections: &[SectionEdge],
+    surface: &FaceSurface,
+    seam_u: f64,
+    tol: f64,
+) -> Vec<SectionEdge> {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
+    let delta_u =
+        |p: Point3| -> Option<f64> { surface.project_point(p).map(|(u, _)| wrap(u - seam_u)) };
+    let mut out = Vec::with_capacity(sections.len() + 2);
+    for s in sections {
+        let (Some(d0), Some(d1)) = (delta_u(s.start), delta_u(s.end)) else {
+            out.push(s.clone());
+            continue;
+        };
+        let straddles = d0 * d1 < 0.0 && (d0 - d1).abs() < PI && d0.abs() > 1e-9 && d1.abs() > 1e-9;
+        if !straddles {
+            out.push(s.clone());
+            continue;
+        }
+        let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+        let (mut lo, mut hi, f_lo) = (t0, t1, d0);
+        for _ in 0..60 {
+            let tm = 0.5 * (lo + hi);
+            let Some(fm) = delta_u(s.curve_3d.evaluate_with_endpoints(tm, s.start, s.end)) else {
+                break;
+            };
+            if (fm > 0.0) == (f_lo > 0.0) {
+                lo = tm;
+            } else {
+                hi = tm;
+            }
+        }
+        let p = s
+            .curve_3d
+            .evaluate_with_endpoints(0.5 * (lo + hi), s.start, s.end);
+        if (p - s.start).length() <= tol * 10.0 || (p - s.end).length() <= tol * 10.0 {
+            out.push(s.clone());
+            continue;
+        }
+        let mut first = s.clone();
+        first.end = p;
+        let mut second = s.clone();
+        second.start = p;
+        for piece in [&mut first, &mut second] {
+            piece.start_uv_a = None;
+            piece.end_uv_a = None;
+            piece.start_uv_b = None;
+            piece.end_uv_b = None;
+            piece.pave_block_id = None;
+        }
+        out.push(first);
+        out.push(second);
+    }
+    out
+}
+
+/// Whether the sections chain into a loop that WINDS the surface's periodic
+/// u direction (|net signed u-progress| > π after chaining by endpoint
+/// position). Non-periodic surfaces never wind. Chains that fail to close
+/// are conservatively reported as non-winding — the internal-loops path has
+/// its own closure requirements.
+fn sections_form_winding_chain(sections: &[SectionEdge], surface: &FaceSurface, tol: f64) -> bool {
+    use std::collections::HashMap;
+    use std::f64::consts::{PI, TAU};
+
+    let (Some(_), _) = super::pcurve_compute::surface_periods(surface) else {
+        return false;
+    };
+    if sections.len() < 2 {
+        return false;
+    }
+    let proj_u = |p: Point3| -> Option<f64> { surface.project_point(p).map(|(u, _)| u) };
+    let qscale = 1.0 / tol.max(1e-12);
+    let q3 = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * qscale).round() as i64,
+            (p.y() * qscale).round() as i64,
+            (p.z() * qscale).round() as i64,
+        )
+    };
+    let wrap_pi = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
+
+    // Endpoint-keyed adjacency: (piece index, leaves-from-start).
+    let mut adj: HashMap<(i64, i64, i64), Vec<(usize, bool)>> = HashMap::new();
+    for (i, s) in sections.iter().enumerate() {
+        adj.entry(q3(s.start)).or_default().push((i, true));
+        adj.entry(q3(s.end)).or_default().push((i, false));
+    }
+
+    let mut used = vec![false; sections.len()];
+    for start in 0..sections.len() {
+        if used[start] {
+            continue;
+        }
+        let mut winding = 0.0_f64;
+        let mut cur = start;
+        let mut forward = true;
+        let origin = q3(sections[start].start);
+        let mut closed = false;
+        for _ in 0..sections.len() {
+            used[cur] = true;
+            let s = &sections[cur];
+            let (from, to) = if forward {
+                (s.start, s.end)
+            } else {
+                (s.end, s.start)
+            };
+            let (Some(u0), Some(u1)) = (proj_u(from), proj_u(to)) else {
+                return false;
+            };
+            winding += wrap_pi(u1 - u0);
+            let to_key = q3(to);
+            if to_key == origin {
+                closed = true;
+                break;
+            }
+            let Some(next) = adj
+                .get(&to_key)
+                .and_then(|c| c.iter().find(|(j, _)| !used[*j]))
+            else {
+                break;
+            };
+            forward = next.1;
+            cur = next.0;
+        }
+        if closed && winding.abs() > PI {
+            return true;
+        }
+    }
+    false
+}
+
 /// [`wire_loops_have_degenerate_area`] with period-aware sampling: a valid
 /// full-period band loop's raw UV polygon folds to ~zero area at the seam
 /// crossing, so the absolute check misjudges it. Downstream classification
@@ -4271,12 +4438,23 @@ fn split_face_2d_impl(
         // Non-plane faces: check if all section endpoints are off the
         // boundary in UV space.
         let uv_tol = 0.01; // ~0.6 deg in angular coordinates
-        sections.iter().all(|s| {
+        let endpoints_internal = sections.iter().all(|s| {
             let start_on_boundary =
                 is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol);
             let end_on_boundary = is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
             !start_on_boundary && !end_on_boundary
-        })
+        });
+        // Winding veto: on a u-periodic lateral, a section chain that winds
+        // the full period is a band separator, not a contractible hole — an
+        // annulus loop with winding number 1 bounds no disc. Treating it as
+        // internal attaches the chain as an inner wire on the UNSPLIT face
+        // (the "circle outside" cone∪box fuse: 4 corner ring-arcs + 4 wall
+        // arches chain into one winding loop, and the whole lateral was kept
+        // with the loop as a hole, orphaning the top rim). Winding chains
+        // fall through to the general splitter, whose band machinery handles
+        // them. A genuine lens hole (a tube poking the wall) has winding 0
+        // and keeps the internal path.
+        endpoints_internal && !sections_form_winding_chain(sections, &surface, tol.linear)
     };
 
     if all_sections_internal {
@@ -4296,6 +4474,27 @@ fn split_face_2d_impl(
             &wire_pts,
         );
     }
+
+    // Seam-anchor a winding section chain: a chain that winds the periodic
+    // direction must connect to the seam in the trace graph, or it floats as
+    // an island and every wire builder mis-handles it (the closed-circle
+    // band shortcut gets this via the seam-anchor pre-pass; a chain of arcs
+    // and conic pieces gets it here). Splitting the crossing piece at the
+    // seam meridian makes the crossing point a section ENDPOINT, so the
+    // boundary-splitting below anchors the seam edge at the same 3D point
+    // and the graphs share a vertex.
+    let seam_anchored_sections: Vec<SectionEdge>;
+    let sections: &[SectionEdge] = if !is_plane
+        && super::pcurve_compute::surface_periods(&surface).0.is_some()
+        && sections_form_winding_chain(sections, &surface, tol.linear)
+        && let Some(seam_u) = boundary_seam_u(&boundary_edges, &surface, tol.linear)
+    {
+        seam_anchored_sections =
+            split_sections_at_seam_meridian(sections, &surface, seam_u, tol.linear);
+        &seam_anchored_sections
+    } else {
+        sections
+    };
 
     let mut split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
     split_pts_3d.append(&mut outer_clip_anchors);
