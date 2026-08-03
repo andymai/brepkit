@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.14](https://github.com/andymai/brepkit/compare/v2.128.13...v2.128.14) (2026-08-03)
+
+
+### Bug Fixes
+
+* **algo:** emit ellipse section arcs in sub-π spans ([#1262](https://github.com/andymai/brepkit/issues/1262)) ([f427b46](https://github.com/andymai/brepkit/commit/f427b46a84afb97eba9181484024fe1a2aefd2bc))
+
 ## [2.128.13](https://github.com/andymai/brepkit/compare/v2.128.12...v2.128.13) (2026-08-03)
 
 
