@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.17](https://github.com/andymai/brepkit/compare/v2.128.16...v2.128.17) (2026-08-03)
+
+
+### Bug Fixes
+
+* **algo:** weld-scale boundary anchoring for line splits ([#1270](https://github.com/andymai/brepkit/issues/1270)) ([5fbb836](https://github.com/andymai/brepkit/commit/5fbb83612b5fc714fe9c3aa1399f20d95888a724))
+
 ## [2.128.16](https://github.com/andymai/brepkit/compare/v2.128.15...v2.128.16) (2026-08-03)
 
 
