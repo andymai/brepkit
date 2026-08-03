@@ -292,7 +292,12 @@ fn ray_plane_crossings(
     }
 
     let hit = origin + direction * t;
-    let verts = face_polygon(topo, face_id)?;
+    // The check-crate polygon samples OPEN curved edges too (the boolean-side
+    // `face_polygon` chords them for its calibrated fragment-sharing
+    // consumers): a plane face bitten by a marched conic arch would otherwise
+    // count hits inside the removed bite — the winding-chain wall lobes
+    // misclassified through exactly that.
+    let verts = brepkit_check::util::face_polygon(topo, face_id)?;
     if verts.len() < 3 {
         return Ok(0);
     }

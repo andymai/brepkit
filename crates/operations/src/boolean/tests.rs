@@ -6907,6 +6907,24 @@ fn circle_outside_cone_box_fuse_is_watertight() {
         0,
         "fused solid must tessellate watertight"
     );
+    // Per-face route (feeds classify_point's analytic ray casting): the wavy
+    // band must not be snap-skinned and the wall polygons must follow their
+    // arch bites; every wall lobe classifies Inside through both rays.
+    for (x, y, z) in [
+        (3.3, 0.0, 6.8),
+        (-3.3, 0.0, 6.8),
+        (0.0, 3.3, 6.8),
+        (0.0, -3.3, 6.8),
+    ] {
+        let p = brepkit_math::vec::Point3::new(x, y, z);
+        let c = crate::classify::classify_point(&topo, result, p, 0.001, 1e-7).unwrap();
+        assert_eq!(
+            c,
+            crate::classify::PointClassification::Inside,
+            "lobe point ({x},{y},{z}) must classify inside"
+        );
+    }
+
     // Closed form: cone 208π + box 288 − overlap 159.00 = 782.449. The tight
     // band pins the wall lobes' presence — losing even one (≈4.2) fails it;
     // the historical broken results measured 921.7 (whole lateral kept) and
