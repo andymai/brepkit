@@ -40,18 +40,6 @@ type NormalFn = Box<dyn Fn(f64, f64) -> Vec3>;
 /// structured watertight band. Rims with equal shared-vertex counts sweep
 /// index-paired exactly as before; unequal counts (each rim's sampling is
 /// dictated by its own neighbours) are stitched with an angular zipper merge.
-/// One rim of a revolution band: the circle edges at one constant surface `v`
-/// and their accumulated angular span (in each circle's own frame).
-struct RimGroup {
-    v: f64,
-    edge_idxs: Vec<usize>,
-    span: f64,
-}
-
-/// Rim-level grouping band: rim levels are separated by the band height,
-/// while arcs of one rim share the exact circle, so a tight band is safe.
-const RIM_V_GROUP_TOL: f64 = 1e-6;
-
 pub(super) fn tessellate_revolution_band_shared(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -80,71 +68,113 @@ pub(super) fn tessellate_revolution_band_shared(
         _ => return Ok(false),
     };
 
-    // Collect rim circle edges grouped by their constant surface `v`;
-    // everything else must be a seam line. A rim is one closed circle or a
-    // chain of open arcs whose natural CCW spans sum to a full revolution.
+    // Collect rim edges as endpoint-connected CYCLES of curved edges;
+    // everything else must be a seam line. A rim is any cycle whose net
+    // surface-u winding is a full revolution: one closed circle, a chain of
+    // ring arcs, or a wavy mixed circle+NURBS chain (the winding-chain band
+    // separator). A cycle that does not wind — a lens hole, a partial band
+    // arc run bounded by non-seam generators — declines the structured
+    // sweep, which would otherwise skin across the removed region.
     let wire = topo.wire(face_data.outer_wire())?;
-    let mut groups: Vec<RimGroup> = Vec::new();
+    let mut curved: Vec<(
+        usize,
+        brepkit_topology::vertex::VertexId,
+        brepkit_topology::vertex::VertexId,
+    )> = Vec::new();
+    let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for oe in wire.edges() {
         let e = topo.edge(oe.edge())?;
         match e.curve() {
-            // The caller gates this path on Line | Circle edges only, so
-            // ellipse rims never reach it — they take the CDT path instead.
-            EdgeCurve::Circle(circ) => {
-                let closed = e.start() == e.end();
-                let sp = topo.vertex(e.start())?.point();
-                let ep = topo.vertex(e.end())?.point();
-                let (_, vs) = project(sp);
-                // The stored arc spans CCW start→end in the CIRCLE's own
-                // frame (independent of wire traversal AND of the surface's
-                // u direction, which can be the circle's mirror when the rim
-                // normal opposes the surface axis).
-                let span = if closed {
-                    TAU
-                } else {
-                    (circ.project(ep) - circ.project(sp)).rem_euclid(TAU)
-                };
-                let idx = oe.edge().index();
-                if let Some(g) = groups
-                    .iter_mut()
-                    .find(|g| (g.v - vs).abs() < RIM_V_GROUP_TOL)
-                {
-                    if !g.edge_idxs.contains(&idx) {
-                        g.edge_idxs.push(idx);
-                        g.span += span;
-                    }
-                } else {
-                    groups.push(RimGroup {
-                        v: vs,
-                        edge_idxs: vec![idx],
-                        span,
-                    });
+            // A closed single-edge NURBS loop has no by-construction winding
+            // (unlike a closed circle) — decline rather than guess.
+            EdgeCurve::NurbsCurve(_) if e.start() == e.end() => return Ok(false),
+            EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) => {
+                if seen.insert(oe.edge().index()) {
+                    curved.push((oe.edge().index(), e.start(), e.end()));
                 }
             }
             EdgeCurve::Line => {}
-            // A NURBS boundary is not a simple revolution band — let the
-            // caller handle it.
-            _ => return Ok(false),
+            // Ellipse rims keep the CDT path.
+            EdgeCurve::Ellipse(_) => return Ok(false),
         }
     }
-    if groups.len() != 2 {
+    // Walk cycles by shared vertices (vertex→edge adjacency built once).
+    let mut by_vertex: std::collections::HashMap<brepkit_topology::vertex::VertexId, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (j, &(_, sv, ev)) in curved.iter().enumerate() {
+        by_vertex.entry(sv).or_default().push(j);
+        by_vertex.entry(ev).or_default().push(j);
+    }
+    let mut used = vec![false; curved.len()];
+    let mut cycles: Vec<Vec<usize>> = Vec::new();
+    for start in 0..curved.len() {
+        if used[start] {
+            continue;
+        }
+        let (_, origin, mut at) = curved[start];
+        used[start] = true;
+        let mut cycle = vec![start];
+        let mut closed = curved[start].1 == curved[start].2 || at == origin;
+        while !closed {
+            let Some(&next) = by_vertex
+                .get(&at)
+                .and_then(|c| c.iter().find(|&&j| !used[j]))
+            else {
+                break;
+            };
+            used[next] = true;
+            at = if curved[next].1 == at {
+                curved[next].2
+            } else {
+                curved[next].1
+            };
+            cycle.push(next);
+            closed = at == origin;
+        }
+        if !closed {
+            return Ok(false); // open curved run — not a rim structure
+        }
+        cycles.push(cycle);
+    }
+    if cycles.len() != 2 {
         return Ok(false);
     }
-    // Each rim must cover exactly one full revolution: a partial band (arcs
-    // bounded by non-seam generators) must NOT be swept as a ring — that
-    // would skin the mesh across the removed sector.
-    if groups.iter().any(|g| (g.span - TAU).abs() > 1e-6) {
-        return Ok(false);
+    // Net winding per cycle from surface-projected endpoint deltas; a closed
+    // single edge (start == end vertex) winds a full turn by construction.
+    let wrap_pi = |d: f64| -> f64 { (d + TAU / 2.0).rem_euclid(TAU) - TAU / 2.0 };
+    for cycle in &cycles {
+        let mut winding = 0.0_f64;
+        let mut whole_turn = false;
+        let mut at: Option<brepkit_topology::vertex::VertexId> = None;
+        for &ci in cycle {
+            let (_, sv, ev) = curved[ci];
+            if sv == ev {
+                whole_turn = true;
+                continue;
+            }
+            let (from, to) = match at {
+                None => (sv, ev),
+                Some(v) if v == sv => (sv, ev),
+                Some(_) => (ev, sv),
+            };
+            let (u0, _) = project(topo.vertex(from)?.point());
+            let (u1, _) = project(topo.vertex(to)?.point());
+            winding += wrap_pi(u1 - u0);
+            at = Some(to);
+        }
+        if !whole_turn && (winding.abs() - TAU).abs() > 1e-6 {
+            return Ok(false);
+        }
     }
 
-    // Pull each rim's shared global vertex IDs. Chained arcs share their
+    // Pull each rim's shared global vertex IDs. Chained pieces share their
     // joint vertices through the pool, so id-dedup merges the chain into one
     // ring; a closed circle carries its closing duplicate instead.
     let mut rims: Vec<Vec<u32>> = Vec::with_capacity(2);
-    for g in &groups {
+    for cycle in &cycles {
         let mut ids: Vec<u32> = Vec::new();
-        for re in &g.edge_idxs {
-            let Some(edge_ids) = edge_global_indices.get(re) else {
+        for &ci in cycle {
+            let Some(edge_ids) = edge_global_indices.get(&curved[ci].0) else {
                 return Ok(false);
             };
             ids.extend_from_slice(edge_ids);

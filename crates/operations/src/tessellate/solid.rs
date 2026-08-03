@@ -823,12 +823,25 @@ pub(super) fn tessellate_face_with_shared_edges(
         face_data.surface(),
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
     ) {
-        let all_line_circle = {
+        let (all_line_circle, band_eligible) = {
             let wire = topo.wire(face_data.outer_wire())?;
-            wire.edges().iter().all(|oe| {
+            let lc = wire.edges().iter().all(|oe| {
                 topo.edge(oe.edge())
                     .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_)))
-            })
+            });
+            // The structured band also handles wavy mixed rims (winding-chain
+            // separators carry marched-NURBS pieces); it verifies the cycle
+            // structure itself and declines anything else.
+            let be = lc
+                || wire.edges().iter().all(|oe| {
+                    topo.edge(oe.edge()).is_ok_and(|e| {
+                        matches!(
+                            e.curve(),
+                            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_)
+                        )
+                    })
+                });
+            (lc, be)
         };
         let is_standard_rect =
             all_line_circle && topo.wire(face_data.outer_wire())?.edges().len() <= 4;
@@ -841,7 +854,7 @@ pub(super) fn tessellate_face_with_shared_edges(
         // whose rims are split into arc chains (cone∪box inscribed-rim), which
         // the band mesher now handles; it still returns false for anything
         // that is not a two-full-rim band.
-        let band_handled = all_line_circle
+        let band_handled = band_eligible
             && tessellate_revolution_band_shared(topo, face_data, edge_global_indices, merged)?;
 
         if band_handled {

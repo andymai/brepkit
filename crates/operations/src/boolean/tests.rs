@@ -6860,3 +6860,60 @@ fn two_tangency_box_fuse_is_analytic_watertight() {
         );
     }
 }
+
+/// The "circle outside" cone∪box fuse — the last member of the tangent-circle
+/// family (box SMALLER than the section circle, corners poking out). The
+/// cone's fuse boundary is a single closed chain WINDING the lateral: 4
+/// corner ring-arcs alternating with 4 wall arches (plane×cone conic pieces,
+/// marched and NURBS-fit by phase-FF; a hyperbola has no exact `EdgeCurve`
+/// representation).
+///
+/// Five pieces close it: the winding veto on the internal-loops shortcut (an
+/// annulus loop with winding 1 bounds no disc), seam-meridian anchoring of
+/// winding chains, the chain-band splitter
+/// (`split_periodic_face_by_winding_chain` — greedy and DCEL both mistrace
+/// the chain's identical-tangent parallel twins), NURBS edge refinement at
+/// collinear vertices in assembly (the cone side splits its arch at the seam
+/// apex; the wall side's copy must match), and the cycle-based structured
+/// band tessellator (rims as full-winding cycles rather than constant-v
+/// circle groups, so a wavy mixed rim still sweeps watertight — the snap
+/// fallback used to skin the full parametric band, covering the dropped
+/// region and cutting off the wall lobes).
+///
+/// Known residual: the PER-FACE tessellation route (no shared edge pool —
+/// `classify_point`'s meshes) still snap-skins wavy-band faces; the solid
+/// path is correct and is what volume, export, and parity consume.
+#[test]
+fn circle_outside_cone_box_fuse_is_watertight() {
+    use brepkit_math::mat::Mat4;
+    let mut topo = Topology::new();
+    let cone = crate::primitives::make_cone(&mut topo, 6.0, 2.0, 12.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 6.0, 6.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(-3.0, -3.0, 6.0)).unwrap();
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cone, b).unwrap();
+
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert!(
+        faces
+            .iter()
+            .all(|&fid| topo.face(fid).unwrap().surface().type_tag() != "nurbs"),
+        "faces must stay analytic (edges may be marched NURBS)"
+    );
+    let mesh = crate::tessellate::tessellate_solid(&topo, result, 0.05).unwrap();
+    assert_eq!(
+        crate::tessellate::boundary_edge_count(&mesh),
+        0,
+        "fused solid must tessellate watertight"
+    );
+    // Closed form: cone 208π + box 288 − overlap 159.00 = 782.449. The tight
+    // band pins the wall lobes' presence — losing even one (≈4.2) fails it;
+    // the historical broken results measured 921.7 (whole lateral kept) and
+    // 318.4 (cone dropped).
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - 782.449).abs() < 1.0,
+        "volume {vol} should be ~782.449"
+    );
+}

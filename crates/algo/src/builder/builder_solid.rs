@@ -2155,8 +2155,11 @@ fn split_arc_edges_at_collinear_vertices(
                 let ep = topo.vertex(ev)?.point();
                 vert_at.entry(quantize_point(sp, tol)).or_insert((sv, sp));
                 vert_at.entry(quantize_point(ep, tol)).or_insert((ev, ep));
-                let is_arc = matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
-                if is_arc && seen_edges.insert(oe.edge()) {
+                let is_refinable = matches!(
+                    edge.curve(),
+                    EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
+                );
+                if is_refinable && seen_edges.insert(oe.edge()) {
                     arc_edges.push((oe.edge(), sv, ev, sp, ep, edge.curve().clone()));
                 }
             }
@@ -2193,9 +2196,101 @@ fn split_arc_edges_at_collinear_vertices(
         // is metrically equivalent to `snap`. A degenerate near-zero radius has
         // no meaningful interior to split, so leave the edge whole.
         //
-        // Only arcs reach here (the collection loop filters on `is_arc`); the
-        // non-arc arms are unreachable but kept explicit per the exhaustive-
-        // match convention so a future curve variant can't be silently skipped.
+        // Only circle/ellipse arcs reach here (NURBS edges took the
+        // parameter-space branch above; Lines are filtered at collection);
+        // the unreachable arms stay explicit per the exhaustive-match
+        // convention so a future curve variant can't be silently skipped.
+        // Open marched-NURBS sections (plane×cone conics and friends) are
+        // refined in PARAMETER space: two faces sharing the curve can split
+        // it at different points (the winding-chain seam anchoring splits
+        // the cone side's copy at the seam apex; the wall side's copy stays
+        // whole), and without this refinement their partitions desynchronize
+        // into free-edge pairs. Sub-spans are endpoint-parameterized like
+        // every other NURBS section piece.
+        if matches!(&curve, EdgeCurve::NurbsCurve(_)) {
+            if is_closed {
+                continue;
+            }
+            let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+            if t1 - t0 < 1e-12 {
+                continue;
+            }
+            let n_samples = 32_usize;
+            let samples: Vec<Point3> = (0..=n_samples)
+                .map(|k| {
+                    let t = t0 + (t1 - t0) * (k as f64 / n_samples as f64);
+                    curve.evaluate_with_endpoints(t, sp, ep)
+                })
+                .collect();
+            let mut amin = sp;
+            let mut amax = sp;
+            for q in &samples {
+                amin = Point3::new(
+                    amin.x().min(q.x()),
+                    amin.y().min(q.y()),
+                    amin.z().min(q.z()),
+                );
+                amax = Point3::new(
+                    amax.x().max(q.x()),
+                    amax.y().max(q.y()),
+                    amax.z().max(q.z()),
+                );
+            }
+            let mut cuts: Vec<(f64, VertexId)> = Vec::new();
+            for ci in grid.box_candidates(amin, amax, snap * 2.0) {
+                let (vid, p) = verts[ci];
+                if (p - sp).length() < snap || (p - ep).length() < snap {
+                    continue;
+                }
+                let mut best_k = 0;
+                let mut best = f64::MAX;
+                for (k, q) in samples.iter().enumerate() {
+                    let d = (*q - p).length();
+                    if d < best {
+                        best = d;
+                        best_k = k;
+                    }
+                }
+                let mut lo = t0 + (t1 - t0) * (best_k.saturating_sub(1) as f64 / n_samples as f64);
+                let mut hi =
+                    t0 + (t1 - t0) * ((best_k + 1).min(n_samples) as f64 / n_samples as f64);
+                for _ in 0..40 {
+                    let m1 = lo + (hi - lo) / 3.0;
+                    let m2 = hi - (hi - lo) / 3.0;
+                    let d1 = (curve.evaluate_with_endpoints(m1, sp, ep) - p).length();
+                    let d2 = (curve.evaluate_with_endpoints(m2, sp, ep) - p).length();
+                    if d1 < d2 {
+                        hi = m2;
+                    } else {
+                        lo = m1;
+                    }
+                }
+                let tm = 0.5 * (lo + hi);
+                if (curve.evaluate_with_endpoints(tm, sp, ep) - p).length() > snap {
+                    continue;
+                }
+                cuts.push((tm, vid));
+            }
+            if cuts.is_empty() {
+                continue;
+            }
+            cuts.sort_by(|a, b| {
+                a.0.total_cmp(&b.0)
+                    .then_with(|| a.1.index().cmp(&b.1.index()))
+            });
+            cuts.dedup_by_key(|(_, vid)| *vid);
+            let mut chain: Vec<VertexId> = Vec::with_capacity(cuts.len() + 2);
+            chain.push(sv);
+            chain.extend(cuts.iter().map(|&(_, vid)| vid));
+            chain.push(ev);
+            let mut subs = Vec::with_capacity(chain.len() - 1);
+            for w in chain.windows(2) {
+                let sub_eid = topo.add_edge(Edge::new(w[0], w[1], curve.clone()));
+                subs.push(OrientedEdge::new(sub_eid, true));
+            }
+            replacements.insert(eid, subs);
+            continue;
+        }
         let radius_scale = match &curve {
             EdgeCurve::Circle(c) => c.radius(),
             EdgeCurve::Ellipse(e) => e.semi_major(),
