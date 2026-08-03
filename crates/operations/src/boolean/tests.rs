@@ -6809,3 +6809,54 @@ fn a_piece_in_a_rings_hole_is_disjoint() {
         "a plug in the ring's hole is not enclosed by the ring's material"
     );
 }
+
+/// The 2-tangency siblings of the inscribed-rim fuse: the box is tangent to
+/// the section circle on only two walls, splitting it into two half-arcs
+/// that share BOTH endpoints. Three parallel-edge weaknesses stacked here:
+/// the plane arrangement collapsed the halves' identical chords into one
+/// segment (losing the far half of the box bottom), the DCEL trace
+/// grand-toured through the parallel pair, and the greedy handed the cone a
+/// single self-covering loop (the within-loop duplicate form). Pinned with
+/// the full oracles for both quadrics.
+#[test]
+fn two_tangency_box_fuse_is_analytic_watertight() {
+    use brepkit_math::mat::Mat4;
+    for &cone in &[false, true] {
+        let mut topo = Topology::new();
+        let quad = if cone {
+            crate::primitives::make_cone(&mut topo, 6.0, 2.0, 12.0).unwrap()
+        } else {
+            crate::primitives::make_cylinder(&mut topo, 4.0, 12.0).unwrap()
+        };
+        let b = crate::primitives::make_box(&mut topo, 8.0, 18.0, 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(-4.0, -9.0, 6.0))
+            .unwrap();
+        let result =
+            brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, quad, b)
+                .unwrap();
+        assert_eq!(count_non_manifold_edges(&topo, result), 0);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        assert!(
+            faces
+                .iter()
+                .all(|&fid| topo.face(fid).unwrap().surface().type_tag() != "nurbs"),
+            "all faces must stay analytic (cone={cone})"
+        );
+        let mesh = crate::tessellate::tessellate_solid(&topo, result, 0.05).unwrap();
+        assert_eq!(
+            crate::tessellate::boundary_edge_count(&mesh),
+            0,
+            "fused solid must tessellate watertight (cone={cone})"
+        );
+        let expected = if cone {
+            152.0 * std::f64::consts::PI + 1152.0
+        } else {
+            96.0 * std::f64::consts::PI + 1152.0
+        };
+        let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (vol - expected).abs() < 1.0,
+            "volume {vol} should be ~{expected} (cone={cone})"
+        );
+    }
+}
