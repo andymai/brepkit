@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785795614317,
+  "lastUpdate": 1785796767130,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14579,6 +14579,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22046075,
             "range": "± 59066",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c9847a44e968a0c0d751c4c4502502d490b0f871",
+          "message": "fix(algo): exact polygon clip for plane-plane lines in the FF prefilter (#1267)\n\n## Summary\n\nThe FF prefilter's 16-sample in-both test aliases on plane×plane Line\nsections: a lattice facet's true in-both window can be far under the\nsample pitch, and the mitsukude wall-pattern bands lose 80+ real\nsections this way (the `kumiko_lattice_fuse_inmem` open-shell family —\neach drop under-splits a face and sends the fuse to the mesh fallback).\n\nThe existing slab-clip fix (#1224) was deliberately gated to quadric\npartners because an inflated AABB grossly over-approximates a planar\nface — widening it regressed the A1-corner nub fuse to bnd=158. The\nfilter comment recorded the correct fix shape: \"a test against true face\nextents rather than AABBs\". This implements it: lines that fail the\nsampled test get the exact answer against both faces' **true outlines**\nvia `clip_line_to_face`. Hull ranges on non-convex outlines can only\nover-admit (downstream trimming handles that); indeterminate polygons\nkeep the historical drop, so no current keep is lost and no AABB-style\nspurious admission is possible.\n\n## Status\n\nPrerequisite, not a close: the fixture still aborts on a second, now\nfully-localized root — the 67-face lump's four free edges bound ONE\n0.05-wide quad whose section chain dangles 0.002 short of its face\nboundary because the chain-closing 0.002 micro-section (a real lattice\nend-facet feature, 20000×tol) is graze-dropped. The roadmap row carries\nthe complete probe chain and the remaining fix shape.\n\n## Verification\n\n- Full workspace green (107 suites, `--exclude brepkit-render`) —\nincluding the A1-corner family and every face-splitter foil; clippy `-D\nwarnings` clean.\n- FF trace confirms previously-dropped flat-wall pairs now emit their\nsections.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes aliasing in the FF prefilter by using an exact polygon clip for\nplane-plane lines when the 16-sample in-both test misses. Recovers real\nsections in lattice/wall-pattern cases without reintroducing AABB-based\nfalse positives.\n\n- **Bug Fixes**\n- Added a fallback that clips the line against both faces’ true outlines\nvia `clip_line_to_face` and admits on overlapping ranges; only runs when\nthe sampled test fails.\n- Avoids inflated AABB slab-clip regressions; non-convex outlines use\nhull ranges (safe to over-admit; downstream trims), and indeterminate\npolygons remain dropped.\n\n<sup>Written for commit c0f62fde05a6207a32c30daa84f9e3c06abf0c82.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1267?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T15:36:49-07:00",
+          "tree_id": "9c87fa48de5de9777e0808bee3750d203e27e4fa",
+          "url": "https://github.com/andymai/brepkit/commit/c9847a44e968a0c0d751c4c4502502d490b0f871"
+        },
+        "date": 1785796765488,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 873779,
+            "range": "± 914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 956773,
+            "range": "± 1642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12940,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 685477,
+            "range": "± 2674",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23201070,
+            "range": "± 155890",
             "unit": "ns/iter"
           }
         ]
