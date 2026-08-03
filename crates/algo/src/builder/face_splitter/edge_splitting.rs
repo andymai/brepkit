@@ -162,7 +162,14 @@ pub(super) fn find_splits_on_line(
         }
         let closest = edge.start_3d + edge_dir * t;
         let dist = (sp - closest).length();
-        if dist < tol {
+        // Weld-scale acceptance, not exact-tol: a plane-plane section
+        // endpoint carries clip/trim rounding of a few tol — the kumiko
+        // lattice chain ends measured 2.1e-7 and 2.3e-7 off their boundary
+        // edges — and rejecting the anchor leaves the section chain a
+        // pendant the arrangement rightly refuses, so the face under-splits
+        // and the fuse aborts on an open growth shell. The split point uses
+        // the foot on the line, so boundary pieces stay exact.
+        if dist < tol * 100.0 {
             splits.push((t, sp));
         }
     }
