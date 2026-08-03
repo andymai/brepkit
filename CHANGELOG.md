@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.18](https://github.com/andymai/brepkit/compare/v2.128.17...v2.128.18) (2026-08-03)
+
+
+### Bug Fixes
+
+* **algo:** line splits return the foot; pin the weld-band contract ([#1272](https://github.com/andymai/brepkit/issues/1272)) ([56de1ee](https://github.com/andymai/brepkit/commit/56de1ee7e9bf3d716167d77e1e71300bd33f95b6))
+
 ## [2.128.17](https://github.com/andymai/brepkit/compare/v2.128.16...v2.128.17) (2026-08-03)
 
 
