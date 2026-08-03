@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785789973760,
+  "lastUpdate": 1785790635993,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14147,6 +14147,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23662285,
             "range": "± 144442",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4ac422d81e44bbdeeeaca8a8e17bdf4bc32a689f",
+          "message": "fix(algo): close the circle-outside cone∪box fuse (winding-chain band splitting) (#1259)\n\n## Summary\n\nCloses the last member of the tangent-circle family: `cone ∪ box` with\nthe box SMALLER than the section circle (corners poking out). The cone's\nfuse boundary is a single closed chain that WINDS the lateral — 4 corner\nring-arcs alternating with 4 wall arches (plane×cone conics, marched and\nNURBS-fit by phase-FF; a hyperbola has no exact `EdgeCurve`\nrepresentation). Two commits:\n\n### 1. Groundwork (behavior-neutral, verified against full workspace)\n- **Winding veto** on the internal-loops shortcut: an annulus loop with\nwinding number 1 bounds no disc, so treating the chain as a contractible\nhole attached it as an inner wire on the *unsplit* lateral (orphaning\nthe top rim).\n- **Seam-meridian anchoring**: split the chain piece crossing the seam\nat the crossing point, so the chain connects to the seam in the trace\ngraph instead of floating as an island (the closed-circle band path gets\nthis from the seam-anchor pre-pass; chains get it here).\n\n### 2. The completing components\n- **`split_periodic_face_by_winding_chain`**: the chain generalization\nof `split_periodic_face_into_bands` — emits the two bands directly with\nthe same wire shape and precomputed interior points as the circle case.\nThe greedy and DCEL both mistrace the chain's identical-tangent parallel\ntwins, so no trace is consulted (probes confirmed both failure modes).\n- **NURBS edge refinement at collinear vertices** in assembly (extends\n`split_arc_edges_at_collinear_vertices`): the cone side splits its\nwall-arch copy at the seam apex; the wall side's whole copy must be\nrefined at the same vertex or the partitions desynchronize into\nfree-edge pairs. Parameter-space cut finding; endpoint-parameterized\nsub-spans like every other NURBS section piece.\n- **Cycle-based structured band tessellator**: rims are\nendpoint-connected cycles with net winding one full turn (subsumes\nclosed circles, arc chains, and wavy mixed circle+NURBS chains) instead\nof constant-v circle groups; the band attempt now admits NURBS wires.\nWithout it the CDT rolled back to the snap path, which skinned the full\nparametric band — mesh area matched the full z 0..9 revolution exactly\n(268.215), covering the dropped region and cutting the wall lobes out of\nevery downstream mesh.\n\n## Verification\n\n- `circle_outside_cone_box_fuse_is_watertight`: manifold, analytic faces\nonly, watertight solid tessellation, and volume within **1.0** of the\n782.449 closed form (measured 782.37, 0.01%) — a band that fails if even\none wall lobe (≈4.2) is lost. The historical broken results measured\n921.7 and 318.4.\n- Full workspace green (107 suites, `--exclude brepkit-render`),\nincluding all calibrated face-splitter foils and wasm gridfinity; clippy\n`-D warnings` clean.\n- `approx_census` BOOLEAN section: all rows exact analytic, timings\nunchanged.\n\n## Residual (roadmap row added)\n\nThe PER-FACE tessellation route (no shared edge pool; feeds\n`classify_point`'s meshes) still snap-skins wavy-band faces. The solid\npath — what volume, export, and parity consume — is correct.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the cone ∪ box “circle outside” case by splitting u‑periodic\nlaterals along a winding section chain, producing a watertight, analytic\nsolid with volume within 1.0 of the 782.449 closed form.\n\n- **Bug Fixes**\n- Prevented misclassification of winding chains as holes with a winding\nveto on the internal-loops shortcut.\n- Seam-anchored winding chains by splitting the chain piece at the seam\nmeridian so graph vertices align.\n- Added `split_periodic_face_by_winding_chain` to emit the two bands\ndirectly for seam-anchored, winding chains (avoids greedy/DCEL\nmistracing of identical-tangent twins).\n- Refined marched `NurbsCurve` edges at collinear vertices during\nassembly so both sides split at the same apex and avoid free-edge pairs.\n- Upgraded the structured band tessellator to cycle-based rims with\nfull-turn winding, supporting circle+`NurbsCurve` mixed rims and arc\nchains; avoids snap-skinning the full parametric band.\n- Review follow-ups: declined closed single-edge `NurbsCurve` loops (no\nby‑construction winding), switched cycle walk to vertex→edge adjacency,\nand aligned comments with the NURBS refinement branch.\n- Added `circle_outside_cone_box_fuse_is_watertight` test; noted a\nresidual where per-face tessellation still snap-skins wavy-band faces\n(solid path is correct).\n\n<sup>Written for commit 01acdbc7125ecdd4fd6349341da44f7563224426.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1259?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T13:54:35-07:00",
+          "tree_id": "ad09470da7fda02a77feb727f582a8c257475a10",
+          "url": "https://github.com/andymai/brepkit/commit/4ac422d81e44bbdeeeaca8a8e17bdf4bc32a689f"
+        },
+        "date": 1785790634741,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 850420,
+            "range": "± 1316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 930455,
+            "range": "± 2559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12284,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 687657,
+            "range": "± 2593",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22128572,
+            "range": "± 60999",
             "unit": "ns/iter"
           }
         ]
