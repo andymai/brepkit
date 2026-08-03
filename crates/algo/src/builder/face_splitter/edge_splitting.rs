@@ -170,7 +170,10 @@ pub(super) fn find_splits_on_line(
         // and the fuse aborts on an open growth shell. The split point uses
         // the foot on the line, so boundary pieces stay exact.
         if dist < tol * 100.0 {
-            splits.push((t, sp));
+            // Return the FOOT, not the raw candidate: the candidate may sit
+            // anywhere in the weld band, and consumers thread the returned
+            // point into wires (section T-junction splits use it verbatim).
+            splits.push((t, closest));
         }
     }
     splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -799,5 +802,37 @@ mod tests {
         let d0 = (splits[0].1 - edge.start_3d).length();
         let d1 = (splits[1].1 - edge.start_3d).length();
         assert!(d0 < d1, "splits must walk start_3d → end_3d");
+    }
+
+    #[test]
+    fn line_split_accepts_weld_band_probe_and_returns_the_foot() {
+        // A probe 5 tol off the line must still anchor (section endpoints
+        // carry a few tol of clip rounding), and the returned point must be
+        // the exact foot on the line so wires stay on-edge.
+        let tol = 1e-7;
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(10.0, 0.0),
+            start_3d: Point3::new(0.0, 0.0, 0.0),
+            end_3d: Point3::new(10.0, 0.0, 0.0),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let probe = Point3::new(4.0, 5.0 * tol, 0.0);
+        let splits = find_splits_on_line(&edge, &[probe], tol);
+        assert_eq!(splits.len(), 1, "weld-band probe must anchor");
+        let (t, foot) = splits[0];
+        assert!((t - 0.4).abs() < 1e-9);
+        assert!(
+            foot.y().abs() < 1e-15,
+            "returned point must be the foot on the line, got y={}",
+            foot.y()
+        );
+        // Beyond the weld band: rejected.
+        let far = Point3::new(4.0, 200.0 * tol, 0.0);
+        assert!(find_splits_on_line(&edge, &[far], tol).is_empty());
     }
 }
