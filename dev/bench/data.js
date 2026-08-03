@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785790635993,
+  "lastUpdate": 1785791103165,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14201,6 +14201,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22128572,
             "range": "± 60999",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "be9f5650ba5f3d1d7d2f6404fc5b461fd7ee5f71",
+          "message": "chore(main): release 2.128.13 (#1260)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.13](https://github.com/andymai/brepkit/compare/v2.128.12...v2.128.13)\n(2026-08-03)\n\n\n### Bug Fixes\n\n* **algo:** close the circle-outside cone∪box fuse (winding-chain band\nsplitting) ([#1259](https://github.com/andymai/brepkit/issues/1259))\n([4ac422d](https://github.com/andymai/brepkit/commit/4ac422d81e44bbdeeeaca8a8e17bdf4bc32a689f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.128.13 with a fix for the circle-outside cone ∪\nbox fuse to produce closed, valid results.\n\n- **Bug Fixes**\n- Corrected winding-chain band splitting so the fuse closes the loop\nwhen a circle lies outside a cone ∪ box union, preventing gaps and\ninvalid topology.\n\n<sup>Written for commit 06445ad78317fa33c37b3e286cc695edc11b6db0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1260?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-03T21:02:19Z",
+          "tree_id": "76459b4a77773f532388a1d42213a5e882a6c974",
+          "url": "https://github.com/andymai/brepkit/commit/be9f5650ba5f3d1d7d2f6404fc5b461fd7ee5f71"
+        },
+        "date": 1785791101506,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 862483,
+            "range": "± 12856",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 938797,
+            "range": "± 17934",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11819,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 684040,
+            "range": "± 4767",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21996057,
+            "range": "± 46025",
             "unit": "ns/iter"
           }
         ]
