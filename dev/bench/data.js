@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785791103165,
+  "lastUpdate": 1785791437712,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14255,6 +14255,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21996057,
             "range": "± 46025",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c0c0c94e52433528254355acfd7330da3452aa76",
+          "message": "docs(roadmap): record per-face wavy-band findings (#1261)\n\nRecords the measured outcome of the attempted per-face fix for the\nwavy-band tessellation residual (boundary-CDT with sampled edges reached\n203.5 of 244.6 analytic area; the seam-twice cut-annulus wire pinches\nthe UV polygon). Points the next session at the solid path's cycle-rim\nzipper with locally sampled rims. Roadmap-only change.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap to record measured results of the per-face wavy-band\ntessellation attempt. Boundary-CDT with edge sampling reached\n203.5/244.6 analytic area due to a pinched seam, so it was reverted;\nnext step is the solid path’s cycle‑rim zipper with locally sampled\nrims.\n\n<sup>Written for commit baeb43c6fd072a758ae6eee6ce635fbde959343d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1261?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T14:08:06-07:00",
+          "tree_id": "19c271f4c1b4162bf9bc13c55870dee4d10716d4",
+          "url": "https://github.com/andymai/brepkit/commit/c0c0c94e52433528254355acfd7330da3452aa76"
+        },
+        "date": 1785791436755,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 870691,
+            "range": "± 3686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 955619,
+            "range": "± 1415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13010,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 676578,
+            "range": "± 14532",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23165278,
+            "range": "± 52703",
             "unit": "ns/iter"
           }
         ]
