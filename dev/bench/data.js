@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785795143866,
+  "lastUpdate": 1785795614317,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -14525,6 +14525,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21985461,
             "range": "± 30438",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8ec55c5266f979526a4652568aed9edf0f68d98d",
+          "message": "chore(main): release 2.128.15 (#1266)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.15](https://github.com/andymai/brepkit/compare/v2.128.14...v2.128.15)\n(2026-08-03)\n\n\n### Bug Fixes\n\n* **operations:** per-face tessellation and classification of wavy-band\nfaces ([#1265](https://github.com/andymai/brepkit/issues/1265))\n([458d0f7](https://github.com/andymai/brepkit/commit/458d0f72276743b78c7443bce5dbcd972be23fd6))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.15 of `brepkit-wasm` fixes per-face tessellation and\nclassification of wavy‑band faces in operations. This improves mesh\nfidelity and prevents misclassification on complex surfaces.\n\n<sup>Written for commit 0b12cb8c7027434eed62950c1ada43ddd7064585.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1266?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-03T22:17:41Z",
+          "tree_id": "8b28e1c75551143d15598fef2994f7fd8b19252f",
+          "url": "https://github.com/andymai/brepkit/commit/8ec55c5266f979526a4652568aed9edf0f68d98d"
+        },
+        "date": 1785795613414,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 835578,
+            "range": "± 2381",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 915320,
+            "range": "± 2174",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11953,
+            "range": "± 394",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 670232,
+            "range": "± 2507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22046075,
+            "range": "± 59066",
             "unit": "ns/iter"
           }
         ]
