@@ -26,6 +26,7 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
         return;
     };
     let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+    let mut users: HashMap<EdgeId, Vec<brepkit_topology::face::FaceId>> = HashMap::new();
     let mut mix: HashMap<&'static str, usize> = HashMap::new();
     for &fid in &faces {
         let Ok(face) = topo.face(fid) else { continue };
@@ -34,6 +35,7 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
             let Ok(w) = topo.wire(wid) else { continue };
             for oe in w.edges() {
                 *uses.entry(oe.edge()).or_default() += 1;
+                users.entry(oe.edge()).or_default().push(fid);
             }
         }
     }
@@ -46,8 +48,20 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
                 && let (Ok(a), Ok(b)) = (topo.vertex(e.start()), topo.vertex(e.end()))
             {
                 let (a, b) = (a.point(), b.point());
+                let owners: Vec<String> = users
+                    .get(eid)
+                    .into_iter()
+                    .flatten()
+                    .map(|f| {
+                        let tag = topo
+                            .face(*f)
+                            .map(|fc| fc.surface().type_tag())
+                            .unwrap_or("?");
+                        format!("{f:?}:{tag}")
+                    })
+                    .collect();
                 println!(
-                    "  {} edge {eid:?} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                    "  {} edge {eid:?} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) used_by={owners:?}",
                     if *n == 1 { "FREE" } else { "OVER" },
                     e.curve().type_tag(),
                     a.x(),
