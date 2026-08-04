@@ -138,10 +138,20 @@ the material-oriented direction (effective-normal × wire-traversal tangent), bi
 fallback. `regress_chamfer_obtuse_ridge.rs`. The FILLET
 plane-plane path DOES share a concave defect but milder and DIFFERENT (probed 2026-08-04,
 `regress_fillet_concave_notch.rs` ignored ready-repro: a 0.02 fillet on the reflex notch
-REMOVES 0.077 instead of adding the sliver). REFUTED: transplanting only the chamfer's
-material-oriented contact directions makes it WORSE (removes 10.5) and breaks the calibrated
-convex pins — the fillet's concave case couples the cylinder-centre side, section
-orientation, and keep-side and must be treated as one geometry change. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
+REMOVES 0.077 instead of adding the sliver). REFUTED (now THREE times, with the root
+identified): transplanting the chamfer's material-oriented contacts fails under every sign
+scheme tried — unconditional `n x t` (breaks convex fillet pins), Newell-winding-calibrated
+(breaks the concave CHAMFER pin), and an in-polygon containment probe (same). GROUND TRUTH
+DISCOVERED on the way: `make_box` and `extrude` produce OPPOSITELY-WOUND face wires relative
+to their outward normals (measured via a direction probe on the box fillet: the traversal
+left side is the bisector-OPPOSITE on box faces, bisector-ALIGNED on extrude prisms), so no
+fixed handedness works across constructors, and the shipped chamfer helper is calibrated to
+the extrude convention only — `convex_chamfer_volume_check.rs` now pins the convex chamfer
+volume so any future sign change is caught. The concave FILLET's 221.5 result is IDENTICAL
+under all three contact schemes, proving its defect is dominated by the cylinder-centre /
+section geometry (the reflex-angle derivation), not the contact directions. Fix path: derive
+the reflex-aware fillet geometry (supplementary half-angle, centre side, section span) as one
+change, and settle the winding convention (or make constructors consistent) first. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
 
 The remaining `#[ignore]` entries are diagnostics or slow perf runs, not open bugs: the
 `profile_intersect.rs` box-sphere probes are stale (box-sphere shipped analytic in #1006),
