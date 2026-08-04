@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785833512257,
+  "lastUpdate": 1785840919353,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16523,6 +16523,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23975944,
             "range": "± 58189",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "719585c9264f20c3aa3262f5934a496c215ef0e0",
+          "message": "fix(algo): close the kumiko lattice band fuse (#1302)\n\n## Summary\n\nCloses the kumiko lattice band fuse campaign:\n`kumiko_lattice_bands_fuse_closed` is un-ignored and green after 29\ndocumented passes.\n\nThree face-splitter mechanisms, each measured on the fixture and shaped\nby foils that caught their first over-broad forms:\n\n- **Demand-gated outer-wire image expansion.** A planar hole-free face\nexpands a boundary edge's pave-split images only when an interior image\njunction sits within 3e-3 of a section endpoint without coinciding with\none (within weld). The two gates are measured: expanding coincident\njunctions de-analytics the divider-lip fuse, and expanding periodic\nlaterals' seam edges breaks the perpendicular-cylinder fuse.\n- **Pendant-to-boundary-vertex bridges**, restricted to section-free\ntargets so healthy corners are never over-connected (the z=4.5 corner\nregression that refuted the first bridge form).\n- **Pendant-to-pendant bridges** (mutually nearest within the band, 10x\nisolation guard, twin-deduped). The fixture's final defect was a 2.3e-3\nchain gap between two section pendants on one slope face.\n\nAlso corrects the roadmap: the pass-27 \"near-coincident slope SD\" theory\nis refuted by direct measurement (the planes are 15 degrees apart; the\nshared points lie on their intersection line).\n\n## Testing\n\n- `kumiko_lattice_bands_fuse_closed` un-ignored, green (plus the\nin-suite sibling)\n- `gridfinity_lipfuse_dividers_inmem`,\n`fuse_perpendicular_cylinders_is_analytic_watertight`, steinmetz volume\ntests: green (each pinned a gate)\n- Honeycomb raw residual ceilings re-pinned (pcut1 53 -> 83, pcut2 28 ->\n30; every production-level test in that file unchanged)\n- algo 209, operations, io suites green; clippy -D warnings clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCloses the kumiko lattice band fuse by making the face splitter see exit\npaves on planar, hole‑free caps and by bridging short pendant gaps. The\nkumiko test is un‑ignored and green; other suites hold.\n\n- **Bug Fixes**\n- Demand‑gated outer‑wire image expansion on planar, hole‑free faces\nonly when an interior image junction sits within 3e‑3 of a section\nendpoint and outside the weld band; never on periodic laterals or holed\ncaps.\n- Pendant bridges: connect pendant ends to the nearest section‑free\nboundary vertex within the band, and bridge mutually‑nearest pendant\npairs (isolation‑guarded, twin‑deduped); fed into the arrangement by\naugmenting `sections`.\n- Re‑pinned honeycomb raw residual ceilings (pcut1 53→83, pcut2 28→30);\nproduction‑level tests unchanged.\n\n<sup>Written for commit bd1d214ee870d9f9e51afd7e0cd64c6463011133.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1302?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T10:52:53Z",
+          "tree_id": "461611947cfe02ff52955549d3a23ed5e528b1ff",
+          "url": "https://github.com/andymai/brepkit/commit/719585c9264f20c3aa3262f5934a496c215ef0e0"
+        },
+        "date": 1785840917333,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 927848,
+            "range": "± 3332",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1001053,
+            "range": "± 1812",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11967,
+            "range": "± 262",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 689940,
+            "range": "± 21493",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24305900,
+            "range": "± 39196",
             "unit": "ns/iter"
           }
         ]
