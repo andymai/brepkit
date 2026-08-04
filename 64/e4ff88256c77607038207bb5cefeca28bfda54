@@ -1,0 +1,20 @@
+crates/operations/tests/regress_blend_keepside_tangency.rs
+  s_7ff36fc7322bef::t_3718e96fdcfd28 1-34,40-98
+  s_7ff36fc7322bef::t_484efa7bf473e9 35-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "64e4ff88256c77607038207bb5cefeca28bfda54",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
