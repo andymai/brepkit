@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785833034662,
+  "lastUpdate": 1785833512257,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16469,6 +16469,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24242745,
             "range": "± 37649",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "08566282f3b5efba8f2399e777dab871bce8ec4b",
+          "message": "chore(main): release 2.128.21 (#1301)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.21](https://github.com/andymai/brepkit/compare/v2.128.20...v2.128.21)\n(2026-08-04)\n\n\n### Bug Fixes\n\n* **algo:** analytic torus arm for the ray-cast classifier\n([#1300](https://github.com/andymai/brepkit/issues/1300))\n([8c0c530](https://github.com/andymai/brepkit/commit/8c0c530a74b248fc1d1623601c20be584576b5af))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.21 for `brepkit-wasm`, fixing ray-cast classification on\ntorus geometry by adding an analytic torus arm. This improves hit\naccuracy and prevents misclassification near toroidal surfaces.\n\n<sup>Written for commit 93769fa0ab954e9396b2029146210177920abad9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1301?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-04T08:49:20Z",
+          "tree_id": "d810c4ccb099126e9f5a987db1093399b68047f2",
+          "url": "https://github.com/andymai/brepkit/commit/08566282f3b5efba8f2399e777dab871bce8ec4b"
+        },
+        "date": 1785833511207,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 904332,
+            "range": "± 1656",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 987928,
+            "range": "± 13683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11995,
+            "range": "± 61",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697487,
+            "range": "± 20803",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23975944,
+            "range": "± 58189",
             "unit": "ns/iter"
           }
         ]
