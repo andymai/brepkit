@@ -432,6 +432,162 @@ CAVEAT on probe numbers here: a standalone probe run of `scenario-dividers-on` r
 notes record (in-matrix runs are cache-warm); do NOT compare a standalone probe number against a
 suite number.
 
+## Open growth shell: the 364 ms lattice fuse, characterized
+
+`crates/io/tests/kumiko_lattice_fuse_inmem.rs` is the first sub-second repro this family has had.
+`BK_OPEN_SHELL=1` with `replay_pair` gives the anatomy directly:
+
+- The lump is **67 planar faces, signed volume +153.5**, bbox x[32.792,39.722] y[-42.950,-38.150]
+  z[26.253,34.800] — a genuine chunk, not a sliver, which is why the guard refuses to drop it.
+- Its unpaired edges are **exactly four, and they form a CLOSED QUADRILATERAL**
+  (38.050,-42.748,29.866) -> (38.000,-42.750,29.830) -> (38.000,-40.932,29.260) ->
+  (38.050,-40.909,29.289). So this is ONE MISSING FACE, not a tear.
+- That quad BRIDGES x=38.000 and x=38.050, i.e. it caps the tool's deliberate
+  **`SLAB_OVERLAP = 0.05`** gap — the same 0.05 mm overlap the goma notes record.
+- Every one of the four carries `same_id_outside=0 coincident_other_id=0`: the partner exists
+  nowhere in the selection under any identity, so it was never created rather than mis-selected.
+- `BK_SUBFACE_BOX` over the gap shows neighbouring 0.05 mm slivers ARE created and classified
+  `Inside` (Id 1447, 1961, 1966), which is correct for a Fuse — but nothing covers the quad itself.
+
+**REFUTED: plane-plane FF aliasing is NOT the mechanism**, despite the matching 0.05 mm signature
+and the standing note that plane-plane "stays theoretically susceptible ... no repro exhibits it".
+Ungating #1224's exact slab clip to plane-plane leaves the fuse failing IDENTICALLY (same 67-face
+lump, 368 ms). So this repro does not exhibit that hazard and the gate should stay as it is.
+The quad's four corners are coplanar (normal ~(0.570,-0.244,-0.777) — a slanted lattice-strut
+plane), so it can only be a trimmed piece of an INPUT face; a boolean emits nothing else.
+
+**REFUTED #2: it is NOT an incomplete face partition.** `BK_SUBFACE_SRC=<id>|all` (new, in
+`builder/mod.rs`) totals a source face's pieces against the source's own area. The obvious suspect
+`Id(371)` — whose pieces bracket the quad — tiles EXACTLY: 29.143651 = 29.076256 + 0.067395,
+uncovered 0.000000. Scanning ALL source faces, only one fails to tile and by 8e-6, i.e. fan-
+triangulation noise. So every source face is fully covered and the quad is not a missing piece of
+any of them.
+**AND THE "MISSING FACE" FRAMING IS ITSELF OVERTURNED (refuted #3, the important one).** Classifying
+either side of the quad with the independent operations oracle (`POINT_IN` on `replay_pair`, now
+wired; instrument verified — a far-away point reads Outside/Outside):
+
+| point | vs A | vs B |
+|---|---|---|
+| quad + normal | **Inside** | Outside |
+| quad − normal | **Inside** | Inside |
+
+Both sides of the quad are INSIDE the union, so **no face belongs there at all** — one would be an
+internal membrane. That much is solid: the samples sit immediately either side of a real boundary,
+offset along its normal.
+
+**CORRECTION, and the method lesson behind it.** An earlier pass added "and the lump's own interior
+is inside A", concluding the whole lump is an internal artifact. That is NOT established and the
+claim is withdrawn. It rested on a BBOX-CENTRE sample; adding a vertex-CENTROID sample (now printed
+by the `BK_OPEN_SHELL` probe) contradicts it outright:
+
+| pair | bbox centre | vertex centroid |
+|---|---|---|
+| 1+2 | Inside A | **Outside / Outside** |
+| 2+3 | Outside / Outside | **Inside A** |
+| 3+4 | Outside / Inside B | Outside / Inside B |
+
+**For a non-convex OPEN shell neither a bbox centre nor a vertex centroid is a valid interior
+sample** — both can land outside the lump, and here they disagree on two pairs out of three. Only
+points taken adjacent to an actual face and offset along its normal mean anything. So the standing,
+supported finding is the narrow one: no face belongs at the quad, hence the faces owning those four
+free edges are what needs explaining. Whether the lump as a whole is spurious is OPEN.
+**Connectivity probe so far, and an honest status.** `BK_SUBFACE_SRC=all` now also reports sources
+whose pieces TILE but where NONE was selected — a hole an area-gap scan cannot see. There are three
+such sources, all tiny (areas 0.040, 0.009, 0.001), none matching the ~0.117 quad. So the boundary
+gap is not a fully-dropped source either, and the four free edges still have no face anywhere
+sharing their positions (`same_id_outside=0 coincident_other_id=0`).
+
+**Take stock before continuing.** This single failure has now had five successive diagnoses, four of
+them overturned by later measurement (FF aliasing, incomplete partition, missing face, spurious
+lump). The refutations are durable and the probes are reusable, but the rate of progress toward a
+FIX is low and each pass has cost a full iteration. `debugging-doctrine` exists for exactly this
+shape. Anyone picking this up should consider whether a different entry point is cheaper than
+continuing the current thread — for example instrumenting the shell WALKER directly (why it starts a
+new shell at these edges) rather than continuing to characterise the result it produced.
+
+**NEXT: chase SHELL CONNECTIVITY, not a drop-it discriminator.** The earlier proposal — drop a
+growth shell whose interior looks internal — is retargeted: the faces are legitimate, so dropping is
+never right here. The question is why the shell walker emits this set as a SEPARATE shell instead of
+joining it across the quad region. Useful context if that work needs the operands: they are NOT in
+scope at assembly (`build_solid`/`build_solid_with_origins` take only `selected: &[SelectedFace]`
+plus cap planes, and `SelectedFace` carries `face_id`, `source_face`, `reversed` — no operand tag),
+and `brepkit-algo` cannot call `operations::classify_point` under the layer rules.
+
+**SYSTEMATIC BUT PAIR-SPECIFIC.** Within op29's tool merges, `1+2` (67 faces), `2+3` (33) and `3+4`
+(65) all abort while `1+3` and `1+4` fuse clean (F=872 / F=1024, free=0). So it is neither a one-off
+nor universal — it depends on the pair.
+**RESOLVED: every lump face is a LEGITIMATE union boundary; the lump is real material that failed
+to CONNECT.** Sampling per face either side along its own normal, with the sample taken at the face
+INTERIOR (vertex centroid of the outer wire), over 24 faces of the `1+2` lump:
+
+| side | reading | count |
+|---|---|---|
+| minus | Inside A or Inside B | **24 of 24** |
+| plus | Outside / Outside | 23 of 24 |
+
+Material behind every face, empty in front — that is exactly what a union boundary face looks like.
+Combined with the quad result (material on BOTH sides there, so no cap belongs), the coherent
+picture is: **the lump is a genuine piece of the union whose faces are correct, and the failure is
+that the shell walker put it in a SEPARATE shell instead of connecting it** to the neighbouring
+faces across the quad region. Not a missing face, not a spurious selection, not an under-partition.
+So the assembly guard is RIGHT to refuse to drop it, and a "drop it when it looks internal"
+discriminator would have been the wrong fix — chase shell connectivity instead.
+
+**RETRACTED, with the method lesson.** An earlier pass reported "8 of 24 faces bound empty space on
+both sides, stable across offsets 0.02/0.05/0.15" and built a per-face-discriminator plan on it.
+That was an artifact of sampling the midpoint of the face's first boundary EDGE: at a convex edge,
+offsetting perpendicular to the face exits the material on BOTH sides, so perfectly good faces read
+as bounding nothing. Offset-stability did not save it (the artifact is offset-independent), and
+neither did deflection-stability (identical verdicts at 0.01/0.002/0.0005) — both looked like
+robustness and were measuring the same wrong point. **When classifying which side of a face carries
+material, sample the face INTERIOR; an edge or vertex point is never valid.** The same rule already
+appears here for notched sub-face seeds; this is the classification-probe form of it.
+
+PROPOSED DISCRIMINATOR: a growth shell whose INTERIOR classifies inside one of the operands is not
+new boundary and can be dropped; the fused-foot lump was genuinely outside both.
+
+**COST AND BLAST RADIUS, measured before attempting it — this is why it is not done yet.** The
+operands are NOT in scope at assembly: `build_solid`/`build_solid_with_origins` take only
+`selected: &[SelectedFace]` plus cap planes, and `SelectedFace` carries `face_id`, `source_face`,
+`reversed` — no operand tag and no solid. So the discriminator needs either the operand solids
+plumbed down (changes a load-bearing signature) or `assemble` returning open lumps for the caller to
+judge. `brepkit-algo` also cannot call `operations::classify_point` (layer rules) and must use its
+own `classifier/ray_cast.rs`; and an OPEN shell cannot be classified reliably, so any test must run
+against the closed OPERANDS as the measurements above do. Do not rush this into a guard that exists
+to prevent a silent material-deleting regression.
+
+**SYSTEMATIC BUT PAIR-SPECIFIC.** Within op29's tool merges, `1+2` (67 faces), `2+3` (33) and `3+4`
+(65) all abort while `1+3` and `1+4` fuse clean (F=872 / F=1024, free=0). So it is neither a one-off
+nor universal — it depends on the pair.
+**VALID SAMPLING DONE — the lump MIXES real boundary with faces that bound nothing.**
+`BK_OPEN_SHELL_FACEPTS=1` emits, per lump face, a point either side offset 0.02 along that face's
+own normal (the only sound sample for a non-convex open shell), and `POINT_IN` now takes a
+semicolon-separated batch. Over 24 faces of the `1+2` lump, every PLUS-side point is Outside/Outside,
+and the MINUS side splits:
+
+| minus-side | count | reading |
+|---|---|---|
+| Outside / Outside | **8** | empty on BOTH sides — bounds nothing, spurious |
+| Outside A / Inside B | 6 | legitimate union boundary |
+| Inside / Inside | 2 | legitimate |
+| OnBoundary A / Inside B | 1 | legitimate |
+| OnBoundary A / Outside B | 7 | COINCIDENT with A's surface — see below, not an artifact |
+
+**Offset-stability check (0.02 / 0.05 / 0.15) settles both groups.** The `Outside/Outside` count is
+**8 at every offset** — an offset-independent fact, not a sampling accident. And the `OnBoundary A`
+rows persist at 0.15 too, which is far past any tolerance: those faces are genuinely COINCIDENT with
+operand A's surface rather than ambiguously sampled. So the stable decomposition of the 24 sampled
+faces is roughly **8 bounding nothing + 7 coincident with A + 7 legitimate boundary**.
+
+So the lump is neither "all real material" (which the guard assumes) nor "all internal artifact"
+(the withdrawn claim): a third of its faces bound empty space on both sides, and another third sit
+on an operand surface — which puts the coincident-face/same-domain machinery in scope as a likely
+contributor. A discriminator therefore cannot be a single whole-lump verdict; it has to be per-face,
+and it now has a measured signature to key on.
+CAUTION on `BK_SUBFACE_BOX`: it tests face VERTICES against the box, so a face whose corners sit
+outside will not register; do not conclude a face is absent from that probe alone (the quad's own
+corners ARE its vertices, which is why it is a valid conclusion here).
+
 ## Live campaign: kumiko / goma
 
 **State:** branch `fix/kumiko-corner-window-cut` closes four real engine defects with fixtures
