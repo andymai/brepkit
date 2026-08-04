@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785877298165,
+  "lastUpdate": 1785877442803,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17549,6 +17549,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24166384,
             "range": "± 21705",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b516ed4381ba9cf010e946119bb5d0f3fd7b6bfe",
+          "message": "fix(blend): use the material wedge half-angle in the analytic plane fillet (#1321)\n\n## Root cause\n\n`dihedral_half_angle` returned half the angle BETWEEN the inward\nnormals, but the fillet centre offset (`r/sin`) and contact offset\n(`r/tan`) need the half-angle of the MATERIAL WEDGE, `(pi - angle)/2`.\nThe two coincide only at a 90-degree dihedral, where both give 45\ndegrees — which is why every box-calibrated case passed for so long.\n\nAt a near-tangent 178.9-degree ridge the divergence is catastrophic: the\ncorrect wedge half-angle is 89.45 degrees (contacts `r*tan(0.55deg)`,\nabout `r/100` from the edge), but the old formula gave 0.55 degrees,\nplacing the contacts `r/tan(0.55deg)` = 100 radii from the edge and\ntrimming away a fifth of each top face. This was the entire \"keep-side\ntangency\" 12% volume loss: it was never keep-side selection.\n\n## Validation\n\n- `regress_blend_keepside_tangency.rs` un-ignored and green, closing the\nLAST v2 trimmer residual.\n- `plane_plane_60_degree_fillet` asserted the old formula; at its\nexpected offset 3.0 the centre is 2.6 from each plane, not tangent for\nr=1.5. It now expects the wedge geometry (offset 1.732, verified\ntangent).\n- All pins green: `regress_fillet_concave_notch`,\n`regress_blend_trim_neighbor_split`, `regress_chamfer_obtuse_ridge`,\n`convex_chamfer_volume_check`.\n- Full suites green: blend 96, operations 1011, io 231, algo 209.\n\nRoadmap updated in the same PR: v2 trimmer residuals row is fully\nclosed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUse the material wedge half-angle `(pi - angle)/2` in the analytic\nplane-plane fillet to compute center and contact offsets. This fixes\nover-trimming on near‑tangent ridges and closes the last v2 trimmer\nresidual.\n\n- **Bug Fixes**\n  - Near‑tangent ridge repro no longer loses volume (12% loss removed).\n- `regress_blend_keepside_tangency.rs` un-ignored and passing; root\ncause was geometric offset, not keep-side selection.\n- `plane_plane_60_degree_fillet` updated to expect wedge geometry; all\ntest suites pass; roadmap updated to mark v2 trimmer residuals closed.\n\n<sup>Written for commit 64630f1f67228f55f67a015ea94aced77ae21020.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1321?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T21:00:12Z",
+          "tree_id": "83f3321d4df71675df9e0544420360678b91f1b3",
+          "url": "https://github.com/andymai/brepkit/commit/b516ed4381ba9cf010e946119bb5d0f3fd7b6bfe"
+        },
+        "date": 1785877441655,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 962871,
+            "range": "± 15777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1050006,
+            "range": "± 7261",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13102,
+            "range": "± 53",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697868,
+            "range": "± 1456",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25470102,
+            "range": "± 94026",
             "unit": "ns/iter"
           }
         ]
