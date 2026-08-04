@@ -1,5 +1,15 @@
 //! Fusing a socket assembly onto a bin body whose cavity has SHARP corners
-//! aborts the analytic assembly with "open hole shell with 9 faces".
+//! must stay analytic. It used to abort with "open hole shell with 9 faces":
+//! `shell` emitted NO inner face for a corner cylinder the thickness
+//! swallowed, and the spec assembler closed the corner-wide gap by threading
+//! the top ring's inner wire down the cavity verticals and across the floor
+//! chamfer diagonals. That wire is edge-paired (free=0, so every health
+//! check passed) but geometrically degenerate, so the next fuse's hole-shell
+//! grouping correctly refused it. The fix emits the sharp-corner chamfer
+//! strip (the collapsed cylinder's wire vertices mapped through the miter
+//! positions), and the operands here are re-captured from the fixed shell.
+//! Measured end-to-end: exported boundary edges 23/19/17 to 0/0/0 (1x1 wall
+//! 3.8/3.9/4.0) and 20/20 to 0/0 (2x2 wall 4/6).
 //!
 //! Found via the gridfinity floor-pattern `oversized elements` scenario, which
 //! is misfiled: its floor pattern is a no-op by contract and the plain bin
@@ -98,7 +108,10 @@ fn thickwall_body_cavity_is_sharp_cornered() {
     let mut topo = Topology::new();
     let body = load("thickwall_sharp_cavity_body.bin", &mut topo);
     let (_free, _over, curved, faces) = health(&topo, body);
-    assert_eq!(faces, 15, "expected the 15-face thick-wall body");
+    assert_eq!(
+        faces, 19,
+        "expected the 19-face thick-wall body (15 + the 4 cavity chamfer strips)"
+    );
     assert_eq!(
         curved, 4,
         "expected only the 4 OUTER corner cylinders; a rounded cavity would add 4 more"
@@ -106,7 +119,6 @@ fn thickwall_body_cavity_is_sharp_cornered() {
 }
 
 #[test]
-#[ignore = "ready repro: GFA aborts with 'open hole shell with 9 faces' on a sharp-cornered cavity"]
 fn thickwall_sharp_cavity_fuse_is_closed() {
     let mut topo = Topology::new();
     let body = load("thickwall_sharp_cavity_body.bin", &mut topo);

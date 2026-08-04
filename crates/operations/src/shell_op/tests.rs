@@ -980,4 +980,24 @@ fn shell_thickness_past_corner_radius_gives_a_sharp_corner() {
         "cavity reaches {worst:.4}, past the sharp corner at {sharp:.4} \
          (the collapsed-fillet overshoot lands at {tangent:.4})"
     );
+
+    // The collapsed corner cylinders must be REPLACED by chamfer strips, not
+    // dropped: without them the assembler can only close the cavity by
+    // threading another face's wire through it (edge-paired but degenerate,
+    // which aborts the next boolean's hole-shell grouping).
+    let mut diagonal_planes = 0;
+    for fid in brepkit_topology::explorer::solid_faces(&topo, shelled).unwrap() {
+        let face = topo.face(fid).unwrap();
+        if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface()
+            && normal.z().abs() < 0.01
+            && (normal.x().abs() - normal.y().abs()).abs() < 0.01
+            && normal.x().abs() > 0.5
+        {
+            diagonal_planes += 1;
+        }
+    }
+    assert_eq!(
+        diagonal_planes, 4,
+        "each swallowed corner cylinder must leave a 45-degree chamfer strip"
+    );
 }

@@ -359,13 +359,51 @@ pub fn shell(
             }
             FaceSurface::Cylinder(cyl) => {
                 let new_radius = cyl.radius() - thickness;
-                if new_radius > tol.linear
-                    && let Ok(new_cyl) = brepkit_math::surfaces::CylindricalSurface::new(
-                        cyl.origin(),
-                        cyl.axis(),
-                        new_radius,
-                    )
-                {
+                if new_radius <= tol.linear {
+                    // The thickness swallows the fillet: the inner surface is
+                    // not a smaller cylinder but the sharp chamfer where the
+                    // two neighbouring offset walls meet. Without this face
+                    // the inner shell has a corner-wide gap, and the spec
+                    // assembler can only close it by threading another face's
+                    // wire through the cavity (edge-paired but geometrically
+                    // degenerate, which aborts the next boolean's assembly).
+                    // The strip's corners are exactly this face's WIRE
+                    // vertices mapped through the miter positions: both
+                    // tangent lines already carry the extreme-normal miter.
+                    let wire = topo.wire(face.outer_wire())?;
+                    let mut strip: Vec<Point3> = Vec::new();
+                    for oe in wire.edges() {
+                        let e = topo.edge(oe.edge())?;
+                        let v = topo.vertex(oe.oriented_start(e))?.point();
+                        let p = inner_pos.get(&quantize_pt(v)).copied().unwrap_or(v);
+                        if strip.last().is_none_or(|q| (*q - p).length() > tol.linear) {
+                            strip.push(p);
+                        }
+                    }
+                    if strip.len() > 2 && (strip[0] - strip[strip.len() - 1]).length() <= tol.linear
+                    {
+                        strip.pop();
+                    }
+                    if strip.len() >= 3
+                        && let Some((n_a, n_b)) =
+                            extreme_face_normals(&face_surface_normals(face, outer_verts))
+                        && let Ok(outward) = (n_a + n_b).normalize()
+                    {
+                        strip.reverse();
+                        let inner_normal = -outward;
+                        let inner_d = dot_normal_point(inner_normal, strip[0]);
+                        result_specs.push(FaceSpec::Planar {
+                            vertices: strip,
+                            normal: inner_normal,
+                            d: inner_d,
+                            inner_wires: vec![],
+                        });
+                    }
+                } else if let Ok(new_cyl) = brepkit_math::surfaces::CylindricalSurface::new(
+                    cyl.origin(),
+                    cyl.axis(),
+                    new_radius,
+                ) {
                     // Full-circle cylinders: use Surface (the dense sample
                     // polygon from face_polygon contains seam-duplicate
                     // vertices that CylindricalFace can't handle cleanly).
