@@ -339,6 +339,22 @@ section chains near the hexagon first (which ends dangle and where); gate the br
 pendant-END pairs only (never mid-chain), and keep the guard that a bridged pair must
 be mutually nearest. Then verify sub-face 2067 splits into the inside strip + the
 outside hexagon, classification keeps the hexagon, and the fixture closes.
+SEVENTEENTH PASS (2026-08-03): 935's section chains measured. The rim line 935∩400 is
+covered by PER-PAIR micro-pieces because the A-side is facet-fragmented: pair (935×400)
+contributes [x=38.05 exit → A] (A is one of face 400's own vertices — the line exits 400
+there), the NEXT facet pair contributes the 3.75e-4 fragment [A → B], and the final
+[B → C] micro-piece (~2e-3, ending at the EF exit C on 935's boundary edge 3093) is
+MISSING — dropped by the in-both/graze filtering in `restrict_curves_to_faces` for
+whichever A-facet pair owns it. So the pendant-chain-bridge framing narrows to: the
+graze-drop rescue (`rescue_corner_crossing`) declines a REAL 2e-3 corner crossing at
+this rim (its strict-interior midpoint gate, or the fine-resample path, eats it).
+EIGHTEENTH PASS: instrument `restrict_curves_to_faces` for pairs (935 × each A-facet
+near y∈[-41.32,-41.31]) — log every raw curve and which filter drops it — then loosen
+exactly that gate for the measured signature. Also REVERTED this pass (no effect,
+principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
+band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
+edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
+idea in mind if a future corner shows the degenerate-refine signature directly.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
 phase level all lied because the noise was born at EMISSION, not intersection.
