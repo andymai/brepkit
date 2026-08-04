@@ -441,14 +441,26 @@ the strip is the slope line, and it arrives at restrict ALREADY truncated at
 identical spot — a COMMON CAUSE in how pair sections against face 935 are clipped
 (the trimRR mutual-overlap arm or 935's FaceExtent), not per-pair noise. 935's own
 outer polygon DOES extend south to y=-42.75 (IN935 dump), so the truncation is not
-its true extent. TWENTY-SEVENTH PASS (decisive): probe the trimRR arm for the pair
-(398,935) — print the RAW line (pre-trim), `clip_line_to_face` results for both
-faces (Range fractions / Indeterminate / Empty), and the trim outcome. Whichever
-clip yields the -41.30 cutoff is the defect; note 935's outline is NON-convex, so
-its Cyrus-Beck clip returns Indeterminate and the cutoff likely comes from the
-`clip_line_to_polygon_general` fallback or 398's own polygon (whose top edge IS the
-ridge — the clip of the slope line against the wall polygon near the ridge corner is
-ill-conditioned in exactly the twenty-third-pass sense). ALSO worth implementing independently
+its true extent. TWENTY-SEVENTH PASS
+(2026-08-04, THE CAMPAIGN'S FINAL FORM): the trim probe shows clip_a ([0.205,0.727],
+the wall's own polygon) produces the -41.30 cutoff and it is CORRECT — the slope line
+rises through the wall's top ridge (z=9.8922) there; the wall genuinely is not cut by
+935 south of it. Assembling every pass: the six-edge hole is a 0.03-TALL SLIVER along
+the ridge (z 9.863..9.892, y -41.30..-42.75) where A's TOP SLOPE `400` and B's BOTTOM
+SLOPE `935` are NEAR-COINCIDENT — the sixteenth pass proved A/B/C sit on plane 400 to
+1e-10, i.e. the junction chain rides the two slopes' common line, and the strip region
+between them is thinner than the operand facet noise. This is the COAXIAL SAME-DOMAIN
+FRONTIER (see the memory of the same name), planar-sloped: SD does not pair the
+asymmetrically-fragmented near-coincident slope pieces (2067 Inside-dropped straddles;
+2323 kept with an exposed rim), and every chain/section/straddle artifact of passes
+14-26 is collateral of that one unpaired overlap. FIX ALTITUDE (twenty-eighth pass,
+likely a fresh session): same-domain detection for NEAR-coincident plane pairs at
+operand-noise separation (the `surfaces_same_domain` d-tolerance is `tol.linear`;
+these planes differ by ~1e-3 in d and a few 1e-4 in normal) with the partial-overlap
+split machinery — the exact configuration the SD scope memory
+(`project_gfa-samedomain-scope`) predicted. Alternatively the mesh-fallback remains
+correct for this fixture; a product decision on chasing exact-analytic here is fair
+game given 27 passes of engine hardening already shipped from this campaign. ALSO worth implementing independently
 (robustness backstop, foil-gated): straddle DETECTION in classification — classify
 each sub-face at 3-5 spread samples instead of one; disagreement marks the sub-face
 as straddling (under-split), which can at least abort with a precise diagnostic
