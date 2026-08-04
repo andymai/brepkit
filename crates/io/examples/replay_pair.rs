@@ -11,6 +11,7 @@
 #![allow(clippy::print_stdout, clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use brepkit_io::arena_io::deserialize_solid;
@@ -81,6 +82,44 @@ fn main() {
         "intersect" => brepkit_algo::bop::BooleanOp::Intersect,
         _ => brepkit_algo::bop::BooleanOp::Fuse,
     };
+
+    // POINT_IN=x,y,z classifies a point against BOTH operands with the
+    // independent operations-level oracle. For a Fuse, a face is needed
+    // wherever one side of a surface is inside the union and the other is not.
+    if let Ok(spec) = std::env::var("POINT_IN") {
+        // Semicolon-separated points, so a batch is classified in one process
+        // instead of one process per point.
+        // Deflection matters: classify_point tessellates, and this lattice has
+        // 0.05mm features that a coarse deflection cannot represent, which
+        // makes the verdict itself an artifact of the setting.
+        let defl: f64 = std::env::var("POINT_DEFL")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0.01);
+        for (i, one) in spec.split(';').filter(|t| !t.trim().is_empty()).enumerate() {
+            let c: Vec<f64> = one
+                .split(',')
+                .filter_map(|t| t.trim().parse().ok())
+                .collect();
+            if c.len() != 3 {
+                continue;
+            }
+            let p = brepkit_math::vec::Point3::new(c[0], c[1], c[2]);
+            let mut row = format!("  POINT_IN[{i}] ({:.3},{:.3},{:.3})", c[0], c[1], c[2]);
+            for (label, sid) in [("A", a), ("B", b)] {
+                match brepkit_operations::classify::classify_point(&topo, sid, p, defl, 1e-7) {
+                    Ok(v) => {
+                        let _ = write!(row, "  {label}={v:?}");
+                    }
+                    Err(_) => {
+                        let _ = write!(row, "  {label}=ERR");
+                    }
+                }
+            }
+            println!("{row}");
+        }
+        return;
+    }
 
     // TOOLS=<comma-separated paths> replays a compound_cut, which is how the
     // kumiko wrap chain is actually built; a pairwise replay cannot reach it.

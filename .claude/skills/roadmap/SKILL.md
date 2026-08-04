@@ -125,7 +125,6 @@ doc comment — read that, not this.**
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** (open since 2026-07-16) | operations | `mesh_boolean_fallback` warns its output is not a closed 2-manifold and uses it anyway; there is no further fallback, so rejecting means the op fails outright. A product call, not just a fix |
 | **Divider residual geometry** (3 cases, re-confirmed 2026-08-01 with the compound + shell fixes overlaid: 3 failed / 12 passed, 820 s) | algo/GFA | `mitsukude lattice on dividers` (**boundary 6** — was non-manifold 4 before the shell fix, so the signature MOVED), `kumiko dividers perforate the compartment walls`, `dividers + scoops keep the ramp footings solid` (boundary 4). The first two are the SAME 2x2x6 mitsukude bin with 2x1 compartments differing only in `dividers: true/false`, which argues against the divider carry-through being the cause; `__kernel-tests__/mitsukudeNmProbe.test.ts` isolates pattern vs compartments vs footprint |
 | **snapClip 0.6 mm-nozzle export chain** breaks at op-cut-3 (posBad=10, analytic but leaky) | algo/GFA | Root is marched FF sections on curved faces carrying `pave_block_id=None`, bypassing the pave machinery. Canonical altitude is pave-block attachment at phase-FF/make_blocks; every face-splitter-level attempt broke calibrated chains |
-| **algo ray-cast classifier has no `Torus` arm** — torus faces fall to the flat Newell-polygon fallback | algo | PREVENTIVE, no failing repro: re-probed 2026-08-03, every torus landscape green (lib torus tests, `parity_boolean_curved`, `cut_torus_by_box_notch_is_analytic_watertight`, census `torus − box` analytic). Rank below repro-backed work. If built: the quartic ray×torus machinery exists in `check/src/classify/ray_surface.rs` but algo cannot depend on check — the solver would have to move to math |
 | **v2 trimmer residuals** (4, all evidenced by the regress test's 12 free edges) | blend | Keep-side selection is degenerate under tangency; `create_blend_face` builds its own contact edges; no end-cap notch trim; `chamfer_v2` solves the external tangent branch. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
 
 The remaining `#[ignore]` entries are diagnostics or slow perf runs, not open bugs: the
@@ -379,10 +378,97 @@ exit paves like C are section-free). MEASURED: z=4.5 closes COMPLETELY; the z~9.
 defect shrinks to ONE six-edge hole rim ((38.05,-41.30)→A→B→C→(-42.75)→
 (38.05,-42.7477)→back). Remaining defect: face 935's splitter STILL yields only 2
 sub-faces (2066 Outside kept / 2067 Inside dropped, probe unchanged) — the strip region
-bounded by the bridged chain is not traced as its own region. TWENTIETH PASS: find why
-(SPLIT_PATH probe on 935: which path fires; if the plane arrangement computes 3 regions
-but the adoption gate `result.len() > loops.len()` refuses, or the greedy merges the
-strip into 2067). Foils NOT yet run on the branch — run algo/ops/io before any ship. Also REVERTED this pass (no effect,
+bounded by the bridged chain is not traced as its own region. TWENTIETH PASS (2026-08-03,
+answered; branch now @ cf8c53af): the plane arrangement IS the adopted path for 935,
+and the bridge never reached it — the arrangement reads `sections` while the bridge
+lived only in `all_edges` (the greedy input). Fixed: bridge sections now augment the
+section list ahead of both paths. STILL 2 interior regions (`ARR935 traced=3
+interior=2`): the bridged chain's NORTH anchor (38.05,-41.3002,9.8922) must land on
+935's ridge boundary (x=38.05) for the chain to separate a region, and the T-junction
+there does not register — the endpoint likely sits just past the tol*100=1e-5
+endpoint-T window off the ridge chord, or the ridge edge in the arrangement inputs is
+the unsplit image piece whose interior the endpoint misses. TWENTY-FIRST PASS
+(2026-08-03, measured): NO boundary input lies within 5e-3 of that anchor — the point
+is a MID-FACE junction where sections i=16 ((38.05,-40.4644,9.6350)→anchor, the
+x=38.05 line) and i=18 (A→anchor) meet at t=1.0/t=1.0. The x=38.05 line is INTERIOR
+to 935 (the neighbour wall's crossing), not its ridge. So the would-be separating
+chain runs (38.05,-40.4644,9.635)→anchor→A→B→[bridge]→C: south end now
+boundary-anchored at C, but the NORTH continuation past (38.05,-40.4644,9.635) — the
+SEVENTH-pass z=9.635 corner, the very first near-miss/orphan this campaign measured —
+must ultimately reach 935's boundary for the arrangement to separate the region, and
+it evidently does not (2 interior regions traced). TWENTY-SECOND PASS
+(2026-08-03, the adjacency dump REFRAMES everything): 935's chain IS boundary-anchored
+at BOTH ends (north anchor (38.05,-40.4644,9.635) is a degree-3 boundary vertex; south
+anchor C via the bridge), and the arrangement's 2-region partition is locally CORRECT
+for its inputs. The real missing piece is a WHOLE ABSENT SECTION, not a pendant: the
+result's rim edge (38.05,-41.3002,9.8922)→(38.05,-42.7477,9.8922) (1.45 long, use-1,
+carried by the A-side x=38.05 wall products) shows A's material continues south of
+-41.30 at x=38.05 — face 398's pair with 935 contributed only [(38.05,-40.4644)→
+(38.05,-41.3002)] because 398 ENDS there, and the NEXT A-wall face's pair with 935
+(which owes the [(38.05,-41.30)→(38.05,-42.7477)] continuation) produced NOTHING among
+935's 20 arrangement inputs. Without it 935's partition lacks the full A-boundary
+trace, the hexagon merges into the big kept east region, and the rim mismatches.
+TWENTY-THIRD PASS
+(2026-08-03, target corrected): there is NO "next wall" — face 398's bbox spans the
+WHOLE y∈[-42.95,-38.15] at x=38.05, and the 1.45-long rim edge (38.05,y,9.8922) does
+NOT lie on 935's plane at all (plane check: 0.0186 residual) — it lies on the x=38.05
+WALL plane. The "hexagon on 935" model was wrong: the six-edge hole rim is a 3D loop
+across several faces, and the missing cover is a product of WALL 398 (or its B-side
+partner at x=38.05) whose top boundary should run at z=9.8922 between y=-41.30 and
+y=-42.7477. TWENTY-FOURTH PASS
+(2026-08-04, answered): wall 398 splits into THREE — `1489` Outside (y≈-38.8, kept),
+`1490` INSIDE/DROPPED (probe (38.05,-41.19,6.78)), `1491` Outside (y≈-42.83, kept).
+1490 is ANOTHER STRADDLE: genuinely inside B's band at its probe (low z), but its
+top-south strip (z>9.86, y -41.30..-42.75) sits ABOVE B's slope and must be kept —
+that strip is exactly the six-edge hole's wall side. The wall lacks a split along
+z=9.8922 south of y=-41.30: the rim edges (38.05,y,9.8922) lie on x=38.05 ∩
+z=9.8922, i.e. the section owed by pair (398 × B's HORIZONTAL top face at z=9.8922),
+which is missing/truncated in 398's inputs. TWENTY-FIFTH PASS
+(2026-08-04, answered): NO z=9.8922 plane exists in either solid, and no FF pair
+produces the constant-z rim line — because the rim edges (38.05,y,9.8922) are A's OWN
+OPERAND RIDGE (the boundary edge between A-slope `400` and A-wall `398`; their planes
+meet along that horizontal line). The slope side of the ridge survives (product
+`2323<-400`); the wall side sits inside the straddle-dropped middle band `1490`. So
+the missing face is the wall strip y∈[-42.75,-41.30] bounded ABOVE by the ridge — and
+the split 398 lacks is the VERTICAL cut near y≈-41.30 below the slope line (B's
+boundary at the strip's north edge), which would separate the keep-strip from the
+genuinely-inside middle band. TWENTY-SIXTH PASS
+(2026-08-04, answered): NO vertical section exists — the only (398 × B) section near
+the strip is the slope line, and it arrives at restrict ALREADY truncated at
+(38.05,-41.3002,9.8922). Crucially the (400×935) section truncates at the SAME point
+(twenty-second pass data): two different pairs, both against 935, stopping at the
+identical spot — a COMMON CAUSE in how pair sections against face 935 are clipped
+(the trimRR mutual-overlap arm or 935's FaceExtent), not per-pair noise. 935's own
+outer polygon DOES extend south to y=-42.75 (IN935 dump), so the truncation is not
+its true extent. TWENTY-SEVENTH PASS
+(2026-08-04, THE CAMPAIGN'S FINAL FORM): the trim probe shows clip_a ([0.205,0.727],
+the wall's own polygon) produces the -41.30 cutoff and it is CORRECT — the slope line
+rises through the wall's top ridge (z=9.8922) there; the wall genuinely is not cut by
+935 south of it. Assembling every pass: the six-edge hole is a 0.03-TALL SLIVER along
+the ridge (z 9.863..9.892, y -41.30..-42.75) where A's TOP SLOPE `400` and B's BOTTOM
+SLOPE `935` are NEAR-COINCIDENT — the sixteenth pass proved A/B/C sit on plane 400 to
+1e-10, i.e. the junction chain rides the two slopes' common line, and the strip region
+between them is thinner than the operand facet noise. This is the COAXIAL SAME-DOMAIN
+FRONTIER (see the memory of the same name), planar-sloped: SD does not pair the
+asymmetrically-fragmented near-coincident slope pieces (2067 Inside-dropped straddles;
+2323 kept with an exposed rim), and every chain/section/straddle artifact of passes
+14-26 is collateral of that one unpaired overlap. FIX ALTITUDE (twenty-eighth pass,
+likely a fresh session): same-domain detection for NEAR-coincident plane pairs at
+operand-noise separation (the `surfaces_same_domain` d-tolerance is `tol.linear`;
+these planes differ by ~1e-3 in d and a few 1e-4 in normal) with the partial-overlap
+split machinery — the exact configuration the SD scope memory
+(`project_gfa-samedomain-scope`) predicted. Alternatively the mesh-fallback remains
+correct for this fixture; a product decision on chasing exact-analytic here is fair
+game given 27 passes of engine hardening already shipped from this campaign. ALSO worth implementing independently
+(robustness backstop, foil-gated): straddle DETECTION in classification — classify
+each sub-face at 3-5 spread samples instead of one; disagreement marks the sub-face
+as straddling (under-split), which can at least abort with a precise diagnostic
+instead of silently dropping volume. Every recent kumiko root would have been caught
+at its face by that check. The campaign's
+generic lesson is now sharp: every remaining defect is one instance of "a pair
+section truncated where operand geometry rides a boundary, cascading into a
+straddle-drop"; each pass peels one instance, and the same probe recipes
+(WALL/RESTRICT/SEL) resolve each in one run apiece. Also REVERTED this pass (no effect,
 principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
 band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
 edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
@@ -399,6 +485,162 @@ CAVEAT on probe numbers here: a standalone probe run of `scenario-dividers-on` r
 `bnd=0 nm=7` in 555 s where the in-suite run asserts `bnd=6`. Same context-dependence the goma
 notes record (in-matrix runs are cache-warm); do NOT compare a standalone probe number against a
 suite number.
+
+## Open growth shell: the 364 ms lattice fuse, characterized
+
+`crates/io/tests/kumiko_lattice_fuse_inmem.rs` is the first sub-second repro this family has had.
+`BK_OPEN_SHELL=1` with `replay_pair` gives the anatomy directly:
+
+- The lump is **67 planar faces, signed volume +153.5**, bbox x[32.792,39.722] y[-42.950,-38.150]
+  z[26.253,34.800] — a genuine chunk, not a sliver, which is why the guard refuses to drop it.
+- Its unpaired edges are **exactly four, and they form a CLOSED QUADRILATERAL**
+  (38.050,-42.748,29.866) -> (38.000,-42.750,29.830) -> (38.000,-40.932,29.260) ->
+  (38.050,-40.909,29.289). So this is ONE MISSING FACE, not a tear.
+- That quad BRIDGES x=38.000 and x=38.050, i.e. it caps the tool's deliberate
+  **`SLAB_OVERLAP = 0.05`** gap — the same 0.05 mm overlap the goma notes record.
+- Every one of the four carries `same_id_outside=0 coincident_other_id=0`: the partner exists
+  nowhere in the selection under any identity, so it was never created rather than mis-selected.
+- `BK_SUBFACE_BOX` over the gap shows neighbouring 0.05 mm slivers ARE created and classified
+  `Inside` (Id 1447, 1961, 1966), which is correct for a Fuse — but nothing covers the quad itself.
+
+**REFUTED: plane-plane FF aliasing is NOT the mechanism**, despite the matching 0.05 mm signature
+and the standing note that plane-plane "stays theoretically susceptible ... no repro exhibits it".
+Ungating #1224's exact slab clip to plane-plane leaves the fuse failing IDENTICALLY (same 67-face
+lump, 368 ms). So this repro does not exhibit that hazard and the gate should stay as it is.
+The quad's four corners are coplanar (normal ~(0.570,-0.244,-0.777) — a slanted lattice-strut
+plane), so it can only be a trimmed piece of an INPUT face; a boolean emits nothing else.
+
+**REFUTED #2: it is NOT an incomplete face partition.** `BK_SUBFACE_SRC=<id>|all` (new, in
+`builder/mod.rs`) totals a source face's pieces against the source's own area. The obvious suspect
+`Id(371)` — whose pieces bracket the quad — tiles EXACTLY: 29.143651 = 29.076256 + 0.067395,
+uncovered 0.000000. Scanning ALL source faces, only one fails to tile and by 8e-6, i.e. fan-
+triangulation noise. So every source face is fully covered and the quad is not a missing piece of
+any of them.
+**AND THE "MISSING FACE" FRAMING IS ITSELF OVERTURNED (refuted #3, the important one).** Classifying
+either side of the quad with the independent operations oracle (`POINT_IN` on `replay_pair`, now
+wired; instrument verified — a far-away point reads Outside/Outside):
+
+| point | vs A | vs B |
+|---|---|---|
+| quad + normal | **Inside** | Outside |
+| quad − normal | **Inside** | Inside |
+
+Both sides of the quad are INSIDE the union, so **no face belongs there at all** — one would be an
+internal membrane. That much is solid: the samples sit immediately either side of a real boundary,
+offset along its normal.
+
+**CORRECTION, and the method lesson behind it.** An earlier pass added "and the lump's own interior
+is inside A", concluding the whole lump is an internal artifact. That is NOT established and the
+claim is withdrawn. It rested on a BBOX-CENTRE sample; adding a vertex-CENTROID sample (now printed
+by the `BK_OPEN_SHELL` probe) contradicts it outright:
+
+| pair | bbox centre | vertex centroid |
+|---|---|---|
+| 1+2 | Inside A | **Outside / Outside** |
+| 2+3 | Outside / Outside | **Inside A** |
+| 3+4 | Outside / Inside B | Outside / Inside B |
+
+**For a non-convex OPEN shell neither a bbox centre nor a vertex centroid is a valid interior
+sample** — both can land outside the lump, and here they disagree on two pairs out of three. Only
+points taken adjacent to an actual face and offset along its normal mean anything. So the standing,
+supported finding is the narrow one: no face belongs at the quad, hence the faces owning those four
+free edges are what needs explaining. Whether the lump as a whole is spurious is OPEN.
+**Connectivity probe so far, and an honest status.** `BK_SUBFACE_SRC=all` now also reports sources
+whose pieces TILE but where NONE was selected — a hole an area-gap scan cannot see. There are three
+such sources, all tiny (areas 0.040, 0.009, 0.001), none matching the ~0.117 quad. So the boundary
+gap is not a fully-dropped source either, and the four free edges still have no face anywhere
+sharing their positions (`same_id_outside=0 coincident_other_id=0`).
+
+**Take stock before continuing.** This single failure has now had five successive diagnoses, four of
+them overturned by later measurement (FF aliasing, incomplete partition, missing face, spurious
+lump). The refutations are durable and the probes are reusable, but the rate of progress toward a
+FIX is low and each pass has cost a full iteration. `debugging-doctrine` exists for exactly this
+shape. Anyone picking this up should consider whether a different entry point is cheaper than
+continuing the current thread — for example instrumenting the shell WALKER directly (why it starts a
+new shell at these edges) rather than continuing to characterise the result it produced.
+
+**NEXT: chase SHELL CONNECTIVITY, not a drop-it discriminator.** The earlier proposal — drop a
+growth shell whose interior looks internal — is retargeted: the faces are legitimate, so dropping is
+never right here. The question is why the shell walker emits this set as a SEPARATE shell instead of
+joining it across the quad region. Useful context if that work needs the operands: they are NOT in
+scope at assembly (`build_solid`/`build_solid_with_origins` take only `selected: &[SelectedFace]`
+plus cap planes, and `SelectedFace` carries `face_id`, `source_face`, `reversed` — no operand tag),
+and `brepkit-algo` cannot call `operations::classify_point` under the layer rules.
+
+**SYSTEMATIC BUT PAIR-SPECIFIC.** Within op29's tool merges, `1+2` (67 faces), `2+3` (33) and `3+4`
+(65) all abort while `1+3` and `1+4` fuse clean (F=872 / F=1024, free=0). So it is neither a one-off
+nor universal — it depends on the pair.
+**RESOLVED: every lump face is a LEGITIMATE union boundary; the lump is real material that failed
+to CONNECT.** Sampling per face either side along its own normal, with the sample taken at the face
+INTERIOR (vertex centroid of the outer wire), over 24 faces of the `1+2` lump:
+
+| side | reading | count |
+|---|---|---|
+| minus | Inside A or Inside B | **24 of 24** |
+| plus | Outside / Outside | 23 of 24 |
+
+Material behind every face, empty in front — that is exactly what a union boundary face looks like.
+Combined with the quad result (material on BOTH sides there, so no cap belongs), the coherent
+picture is: **the lump is a genuine piece of the union whose faces are correct, and the failure is
+that the shell walker put it in a SEPARATE shell instead of connecting it** to the neighbouring
+faces across the quad region. Not a missing face, not a spurious selection, not an under-partition.
+So the assembly guard is RIGHT to refuse to drop it, and a "drop it when it looks internal"
+discriminator would have been the wrong fix — chase shell connectivity instead.
+
+**RETRACTED, with the method lesson.** An earlier pass reported "8 of 24 faces bound empty space on
+both sides, stable across offsets 0.02/0.05/0.15" and built a per-face-discriminator plan on it.
+That was an artifact of sampling the midpoint of the face's first boundary EDGE: at a convex edge,
+offsetting perpendicular to the face exits the material on BOTH sides, so perfectly good faces read
+as bounding nothing. Offset-stability did not save it (the artifact is offset-independent), and
+neither did deflection-stability (identical verdicts at 0.01/0.002/0.0005) — both looked like
+robustness and were measuring the same wrong point. **When classifying which side of a face carries
+material, sample the face INTERIOR; an edge or vertex point is never valid.** The same rule already
+appears here for notched sub-face seeds; this is the classification-probe form of it.
+
+PROPOSED DISCRIMINATOR: a growth shell whose INTERIOR classifies inside one of the operands is not
+new boundary and can be dropped; the fused-foot lump was genuinely outside both.
+
+**COST AND BLAST RADIUS, measured before attempting it — this is why it is not done yet.** The
+operands are NOT in scope at assembly: `build_solid`/`build_solid_with_origins` take only
+`selected: &[SelectedFace]` plus cap planes, and `SelectedFace` carries `face_id`, `source_face`,
+`reversed` — no operand tag and no solid. So the discriminator needs either the operand solids
+plumbed down (changes a load-bearing signature) or `assemble` returning open lumps for the caller to
+judge. `brepkit-algo` also cannot call `operations::classify_point` (layer rules) and must use its
+own `classifier/ray_cast.rs`; and an OPEN shell cannot be classified reliably, so any test must run
+against the closed OPERANDS as the measurements above do. Do not rush this into a guard that exists
+to prevent a silent material-deleting regression.
+
+**SYSTEMATIC BUT PAIR-SPECIFIC.** Within op29's tool merges, `1+2` (67 faces), `2+3` (33) and `3+4`
+(65) all abort while `1+3` and `1+4` fuse clean (F=872 / F=1024, free=0). So it is neither a one-off
+nor universal — it depends on the pair.
+**VALID SAMPLING DONE — the lump MIXES real boundary with faces that bound nothing.**
+`BK_OPEN_SHELL_FACEPTS=1` emits, per lump face, a point either side offset 0.02 along that face's
+own normal (the only sound sample for a non-convex open shell), and `POINT_IN` now takes a
+semicolon-separated batch. Over 24 faces of the `1+2` lump, every PLUS-side point is Outside/Outside,
+and the MINUS side splits:
+
+| minus-side | count | reading |
+|---|---|---|
+| Outside / Outside | **8** | empty on BOTH sides — bounds nothing, spurious |
+| Outside A / Inside B | 6 | legitimate union boundary |
+| Inside / Inside | 2 | legitimate |
+| OnBoundary A / Inside B | 1 | legitimate |
+| OnBoundary A / Outside B | 7 | COINCIDENT with A's surface — see below, not an artifact |
+
+**Offset-stability check (0.02 / 0.05 / 0.15) settles both groups.** The `Outside/Outside` count is
+**8 at every offset** — an offset-independent fact, not a sampling accident. And the `OnBoundary A`
+rows persist at 0.15 too, which is far past any tolerance: those faces are genuinely COINCIDENT with
+operand A's surface rather than ambiguously sampled. So the stable decomposition of the 24 sampled
+faces is roughly **8 bounding nothing + 7 coincident with A + 7 legitimate boundary**.
+
+So the lump is neither "all real material" (which the guard assumes) nor "all internal artifact"
+(the withdrawn claim): a third of its faces bound empty space on both sides, and another third sit
+on an operand surface — which puts the coincident-face/same-domain machinery in scope as a likely
+contributor. A discriminator therefore cannot be a single whole-lump verdict; it has to be per-face,
+and it now has a measured signature to key on.
+CAUTION on `BK_SUBFACE_BOX`: it tests face VERTICES against the box, so a face whose corners sit
+outside will not register; do not conclude a face is absent from that probe alone (the quad's own
+corners ARE its vertices, which is why it is a valid conclusion here).
 
 ## Live campaign: kumiko / goma
 
@@ -429,6 +671,12 @@ Measured A/B, same day, same tool commit, each overlay md5-verified through brep
   firing that helps against one that hurts.
 
 ## Closed: root cause + where the detail lives
+- **Torus ray-cast arm** — whole-torus faces (degenerate boundary, < 3 polygon verts) were
+  DROPPED from parity counting entirely, and full-tube laterals fell to the flat polygon
+  fallback. `FaceGeom::Torus` + `math::intersect_line_torus` (the solver already lived in
+  math, no layer move needed) close both; TWO-RIM tube bands decline by design
+  (side-ambiguous from boundary vertices alone). Full-u detection is largest-gap-based
+  (max−min fails on sampled circles). `ray_cast.rs::whole_torus_classifies_inside_and_outside`
 
 - **Kumiko corner cut** — 4 roots: no rescue for a partial cylinder band; graze refinement scaled to
   face extent not arc length; NURBS boundary edges represented by their CHORD; and a reverse-twin

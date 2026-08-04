@@ -56,6 +56,20 @@ enum FaceGeom {
         v_max: f64,
         u_gap: Option<(f64, f64)>,
     },
+    /// A toroidal face covering the full major (u) revolution: either the
+    /// whole torus (degenerate fundamental-polygon boundary — previously
+    /// dropped from parity counting entirely) or a tube-angle band bounded
+    /// by full rim circles. Crossings come from the residual-verified
+    /// ray/torus quartic in `brepkit_math`, filtered to the tube-angle band.
+    /// The flat polygon fallback mis-counts against the doubly-curved
+    /// surface (up to four real crossings per ray).
+    Torus {
+        surface: brepkit_math::surfaces::ToroidalSurface,
+        /// Tube-angle band as `(v_start, span)` with `span` in `(0, TAU)`,
+        /// membership tested periodically from `v_start`. `None` = the full
+        /// tube (whole torus).
+        v_band: Option<(f64, f64)>,
+    },
 }
 
 /// Classify a point by ray casting against the solid's faces.
@@ -518,6 +532,82 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             }
         }
 
+        // Toroidal faces without inner wires: the whole torus (degenerate
+        // fundamental-polygon boundary yields < 3 distinct polygon points and
+        // previously fell out of parity counting entirely) or a full-major-
+        // revolution tube band bounded by rim circles. Partial-u patches keep
+        // the polygon fallback.
+        if let brepkit_topology::face::FaceSurface::Torus(t) = face.surface()
+            && face.inner_wires().is_empty()
+        {
+            use std::f64::consts::TAU;
+            let verts = wire_polygon(topo, face.outer_wire())?;
+            if verts.len() < 3 {
+                // Degenerate boundary: the untrimmed whole torus.
+                result.push(FaceGeom::Torus {
+                    surface: t.clone(),
+                    v_band: None,
+                });
+                continue;
+            }
+            let wire = topo.wire(face.outer_wire())?;
+            let mut has_closed_circle = false;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
+                    && edge.start() == edge.end()
+                {
+                    has_closed_circle = true;
+                    break;
+                }
+            }
+            if has_closed_circle {
+                // Band gated on full u coverage: the boundary must sweep the
+                // whole major revolution, else the patch keeps the fallback.
+                let mut us: Vec<f64> = Vec::with_capacity(verts.len());
+                let mut vs: Vec<f64> = Vec::with_capacity(verts.len());
+                for p in &verts {
+                    let (u, v) = t.project_point(*p);
+                    us.push(u.rem_euclid(TAU));
+                    vs.push(v.rem_euclid(TAU));
+                }
+                // Full major revolution iff the sampled boundary leaves no
+                // large angular gap (a genuine partial patch leaves at least
+                // its own missing arc; sampled rim circles leave only the
+                // inter-sample spacing).
+                us.sort_unstable_by(f64::total_cmp);
+                let mut u_gap = -1.0_f64;
+                for i in 0..us.len() {
+                    let next = us[(i + 1) % us.len()];
+                    u_gap = u_gap.max((next - us[i]).rem_euclid(TAU));
+                }
+                if u_gap <= 1.0 {
+                    // Tube coverage from the periodic v samples. Boundary
+                    // samples fully covering the tube (a seam-only boundary)
+                    // OR collapsing to a single v (a full tube cut along one
+                    // rim circle) both mean the face spans the whole tube. A
+                    // two-rim band is SIDE-AMBIGUOUS from boundary vertices
+                    // alone (the rims bound either half), so it keeps the
+                    // polygon fallback rather than guessing.
+                    vs.sort_unstable_by(f64::total_cmp);
+                    let mut gap = -1.0_f64;
+                    for i in 0..vs.len() {
+                        let next = vs[(i + 1) % vs.len()];
+                        let d = (next - vs[i]).rem_euclid(TAU);
+                        gap = gap.max(d);
+                    }
+                    let span = TAU - gap;
+                    if gap <= 1e-3 || span <= 1e-3 {
+                        result.push(FaceGeom::Torus {
+                            surface: t.clone(),
+                            v_band: None,
+                        });
+                        continue;
+                    }
+                }
+            }
+        }
+
         let verts = wire_polygon(topo, face.outer_wire())?;
         if verts.len() < 3 {
             continue;
@@ -636,6 +726,9 @@ fn ray_geom_crossings(
             v_max,
             u_gap,
         } => ray_cone_crossings(origin, ray_dir, surface, (*v_min, *v_max), *u_gap, tol),
+        FaceGeom::Torus { surface, v_band } => {
+            ray_torus_crossings(origin, ray_dir, surface, *v_band, tol)
+        }
     }
 }
 
@@ -773,6 +866,59 @@ fn near_gap_border(u: f64, gap: (f64, f64), eps: f64) -> bool {
         }
     }
     false
+}
+
+/// Count ray crossings with a full-major-revolution toroidal face.
+///
+/// Roots come from the residual-verified ray/torus quartic in
+/// `brepkit_math`; each accepted root's tube angle must fall inside the
+/// face's periodic `v_band` (`None` accepts the whole tube). Near-tangent
+/// root pairs and hits near the band borders flag the ray as unreliable,
+/// mirroring the cylinder/cone grazing conventions.
+fn ray_torus_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::surfaces::ToroidalSurface,
+    v_band: Option<(f64, f64)>,
+    tol: Tolerance,
+) -> (i32, bool) {
+    use std::f64::consts::TAU;
+    let near = 10.0 * tol.linear;
+    let Ok(dir) = ray_dir.normalize() else {
+        return (0, false);
+    };
+    let roots = brepkit_math::analytic_intersection::intersect_line_torus(surface, origin, dir);
+    let near_angle = near / surface.minor_radius().max(near);
+    let mut crossings = 0;
+    let mut suspicious = false;
+    for (i, &t) in roots.iter().enumerate() {
+        if t <= tol.linear {
+            continue;
+        }
+        // A close root pair is a graze: its two crossings cancel in parity
+        // only if BOTH land in the band, so flag the ray instead of trusting
+        // the count.
+        for &t2 in &roots[i + 1..] {
+            if (t2 - t).abs() <= near {
+                suspicious = true;
+            }
+        }
+        if let Some((v_start, span)) = v_band {
+            let hit = Point3::new(
+                origin.x() + dir.x() * t,
+                origin.y() + dir.y() * t,
+                origin.z() + dir.z() * t,
+            );
+            let (_, v) = surface.project_point(hit);
+            let vv = (v - v_start).rem_euclid(TAU);
+            suspicious |= vv <= near_angle || (span - vv).abs() <= near_angle;
+            if vv > span {
+                continue;
+            }
+        }
+        crossings += 1;
+    }
+    (crossings, suspicious)
 }
 
 /// Count ray crossings with a bounded conical face.
@@ -1081,6 +1227,41 @@ mod tests {
         ));
         let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
         topo.add_solid(Solid::new(shell, vec![]))
+    }
+
+    #[test]
+    fn whole_torus_classifies_inside_and_outside() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        // Whole torus R=3 r=1 about Z at the origin: a single face with a
+        // degenerate point-seam boundary (the untrimmed fundamental polygon).
+        let mut topo = Topology::default();
+        let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0).unwrap();
+        let seam_p = t.evaluate(0.0, 0.0);
+        let v0 = topo.add_vertex(Vertex::new(seam_p, 1e-7));
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            4.0,
+        )
+        .unwrap();
+        let e = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(circle)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(t)));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+
+        // In the tube: on the spine circle.
+        let inside = classify_ray_cast(&topo, solid, Point3::new(3.0, 0.0, 0.0)).unwrap();
+        assert_eq!(inside, crate::builder::face_class::FaceClass::Inside);
+        // The donut hole is OUTSIDE the solid.
+        let hole = classify_ray_cast(&topo, solid, Point3::new(0.0, 0.0, 0.0)).unwrap();
+        assert_eq!(hole, crate::builder::face_class::FaceClass::Outside);
+        // Beyond the outer equator.
+        let out = classify_ray_cast(&topo, solid, Point3::new(6.0, 0.0, 0.0)).unwrap();
+        assert_eq!(out, crate::builder::face_class::FaceClass::Outside);
+        // Above the tube.
+        let above = classify_ray_cast(&topo, solid, Point3::new(3.0, 0.0, 2.0)).unwrap();
+        assert_eq!(above, crate::builder::face_class::FaceClass::Outside);
     }
 
     #[test]

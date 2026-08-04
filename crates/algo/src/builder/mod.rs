@@ -70,6 +70,127 @@ pub struct SubFace {
 /// The decisive probe for a missing result face: it separates "the splitter
 /// never produced a sub-face here" from "it did, and selection dropped it".
 /// Those need opposite fixes, so guessing between them wastes a whole dig.
+/// `BK_SUBFACE_SRC=<n>`: total the sub-faces produced from ONE source face and
+/// compare against the source's own area.
+///
+/// A boolean emits only trimmed patches of input surfaces, so a source face's
+/// pieces must tile it. When they do not, a region of the result simply has no
+/// face and the shell comes back open — which reads downstream as a selection
+/// or classification bug and is neither.
+fn log_source_face_partition(topo: &Topology, subs: &[SubFace], selected: &[bop::SelectedFace]) {
+    let Ok(want) = std::env::var("BK_SUBFACE_SRC") else {
+        return;
+    };
+    // `BK_SUBFACE_SRC=all` scans every source face instead of one, reporting
+    // only those whose pieces fail to tile them — the cheap way to find a
+    // missing result face without guessing which source it came from.
+    if want.trim() == "all" {
+        let chosen: std::collections::HashSet<FaceId> =
+            selected.iter().map(|s| s.face_id).collect();
+        let mut by_src: std::collections::HashMap<FaceId, (f64, usize, usize)> =
+            std::collections::HashMap::new();
+        for sf in subs {
+            let e = by_src.entry(sf.source_face).or_insert((0.0, 0, 0));
+            e.0 += face_area_estimate(topo, sf.face_id);
+            e.1 += 1;
+            if chosen.contains(&sf.face_id) {
+                e.2 += 1;
+            }
+        }
+        let by_src2 = by_src.clone();
+        let mut rows: Vec<_> = by_src
+            .into_iter()
+            .map(|(src, (tot, n, sel))| (face_area_estimate(topo, src) - tot, src, tot, n, sel))
+            .filter(|(gap, _, _, _, _)| gap.abs() > 1e-6)
+            .collect();
+        rows.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
+        // A source whose pieces TILE it but where NONE was selected leaves a
+        // hole in the result boundary just as surely as an under-partition, and
+        // an area-gap scan cannot see it — the pieces all exist.
+        let mut dropped: Vec<_> = by_src2
+            .iter()
+            .filter(|(_, (_, _, sel))| *sel == 0)
+            .map(|(src, (tot, n, _))| (*src, *tot, *n))
+            .collect();
+        dropped.sort_by(|a, b| b.1.total_cmp(&a.1));
+        log::debug!(
+            "SRCPART scan: {} source faces do not tile, {} fully dropped (no piece selected)",
+            rows.len(),
+            dropped.len()
+        );
+        for (src, tot, n) in dropped.iter().take(12) {
+            log::debug!("SRCPART fully-dropped src={src:?} pieces={n} area={tot:.6}");
+        }
+        for (gap, src, tot, n, sel) in rows.iter().take(12) {
+            log::debug!(
+                "SRCPART gap={gap:.6} src={src:?} pieces={n} selected={sel} pieceTotal={tot:.6}"
+            );
+        }
+        return;
+    }
+    let Ok(want) = want.trim().parse::<usize>() else {
+        return;
+    };
+    let chosen: std::collections::HashSet<FaceId> = selected.iter().map(|s| s.face_id).collect();
+    let mut total = 0.0;
+    let mut n = 0;
+    let mut src_id: Option<FaceId> = None;
+    for sf in subs {
+        if sf.source_face.index() != want {
+            continue;
+        }
+        src_id = Some(sf.source_face);
+        let a = face_area_estimate(topo, sf.face_id);
+        total += a;
+        n += 1;
+        log::debug!(
+            "SRCPART sub {:?} area={a:.6} class={:?} selected={}",
+            sf.face_id,
+            sf.classification,
+            chosen.contains(&sf.face_id)
+        );
+    }
+    let src_area = src_id.map_or(f64::NAN, |f| face_area_estimate(topo, f));
+    log::debug!(
+        "SRCPART source Id({want}) area={src_area:.6} pieces={n} pieceTotal={total:.6}          uncovered={:.6}",
+        src_area - total
+    );
+}
+
+/// Fan-triangulated area of a face's outer wire, minus its inner wires. Good
+/// enough to compare a partition against its source; exact for planar faces.
+fn face_area_estimate(topo: &Topology, fid: FaceId) -> f64 {
+    let Ok(face) = topo.face(fid) else {
+        return 0.0;
+    };
+    let ring = |wid| -> f64 {
+        let Ok(w) = topo.wire(wid) else { return 0.0 };
+        let mut pts: Vec<brepkit_math::vec::Point3> = Vec::new();
+        for oe in w.edges() {
+            let Ok(e) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let vid = if oe.is_forward() { e.start() } else { e.end() };
+            if let Ok(v) = topo.vertex(vid) {
+                pts.push(v.point());
+            }
+        }
+        if pts.len() < 3 {
+            return 0.0;
+        }
+        let mut acc = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
+        for i in 1..pts.len() - 1 {
+            let u = pts[i] - pts[0];
+            let v = pts[i + 1] - pts[0];
+            acc += u.cross(v);
+        }
+        acc.length() * 0.5
+    };
+    let outer = ring(face.outer_wire());
+    let inner: f64 = face.inner_wires().iter().map(|w| ring(*w)).sum();
+    (outer - inner).max(0.0)
+}
+
 fn log_subfaces_in_box(topo: &Topology, subs: &[SubFace], selected: &[bop::SelectedFace]) {
     let Ok(spec) = std::env::var("BK_SUBFACE_BOX") else {
         return;
@@ -217,6 +338,7 @@ impl Builder {
             &self.sd_within_rank_dups,
         );
         log_subfaces_in_box(&self.topo, &self.sub_faces, &selected);
+        log_source_face_partition(&self.topo, &self.sub_faces, &selected);
         let cap_planes = self.partial_overlap_cap_planes(&selected);
         let solid_id = assemble::assemble_solid(&mut self.topo, &selected, &cap_planes)?;
         Ok((self.topo, solid_id))
@@ -237,6 +359,7 @@ impl Builder {
             &self.sd_within_rank_dups,
         );
         log_subfaces_in_box(&self.topo, &self.sub_faces, &selected);
+        log_source_face_partition(&self.topo, &self.sub_faces, &selected);
         let cap_planes = self.partial_overlap_cap_planes(&selected);
         let (solid_id, origins) =
             assemble::assemble_solid_with_origins(&mut self.topo, &selected, &cap_planes)?;
