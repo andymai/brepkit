@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785840919353,
+  "lastUpdate": 1785841342126,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16577,6 +16577,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24305900,
             "range": "± 39196",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9ceaf870eee8243940df317ff7e9903de1ab4763",
+          "message": "chore(main): release 2.128.22 (#1303)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.22](https://github.com/andymai/brepkit/compare/v2.128.21...v2.128.22)\n(2026-08-04)\n\n\n### Bug Fixes\n\n* **algo:** close the kumiko lattice band fuse\n([#1302](https://github.com/andymai/brepkit/issues/1302))\n([719585c](https://github.com/andymai/brepkit/commit/719585c9264f20c3aa3262f5934a496c215ef0e0))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.128.22 with a fix that closes the kumiko\nlattice band fuse to prevent gaps and produce watertight geometry.\n\n- **Bug Fixes**\n- Close the kumiko lattice band fuse to eliminate small seams and\nimprove downstream operations.\n\n<sup>Written for commit 6fbdd21323db7e1b9c8f6ba29637a5f777ab7d81.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1303?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-04T10:59:43Z",
+          "tree_id": "22a551f124e311142399175f9c3834fcd8ce38a5",
+          "url": "https://github.com/andymai/brepkit/commit/9ceaf870eee8243940df317ff7e9903de1ab4763"
+        },
+        "date": 1785841340869,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 925116,
+            "range": "± 3049",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1002483,
+            "range": "± 2781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12038,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 683905,
+            "range": "± 1940",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24392315,
+            "range": "± 76804",
             "unit": "ns/iter"
           }
         ]
