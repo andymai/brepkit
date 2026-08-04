@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785808850012,
+  "lastUpdate": 1785809078659,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15227,6 +15227,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 31426938,
             "range": "± 32174",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "166b63f44fce2cb6f62787400d1234e7c6ad26e2",
+          "message": "docs(roadmap): kumiko eighth pass localized to coplanar-phase inner-wire blindness (#1279)\n\nRecords the eighth-pass localization of the kumiko lattice band fuse\n(after #1277 took the fixture from 43 free edges to 2):\n\n- The two remaining free edges at the z=34.8 top corner are an\ninner-wire diagonal of A-top (owner a split product of the diagonal\nwall) and the x=38.05 top-edge piece.\n- The z=34.8 coplanar pair (A-top Id(364), a 4-edge outer rectangle\nwhose corner is the shared free-edge vertex, x B-top Id(852)) emitted\nzero coplanar sections.\n- Root direction: `face_boundary_polygon_2d` / `face_boundary_edges_2d`\nin `phase_ff_coplanar.rs` read only the outer wire, so the\nlattice-shaped inner holes are invisible to the clip, the shared-edge\ntest, and the common-block pass. Same one-wire blindness the junction\nsnap had before its inner-wire fix.\n- Fix shape for the ninth pass is recorded in the entry, plus one\nrefuted approach (`emit_riding_sections`, A/B zero effect).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the Kumiko roadmap to record the eighth-pass localization:\ninner-wire blindness in the coplanar phase leaves two free edges at the\nz=34.8 top corner. Documents the geometry and A/B pair, identifies\nouter-wire-only processing in `phase_ff_coplanar.rs` as the root cause,\noutlines a fix to include inner wires across\nclip/shared-edge/common-block, and notes the reverted\n`emit_riding_sections` attempt.\n\n<sup>Written for commit 41c5b481bbd33100adfd2e6f4668e86045eab5a1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1279?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T19:02:10-07:00",
+          "tree_id": "cc07d70acb22a9522c6e96c0b6a1af1d7d42e8ed",
+          "url": "https://github.com/andymai/brepkit/commit/166b63f44fce2cb6f62787400d1234e7c6ad26e2"
+        },
+        "date": 1785809077278,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1013461,
+            "range": "± 2041",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1089201,
+            "range": "± 30845",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11925,
+            "range": "± 78",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 670687,
+            "range": "± 872",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29697397,
+            "range": "± 144999",
             "unit": "ns/iter"
           }
         ]
