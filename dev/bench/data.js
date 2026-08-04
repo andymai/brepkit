@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785851040166,
+  "lastUpdate": 1785853967581,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17063,6 +17063,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25451563,
             "range": "± 29026",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "499633177f707feec95bc0b4fd8aba1409a1238e",
+          "message": "fix(blend): material-oriented chamfer contacts on concave edges (#1312)\n\n## Summary\n\nCloses the last named v2 trimmer residual (`chamfer_v2` external tangent\nbranch):\n\n- On a concave edge the bisector-projected contact direction flips onto\nthe faces' external extensions — the external tangent branch. Measured:\na 0.02 chamfer on a reflex notch grew the solid by 6.7%.\n- The plane-plane chamfer now derives each contact direction from the\nface's own wire traversal (effective normal cross traversal tangent),\nexact for any convexity, with the bisector projection kept as fallback.\n- New pin `regress_chamfer_obtuse_ridge`: the concave notch chamfer adds\nonly the expected sliver. The roadmap notes the fillet's plane-plane\npath still uses the bisector projection and should be probed on a\nconcave case before assuming it shares the defect.\n\n## Testing\n\n- New concave pin green; blend, operations, io suites green; clippy -D\nwarnings clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `chamfer_v2` placing contacts on the external tangent branch on\nconcave edges by using a material-oriented contact direction, so concave\nchamfers add only the intended sliver instead of growing the solid.\n\n- **Bug Fixes**\n- Compute contact direction per face from wire traversal\n(`effective_normal × traversal_tangent`), with bisector projection as\nfallback.\n- Corrects concave-edge behavior that could inflate volume (e.g., 0.02\nchamfer grew a notched prism by ~6.7%).\n- Adds `regress_chamfer_obtuse_ridge.rs` to pin the fix and updates the\nroadmap note.\n\n<sup>Written for commit 396de959235dd023ca4bafc1e379c8c328d72684.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1312?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T14:30:12Z",
+          "tree_id": "d502c05f3d981dff8a794af191b3229fe9b0dda8",
+          "url": "https://github.com/andymai/brepkit/commit/499633177f707feec95bc0b4fd8aba1409a1238e"
+        },
+        "date": 1785853966471,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 835347,
+            "range": "± 11533",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 904629,
+            "range": "± 12008",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10569,
+            "range": "± 192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 610142,
+            "range": "± 14724",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21409965,
+            "range": "± 574207",
             "unit": "ns/iter"
           }
         ]
