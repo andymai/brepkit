@@ -13,7 +13,7 @@ use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
 
 use crate::analytic;
-use crate::builder_utils::{create_blend_face, sample_nurbs_endpoints};
+use crate::builder_utils::sample_nurbs_endpoints;
 use crate::spine::Spine;
 use crate::stripe::StripeResult;
 use crate::trimmer::{self, TrimSide};
@@ -195,8 +195,13 @@ impl<'a> ChamferBuilder<'a> {
         let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
             std::collections::HashMap::new();
 
+        let mut stripe_contact_edges: Vec<(
+            Option<brepkit_topology::edge::EdgeId>,
+            Option<brepkit_topology::edge::EdgeId>,
+        )> = Vec::new();
         for sr in &stripe_results {
             let stripe = &sr.stripe;
+            stripe_contact_edges.push((None, None));
 
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
             let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
@@ -238,6 +243,9 @@ impl<'a> ChamferBuilder<'a> {
 
             match trim1 {
                 Ok(tr) if tr.trimmed_face != current_face1 => {
+                    if let Some(slot) = stripe_contact_edges.last_mut() {
+                        slot.0 = tr.contact_edge;
+                    }
                     face_replacements.insert(stripe.face1, tr.trimmed_face);
                 }
                 Ok(_) => {}
@@ -260,6 +268,9 @@ impl<'a> ChamferBuilder<'a> {
 
             match trim2 {
                 Ok(tr) if tr.trimmed_face != current_face2 => {
+                    if let Some(slot) = stripe_contact_edges.last_mut() {
+                        slot.1 = tr.contact_edge;
+                    }
                     face_replacements.insert(stripe.face2, tr.trimmed_face);
                 }
                 Ok(_) => {}
@@ -271,8 +282,16 @@ impl<'a> ChamferBuilder<'a> {
 
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
 
-        for sr in &stripe_results {
-            let blend_face_id = create_blend_face(topo, &sr.stripe)?;
+        for (si, sr) in stripe_results.iter().enumerate() {
+            // Reuse the trimmed neighbours' contact edges (mirrors the fillet
+            // builder): a freshly minted duplicate leaves both copies use-1
+            // and opens the shell along the chamfer flanks.
+            let (c1, c2) = stripe_contact_edges
+                .get(si)
+                .copied()
+                .unwrap_or((None, None));
+            let blend_face_id =
+                crate::builder_utils::create_blend_face_with_contacts(topo, &sr.stripe, c1, c2)?;
             blend_face_ids.push(blend_face_id);
         }
 
