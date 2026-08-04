@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785813418982,
+  "lastUpdate": 1785816795209,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15497,6 +15497,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29863603,
             "range": "± 132981",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0a7837ecf8b7ab73f046df5aa7fe3a38fa53679a",
+          "message": "fix(algo): unify cross-solver junction anchors in the kumiko lattice fuse (#1284)\n\n## Summary\n\nThirteenth pass of the kumiko lattice band campaign. Two verified fixes:\n\n- **EF-IN absolute ceiling, scoped to straight leaves.** The\ncrossing-angle gate (`IN_FACE_MAX_DEVIATION_RATIO` 0.2) admitted a long\nLine leaf sitting 0.05 off a wall plane at 2.7% of its chord; the wall\nsplitter then consumed off-plane endpoints and emitted partition wires\nwith out-of-plane vertices (geometrically invalid faces that happened to\nstitch the shell). A line's deviation from a crossed plane grows\nlinearly, so ratio-small + absolute-large can only be a long transversal\ncrossing; curved grazing contacts (the calibrated socket-loft arcs,\nwhich fail an unscoped ceiling) keep the pure ratio gate.\n- **Pave-vertex seeding of the FF junction registry.** EF crossings and\nFF pair refinements each minted their own copy of shared lattice corners\n(3.5e-4 apart). Seeding the registry with all previously minted vertices\nlets the guarded adoption unify them: measured 14 -> 7 free edges on the\nfixture.\n\n## Fixture state\n\n`kumiko_lattice_bands_fuse_closed` stays `#[ignore]`d. The raw free-edge\ncount moves 2 -> 7, but the old 2-state was stitched by the invalid\noff-plane wires this PR removes; the 7 remaining edges are one z~9.9\nmulti-copy cluster (copies spread 2.4e-3, wider than the guarded\nadoption band) — the fourteenth-pass target. A cluster-canonical\nadoption variant was tried and reverted (net-negative: consumers that\nbypass endpoint resolution keep their own anchors).\n\n## Testing\n\n- operations: 798 passed (including `fuse_shelled_box_with_socket_loft`,\nwhich pinned the ceiling's scoping)\n- io: all green, honeycomb residual ceilings unchanged\n- algo: all green; clippy `-D warnings` clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPrevents warped partitions and duplicate junctions in the kumiko lattice\nfuse by capping EF-IN crossing deviation for straight leaves and seeding\nthe FF junction registry to unify anchors.\n\n- **Bug Fixes**\n- EF-IN: Add 1e-2 absolute ceiling to the deviation-ratio gate for\n`Line` leaves; curved contacts keep ratio-only. Blocks long shallow\ncrossings that produced off-plane partition vertices.\n- FF: Seed the junction registry with all previously minted vertices\n(operands + VE/EE/VF/EF) so new section endpoints adopt existing\nanchors. Unifies cross-solver junctions and cuts duplicate corners\n(fixture 14 → 7 free edges).\n\n<sup>Written for commit d803d3bb132d9cfad3fae8d5ff700881601059b2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1284?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T21:10:46-07:00",
+          "tree_id": "cd0d235a6d4b9a405eb79b7d2f8bf2bb385d6332",
+          "url": "https://github.com/andymai/brepkit/commit/0a7837ecf8b7ab73f046df5aa7fe3a38fa53679a"
+        },
+        "date": 1785816793951,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 906895,
+            "range": "± 1114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 987236,
+            "range": "± 1630",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12014,
+            "range": "± 450",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 681436,
+            "range": "± 10323",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24259685,
+            "range": "± 96448",
             "unit": "ns/iter"
           }
         ]
