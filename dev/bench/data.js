@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785823382402,
+  "lastUpdate": 1785824570016,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15929,6 +15929,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23643358,
             "range": "± 51608",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7b5044eece12e72394ebd84798d6a0f87980bf60",
+          "message": "docs(roadmap): kumiko twentieth pass plumbs bridges into the arrangement (#1292)\n\nTwentieth-pass progress for the kumiko lattice band fuse (branch\n`fix/outer-wire-images` @ cf8c53af):\n\n- Found and fixed the bridge/arrangement disconnect: the adopted\narrangement path reads `sections`, so bridges (previously only in\n`all_edges`) never reached it.\n- The arrangement still traces 2 interior regions for face 935: the\nbridged chain's north anchor does not register a T-junction on the ridge\nboundary. The twenty-first-pass measurement and the two candidate fixes\nare recorded.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the kumiko roadmap to document the twentieth-pass fix that\nroutes bridge segments into the plane arrangement by augmenting\n`sections` (they previously lived only in `all_edges`). Also notes the\nremaining face 935 issue (still 2 interior regions due to a missed\nT-junction at the north anchor) and outlines the next measurement steps.\n\n<sup>Written for commit 8584804bd5b9f355cb7848ed62045eedd5b811f9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1292?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T23:20:19-07:00",
+          "tree_id": "1491bf1f008f9fca9ffa66519c2db74f54748693",
+          "url": "https://github.com/andymai/brepkit/commit/7b5044eece12e72394ebd84798d6a0f87980bf60"
+        },
+        "date": 1785824568136,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 911051,
+            "range": "± 1149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 994094,
+            "range": "± 5205",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12082,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 689396,
+            "range": "± 746",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24018860,
+            "range": "± 40013",
             "unit": "ns/iter"
           }
         ]
