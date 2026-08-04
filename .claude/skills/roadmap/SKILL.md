@@ -348,9 +348,25 @@ MISSING — dropped by the in-both/graze filtering in `restrict_curves_to_faces`
 whichever A-facet pair owns it. So the pendant-chain-bridge framing narrows to: the
 graze-drop rescue (`rescue_corner_crossing`) declines a REAL 2e-3 corner crossing at
 this rim (its strict-interior midpoint gate, or the fine-resample path, eats it).
-EIGHTEENTH PASS: instrument `restrict_curves_to_faces` for pairs (935 × each A-facet
-near y∈[-41.32,-41.31]) — log every raw curve and which filter drops it — then loosen
-exactly that gate for the measured signature. Also REVERTED this pass (no effect,
+EIGHTEENTH PASS (2026-08-03, ROOT FOUND — the deepest one yet): the (400×935) section
+arrives at `restrict_curves_to_faces` ALREADY truncated at B, because the [A..C] stretch
+RIDES face 400's boundary and the pair-level mutual-overlap clip legitimately ends
+there. The exit pave C DOES exist: edge 3093's pave block is split at C
+(`PB3093` probe: split edges 7702/7703 meet exactly at C). But
+`split_face_2d_impl` builds the OUTER boundary via `boundary_edges_to_pcurve(topo,
+face.outer_wire(), ..)` from the face's CURRENT topology wires — `edge_images` are
+expanded ONLY for INNER wires (the `expanded_inner_wires` block). So the boundary split
+at C never reaches 935's splitter, the face cannot partition at its own exit pave, and
+the neighbour wall's products (which DO use images 7702/7703 through C) mismatch 935's
+products along the whole edge. NINETEENTH PASS (mechanical, foil-gated): expand the
+OUTER wire with `edge_images` in `split_face_2d_impl`, mirroring the inner-wire
+expansion — blast radius is every split face's outer boundary, so run the full foil
+suite plus the honeycomb ceilings. REFUTED this pass: the pendant-chain bridge — a
+twin-aware pendant scan + mutually-nearest boundary-vertex bridge (band 3e-3,
+isolation 1e-2) fires at the ALREADY-HEALTHY z=4.5 corner (whose sliver is genuine
+structure) and breaks it (bridge edge use-3), while the z~9.9 target's true fix is the
+boundary-image expansion above, after which its C vertex exists and no bridge is
+needed. Do not re-attempt bridging; fix the boundary instead. Also REVERTED this pass (no effect,
 principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
 band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
 edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
