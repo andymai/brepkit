@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785817536051,
+  "lastUpdate": 1785818204268,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15659,6 +15659,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25117586,
             "range": "± 44127",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a76b845aaf8e58518c40867b30dd980d91ab2ec4",
+          "message": "docs(roadmap): kumiko fifteenth pass pins the under-split straddle drop (#1287)\n\nFifteenth-pass answer for the kumiko lattice band fuse:\n\n- Source face 935 split into only two sub-faces; the dropped one\n(classified Inside from a single probe point outside the hole's y-range)\nstraddles solid A's boundary.\n- The under-split traces to the FF section chain gapping by exactly the\n2.4e-3 disagreement between the FF junction and EF crossing anchors at\nthe z~9.9 rim; the splitter rejects the pendant chain and the straddling\nface is then dropped whole.\n- The sixteenth pass is one measurable decision (is the EF crossing real\ngeometry or the operand vertex's own incidence solved 2.36e-3 along the\nedge?), with the mechanical fix for each branch recorded.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the kumiko roadmap with the fifteenth-pass result: source face\n935 was under-split, which made a straddling sub-face get dropped by\nclassification. Documents the 2.4e-3 FF chain gap at the z≈9.9 rim and\nsets the sixteenth-pass decision to treat the EF crossing as noise\n(widen endpoint on-surface for line edges) or accept a small chain-end\ngap within operand noise.\n\n<sup>Written for commit 60df1dca6292e759fdd0e9067dcd7fde811a75c8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1287?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T21:33:59-07:00",
+          "tree_id": "c6178161d69b41c46f2357b9736be33bd9f2c66b",
+          "url": "https://github.com/andymai/brepkit/commit/a76b845aaf8e58518c40867b30dd980d91ab2ec4"
+        },
+        "date": 1785818202634,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 917860,
+            "range": "± 3807",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 998521,
+            "range": "± 2355",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12197,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 692954,
+            "range": "± 5180",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24240295,
+            "range": "± 68969",
             "unit": "ns/iter"
           }
         ]
