@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785870213561,
+  "lastUpdate": 1785874458924,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17387,6 +17387,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24222854,
             "range": "± 84131",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3e721c9b9142b213051d0fd64fc0366d644890ac",
+          "message": "docs(roadmap): sharpen the concave-fillet spec with a worked example (#1318)\n\nWorking the perpendicular-normal notch by hand shows the bisector\ncontacts and centre formula are provably correct for the concave case,\nso the defect is strictly downstream (section-arc span, blend-face\norientation, or keep-side mapping). Records the refined instrument plan.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSharpened the concave fillet roadmap spec with a worked\nperpendicular‑normal notch example. Confirms the bisector contacts and\ncenter formula are correct, and narrows the defect to downstream steps\n(section‑arc span, blend‑face orientation, trimmer keep‑side mapping)\nwith a short instrumentation plan to verify keep‑side and arc direction.\n\n<sup>Written for commit 77b81530c6a9edeee0ea1f877547895f24992b11.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1318?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T20:11:32Z",
+          "tree_id": "e37469b6cc30ca9946099897557b0e26762fc1cb",
+          "url": "https://github.com/andymai/brepkit/commit/3e721c9b9142b213051d0fd64fc0366d644890ac"
+        },
+        "date": 1785874457788,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1012218,
+            "range": "± 16889",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1066859,
+            "range": "± 6382",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13331,
+            "range": "± 182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 715144,
+            "range": "± 7149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26061568,
+            "range": "± 242743",
             "unit": "ns/iter"
           }
         ]
