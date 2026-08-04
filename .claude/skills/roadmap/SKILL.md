@@ -207,12 +207,24 @@ fit-error-vs-exact-gate class (43 → 35). Junction registry additionally: guard
 spacing ≥1.1e-2) plus boundary-VERTEX adoption in the snap (the partner-surface refine is
 degenerate when the boundary lies IN the partner surface). Foils: algo 208 green, ops green, io
 green with the honeycomb residual re-pin (pcut2 IMPROVED 38 → 28, pcut1 52 → 53, pcut3 held 0).
-REMAINING (eighth pass): the fixture aborts on an open 67-face growth shell with exactly TWO
-free edges at the z=34.8 coplanar top corner — clean coordinates
-(38.0,-42.75,34.8)/(38.05,-42.95,34.8)/(38.05,-42.7487,34.8), owners `Id(1436)<-365` and
-`Id(2309)<-364` each using one unmatched edge. This is a topological cover gap in the
-phase_ff_coplanar handling of that corner (a face not split / region not covered), NOT a weld
-problem. An `emit_riding_sections` variant (exact-vertex sub-spans for chain-riding coplanar
+REMAINING (eighth pass, localized 2026-08-03): the fixture aborts on an open 67-face growth
+shell with exactly TWO free edges at the z=34.8 coplanar top corner — clean coordinates,
+owners `Id(1436)<-365` (a DIAGONAL lattice edge (38.0,-42.75)→(38.05,-42.95), z=34.8) and
+`Id(2309)<-364` (the x=38.05 top-edge piece y∈[-42.95,-42.7487]). Probed with COP_PAIR/COP_SEC
+eprintlns in `process_coplanar_pair`: the z=34.8 coplanar pair is A-top `Id(364)` (outer wire =
+a 4-edge RECTANGLE whose corner is exactly the shared free-edge vertex (38.05,-42.95)) ×
+B-top `Id(852)` (16 outer edges, extends past x=38.05), and the pair emitted ZERO coplanar
+sections. The diagonal free edge is an INNER-WIRE segment of A-top (the lattice outline hole),
+and `face_boundary_polygon_2d` / `face_boundary_edges_2d` in `phase_ff_coplanar.rs` read ONLY
+`face.outer_wire()` — B's edges are clipped against A's outer rectangle with the holes
+invisible, `is_shared_boundary_edge` cannot see B edges riding A's inner wires, and the
+common-block pass never links inner-wire boundary pieces. Same one-wire blindness the junction
+snap had before its inner-wire fix (snap-clip campaign). FIX SHAPE: include inner wires in the
+polygon (point-in-polygon with even-odd over all loops), the edge list, and the shared-edge /
+common-block passes; then re-check whether A-top's split product still over-covers the hole
+triangle at the corner (the top product's wire takes the rectangle corner instead of the
+inner diagonal, which is what leaves both edges use-1).
+An `emit_riding_sections` variant (exact-vertex sub-spans for chain-riding coplanar
 candidates) was implemented and REVERTED: A/B showed zero effect on these 2 edges.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
