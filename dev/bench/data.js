@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785847686062,
+  "lastUpdate": 1785848346001,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16901,6 +16901,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24275560,
             "range": "± 65832",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "453a7be9cd63a2f1e238f9a6c598eb0cfe98eed1",
+          "message": "fix(blend): notch end caps with the fillet end cross-section arcs (#1309)\n\n## Summary\n\nCloses the end-cap notch residual of the v2 trimmer (third of the four\ndocumented):\n\n- Blend cross edges are now the true end cross-section arcs rather than\nstraight chords.\n- A notch pass replaces each end cap's two-edge corner path with the\nshared arc, removing the scooped-corner coverage the caps previously\nkept (a volumetric error that the free-edge counts never saw).\n- Assembly consults face replacements for untouched faces so notched\ncaps reach the result.\n\nThe regress test is updated to pin the notched shape (5-edge caps,\ncorner vertex gone) with the mesh-boundary pin held at <= 7; the\nremaining openings are the characterized keep-side residual.\n\n## Testing\n\n- `regress_blend_trim_neighbor_split` green at the tightened\nexpectations\n- blend, operations, io suites green; clippy -D warnings clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the fillet v2 end-cap notch by making blend cross edges true\ncircular end cross-section arcs and notching adjacent caps to share\nthose arcs. Removes the scooped-corner volume and tightens the boundary\nresiduals.\n\n- **Bug Fixes**\n- Cross edges are now circular arcs from the section center through the\ncontact points (not straight chords).\n- Added a notch pass that replaces each end cap’s two-edge corner with\nthe shared arc; the corner vertex is removed and both faces share one\nedge.\n- Updated `regress_blend_trim_neighbor_split` to expect 5-edge end caps\nand keep the boundary pin at <= 7.\n\n<sup>Written for commit 38de6ce0f26284444ed966851dc7310be6312358.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1309?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T12:56:35Z",
+          "tree_id": "730e59acb7f59934135c4dc22354773308cd9b3b",
+          "url": "https://github.com/andymai/brepkit/commit/453a7be9cd63a2f1e238f9a6c598eb0cfe98eed1"
+        },
+        "date": 1785848344851,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960119,
+            "range": "± 3109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046101,
+            "range": "± 10919",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13118,
+            "range": "± 218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 695513,
+            "range": "± 3702",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25722353,
+            "range": "± 58484",
             "unit": "ns/iter"
           }
         ]
