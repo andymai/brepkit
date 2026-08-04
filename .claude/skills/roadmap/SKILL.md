@@ -233,6 +233,25 @@ class as the tessellation "hole-less containers defeat inner_wires guards" lesso
 coplanar phase.
 An `emit_riding_sections` variant (exact-vertex sub-spans for chain-riding coplanar
 candidates) was implemented and REVERTED: A/B showed zero effect on these 2 edges.
+TENTH PASS (2026-08-03): the pinched-hole theory was ALSO wrong (A-top `Id(364)` has ZERO inner
+wires; its split {2309, 2472} is a correct partition along B's outline). The true root of the
+z=34.8 corner: `fill_face_info::fill_ef_in`'s crossing-angle gate (`IN_FACE_MAX_DEVIATION_RATIO`
+0.2) admitted a LONG shallow-crossing leaf — B's slope-bottom edge crossing the east wall
+`Id(365)` (x=38.05 plane) sits 0.05 OFF the plane but at only 2.7% of its 1.8 chord — so pbs
+3890/3891 landed in 365's `pave_blocks_in`, the wall's splitter consumed off-plane section
+endpoints, and its partition warped (faces `1436`/`2311` with top-plane vertices in wall wires;
+`Id(9142)` used 3x). Fix on parked branch `diag/kumiko-in-gate-abs` (e0f3f799): an absolute
+ceiling `IN_FACE_MAX_DEVIATION_ABS = 1e-2` on the ratio band. MEASURED: the z=34.8 corner
+closes fully (abort 67 -> 51 faces, zero free edges at z=34.8), BUT the fixture's free count
+regresses 2 -> 14: the z≈4.5/9.9 junction-copy pairs (the seventh pass's 1.7e-4/3.5e-4
+disagreements) RESURFACE once those IN blocks stop feeding the corner splits — the shipped
+2-edge state was partly stitched by the same off-plane blocks. Eleventh pass: keep the abs
+ceiling and re-attack the resurfaced junction copies (they are the SAME positions the seventh
+pass measured, so the guarded-adoption path is the place to look at why they no longer unify —
+likely a registration-order change now that fewer resolve calls happen), then re-run foils
+before judging the ceiling's value (1e-2 sits between the grazing class's fit-error scale and
+the 0.05 wall offset; the calibrated 2-18%/24-58% ratio classes are unaffected for chords
+under 5e-2).
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
 phase level all lied because the noise was born at EMISSION, not intersection.
