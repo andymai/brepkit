@@ -252,6 +252,20 @@ likely a registration-order change now that fewer resolve calls happen), then re
 before judging the ceiling's value (1e-2 sits between the grazing class's fit-error scale and
 the 0.05 wall offset; the calibrated 2-18%/24-58% ratio classes are unaffected for chords
 under 5e-2).
+ELEVENTH PASS (2026-08-03): registry-side theories for the 14 resurfaced edges are EXHAUSTED —
+with a 2e-3 near-miss probe in `JunctionRegistry::resolve` there are ZERO near-misses at the
+twin positions, and pre-seeding the registry with ALL operand boundary vertices (first-wins
+exact ground truth, tried on the parked branch) leaves the 14 free edges byte-identical. So
+the twin endpoints (e.g. (38.049699651,-42.747694041,4.513595527) vs its operand-exact
+partner 3.5e-4 away) NEVER pass through phase-FF endpoint resolution; they are minted by the
+pave machinery (VE/EE/EF vertices or make_blocks) or the builder's edge splitting. NEXT
+INSTRUMENT (the recipe that cracked the seventh pass): env-gated backtrace in `Vertex::new`
+on the literal coordinate 38.049699651 to get the minting call path in one run, then apply
+the adopt-exact-geometry principle at that site. Also note: seeding was REVERTED (null
+result), and the warped wall faces the ceiling removed were "accidentally load-bearing" at
+the z=4.5/9.9 corners — geometrically invalid (0.05 off-plane vertices in plane-face wires)
+but topologically stitching, which is why the shipped 2-edge state looked better than this
+parked 14-edge state while being structurally worse.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
 phase level all lied because the noise was born at EMISSION, not intersection.
