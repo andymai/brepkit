@@ -125,43 +125,7 @@ doc comment — read that, not this.**
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** (open since 2026-07-16) | operations | `mesh_boolean_fallback` warns its output is not a closed 2-manifold and uses it anyway; there is no further fallback, so rejecting means the op fails outright. A product call, not just a fix |
 | **Divider residual geometry** (3 cases, re-confirmed 2026-08-01 with the compound + shell fixes overlaid: 3 failed / 12 passed, 820 s) | algo/GFA | `mitsukude lattice on dividers` (**boundary 6** — was non-manifold 4 before the shell fix, so the signature MOVED), `kumiko dividers perforate the compartment walls`, `dividers + scoops keep the ramp footings solid` (boundary 4). The first two are the SAME 2x2x6 mitsukude bin with 2x1 compartments differing only in `dividers: true/false`, which argues against the divider carry-through being the cause; `__kernel-tests__/mitsukudeNmProbe.test.ts` isolates pattern vs compartments vs footprint |
 | **snapClip 0.6 mm-nozzle export chain** breaks at op-cut-3 (posBad=10, analytic but leaky) | algo/GFA | Root is marched FF sections on curved faces carrying `pave_block_id=None`, bypassing the pave machinery. Canonical altitude is pave-block attachment at phase-FF/make_blocks; every face-splitter-level attempt broke calibrated chains |
-| **v2 trimmer residuals** (3 remaining) | blend | CLOSED 2026-08-04: `create_blend_face` duplicate contact edges — the blend face now REUSES the trimmers' contact edges when endpoints match within weld (regress bnd 22 → 7, pin tightened to <= 7). Remaining: keep-side selection degenerate under tangency — NOW WITH A STABLE PRIMITIVE REPRO
-(`regress_blend_keepside_tangency.rs`, ignored: a 0.02-radius fillet on a 178.9° extruded
-ridge loses 12% of the solid, 242 → 212.4). MEASURED REFUTATION on record: an in-plane
-cross-contact side discriminant (keep the side of the contact line opposite the projected
-other-contact direction) flipped the CALIBRATED box case while leaving the 12% loss
-UNCHANGED — so the loss is at least partly in the trim geometry itself at shallow incidence,
-not only the side dot; separate the two sub-defects before re-attempting. `chamfer_v2` external tangent branch CLOSED
-2026-08-04: on a concave edge the bisector-projected contact direction flips onto the faces'
-extensions (0.02 chamfer grew a notched prism 6.7%); the chamfer's plane-plane path now uses
-the material-oriented direction (effective-normal × wire-traversal tangent), bisector as
-fallback. `regress_chamfer_obtuse_ridge.rs`. The FILLET
-plane-plane path DOES share a concave defect but milder and DIFFERENT (probed 2026-08-04,
-`regress_fillet_concave_notch.rs` ignored ready-repro: a 0.02 fillet on the reflex notch
-REMOVES 0.077 instead of adding the sliver). REFUTED (now THREE times, with the root
-identified): transplanting the chamfer's material-oriented contacts fails under every sign
-scheme tried — unconditional `n x t` (breaks convex fillet pins), Newell-winding-calibrated
-(breaks the concave CHAMFER pin), and an in-polygon containment probe (same). GROUND TRUTH
-DISCOVERED on the way: `make_box` and `extrude` produce OPPOSITELY-WOUND face wires relative
-to their outward normals (measured via a direction probe on the box fillet: the traversal
-left side is the bisector-OPPOSITE on box faces, bisector-ALIGNED on extrude prisms), so no
-fixed handedness works across constructors, and the shipped chamfer helper is calibrated to
-the extrude convention only — `convex_chamfer_volume_check.rs` now pins the convex chamfer
-volume so any future sign change is caught. The concave FILLET's 221.5 result is IDENTICAL
-under all three contact schemes, proving its defect is dominated by the cylinder-centre /
-section geometry (the reflex-angle derivation), not the contact directions. Fix path SHARPENED by a
-worked example (the notch with perpendicular wall normals): the bisector CONTACTS and the
-CENTRE formula are PROVABLY CORRECT there (centre r*sqrt(2) up the bisector, contacts r along
-the walls toward material — the bisector projection lands right for this concave case), so
-"supplementary half-angle" is NOT the defect. The concave failure is strictly DOWNSTREAM of
-the contact/centre computation: the section-arc span (must bow toward the vertex, the ball's
-notch-side arc), the blend-face surface orientation, or the trimmer keep-side mapping
-(worked example: n·(centre − p1) > 0 → Right; verify Right is the away-from-vertex chain for
-the trimmer's direction convention). Also note the shipped 0.077 removal vs the 10.5 removal
-under material contacts differ only in contact SIGN — meaning the shipped concave contacts
-land on the extensions and the trim barely does anything, while corrected contacts make the
-wrong downstream machinery bite harder. Instrument the section arc and kept chains on the
-notch repro first. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
+| **v2 trimmer residuals** (1 remaining) | blend | Remaining: keep-side/trim geometry degenerate under tangency (`regress_blend_keepside_tangency.rs`, ignored: a 0.02 fillet on a 178.9° extruded ridge loses 12%, 242 → 212.4; UNCHANGED by the 2026-08-04 concave fixes, and a measured refutation on record shows the loss is at least partly in the trim geometry at shallow incidence, not only the side dot — separate the two sub-defects before re-attempting). CLOSED 2026-08-04: duplicate contact edges (blend face reuses trimmer contacts, bnd 22 → 7), end-cap notch (caps share the true end cross-section arcs), `chamfer_v2` external tangent branch (material-oriented contact direction, `regress_chamfer_obtuse_ridge.rs`), and the CONCAVE FILLET (`regress_fillet_concave_notch.rs`, now un-ignored and green): two roots — the analytic plane-plane fillet placed its cross-section down the inward bisector because inward normals alone cannot distinguish convex from concave (fixed with a face-extent material witness that flips the bisector), and the trim keep-side keyed on which side of the PLANE the ball centre sits, which flips for concave edges though the in-plane keep side does not (fixed with `TrimKeep::AwayFrom(spine point)`, resolved INSIDE the trimmer because its Left/Right frame follows each face's wire traversal and is unknowable to callers — the same frame-fragility that produced three refuted external sign schemes; their record and the constructor-winding ground truth live in the fixture doc comments and `convex_chamfer_volume_check.rs`) |
 
 The remaining `#[ignore]` entries are diagnostics or slow perf runs, not open bugs: the
 `profile_intersect.rs` box-sphere probes are stale (box-sphere shipped analytic in #1006),

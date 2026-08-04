@@ -26,6 +26,21 @@ pub enum TrimSide {
     Right,
 }
 
+/// How to choose the kept side of the contact curve.
+///
+/// `Side` is interpreted against the trimmer's internal hit order, which
+/// follows the face's wire traversal; callers outside the trimmer cannot
+/// predict that frame, so `AwayFrom` names a 3D point (typically a spine
+/// point on the edge being blended) and the trimmer keeps the chain on the
+/// opposite side, resolved in its own frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrimKeep {
+    /// Keep an explicit side in the trimmer's own frame.
+    Side(TrimSide),
+    /// Keep the side of the contact curve away from this point.
+    AwayFrom(Point3),
+}
+
 /// Result of trimming a face along a contact curve.
 #[derive(Debug, Clone)]
 pub struct TrimResult {
@@ -77,7 +92,7 @@ pub fn trim_face(
     face_id: FaceId,
     contact_3d: &[Point3],
     contact_uv: &[(f64, f64)],
-    keep_side: TrimSide,
+    keep: TrimKeep,
 ) -> Result<TrimResult, BlendError> {
     let face = topo.face(face_id)?;
     if !face.surface().is_planar() {
@@ -262,6 +277,18 @@ pub fn trim_face(
     let to_sample = sample_pt - hit_a.point_3d;
     let cross = contact_dir.cross(to_sample);
     let chain1_is_left = face_normal.dot(cross) > 0.0;
+
+    let keep_side = match keep {
+        TrimKeep::Side(side) => side,
+        TrimKeep::AwayFrom(p) => {
+            let p_is_left = face_normal.dot(contact_dir.cross(p - hit_a.point_3d)) > 0.0;
+            if p_is_left {
+                TrimSide::Right
+            } else {
+                TrimSide::Left
+            }
+        }
+    };
 
     // chain1 runs va→…→vb, so the contact edge (va→vb) closes it REVERSED;
     // chain2 runs vb→…→va and closes with the contact edge forward.
@@ -530,7 +557,7 @@ pub fn trim_face_general(
     topo: &mut Topology,
     face_id: FaceId,
     contact_3d: &[Point3],
-    keep_side: TrimSide,
+    keep: TrimKeep,
 ) -> Result<TrimResult, BlendError> {
     if contact_3d.len() < 2 {
         return Err(BlendError::TrimmingFailure { face: face_id });
@@ -569,7 +596,7 @@ pub fn trim_face_general(
             })
             .collect();
 
-        return trim_face(topo, face_id, contact_3d, &contact_uv, keep_side);
+        return trim_face(topo, face_id, contact_3d, &contact_uv, keep);
     }
 
     // Non-planar path: project to UV space
@@ -688,6 +715,39 @@ pub fn trim_face_general(
     right_edges.push(OrientedEdge::new(ea_pre, true));
     right_edges.push(OrientedEdge::new(contact_eid, true));
 
+    let keep_side = match keep {
+        TrimKeep::Side(side) => side,
+        TrimKeep::AwayFrom(p) => {
+            let face_normal = match &surface {
+                FaceSurface::Plane { normal, .. } => {
+                    if reversed {
+                        -*normal
+                    } else {
+                        *normal
+                    }
+                }
+                _ => return Err(BlendError::TrimmingFailure { face: face_id }),
+            };
+            let contact_dir = hit_b.point_3d - hit_a.point_3d;
+            let left_sample = (idx_a..idx_b).rev().find_map(|i| {
+                let oe = oriented_edges[i];
+                let e = topo.edge(oe.edge()).ok()?;
+                let vid = if oe.is_forward() { e.end() } else { e.start() };
+                let q = topo.vertex(vid).ok()?.point();
+                let side = face_normal.dot(contact_dir.cross(q - hit_a.point_3d));
+                (side.abs() > 1e-12).then_some(side > 0.0)
+            });
+            let Some(left_chain_is_left) = left_sample else {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            };
+            let p_is_left = face_normal.dot(contact_dir.cross(p - hit_a.point_3d)) > 0.0;
+            if p_is_left == left_chain_is_left {
+                TrimSide::Right
+            } else {
+                TrimSide::Left
+            }
+        }
+    };
     let (keep_edges, _contact_forward) = match keep_side {
         TrimSide::Left => (left_edges, false),
         TrimSide::Right => (right_edges, true),
@@ -786,8 +846,14 @@ mod tests {
         let contact_3d = vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
         let contact_uv = vec![(0.5, 0.0), (0.5, 1.0)];
 
-        let result = trim_face(&mut topo, face_id, &contact_3d, &contact_uv, TrimSide::Left)
-            .expect("trim should succeed");
+        let result = trim_face(
+            &mut topo,
+            face_id,
+            &contact_3d,
+            &contact_uv,
+            TrimKeep::Side(TrimSide::Left),
+        )
+        .expect("trim should succeed");
 
         // The trimmed face should have a new wire.
         let trimmed_face = topo.face(result.trimmed_face).unwrap();
@@ -883,8 +949,14 @@ mod tests {
         // neighbor) and e2 (unshared).
         let contact_3d = vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
         let contact_uv = vec![(0.5, 0.0), (0.5, 1.0)];
-        let result = trim_face(&mut topo, face_id, &contact_3d, &contact_uv, TrimSide::Left)
-            .expect("trim should succeed");
+        let result = trim_face(
+            &mut topo,
+            face_id,
+            &contact_3d,
+            &contact_uv,
+            TrimKeep::Side(TrimSide::Left),
+        )
+        .expect("trim should succeed");
 
         // The neighbor must no longer reference the stale unsplit edge.
         let neighbor_wire = topo
@@ -972,7 +1044,13 @@ mod tests {
 
         let contact_3d = vec![Point3::new(0.5, -1.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
         let contact_uv = vec![(0.5, -1.0), (0.5, 1.0)];
-        let result = trim_face(&mut topo, face_id, &contact_3d, &contact_uv, TrimSide::Left);
+        let result = trim_face(
+            &mut topo,
+            face_id,
+            &contact_3d,
+            &contact_uv,
+            TrimKeep::Side(TrimSide::Left),
+        );
         assert!(
             matches!(result, Err(BlendError::TrimmingFailure { .. })),
             "two hits on one repeated edge must be rejected"
@@ -1006,8 +1084,14 @@ mod tests {
 
         let contact_3d = vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
         let contact_uv = vec![(0.5, 0.0), (0.5, 1.0)];
-        trim_face(&mut topo, face_id, &contact_3d, &contact_uv, TrimSide::Left)
-            .expect("trim should succeed");
+        trim_face(
+            &mut topo,
+            face_id,
+            &contact_3d,
+            &contact_uv,
+            TrimKeep::Side(TrimSide::Left),
+        )
+        .expect("trim should succeed");
 
         assert!(
             !topo.pcurves().contains(edges[0], neighbor),
@@ -1028,7 +1112,7 @@ mod tests {
             face_id,
             &contact_3d,
             &contact_uv,
-            TrimSide::Right,
+            TrimKeep::Side(TrimSide::Right),
         )
         .expect("trim should succeed");
 
@@ -1083,8 +1167,14 @@ mod tests {
         let contact_3d = vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
         let contact_uv = vec![(0.5, 0.0), (0.5, 1.0)];
 
-        let result = trim_face(&mut topo, face_id, &contact_3d, &contact_uv, TrimSide::Left)
-            .expect("should return untrimmed result");
+        let result = trim_face(
+            &mut topo,
+            face_id,
+            &contact_3d,
+            &contact_uv,
+            TrimKeep::Side(TrimSide::Left),
+        )
+        .expect("should return untrimmed result");
 
         // Untrimmed: same face, no new topology.
         assert_eq!(result.trimmed_face, face_id);
