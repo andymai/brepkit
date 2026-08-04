@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.26](https://github.com/andymai/brepkit/compare/v2.128.25...v2.128.26) (2026-08-04)
+
+
+### Bug Fixes
+
+* **blend:** material-oriented chamfer contacts on concave edges ([#1312](https://github.com/andymai/brepkit/issues/1312)) ([4996331](https://github.com/andymai/brepkit/commit/499633177f707feec95bc0b4fd8aba1409a1238e))
+
 ## [2.128.25](https://github.com/andymai/brepkit/compare/v2.128.24...v2.128.25) (2026-08-04)
 
 
