@@ -644,9 +644,19 @@ corners ARE its vertices, which is why it is a valid conclusion here).
 
 ## Live campaign: kumiko / goma
 
-**State:** branch `fix/kumiko-corner-window-cut` closes four real engine defects with fixtures
-(`crates/io/tests/kumiko_corner_window_inmem.rs`, 5 tests) but is **PARKED and must not ship** —
-it regresses goma from 8 to 65 exported boundary edges and 540 s to 817 s.
+**STATE 2026-08-04: the lattice-band arm of this campaign is CLOSED on main** (#1302 —
+`kumiko_lattice_bands_fuse_closed` un-ignored; see the Closed section for the mechanism). The
+old parked branch `fix/kumiko-corner-window-cut` is GONE from the remote (its 5
+`kumiko_corner_window_inmem.rs` fixtures and their data went with it); its four documented
+roots remain unshipped, and re-attempting them means re-capturing fixtures first. The
+thickwall ready-repro still aborts identically on the new machinery (`open hole shell with 9
+faces`, pre-shell-fix operands — re-capture before drawing conclusions). REMAINING
+VERIFICATION for the divider/mitsukude scenario family is TOOL-SIDE: rebuild the kernel into
+the layout tool and run the scenario matrix (recipes below); the native suites cannot see it.
+
+**Historical state (pre-closure):** branch `fix/kumiko-corner-window-cut` closed four real
+engine defects with fixtures but was **PARKED** — it regressed goma from 8 to 65 exported
+boundary edges and 540 s to 817 s.
 
 Measured A/B, same day, same tool commit, each overlay md5-verified through brepjs's own resolution:
 
