@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785826086023,
+  "lastUpdate": 1785826244596,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16091,6 +16091,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22855425,
             "range": "± 108918",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "434adcd9fe964e4e92f813ec969d9e20a819f8ed",
+          "message": "test(algo): probes and findings for the lattice open growth shell (#1245)",
+          "timestamp": "2026-08-03T23:47:33-07:00",
+          "tree_id": "46a6e0d2cc9dffe12833433c0203888fc518e0d5",
+          "url": "https://github.com/andymai/brepkit/commit/434adcd9fe964e4e92f813ec969d9e20a819f8ed"
+        },
+        "date": 1785826243091,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 979053,
+            "range": "± 10186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1035136,
+            "range": "± 1208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13229,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 693538,
+            "range": "± 1932",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25076257,
+            "range": "± 32996",
             "unit": "ns/iter"
           }
         ]
