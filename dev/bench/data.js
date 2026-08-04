@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785816795209,
+  "lastUpdate": 1785817381233,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15551,6 +15551,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24259685,
             "range": "± 96448",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d4d7f62db7fda0205c97c756ba81bc7624f07833",
+          "message": "chore(main): release 2.128.20 (#1285)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.20](https://github.com/andymai/brepkit/compare/v2.128.19...v2.128.20)\n(2026-08-04)\n\n\n### Bug Fixes\n\n* **algo:** unify cross-solver junction anchors in the kumiko lattice\nfuse ([#1284](https://github.com/andymai/brepkit/issues/1284))\n([0a7837e](https://github.com/andymai/brepkit/commit/0a7837ecf8b7ab73f046df5aa7fe3a38fa53679a))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.20 of `brepkit-wasm` with a fix to unify cross-solver\njunction anchors in the kumiko lattice fuse. This ensures consistent\njunction geometry across solvers.\n\n- **Bug Fixes**\n- Standardized anchor computation across solvers in the kumiko lattice\nfuse to prevent misaligned junctions.\n\n<sup>Written for commit f299b76bdb769b528417f7d1fbb92a8547ad3d7e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1285?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-04T04:20:36Z",
+          "tree_id": "9ca51e934f60be72cf50437af7afe67b2d680cd6",
+          "url": "https://github.com/andymai/brepkit/commit/d4d7f62db7fda0205c97c756ba81bc7624f07833"
+        },
+        "date": 1785817380225,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 838323,
+            "range": "± 7222",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 903106,
+            "range": "± 11371",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10832,
+            "range": "± 328",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 621557,
+            "range": "± 6748",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22087396,
+            "range": "± 182653",
             "unit": "ns/iter"
           }
         ]
