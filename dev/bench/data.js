@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785841342126,
+  "lastUpdate": 1785843478102,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16631,6 +16631,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24392315,
             "range": "± 76804",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e4fa79f9a2977604aba91536a4769103f490600d",
+          "message": "docs(roadmap): mark the kumiko lattice arm closed and the parked branch gone (#1304)\n\nPost-closure tidy: the live-campaign section now records the #1302\nclosure, the disappearance of the old parked corner-window branch\n(fixtures would need re-capture), the unchanged thickwall ready-repro,\nand that the remaining divider-family verification is tool-side.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to mark the kumiko lattice-band arm CLOSED on `main`\nper #1302 and tidy the live-campaign notes. Also record that\n`fix/kumiko-corner-window-cut` was removed and that remaining\ndivider-family verification is tool-side.\n\n- **Migration**\n- Re-capture fixtures before re-attempting the four corner-window\ndefects.\n- Rebuild the kernel into the layout tool and run the divider/mitsukude\nscenario matrix.\n\n<sup>Written for commit 043f6ac4a662aeee8330e30afbbfc5ab1be75975.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1304?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T11:35:19Z",
+          "tree_id": "27e2087c3131dce5b34ae0e33da519a943b024fa",
+          "url": "https://github.com/andymai/brepkit/commit/e4fa79f9a2977604aba91536a4769103f490600d"
+        },
+        "date": 1785843476252,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 958619,
+            "range": "± 8316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046334,
+            "range": "± 60937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13079,
+            "range": "± 264",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 692428,
+            "range": "± 946",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25524948,
+            "range": "± 121520",
             "unit": "ns/iter"
           }
         ]
