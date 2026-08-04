@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785824570016,
+  "lastUpdate": 1785825351302,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15983,6 +15983,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24018860,
             "range": "± 40013",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1c0d0207aa0039b479205f50bbee5b2e1d48335",
+          "message": "docs(roadmap): kumiko twenty-first pass maps the chain's dangling north end (#1293)\n\nTwenty-first-pass measurement for the kumiko lattice band fuse:\n\n- The bridged chain's north anchor is a mid-face section junction, not a\nridge point; the x=38.05 line is interior to face 935.\n- The separating chain is boundary-anchored only at its south end (C,\nvia the bridge); its north continuation runs through the campaign's\noriginal z=9.635 corner and never reaches the boundary, so the\narrangement cannot separate the strip region.\n- Twenty-second-pass plan recorded: dump 935's full section adjacency\nand treat each boundary-reach failure with the same gated bridge /\nexit-pave machinery.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the kumiko roadmap with the 21st-pass measurement: the north\nanchor is mid-face, not on 935’s ridge, so the chain only anchors at C\nand cannot separate the strip. Add the 22nd-pass plan (dump 935\nadjacency and treat gaps with gated bridge/exit-pave) and note the\nrevert of the degenerate-refine rescue in\n`snap_to_boundary_junction_band`.\n\n<sup>Written for commit 60343a34fe4d188271f671d87debb23aa0f3a4e3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1293?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T23:33:13-07:00",
+          "tree_id": "a695dfb4b31a1b0873bc0cb63994e21f24a01aa5",
+          "url": "https://github.com/andymai/brepkit/commit/a1c0d0207aa0039b479205f50bbee5b2e1d48335"
+        },
+        "date": 1785825349730,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 909952,
+            "range": "± 2647",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 991023,
+            "range": "± 1390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11976,
+            "range": "± 81",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 691848,
+            "range": "± 816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23990329,
+            "range": "± 68789",
             "unit": "ns/iter"
           }
         ]
