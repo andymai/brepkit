@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785801267072,
+  "lastUpdate": 1785802104504,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15065,6 +15065,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23120593,
             "range": "± 227060",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16801ca4ac3fe8405c68e1244ae698865062c1b0",
+          "message": "docs(roadmap): kumiko sixth pass — growth shell closes on parked branch (#1276)\n\nRecords the junction-registry milestone on `diag/kumiko-junction-snap`\n(85fd8023): cross-pair unification of lattice-corner endpoints closes\nthe growth shell for the first time (ops foils green); the abort becomes\nan open 50-face hole shell at the z 9.9 crossing whose copies still\ndisagree by 7.7e-4 — pointing at trim arms the registry does not yet\ncover rather than a band shortfall (real facet scale is 2e-3, so\nband-widening would conflate true corners). Roadmap-only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the Kumiko roadmap to record the sixth pass: a cross‑pair\nJunctionRegistry on `diag/kumiko-junction-snap` unifies lattice‑corner\nendpoints, closing the growth shell. Documents the remaining open\n50‑face hole at the z 9.9 crossing (7.7e‑4 mismatch likely from\nuncovered trim arms), notes that the abort now uses `BK_OPEN_SHELL`, and\nflags a `compoundCut` array‑capture gap.\n\n<sup>Written for commit 4562b5de15a16023132c8bd63756d13ce1564e3e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1276?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T17:05:56-07:00",
+          "tree_id": "50ba434943b7f849bf997fcf6edf69c4e2c2fc78",
+          "url": "https://github.com/andymai/brepkit/commit/16801ca4ac3fe8405c68e1244ae698865062c1b0"
+        },
+        "date": 1785802103150,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 902458,
+            "range": "± 1002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 955039,
+            "range": "± 59196",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13005,
+            "range": "± 115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675873,
+            "range": "± 1300",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23070785,
+            "range": "± 43404",
             "unit": "ns/iter"
           }
         ]
