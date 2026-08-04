@@ -192,16 +192,31 @@ micro-section (a REAL lattice end-facet feature, 20000×tol, not noise) was graz
 sampled in-both filter, the arrangement then rejects the pendant chain, and the face under-splits.
 SHIPPED prerequisite: F1's plane×plane Line filter now uses the exact polygon clip instead of
 16-sample aliasing (the fix the old comment said "needs a test against true face extents" — the
-AABB version regressed A1 to bnd=158; the polygon version keeps every foil green). REMAINING (sixth pass, 2026-08-03 — GROWTH SHELL CLOSES on the parked branch; abort now an
-open 50-face HOLE shell): branch `diag/kumiko-junction-snap` (85fd8023) adds a cross-pair
-JunctionRegistry (1e-4 cells, neighbor lookup, first-refiner-wins) so every pair's copy of a
-lattice-corner endpoint adopts one exact triple-junction point — pairwise refinement alone put
-copies ~1e-5 apart and minted micro-sliver free edges. MEASURED: growth shell closes for the
-first time; ops foils green (798). Remaining: the z 9.9 crossing still disagrees by 7.7e-4 —
-likely endpoints routed through trim arms the registry does not cover (Range×Indeterminate,
-the sample-clip path), so extend registry coverage there rather than widening the band (real
-facet scale is 2e-3; a 1e-3 band conflates true corners). The open-hole abort path now runs
-the same BK_OPEN_SHELL instrument as the growth side (also on the branch).
+AABB version regressed A1 to bnd=158; the polygon version keeps every foil green).
+SEVENTH PASS (2026-08-03, shipped from `diag/kumiko-junction-snap`): free edges 43 → **2**. The
+"7.7e-4 trim-arm disagreement" framing was WRONG — the twin free-edge chains were minted by the
+PLANE-ARRANGEMENT EMISSION, which reconstructed every sub-face vertex as
+`frame.evaluate(frame.project(p))`, PROJECTING operand facet-chain vertices (which sit up to
+~2e-5 OFF their face's stored plane) onto the plane while the unsplit neighbour faces kept the
+original positions. Three fixes shipped together, each measured: (1) arrangement emission carries
+each registered input endpoint's EXACT 3D through `exact3d` (35 → 2); (2) crossings snap-round
+onto registered vertices, endpoints pre-registered first-wins (supports 1); (3)
+`weld_coincident_vertices` snap widened 10·MERGE_TOL → 100·MERGE_TOL, the recurring
+fit-error-vs-exact-gate class (43 → 35). Junction registry additionally: guarded wide adoption
+(≤1e-3 AND 10x closer than the next junction — the measured bimodal gap: copies ≤7.9e-4, genuine
+spacing ≥1.1e-2) plus boundary-VERTEX adoption in the snap (the partner-surface refine is
+degenerate when the boundary lies IN the partner surface). Foils: algo 208 green, ops green, io
+green with the honeycomb residual re-pin (pcut2 IMPROVED 38 → 28, pcut1 52 → 53, pcut3 held 0).
+REMAINING (eighth pass): the fixture aborts on an open 67-face growth shell with exactly TWO
+free edges at the z=34.8 coplanar top corner — clean coordinates
+(38.0,-42.75,34.8)/(38.05,-42.95,34.8)/(38.05,-42.7487,34.8), owners `Id(1436)<-365` and
+`Id(2309)<-364` each using one unmatched edge. This is a topological cover gap in the
+phase_ff_coplanar handling of that corner (a face not split / region not covered), NOT a weld
+problem. An `emit_riding_sections` variant (exact-vertex sub-spans for chain-riding coplanar
+candidates) was implemented and REVERTED: A/B showed zero effect on these 2 edges.
+Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
+stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
+phase level all lied because the noise was born at EMISSION, not intersection.
 CAPTURE GAP worth fixing once: `compoundCut(base, tools[])` passes its tools as an ARRAY, so a
 number-only argument filter captures the base and silently drops every tool — the op then cannot be
 replayed at all. Flatten arrays and typed arrays in any boolean-capture hook.

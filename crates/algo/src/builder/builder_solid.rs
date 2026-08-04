@@ -1754,7 +1754,7 @@ fn weld_coincident_vertices(topo: &mut Topology, face_ids: &mut [FaceId]) -> Res
     use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
     use brepkit_topology::vertex::VertexId;
 
-    let snap = MERGE_TOL * 10.0;
+    let snap = MERGE_TOL * 100.0;
 
     // Collect distinct vertices (id + position) referenced by the faces.
     let mut seen: HashSet<VertexId> = HashSet::new();

@@ -67,6 +67,7 @@ struct JunctionRegistry {
 
 impl JunctionRegistry {
     const CELL: f64 = 1e-4;
+    const ADOPT_MAX: f64 = 1e-3;
 
     fn key(p: Point3) -> (i64, i64, i64) {
         #[allow(clippy::cast_possible_truncation)]
@@ -104,6 +105,20 @@ impl JunctionRegistry {
         if let Some(j) = self.lookup(p, band) {
             return j;
         }
+        // A cross-pair copy of an already-registered junction can sit up to
+        // ~8e-4 away when the two pairs refined against boundary features
+        // that themselves disagree at facet scale, which is outside the weld
+        // band above. Adopt the existing junction only when it is
+        // UNAMBIGUOUS: within the adoption ceiling and at least 10x closer
+        // than the next-nearest junction (measured genuine junction spacing
+        // is >= 1.1e-2, copies <= 7.9e-4 — a bimodal gap this guard encodes
+        // rather than assumes).
+        if let Some((d1, j1, d2)) = self.nearest_two(p)
+            && d1 <= Self::ADOPT_MAX
+            && d2 >= d1 * 10.0
+        {
+            return j1;
+        }
         match snap_to_boundary_junction_band(topo, fa, fb, p, tol, band) {
             Some(j) => {
                 self.cells.insert(Self::key(j), j);
@@ -111,6 +126,23 @@ impl JunctionRegistry {
             }
             None => p,
         }
+    }
+
+    fn nearest_two(&self, p: Point3) -> Option<(f64, Point3, f64)> {
+        let mut best: Option<(f64, Point3)> = None;
+        let mut second = f64::INFINITY;
+        for &j in self.cells.values() {
+            let d = (j - p).length();
+            match best {
+                Some((bd, _)) if d < bd => {
+                    second = bd;
+                    best = Some((d, j));
+                }
+                Some(_) => second = second.min(d),
+                None => best = Some((d, j)),
+            }
+        }
+        best.map(|(d, j)| (d, j, second))
     }
 }
 
@@ -213,19 +245,6 @@ pub fn perform(
             let v_range_b = v_ranges_b[idx_b];
             let raw_curves =
                 compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?;
-            if traced {
-                log::debug!(
-                    "FF_TRACE pair a={} b={} raw_curves={} ax[{:.3},{:.3}] bx[{:.3},{:.3}]",
-                    surf_a.type_tag(),
-                    surf_b.type_tag(),
-                    raw_curves.len(),
-                    bbox_a.min.x(),
-                    bbox_a.max.x(),
-                    bbox_b.min.x(),
-                    bbox_b.max.x()
-                );
-            }
-
             // For plane-plane Line curves with all-straight-edge faces, trim
             // each curve to the mutual overlap of the two faces' clipped
             // ranges. Without this the section curve spans the union of both
@@ -532,7 +551,16 @@ pub fn perform(
             // partner face's wire. Keep only the in-both span (curves only).
             let before_restrict = raw_curves.len();
             let raw_curves = restrict_curves_to_faces(
-                topo, fa, fb, surf_a, surf_b, v_range_a, v_range_b, raw_curves, tol,
+                topo,
+                fa,
+                fb,
+                surf_a,
+                surf_b,
+                v_range_a,
+                v_range_b,
+                raw_curves,
+                tol,
+                &mut junction_registry,
             );
             if traced {
                 log::debug!(
@@ -1146,6 +1174,7 @@ fn restrict_curves_to_faces(
     v_range_b: Option<(f64, f64)>,
     raw_curves: Vec<RawCurve>,
     tol: Tolerance,
+    junctions: &mut JunctionRegistry,
 ) -> Vec<RawCurve> {
     let (Some(ext_a), Some(ext_b)) = (
         FaceExtent::new(topo, fa, surf_a, v_range_a, tol),
@@ -1244,7 +1273,7 @@ fn restrict_curves_to_faces(
             let n_fine = ((8.0 * approx_len / min_dim).ceil() as usize).clamp(N, 1024);
             if n_fine <= N {
                 out.extend(rescue_corner_crossing(
-                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb, tol,
+                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb, tol, junctions,
                 ));
                 continue;
             }
@@ -1263,13 +1292,13 @@ fn restrict_curves_to_faces(
             let (f0, f1) = longest_inboth_run(&inb_fine, closed);
             if f1 - f0 < 2 {
                 out.extend(rescue_corner_crossing(
-                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, tol,
+                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, tol, junctions,
                 ));
                 continue;
             }
             if closed && f1 - f0 < n_fine && !matches!(raw.curve, EdgeCurve::Circle(_)) {
                 emit_closed_curve_windows(
-                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, n_fine, tol, &mut out,
+                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, n_fine, tol, junctions, &mut out,
                 );
                 continue;
             }
@@ -1298,7 +1327,9 @@ fn restrict_curves_to_faces(
             // Non-wrapping windows get bisected in/out transitions and
             // boundary-junction snapping — sample-index endpoints sit ~0.03
             // off the junction and never weld.
-            emit_closed_curve_windows(topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, tol, &mut out);
+            emit_closed_curve_windows(
+                topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, tol, junctions, &mut out,
+            );
             continue;
         }
         out.push(raw);
@@ -1563,6 +1594,7 @@ fn rescue_corner_crossing(
     ext_b: &FaceExtent,
     inb: &[bool],
     tol: Tolerance,
+    junctions: &mut JunctionRegistry,
 ) -> Option<RawCurve> {
     // Open curves only: a closed near-tangent loop keeps the historical drop
     // (the seam-adoption / internal-loop paths own closed sections).
@@ -1632,9 +1664,8 @@ fn rescue_corner_crossing(
     // surfaces), while the boundary splitters gate candidates at the exact
     // 1e-7 tolerance — the recurring fit-error-vs-exact-gate class. Adopting
     // the boundary FOOT gives both faces the identical on-boundary junction.
-    let snap = |p: Point3| snap_to_boundary_junction(topo, fa, fb, p, tol);
-    let p_start = snap(point_at(t_lo));
-    let p_end = snap(point_at(t_hi));
+    let p_start = junctions.resolve(topo, fa, fb, point_at(t_lo), tol);
+    let p_end = junctions.resolve(topo, fa, fb, point_at(t_hi), tol);
     Some(RawCurve {
         curve: raw.curve.clone(),
         bbox: raw.bbox,
@@ -1662,6 +1693,7 @@ fn emit_closed_curve_windows(
     inb: &[bool],
     n: usize,
     tol: Tolerance,
+    junctions: &mut JunctionRegistry,
     out: &mut Vec<RawCurve>,
 ) {
     let span = raw.t_range.1 - raw.t_range.0;
@@ -1745,8 +1777,8 @@ fn emit_closed_curve_windows(
         if t_hi <= t_lo {
             continue;
         }
-        let p_start = snap_to_boundary_junction(topo, fa, fb, point_at(t_lo), tol);
-        let p_end = snap_to_boundary_junction(topo, fa, fb, point_at(t_hi), tol);
+        let p_start = junctions.resolve(topo, fa, fb, point_at(t_lo), tol);
+        let p_end = junctions.resolve(topo, fa, fb, point_at(t_hi), tol);
         out.push(RawCurve {
             curve: raw.curve.clone(),
             bbox: raw.bbox,
@@ -1758,21 +1790,9 @@ fn emit_closed_curve_windows(
 }
 
 /// Snap a fitted section endpoint onto the nearest boundary curve of either
-/// face (outer or inner wires) within the weld band, then refine along that
-/// boundary to its exact crossing with the PARTNER face's surface — the
-/// triple junction every section ending here must share. Returns the input
-/// point unchanged when no boundary is within the weld band.
-fn snap_to_boundary_junction(
-    topo: &Topology,
-    fa: FaceId,
-    fb: FaceId,
-    p: Point3,
-    tol: Tolerance,
-) -> Point3 {
-    snap_to_boundary_junction_band(topo, fa, fb, p, tol, tol.linear * 100.0).unwrap_or(p)
-}
-
-/// [`snap_to_boundary_junction`] with an explicit trigger band. The refine
+/// face (outer or inner wires) within the trigger band, then refine along
+/// that boundary to its exact crossing with the PARTNER face's surface — the
+/// triple junction every section ending here must share. The refine
 /// step is exact regardless of the trigger, so a wider band only extends
 /// WHICH endpoints get pulled to their true triple junction; the kumiko
 /// lattice chain ends carry up to ~2e-5 of accumulated trim rounding and sit
@@ -1844,6 +1864,26 @@ fn snap_to_boundary_junction_band(
         }
     }
     let (_, foot, tm, owner_fid, eid) = best?;
+    // A foot landing weld-close to the boundary edge's own endpoint means
+    // the junction IS that existing vertex — adopt it exactly. The
+    // partner-surface refinement below is degenerate when the boundary
+    // curve lies IN the partner surface (coincident faces): the distance
+    // objective is flat, the ternary search converges on noise, and every
+    // pair mints a different copy of the same corner. The operand vertex is
+    // the one position all pairs share.
+    if let Ok(e) = topo.edge(eid)
+        && let (Ok(sv), Ok(ev)) = (topo.vertex(e.start()), topo.vertex(e.end()))
+    {
+        let (sp, ep) = (sv.point(), ev.point());
+        let (dmin, vp) = if (sp - foot).length() <= (ep - foot).length() {
+            ((sp - foot).length(), sp)
+        } else {
+            ((ep - foot).length(), ep)
+        };
+        if dmin <= weld {
+            return Some(vp);
+        }
+    }
     // The foot lies ON the boundary curve but is displaced along it by the
     // section's fit error. The true junction is where that boundary curve
     // meets the PARTNER face's surface — refine to it so every section
@@ -5294,9 +5334,22 @@ mod tests {
             "probe point (5,0.2) must be strictly inside the square"
         );
         let mut out = Vec::new();
+        let mut junctions = JunctionRegistry::default();
         // Both extents the same square: the second face in a real pair only
         // narrows the window further, which this test doesn't need.
-        emit_closed_curve_windows(&topo, face, face, &raw, &ext, &ext, &inb, N, tol, &mut out);
+        emit_closed_curve_windows(
+            &topo,
+            face,
+            face,
+            &raw,
+            &ext,
+            &ext,
+            &inb,
+            N,
+            tol,
+            &mut junctions,
+            &mut out,
+        );
         assert_eq!(out.len(), 1, "one crossing window expected");
         let w = &out[0];
         assert!(

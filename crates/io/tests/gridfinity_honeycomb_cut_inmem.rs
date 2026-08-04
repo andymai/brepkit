@@ -219,9 +219,16 @@ fn honeycomb_cut_residual_documented() {
     // in this file (`wallcut_step_is_watertight`,
     // `honeycomb_cut_no_longer_throws`,
     // `honeycomb_cut_pcut0_is_watertight_and_analytic`) are unchanged.
+    //
+    // Re-pinned with the plane-arrangement exact-3D emission (kumiko lattice
+    // bands): sub-face vertices now keep their operands' off-plane positions
+    // instead of being projected onto the stored plane, and the builder weld
+    // widened to the weld scale. pcut2 IMPROVED 38 -> 28; pcut1 nudged
+    // 52 -> 53 (one boundary stitch previously leaned on a projected copy);
+    // pcut3 (0) and every production-level test in this file held.
     let residual_free: &[(&str, usize)] = &[
-        ("a2hcomb_pcut1.bin", 52),
-        ("a2hcomb_pcut2.bin", 38),
+        ("a2hcomb_pcut1.bin", 53),
+        ("a2hcomb_pcut2.bin", 28),
         ("a2hcomb_pcut3.bin", 0),
     ];
     for &(tool, expect_free) in residual_free {

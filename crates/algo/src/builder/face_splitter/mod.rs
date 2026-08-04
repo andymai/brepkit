@@ -2138,14 +2138,64 @@ fn arrangement_regions_from_inputs(
     // any other chord's endpoint that lands on its interior. Collect the
     // resulting break parameters, then emit sub-segments between consecutive
     // breaks.
+    //
+    // A computed break must UNIFY with the vertex set, not merely quantize: a
+    // proper crossing is re-derived independently from each input's chord
+    // fraction, and for nearly-parallel inputs (adjacent facet chains) the
+    // two derivations scatter by crossing-noise/sin(angle) — far above the
+    // quantization cell — leaving two degree-2 vertices where one degree-4
+    // vertex belongs. Worse, a break landing near an input ENDPOINT splits
+    // the chord at the scattered point while the neighbouring face keeps the
+    // exact operand vertex, minting a near-copy boundary edge that never
+    // welds. So: input endpoints register FIRST (ground truth), and every
+    // later point within the snap band adopts the earliest registered vertex
+    // via a coarse hash (first-wins).
+    let snap_band = tol * 1000.0;
+    let ckey = |p: Point2| -> (i64, i64) {
+        (
+            (p.x() / snap_band).round() as i64,
+            (p.y() / snap_band).round() as i64,
+        )
+    };
     let mut vert_pos: std::collections::HashMap<(i64, i64), Point2> =
         std::collections::HashMap::new();
-    let register =
+    let mut coarse: std::collections::HashMap<(i64, i64), Point2> =
+        std::collections::HashMap::new();
+    let mut register =
         |p: Point2, map: &mut std::collections::HashMap<(i64, i64), Point2>| -> (i64, i64) {
+            let (cx, cy) = ckey(p);
+            let mut adopted: Option<(f64, Point2)> = None;
+            for dx in -1..=1_i64 {
+                for dy in -1..=1_i64 {
+                    if let Some(&q) = coarse.get(&(cx + dx, cy + dy)) {
+                        let d = (q - p).length();
+                        if d <= snap_band && adopted.is_none_or(|(bd, _)| d < bd) {
+                            adopted = Some((d, q));
+                        }
+                    }
+                }
+            }
+            let p = adopted.map_or(p, |(_, q)| q);
             let k = qkey(p);
             map.entry(k).or_insert(p);
+            coarse.entry(ckey(p)).or_insert(p);
             k
         };
+    // Exact 3D per registered input-endpoint vertex. The generic emission
+    // reconstructs 3D as frame.evaluate(uv), which PROJECTS the point onto
+    // the stored plane — but an operand's facet-chain vertex can sit ~1e-5
+    // OFF that plane, and collapsing it moves the sub-face boundary off the
+    // neighbouring faces' copy of the same vertex, minting a twin edge that
+    // never welds. Boundary inputs register first, so their exact positions
+    // win over section endpoints at the same vertex.
+    let mut exact3d: std::collections::HashMap<(i64, i64), Point3> =
+        std::collections::HashMap::new();
+    for inp in &inputs {
+        let ka = register(inp.a, &mut vert_pos);
+        exact3d.entry(ka).or_insert(inp.edge.start_3d);
+        let kb = register(inp.b, &mut vert_pos);
+        exact3d.entry(kb).or_insert(inp.edge.end_3d);
+    }
 
     // True when a UV point lies on input `idx`'s actual arc geometry (within
     // `tol`). A break parameter is computed against an arc's straight CHORD, so
@@ -2642,8 +2692,14 @@ fn arrangement_regions_from_inputs(
                 // `evaluate_with_endpoints`/`domain_with_endpoints`). Vertices
                 // came from exact true-crossing/T registration, so the 3D from
                 // the frame matches the neighbouring pieces.
-                let s3 = frame.evaluate(su.x(), su.y());
-                let e3 = frame.evaluate(eu.x(), eu.y());
+                let s3 = exact3d
+                    .get(&from)
+                    .copied()
+                    .unwrap_or_else(|| frame.evaluate(su.x(), su.y()));
+                let e3 = exact3d
+                    .get(&to)
+                    .copied()
+                    .unwrap_or_else(|| frame.evaluate(eu.x(), eu.y()));
                 let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
                     &inp.edge.curve_3d,
                     s3,
@@ -2722,8 +2778,14 @@ fn arrangement_regions_from_inputs(
             pcurve,
             start_uv: su,
             end_uv: eu,
-            start_3d: frame.evaluate(su.x(), su.y()),
-            end_3d: frame.evaluate(eu.x(), eu.y()),
+            start_3d: exact3d
+                .get(&from)
+                .copied()
+                .unwrap_or_else(|| frame.evaluate(su.x(), su.y())),
+            end_3d: exact3d
+                .get(&to)
+                .copied()
+                .unwrap_or_else(|| frame.evaluate(eu.x(), eu.y())),
             forward: true,
             source_edge_idx: Some(seg_id),
             pave_block_id: None,
