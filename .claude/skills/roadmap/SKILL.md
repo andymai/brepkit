@@ -366,7 +366,23 @@ twin-aware pendant scan + mutually-nearest boundary-vertex bridge (band 3e-3,
 isolation 1e-2) fires at the ALREADY-HEALTHY z=4.5 corner (whose sliver is genuine
 structure) and breaks it (bridge edge use-3), while the z~9.9 target's true fix is the
 boundary-image expansion above, after which its C vertex exists and no bridge is
-needed. Do not re-attempt bridging; fix the boundary instead. Also REVERTED this pass (no effect,
+needed. Do not re-attempt bridging; fix the boundary instead.
+NINETEENTH PASS (2026-08-03, parked on `fix/outer-wire-images` @ 6eb334e6): BOTH pieces
+implemented and measured. (1) `boundary_edges_to_pcurve_with_images` expands the OUTER
+wire with pave-split edge images (Line edges, mirroring `rebuild_face_with_edge_images`)
+— face 935 now sees its exit vertex C on the boundary. (2) The pendant bridge RETURNS,
+correctly gated this time: twin-aware pendant test, own-other-endpoint exclusion,
+mutually-nearest boundary vertex within 3e-3, isolation >= 1e-2, dedupe, AND a new
+section-free-target gate (a target vertex any section already reaches is part of the
+section network — bridging onto it over-connected the healthy z=4.5 corner to use-3;
+exit paves like C are section-free). MEASURED: z=4.5 closes COMPLETELY; the z~9.9
+defect shrinks to ONE six-edge hole rim ((38.05,-41.30)→A→B→C→(-42.75)→
+(38.05,-42.7477)→back). Remaining defect: face 935's splitter STILL yields only 2
+sub-faces (2066 Outside kept / 2067 Inside dropped, probe unchanged) — the strip region
+bounded by the bridged chain is not traced as its own region. TWENTIETH PASS: find why
+(SPLIT_PATH probe on 935: which path fires; if the plane arrangement computes 3 regions
+but the adoption gate `result.len() > loops.len()` refuses, or the greedy merges the
+strip into 2067). Foils NOT yet run on the branch — run algo/ops/io before any ship. Also REVERTED this pass (no effect,
 principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
 band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
 edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
