@@ -149,9 +149,19 @@ fixed handedness works across constructors, and the shipped chamfer helper is ca
 the extrude convention only — `convex_chamfer_volume_check.rs` now pins the convex chamfer
 volume so any future sign change is caught. The concave FILLET's 221.5 result is IDENTICAL
 under all three contact schemes, proving its defect is dominated by the cylinder-centre /
-section geometry (the reflex-angle derivation), not the contact directions. Fix path: derive
-the reflex-aware fillet geometry (supplementary half-angle, centre side, section span) as one
-change, and settle the winding convention (or make constructors consistent) first. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
+section geometry (the reflex-angle derivation), not the contact directions. Fix path SHARPENED by a
+worked example (the notch with perpendicular wall normals): the bisector CONTACTS and the
+CENTRE formula are PROVABLY CORRECT there (centre r*sqrt(2) up the bisector, contacts r along
+the walls toward material — the bisector projection lands right for this concave case), so
+"supplementary half-angle" is NOT the defect. The concave failure is strictly DOWNSTREAM of
+the contact/centre computation: the section-arc span (must bow toward the vertex, the ball's
+notch-side arc), the blend-face surface orientation, or the trimmer keep-side mapping
+(worked example: n·(centre − p1) > 0 → Right; verify Right is the away-from-vertex chain for
+the trimmer's direction convention). Also note the shipped 0.077 removal vs the 10.5 removal
+under material contacts differ only in contact SIGN — meaning the shipped concave contacts
+land on the extensions and the trim barely does anything, while corrected contacts make the
+wrong downstream machinery bite harder. Instrument the section arc and kept chains on the
+notch repro first. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
 
 The remaining `#[ignore]` entries are diagnostics or slow perf runs, not open bugs: the
 `profile_intersect.rs` box-sphere probes are stale (box-sphere shipped analytic in #1006),
