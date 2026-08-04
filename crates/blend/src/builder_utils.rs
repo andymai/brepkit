@@ -31,10 +31,6 @@ pub fn sample_nurbs_endpoints(curve: &NurbsCurve) -> Vec<Point3> {
 /// # Errors
 ///
 /// Returns [`BlendError`] if wire or face construction fails.
-pub fn create_blend_face(topo: &mut Topology, stripe: &Stripe) -> Result<FaceId, BlendError> {
-    create_blend_face_with_contacts(topo, stripe, None, None)
-}
-
 /// [`create_blend_face`] that REUSES the trimmers' contact edges when they
 /// span the same contacts. Minting fresh edges for curves the trimmed
 /// neighbours already carry leaves two edge entities per contact — each used
