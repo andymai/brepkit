@@ -1,0 +1,25 @@
+crates/operations/tests/regress_blend_trim_neighbor_split.rs
+  s_7ff36fc7322bef::t_5e1192fe609f69 165-168,173-174
+crates/blend/src/builder_utils.rs
+  s_7ff36fc7322bef::t_6eca7490630f06 35-51,60-103,109-121,123-135,140,142
+  s_7ff36fc7322bef::t_3208ce6095eb7f 13
+crates/blend/src/fillet_builder.rs
+  s_7ff36fc7322bef::t_8d5db9dfd00762 230-232,251-253
+  s_7ff36fc7322bef::t_0ae93f76d10b20 183-186,189,263,266-274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "8ea3652ecb1cc00ee0c91f9c9e5a3cf9962b907c",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
