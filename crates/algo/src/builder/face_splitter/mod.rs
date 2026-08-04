@@ -4323,7 +4323,18 @@ fn split_face_2d_impl(
     // end at u=2pi connects to seam start at u=0). Keep it enabled.
     let (u_periodic, v_periodic) = info.map_or((false, false), SurfaceInfo::periodicity);
 
-    let mut boundary_edges = if is_plane {
+    // Outer-wire image expansion is gated to HOLE-FREE PLANAR faces: a
+    // periodic lateral's seam is a Line edge too, and expanding it hands
+    // the calibrated seam machinery multiple seam pieces where it expects
+    // one (the perpendicular-cylinder fuse loses both mutually-trimmed
+    // walls); a holed cap's integrate-holes weave is likewise calibrated
+    // against the unexpanded boundary (the divider-lip fuse de-analytics
+    // with expansion applied).
+    let section_anchor_pts: Vec<Point3> = sections
+        .iter()
+        .flat_map(|sct| [sct.start, sct.end])
+        .collect();
+    let mut boundary_edges = if is_plane && face.inner_wires().is_empty() {
         super::face_splitter::conversion::boundary_edges_to_pcurve_with_images(
             topo,
             face.outer_wire(),
@@ -4331,16 +4342,10 @@ fn split_face_2d_impl(
             &wire_pts,
             Some(frame),
             edge_images,
+            &section_anchor_pts,
         )
     } else {
-        super::face_splitter::conversion::boundary_edges_to_pcurve_with_images(
-            topo,
-            face.outer_wire(),
-            &surface,
-            &wire_pts,
-            None,
-            edge_images,
-        )
+        boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
     };
 
     // Convert original inner wires (holes) to OrientedPCurveEdge.
@@ -5585,11 +5590,18 @@ fn split_face_2d_impl(
     // true result needs. Genuine features sit >= 1.1e-2 apart, so the band
     // cannot conflate distinct corners.
     let mut bridge_sections: Vec<super::split_types::SectionEdge> = Vec::new();
-    if is_plane {
+    // Bridging is gated to HOLE-FREE planar faces: on a holed cap the
+    // integrate-holes weave owns chain-end reconciliation, and a bridge
+    // minted next to a woven hole boundary de-analytics the divider-lip
+    // fuse (its production fixture drops from >=32 curved faces to 0).
+    if is_plane && original_inner_wires.is_empty() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::Vec2;
         const BRIDGE_BAND: f64 = 3e-3;
         let weld = tol.linear * 100.0;
         let n_all = all_edges.len();
         let mut bridges: Vec<OrientedPCurveEdge> = Vec::new();
+        let mut pendants: Vec<(Point3, Point2, Point3)> = Vec::new();
         for si in n_boundary_edges..n_all {
             for pick_start in [true, false] {
                 let (p3, puv) = if pick_start {
@@ -5659,11 +5671,14 @@ fn split_face_2d_impl(
                         (se.start_3d - b3).length() <= weld || (se.end_3d - b3).length() <= weld
                     })
                 };
-                if let Some((d, b3, buv)) = best
-                    && d > weld
-                    && d <= BRIDGE_BAND
-                    && second >= 1e-2
-                    && !target_in_sections(b3)
+                let boundary_bridge = best.is_some_and(|(d, b3, _)| {
+                    d > weld && d <= BRIDGE_BAND && second >= 1e-2 && !target_in_sections(b3)
+                });
+                if !boundary_bridge {
+                    pendants.push((p3, puv, own_other));
+                }
+                if let Some((_d, b3, buv)) = best
+                    && boundary_bridge
                     && !bridges.iter().any(|br: &OrientedPCurveEdge| {
                         ((br.start_3d - p3).length() <= weld && (br.end_3d - b3).length() <= weld)
                             || ((br.start_3d - b3).length() <= weld
@@ -5695,6 +5710,80 @@ fn split_face_2d_impl(
                     });
                 }
             }
+        }
+        // Pendant-to-pendant bridging: a chain gap between TWO section ends
+        // (the triple-point wedge on the kumiko slope, where the pair
+        // sections stop 2.3e-3 apart at the operands' disagreement) has no
+        // boundary vertex to target — the missing connector runs between
+        // the pendants themselves. Bridge mutually-nearest pendant pairs
+        // within the band, with the same isolation guard against every
+        // other pendant.
+        // Each section arrives as a forward/reverse twin pair, so a pendant
+        // endpoint is recorded once per twin — dedupe by position or the
+        // zero-distance duplicate defeats the mutual-nearest pairing.
+        pendants.dedup_by(|a, b| (a.0 - b.0).length() <= weld);
+        for i in 0..pendants.len() {
+            let (pi, uvi, own_i) = pendants[i];
+            let mut best_j: Option<(f64, usize)> = None;
+            let mut second = f64::INFINITY;
+            for (j, &(pj, _, _)) in pendants.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                let d = (pj - pi).length();
+                match best_j {
+                    Some((bd, _)) if d < bd => {
+                        second = bd;
+                        best_j = Some((d, j));
+                    }
+                    Some(_) => second = second.min(d),
+                    None => best_j = Some((d, j)),
+                }
+            }
+            let Some((d, j)) = best_j else { continue };
+            let (pj, uvj, own_j) = pendants[j];
+            if d <= weld || d > BRIDGE_BAND || second < 1e-2 {
+                continue;
+            }
+            let mutual = pendants
+                .iter()
+                .enumerate()
+                .filter(|&(k, _)| k != j)
+                .map(|(_, &(pk, _, _))| (pk - pj).length())
+                .fold(f64::INFINITY, f64::min)
+                >= d - 1e-12;
+            if !mutual
+                || (pj - own_i).length() <= weld
+                || (pi - own_j).length() <= weld
+                || bridges.iter().any(|br: &OrientedPCurveEdge| {
+                    ((br.start_3d - pi).length() <= weld && (br.end_3d - pj).length() <= weld)
+                        || ((br.start_3d - pj).length() <= weld
+                            && (br.end_3d - pi).length() <= weld)
+                })
+            {
+                continue;
+            }
+            let duv = Vec2::new(uvj.x() - uvi.x(), uvj.y() - uvi.y());
+            let len = duv.length();
+            let dir = if len > 1e-12 {
+                Vec2::new(duv.x() / len, duv.y() / len)
+            } else {
+                Vec2::new(1.0, 0.0)
+            };
+            let Ok(l2d) = Line2D::new(uvi, dir) else {
+                continue;
+            };
+            bridges.push(OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve: Curve2D::Line(l2d),
+                start_uv: uvi,
+                end_uv: uvj,
+                start_3d: pi,
+                end_3d: pj,
+                forward: true,
+                source_edge_idx: None,
+                pave_block_id: None,
+            });
         }
         if !bridges.is_empty() {
             bridge_sections = bridges

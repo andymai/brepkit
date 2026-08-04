@@ -54,6 +54,7 @@ pub(super) fn boundary_edges_to_pcurve(
         wire_pts,
         frame,
         &std::collections::HashMap::new(),
+        &[],
     )
 }
 
@@ -77,10 +78,46 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
         Vec<brepkit_topology::edge::EdgeId>,
         S,
     >,
+    anchors: &[Point3],
 ) -> Vec<OrientedPCurveEdge> {
+    // Demand-driven: expand an edge only when one of its interior image
+    // junctions sits near a section endpoint (an exit pave a chain must
+    // anchor to). Every other face keeps its unexpanded boundary and stays
+    // byte-identical to the historical behaviour.
+    const ANCHOR_BAND: f64 = 3e-3;
+    // A junction COINCIDENT with a section endpoint (within the weld band)
+    // is already served by the calibrated boundary-splitting machinery —
+    // expanding there perturbs partitions that were correct (the
+    // divider-lip fuse de-analytics). Only a junction the sections point AT
+    // but do not REACH (the operands' own disagreement scale) demands the
+    // expansion.
+    const WELD_BAND: f64 = 1e-5;
     let wire = match topo.wire(wire_id) {
         Ok(w) => w,
         Err(_) => return Vec::new(),
+    };
+
+    let junction_near_anchor = |imgs: &[brepkit_topology::edge::EdgeId]| -> bool {
+        for w in imgs.windows(2) {
+            let (Ok(e0), Ok(e1)) = (topo.edge(w[0]), topo.edge(w[1])) else {
+                continue;
+            };
+            for vid in [e0.start(), e0.end()] {
+                if (vid == e1.start() || vid == e1.end())
+                    && let Ok(v) = topo.vertex(vid)
+                {
+                    let p = v.point();
+                    if anchors.iter().any(|a| {
+                        let d = (*a - p).length();
+                        d <= ANCHOR_BAND && d > WELD_BAND
+                    }) && !anchors.iter().any(|a| (*a - p).length() <= WELD_BAND)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     };
 
     let mut pieces: Vec<(brepkit_topology::edge::EdgeId, bool)> = Vec::new();
@@ -89,7 +126,7 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
             .edge(oe.edge())
             .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line));
         match edge_images.get(&oe.edge()) {
-            Some(imgs) if imgs.len() > 1 && is_line => {
+            Some(imgs) if imgs.len() > 1 && is_line && junction_near_anchor(imgs) => {
                 if oe.is_forward() {
                     pieces.extend(imgs.iter().map(|&i| (i, true)));
                 } else {
