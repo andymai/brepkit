@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785826244596,
+  "lastUpdate": 1785826859634,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16145,6 +16145,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25076257,
             "range": "± 32996",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7d0ca832af6179d43a118aadf131c284a3f08dd",
+          "message": "docs(roadmap): kumiko twenty-third pass corrects the missing-face owner to wall 398 (#1295)\n\nTwenty-third-pass correction for the kumiko lattice band fuse:\n\n- Face 398 spans the whole wall; there is no \"next wall\" face owing a\nsection.\n- The 1.45-long rim edge lies on the x=38.05 wall plane, not on 935: the\nsix-edge hole rim is a 3D loop and the missing cover is a wall-398 (or\nB-partner) product.\n- Twenty-fourth pass re-aims the sub-face classification probe at source\n398.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix the kumiko roadmap: the missing cover belongs to wall face 398 on\nthe x=38.05 plane, not to 935. Clarifies the 1.45-long rim edge is not\non 935, describes the six-edge rim as a 3D loop, and re-aims the\ntwenty-fourth pass to probe sub-faces with `source_face == 398` (and its\nB-side partner).\n\n<sup>Written for commit eb3e078ee094caa5458008ebb072899f14df0f1e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1295?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T23:58:38-07:00",
+          "tree_id": "6d81057e4818aaff9dfa9d7238d693f9c72c4c71",
+          "url": "https://github.com/andymai/brepkit/commit/c7d0ca832af6179d43a118aadf131c284a3f08dd"
+        },
+        "date": 1785826858558,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 883141,
+            "range": "± 2452",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 962466,
+            "range": "± 3007",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11812,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 645532,
+            "range": "± 804",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23634906,
+            "range": "± 60712",
             "unit": "ns/iter"
           }
         ]
