@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785818204268,
+  "lastUpdate": 1785819146903,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15713,6 +15713,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24240295,
             "range": "± 68969",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1da71241611ad722959bb41bc124e8035a58eaee",
+          "message": "docs(roadmap): kumiko sixteenth pass decides for the pendant-chain bridge (#1288)\n\nSixteenth-pass measurement for the kumiko lattice band fuse:\n\n- The EF crossing at the z~9.9 rim is a clean mid-edge transversal\n(t=0.482, both edge endpoints ~0.18 off the crossed face), and the\noperand vertex plus the FF junction lie exactly on the crossed face -\nall three points share one line, 2.36e-3 apart along it.\n- The micro-structure is therefore real operand geometry, deciding the\nrecorded fork toward the pendant-chain bridge in the face splitter (spec\nand guards recorded in the entry).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds the sixteenth-pass roadmap entry for the kumiko lattice,\ndocumenting EF-site probe results and deciding to use the pendant-chain\nbridge in the face splitter. Records key measurements (t=0.482, 2.36e-3\nfrom the vertex, endpoints ~0.18 off the face) and notes the bridge\nrules (pendant-end pairs only, mutual nearest, ~3e-3 band) with\nverification steps to close the fixture.\n\n<sup>Written for commit 2cc406aa44b6ca4298536283c6dc1b80979133ce.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1288?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T21:49:53-07:00",
+          "tree_id": "57d13cdcc4755b4522b092cbbb60feb7a3f139b9",
+          "url": "https://github.com/andymai/brepkit/commit/1da71241611ad722959bb41bc124e8035a58eaee"
+        },
+        "date": 1785819145089,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 916339,
+            "range": "± 1585",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 994571,
+            "range": "± 2659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12011,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 690875,
+            "range": "± 21230",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24381616,
+            "range": "± 237318",
             "unit": "ns/iter"
           }
         ]
