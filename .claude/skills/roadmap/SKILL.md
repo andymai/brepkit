@@ -409,12 +409,19 @@ carried by the A-side x=38.05 wall products) shows A's material continues south 
 (which owes the [(38.05,-41.30)→(38.05,-42.7477)] continuation) produced NOTHING among
 935's 20 arrangement inputs. Without it 935's partition lacks the full A-boundary
 trace, the hexagon merges into the big kept east region, and the rim mismatches.
-TWENTY-THIRD PASS (targeted): identify the A-face owning the x=38.05 wall for
-y∈[-42.75,-41.30] (list solid-A faces whose plane is x=38.05 and extent covers that
-span), then RESTRICT_IN/RESTRICT_OUT-probe the pair (that face × 935) — the section is
-either never computed (pair AABB-rejected?), emitted then dropped by the in-both
-filter, or clipped to empty by the trim arm. Same recipe as the seventeenth pass, now
-aimed at a 1.45-long section, so whichever gate eats it is unambiguous. Also REVERTED this pass (no effect,
+TWENTY-THIRD PASS
+(2026-08-03, target corrected): there is NO "next wall" — face 398's bbox spans the
+WHOLE y∈[-42.95,-38.15] at x=38.05, and the 1.45-long rim edge (38.05,y,9.8922) does
+NOT lie on 935's plane at all (plane check: 0.0186 residual) — it lies on the x=38.05
+WALL plane. The "hexagon on 935" model was wrong: the six-edge hole rim is a 3D loop
+across several faces, and the missing cover is a product of WALL 398 (or its B-side
+partner at x=38.05) whose top boundary should run at z=9.8922 between y=-41.30 and
+y=-42.7477. TWENTY-FOURTH PASS: the fifteenth-pass recipe aimed at 398 — SEL-probe all
+sub-faces with `source_face == 398` (and the B-side x=38.05 partner face), their
+classifications and probe points; the missing wall strip is either dropped-Inside
+(straddle again) or never traced. Note face 398 is a TALL wall (z 4.5..9.9) whose
+z=4.5 corner the earlier passes already closed — the two campaigns' corners are its
+bottom and top edges. Also REVERTED this pass (no effect,
 principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
 band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
 edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
