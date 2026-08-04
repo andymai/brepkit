@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_3532b74edc32f0 128
+crates/blend/src/chamfer_builder.rs
+  s_7ff36fc7322bef::t_43f6a73dc788bc 16,198-201,204,246-248,271-273,285-294
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "794ef3de380e4f0d636c0745d657b5257688ccb4",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
