@@ -1,0 +1,22 @@
+crates/io/examples/replay_pair.rs
+  s_7ff36fc7322bef::t_82854869c81342 51-62,64
+  s_7ff36fc7322bef::t_1eb3e1ff2f6c42 29,38
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_4223013aedba52 127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "3e1fd998ab078592e16deecb2b8fef5be1bec47c",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
