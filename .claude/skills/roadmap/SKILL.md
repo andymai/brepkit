@@ -416,12 +416,21 @@ NOT lie on 935's plane at all (plane check: 0.0186 residual) — it lies on the 
 WALL plane. The "hexagon on 935" model was wrong: the six-edge hole rim is a 3D loop
 across several faces, and the missing cover is a product of WALL 398 (or its B-side
 partner at x=38.05) whose top boundary should run at z=9.8922 between y=-41.30 and
-y=-42.7477. TWENTY-FOURTH PASS: the fifteenth-pass recipe aimed at 398 — SEL-probe all
-sub-faces with `source_face == 398` (and the B-side x=38.05 partner face), their
-classifications and probe points; the missing wall strip is either dropped-Inside
-(straddle again) or never traced. Note face 398 is a TALL wall (z 4.5..9.9) whose
-z=4.5 corner the earlier passes already closed — the two campaigns' corners are its
-bottom and top edges. Also REVERTED this pass (no effect,
+y=-42.7477. TWENTY-FOURTH PASS
+(2026-08-04, answered): wall 398 splits into THREE — `1489` Outside (y≈-38.8, kept),
+`1490` INSIDE/DROPPED (probe (38.05,-41.19,6.78)), `1491` Outside (y≈-42.83, kept).
+1490 is ANOTHER STRADDLE: genuinely inside B's band at its probe (low z), but its
+top-south strip (z>9.86, y -41.30..-42.75) sits ABOVE B's slope and must be kept —
+that strip is exactly the six-edge hole's wall side. The wall lacks a split along
+z=9.8922 south of y=-41.30: the rim edges (38.05,y,9.8922) lie on x=38.05 ∩
+z=9.8922, i.e. the section owed by pair (398 × B's HORIZONTAL top face at z=9.8922),
+which is missing/truncated in 398's inputs. TWENTY-FIFTH PASS: find the B-face with
+plane z=9.8922 covering y∈[-42.75,-41.30] near x=38.05 (WALL-probe recipe with the
+normal test on z), then RESTRICT_IN/OUT-probe the pair (398 × it). The campaign's
+generic lesson is now sharp: every remaining defect is one instance of "a pair
+section truncated where operand geometry rides a boundary, cascading into a
+straddle-drop"; each pass peels one instance, and the same probe recipes
+(WALL/RESTRICT/SEL) resolve each in one run apiece. Also REVERTED this pass (no effect,
 principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
 band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
 edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
