@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785802104504,
+  "lastUpdate": 1785808343288,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15119,6 +15119,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23070785,
             "range": "± 43404",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dd152bd6f057cb18408dcab24e924b9ef840cb86",
+          "message": "fix(algo): keep exact operand geometry through arrangement emission and welds (#1277)\n\n## Summary\n\nKumiko lattice band fuse campaign, seventh pass: free edges on the abort\nshell go **43 -> 2**, with the honeycomb residual pcut2 improving 38 ->\n28 as collateral.\n\nThree measured fixes:\n\n- **Plane-arrangement emission kept exact operand 3D.** Sub-face\nvertices were rebuilt as `frame.evaluate(frame.project(p))`, which\nprojects operand facet-chain vertices (up to ~2e-5 off the face's stored\nplane) onto the plane. The unsplit neighbour faces keep the original\npositions, so every split product minted twin edges that never weld.\nRegistered input endpoints now carry their exact 3D through emission\n(`exact3d`), and computed crossings snap-round onto registered vertices\nwith endpoints pre-registered first-wins. Measured on the fixture: 35 ->\n2 free edges.\n- **Builder vertex weld at weld scale.** `weld_coincident_vertices`\nsnapped at `10 * MERGE_TOL` (1e-6), exactly fit-error scale; widened to\n`100 * MERGE_TOL`. Measured: 43 -> 35.\n- **Junction registry hardening** (extends the registry introduced on\nthis branch): guarded wide adoption (accept a junction within 1e-3 only\nwhen 10x closer than the next-nearest; measured bimodal gap on the\nfixture is copies <= 7.9e-4 vs genuine spacing >= 1.1e-2),\nboundary-vertex adoption when the snap foot lands weld-close to an edge\nendpoint (the partner-surface refinement is degenerate when the boundary\nlies in the partner surface), and coverage of the rescue and\nclosed-window sample paths.\n\n## Remaining (recorded in the roadmap)\n\nThe fixture still aborts, now on an open 67-face growth shell with\nexactly two free edges at the z=34.8 coplanar top corner (clean\ncoordinates, a topological cover gap in the coplanar phase, not a weld\nproblem). Eighth pass continues there;\n`kumiko_lattice_bands_fuse_closed` stays `#[ignore]`d.\n\n## Testing\n\n- algo: 208 passed\n- operations: all green\n- io: all green after re-pinning the documented honeycomb residual\nceilings (pcut2 improved 38 -> 28, pcut1 nudged 52 -> 53, pcut3 held 0);\nevery production-level test in that file unchanged\n- clippy `-D warnings`, fmt, boundary check: clean\n- `brepkit-render` `compute_mesh_lod` segfaults identically with and\nwithout this change (GPU sandbox limitation; CI is authoritative)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes plane-arrangement emission and vertex welds to keep exact operand\ngeometry and unify triple‑junctions, collapsing twin edges and reducing\nfree edges from 43 to 2 on the kumiko lattice fuse. Also improves\nhoneycomb residuals (pcut2 38 → 28) with all tests green.\n\n- **Bug Fixes**\n- Arrangement emission now preserves exact 3D for input endpoints\n(`exact3d`) and snaps computed crossings to registered vertices\n(first‑wins).\n  - Vertex weld widened to `100 * MERGE_TOL` to match weld scale.\n- Junction registry hardened: adopt an existing junction within 1e‑3\nonly if it’s 10× closer than the next; adopt boundary vertices when the\nsnap foot is weld‑close; apply to rescue and closed‑window paths.\n- Better diagnostics: growth-side open‑shell logs include edge length\nand are invoked on hole shells.\n\nTesting: algo 208 green; operations green; IO re‑pinned ceilings (pcut1\n52 → 53, pcut2 38 → 28, pcut3 0).\n\n<sup>Written for commit ed9b13914f1ad70ad98e729ce0fd7976b86b835c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1277?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T18:49:55-07:00",
+          "tree_id": "8a48c832c2e09eb0841519ecd9e230661923280e",
+          "url": "https://github.com/andymai/brepkit/commit/dd152bd6f057cb18408dcab24e924b9ef840cb86"
+        },
+        "date": 1785808341466,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1014735,
+            "range": "± 3989",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1092471,
+            "range": "± 15502",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11972,
+            "range": "± 145",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 671962,
+            "range": "± 3951",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29656822,
+            "range": "± 504390",
             "unit": "ns/iter"
           }
         ]
