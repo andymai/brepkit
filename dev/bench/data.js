@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785820174418,
+  "lastUpdate": 1785821977014,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15821,6 +15821,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24350081,
             "range": "± 48422",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "93b71af3b122a51e8fc591fe0351727df9c0703d",
+          "message": "docs(roadmap): kumiko eighteenth pass roots outer-boundary image blindness (#1290)\n\nEighteenth-pass root for the kumiko lattice band fuse:\n\n- The exit pave the z~9.9 partition needs exists in the arena (edge 3093\nsplit exactly at C), but `split_face_2d_impl` expands `edge_images` only\nfor inner wires; the outer boundary is built from the face's unsplit\ntopology wires, so the face can never partition at its own boundary\npave, and its products mismatch the neighbour wall's image-split edges.\n- Nineteenth pass is mechanical and foil-gated: expand the outer wire\nwith edge images, mirroring the existing inner-wire expansion.\n- The pendant-chain bridge is refuted with measurements (fires at a\nhealthy corner and breaks it); recorded so it is not re-attempted.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap to record the 18th-pass root: `split_face_2d_impl`\nexpands `edge_images` only for inner wires, so the outer boundary never\nsplits at exit pave C and products mismatch the neighbor wall. Document\nthe planned fix (expand the outer wire with `edge_images`) and note the\npendant-chain bridge was tested and refuted, so it will not be pursued.\n\n<sup>Written for commit 3b55f1b55f82ecd2575557092ac404f4cd3eab51.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1290?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T22:37:20-07:00",
+          "tree_id": "59dcf9e0868a38711f1cefe43e0ff4d44e365c71",
+          "url": "https://github.com/andymai/brepkit/commit/93b71af3b122a51e8fc591fe0351727df9c0703d"
+        },
+        "date": 1785821975783,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 738042,
+            "range": "± 3823",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 807646,
+            "range": "± 2783",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9704,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 548436,
+            "range": "± 885",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19661096,
+            "range": "± 63256",
             "unit": "ns/iter"
           }
         ]
