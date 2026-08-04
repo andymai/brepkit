@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785827658311,
+  "lastUpdate": 1785828446182,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16253,6 +16253,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23918164,
             "range": "± 30360",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "acab762140948c82a3e93c4b0a8ed318c40c3b76",
+          "message": "docs(roadmap): kumiko twenty-fifth pass identifies the operand ridge rim (#1297)\n\nTwenty-fifth-pass answer for the kumiko lattice band fuse:\n\n- No z=9.8922 plane exists; the rim is A's own operand ridge between\nslope 400 and wall 398. The slope side survives; the wall side is inside\nthe straddle-dropped band.\n- The wall lacks a vertical split near y=-41.30 below the slope line;\nthe twenty-sixth-pass probe targets the pairs owing it.\n- Also records a foil-gated robustness backstop worth implementing:\nmulti-sample straddle detection in sub-face classification, which would\nhave caught every recent kumiko root at its face.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the kumiko roadmap with the twenty-fifth pass, clarifying the\nz=9.8922 rim is A’s operand ridge between `400` (slope) and `398`\n(wall), not a missing B face. Adds a next-step probe for the vertical\nsplit near y≈-41.30 and notes a multi-sample straddle-detection backstop\nin sub-face classification.\n\n<sup>Written for commit 2dc4d8b080578f0c032cabc49b5b0a19d90b5d43.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1297?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T00:24:52-07:00",
+          "tree_id": "0cdd7e633d363daa17ce8ebc08a16568a09ba7ff",
+          "url": "https://github.com/andymai/brepkit/commit/acab762140948c82a3e93c4b0a8ed318c40c3b76"
+        },
+        "date": 1785828444573,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 978872,
+            "range": "± 1410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1031440,
+            "range": "± 2712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13118,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 690853,
+            "range": "± 1909",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25032895,
+            "range": "± 30982",
             "unit": "ns/iter"
           }
         ]
