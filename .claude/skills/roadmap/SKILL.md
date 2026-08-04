@@ -673,8 +673,12 @@ faces`, pre-shell-fix operands — re-capture before drawing conclusions). TOOL-
 `gomaBoundaryProbe`, `kumikoNubProbe`, `dividerCrossLap`, `honeycombManifoldCheck` — 4 files,
 8/8 tests green in 53 s. Note the tool's test files were RENAMED since the recipes below were
 written (`topologyParity` and `mitsukudeNmProbe` no longer exist; the probes above are their
-successors). The full scenario matrix (~14 min/arm) remains unrun; the probes are the
-recorded isolation tests for the kumiko/goma/divider families.
+successors). THE FULL EXPORT MATRIX IS GREEN
+(2026-08-04, same kernel): all four arms — `binGenerator.export.baseStyles`, `.binStyles`
+(wall patterns incl. kumiko/mitsukude), `.customShape`, `.halfSockets` — 73/73 tests in ~31 s
+total under the DEFAULT vitest config (the profile config's include misses them). The
+historical "14 min/arm with failures" era is over; the matrix now runs in seconds and passes
+entirely. The isolation probes (4 files, 8/8) are green on the same build.
 
 **Historical state (pre-closure):** branch `fix/kumiko-corner-window-cut` closed four real
 engine defects with fixtures but was **PARKED** — it regressed goma from 8 to 65 exported
