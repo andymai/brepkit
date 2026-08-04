@@ -10,7 +10,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
-use brepkit_topology::vertex::Vertex;
+use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::BlendError;
@@ -32,6 +32,23 @@ pub fn sample_nurbs_endpoints(curve: &NurbsCurve) -> Vec<Point3> {
 ///
 /// Returns [`BlendError`] if wire or face construction fails.
 pub fn create_blend_face(topo: &mut Topology, stripe: &Stripe) -> Result<FaceId, BlendError> {
+    create_blend_face_with_contacts(topo, stripe, None, None)
+}
+
+/// [`create_blend_face`] that REUSES the trimmers' contact edges when they
+/// span the same contacts. Minting fresh edges for curves the trimmed
+/// neighbours already carry leaves two edge entities per contact — each used
+/// by one face — opening the shell along every blend flank. A trimmer edge
+/// is adopted (with its vertices) when its endpoints match the stripe's
+/// contact endpoints within the weld band, in either orientation; otherwise
+/// that side falls back to a fresh edge.
+pub fn create_blend_face_with_contacts(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    contact1_edge: Option<brepkit_topology::edge::EdgeId>,
+    contact2_edge: Option<brepkit_topology::edge::EdgeId>,
+) -> Result<FaceId, BlendError> {
+    const WELD: f64 = 1e-5;
     let (t0_1, t1_1) = stripe.contact1.domain();
     let (t0_2, t1_2) = stripe.contact2.domain();
 
@@ -40,34 +57,89 @@ pub fn create_blend_face(topo: &mut Topology, stripe: &Stripe) -> Result<FaceId,
     let p2_start = stripe.contact2.evaluate(t0_2);
     let p2_end = stripe.contact2.evaluate(t1_2);
 
-    // Create vertices (snapshot then allocate).
-    let v1s = topo.add_vertex(Vertex::new(p1_start, 1e-7));
-    let v1e = topo.add_vertex(Vertex::new(p1_end, 1e-7));
-    let v2s = topo.add_vertex(Vertex::new(p2_start, 1e-7));
-    let v2e = topo.add_vertex(Vertex::new(p2_end, 1e-7));
+    // Adopt a trimmer contact edge when its endpoints match `(want_s, want_e)`
+    // in either orientation: returns (edge, forward, start_vid, end_vid) in
+    // the WIRE traversal direction.
+    let adopt = |topo: &Topology,
+                 eid: Option<brepkit_topology::edge::EdgeId>,
+                 want_s: Point3,
+                 want_e: Point3|
+     -> Option<(brepkit_topology::edge::EdgeId, bool, VertexId, VertexId)> {
+        let eid = eid?;
+        let e = topo.edge(eid).ok()?;
+        let (sv, ev) = (e.start(), e.end());
+        let sp = topo.vertex(sv).ok()?.point();
+        let ep = topo.vertex(ev).ok()?.point();
+        if (sp - want_s).length() <= WELD && (ep - want_e).length() <= WELD {
+            Some((eid, true, sv, ev))
+        } else if (sp - want_e).length() <= WELD && (ep - want_s).length() <= WELD {
+            Some((eid, false, ev, sv))
+        } else {
+            None
+        }
+    };
+    let adopt1 = adopt(topo, contact1_edge, p1_start, p1_end);
+    // Contact 2 traverses end -> start in the quad below.
+    let adopt2 = adopt(topo, contact2_edge, p2_end, p2_start);
+
+    // Create/reuse vertices (snapshot then allocate).
+    let (v1s, v1e) = adopt1.map_or_else(
+        || {
+            (
+                topo.add_vertex(Vertex::new(p1_start, 1e-7)),
+                topo.add_vertex(Vertex::new(p1_end, 1e-7)),
+            )
+        },
+        |(_, _, s, e)| (s, e),
+    );
+    let (v2e, v2s) = adopt2.map_or_else(
+        || {
+            (
+                topo.add_vertex(Vertex::new(p2_end, 1e-7)),
+                topo.add_vertex(Vertex::new(p2_start, 1e-7)),
+            )
+        },
+        |(_, _, s, e)| (s, e),
+    );
 
     // Build quad: p1_start -> p1_end -> p2_end -> p2_start -> p1_start.
     // Use actual contact curves for e0 and e2 (the longitudinal edges along
     // the spine direction). Cross edges e1 and e3 are straight lines connecting
     // the two contact curves at the spine endpoints.
-    let e0 = topo.add_edge(Edge::new(
-        v1s,
-        v1e,
-        EdgeCurve::NurbsCurve(stripe.contact1.clone()),
-    ));
+    let (e0, e0_fwd) = adopt1.map_or_else(
+        || {
+            (
+                topo.add_edge(Edge::new(
+                    v1s,
+                    v1e,
+                    EdgeCurve::NurbsCurve(stripe.contact1.clone()),
+                )),
+                true,
+            )
+        },
+        |(eid, fwd, _, _)| (eid, fwd),
+    );
     let e1 = topo.add_edge(Edge::new(v1e, v2e, EdgeCurve::Line));
-    let e2 = topo.add_edge(Edge::new(
-        v2e,
-        v2s,
-        EdgeCurve::NurbsCurve(stripe.contact2.clone()),
-    ));
+    let (e2, e2_fwd) = adopt2.map_or_else(
+        || {
+            (
+                topo.add_edge(Edge::new(
+                    v2e,
+                    v2s,
+                    EdgeCurve::NurbsCurve(stripe.contact2.clone()),
+                )),
+                true,
+            )
+        },
+        |(eid, fwd, _, _)| (eid, fwd),
+    );
     let e3 = topo.add_edge(Edge::new(v2s, v1s, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
-            OrientedEdge::new(e0, true),
+            OrientedEdge::new(e0, e0_fwd),
             OrientedEdge::new(e1, true),
-            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e2, e2_fwd),
             OrientedEdge::new(e3, true),
         ],
         true,
