@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.20](https://github.com/andymai/brepkit/compare/v2.128.19...v2.128.20) (2026-08-04)
+
+
+### Bug Fixes
+
+* **algo:** unify cross-solver junction anchors in the kumiko lattice fuse ([#1284](https://github.com/andymai/brepkit/issues/1284)) ([0a7837e](https://github.com/andymai/brepkit/commit/0a7837ecf8b7ab73f046df5aa7fe3a38fa53679a))
+
 ## [2.128.19](https://github.com/andymai/brepkit/compare/v2.128.18...v2.128.19) (2026-08-04)
 
 
