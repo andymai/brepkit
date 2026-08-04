@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785853967581,
+  "lastUpdate": 1785854446230,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17117,6 +17117,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21409965,
             "range": "± 574207",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e646fc5c2fd04917df5710cdefd00094a8eedc02",
+          "message": "chore(main): release 2.128.26 (#1313)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.26](https://github.com/andymai/brepkit/compare/v2.128.25...v2.128.26)\n(2026-08-04)\n\n\n### Bug Fixes\n\n* **blend:** material-oriented chamfer contacts on concave edges\n([#1312](https://github.com/andymai/brepkit/issues/1312))\n([4996331](https://github.com/andymai/brepkit/commit/499633177f707feec95bc0b4fd8aba1409a1238e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.128.26, fixing material-oriented chamfer\ncontacts on concave edges in blend operations. This improves geometric\ncorrectness and prevents misaligned contacts.\n\n<sup>Written for commit 0b1122f801d92bb767d9c68f432581d9e0cc449e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1313?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-04T14:38:19Z",
+          "tree_id": "a0685b1b46cb0c8a75d4b24028f545ee707c341b",
+          "url": "https://github.com/andymai/brepkit/commit/e646fc5c2fd04917df5710cdefd00094a8eedc02"
+        },
+        "date": 1785854444265,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 745471,
+            "range": "± 2047",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 816781,
+            "range": "± 7634",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9596,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 550949,
+            "range": "± 3262",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19918592,
+            "range": "± 197964",
             "unit": "ns/iter"
           }
         ]
