@@ -275,8 +275,19 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                         }
                     }
                     let chord = (pev.point() - psv.point()).length();
-                    dev <= on_band
-                        .max((IN_FACE_MAX_DEVIATION_RATIO * chord).min(IN_FACE_MAX_DEVIATION_ABS))
+                    // The absolute ceiling applies to STRAIGHT leaves only: a
+                    // line's deviation from a crossed plane grows linearly, so
+                    // ratio-small + absolute-large means a long transversal
+                    // crossing, never a graze. A curved contact (the
+                    // calibrated socket-loft corner arcs) hugs via curvature
+                    // and legitimately reaches larger absolute deviations at
+                    // its span ends; it keeps the pure ratio gate.
+                    let band = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                        (IN_FACE_MAX_DEVIATION_RATIO * chord).min(IN_FACE_MAX_DEVIATION_ABS)
+                    } else {
+                        IN_FACE_MAX_DEVIATION_RATIO * chord
+                    };
+                    dev <= on_band.max(band)
                 })
                 .collect();
             let fi = arena.face_info_mut(face_id);
