@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.27](https://github.com/andymai/brepkit/compare/v2.128.26...v2.128.27) (2026-08-04)
+
+
+### Bug Fixes
+
+* **blend:** fill concave edges on the correct side of the analytic fillet ([#1319](https://github.com/andymai/brepkit/issues/1319)) ([b0d6ed7](https://github.com/andymai/brepkit/commit/b0d6ed7e8cf11d4cfbb0735a3b651a90a458d0ce))
+
 ## [2.128.26](https://github.com/andymai/brepkit/compare/v2.128.25...v2.128.26) (2026-08-04)
 
 
