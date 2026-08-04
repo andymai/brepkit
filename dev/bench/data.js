@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785848926240,
+  "lastUpdate": 1785851040166,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17009,6 +17009,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24267633,
             "range": "± 115252",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2c7fe377b2506b2d9b178331d86a2dc95b4ffcc6",
+          "message": "test(blend): stable primitive repro for the keep-side tangency residual (#1311)\n\nAdds the first stable primitive repro for the v2 trimmer's keep-side\nresidual (ignored, with the measured refutation of the naive\nside-discriminant fix documented in the ignore reason and the roadmap).\nNo behavior change.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a stable primitive repro for the v2 trimmer keep-side failure near\ntangency and updates the roadmap with findings. The ignored test\n`crates/operations/tests/regress_blend_keepside_tangency.rs` (uses\n`fillet_v2`) shows a 0.02‑radius fillet on a 178.9° extruded ridge loses\n~12% volume (242 → 212.4); an in‑plane cross‑contact side discriminant\nwas measured and refuted, so no behavior changes.\n\n<sup>Written for commit 64e4ff88256c77607038207bb5cefeca28bfda54.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1311?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T13:41:29Z",
+          "tree_id": "83e6aec79c1bdfdc2f1d937fa8ade739502edc75",
+          "url": "https://github.com/andymai/brepkit/commit/2c7fe377b2506b2d9b178331d86a2dc95b4ffcc6"
+        },
+        "date": 1785851039062,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 968204,
+            "range": "± 23457",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1053219,
+            "range": "± 12548",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13198,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 696049,
+            "range": "± 28863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25451563,
+            "range": "± 29026",
             "unit": "ns/iter"
           }
         ]
