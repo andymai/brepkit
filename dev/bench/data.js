@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785812714907,
+  "lastUpdate": 1785813418982,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15443,6 +15443,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30198255,
             "range": "± 459734",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c6f84106bc258fb976e9af9ced60103d6bbb5bc7",
+          "message": "docs(roadmap): kumiko twelfth pass roots the EF crossing altitude (#1283)\n\nTwelfth-pass analysis for the kumiko lattice band fuse (parked\n`diag/kumiko-in-gate-abs`, 14 free edges):\n\n- The backtrace instrument pins the twin vertex to\n`phase_ef::check_edge_face_pairs`: an EF crossing 3.5e-4 from the\noperand corner it should share.\n- That offset is real operand-level disagreement (the two bands are\nindependently faceted, mismatching by up to ~1e-3 at lattice corners),\nnot solver error.\n- The existing angle-scaled EF snap cannot unify it (window too narrow\nfor a non-tangential crossing; the candidate fails the weld-scale\non-surface check by the same operand noise).\n- Fix shape recorded: guarded wide adoption at the EF crossing with the\nambiguity ratio guard, on-surface band widened to the operand-noise\nscale; flagged as touching the honeycomb-calibrated endpoint windows, so\nit needs a session with full foil bandwidth.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocument twelfth-pass findings for Kumiko: the twin vertex originates at\nan EF crossing in `phase_ef::check_edge_face_pairs` due to operand-level\nfacet mismatch (~1e-3), not solver error. Proposes a guarded wide\nadoption at interference altitude (10× ambiguity ratio via\n`JunctionRegistry`, widened on-surface band) and flags honeycomb\nendpoint-window risks in `phase_ef.rs`.\n\n<sup>Written for commit ef2d4ff00ff6d7b21fe80330c42c7ebd95db2292.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1283?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T20:14:30-07:00",
+          "tree_id": "19b63e9eb9383a8a4ae3d1d3f1c6a9f3cef48d6d",
+          "url": "https://github.com/andymai/brepkit/commit/c6f84106bc258fb976e9af9ced60103d6bbb5bc7"
+        },
+        "date": 1785813417770,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1014422,
+            "range": "± 3860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1092073,
+            "range": "± 33338",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11974,
+            "range": "± 114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 676110,
+            "range": "± 2550",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29863603,
+            "range": "± 132981",
             "unit": "ns/iter"
           }
         ]
