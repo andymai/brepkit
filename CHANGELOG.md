@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.19](https://github.com/andymai/brepkit/compare/v2.128.18...v2.128.19) (2026-08-04)
+
+
+### Bug Fixes
+
+* **algo:** keep exact operand geometry through arrangement emission and welds ([#1277](https://github.com/andymai/brepkit/issues/1277)) ([dd152bd](https://github.com/andymai/brepkit/commit/dd152bd6f057cb18408dcab24e924b9ef840cb86))
+
 ## [2.128.18](https://github.com/andymai/brepkit/compare/v2.128.17...v2.128.18) (2026-08-03)
 
 
