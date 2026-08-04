@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.28](https://github.com/andymai/brepkit/compare/v2.128.27...v2.128.28) (2026-08-04)
+
+
+### Bug Fixes
+
+* **blend:** use the material wedge half-angle in the analytic plane fillet ([#1321](https://github.com/andymai/brepkit/issues/1321)) ([b516ed4](https://github.com/andymai/brepkit/commit/b516ed4381ba9cf010e946119bb5d0f3fd7b6bfe))
+
 ## [2.128.27](https://github.com/andymai/brepkit/compare/v2.128.26...v2.128.27) (2026-08-04)
 
 
