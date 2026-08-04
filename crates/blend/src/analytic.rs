@@ -436,6 +436,34 @@ fn midpoint_3d(a: Point3, b: Point3) -> Point3 {
 /// # Errors
 /// Returns `BlendError` if topology lookups or math operations fail.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+/// Signed extent of `face`'s vertices against another plane's inward normal
+/// `n_other`, measured from the spine point `p`. The extreme-magnitude vertex
+/// is the witness: positive means the face reaches into the material side of
+/// the other plane (convex edge), negative means the void side (concave).
+fn material_side_witness(
+    topo: &Topology,
+    face: FaceId,
+    n_other: Vec3,
+    p: Point3,
+) -> Result<f64, BlendError> {
+    let f = topo.face(face)?;
+    let mut wires = vec![f.outer_wire()];
+    wires.extend(f.inner_wires().iter().copied());
+    let mut extreme = 0.0_f64;
+    for wid in wires {
+        for oe in topo.wire(wid)?.edges() {
+            let e = topo.edge(oe.edge())?;
+            for vid in [e.start(), e.end()] {
+                let s = n_other.dot(topo.vertex(vid)?.point() - p);
+                if s.abs() > extreme.abs() {
+                    extreme = s;
+                }
+            }
+        }
+    }
+    Ok(extreme)
+}
+
 fn plane_plane_fillet(
     spine: &Spine,
     topo: &Topology,
@@ -460,6 +488,21 @@ fn plane_plane_fillet(
 
     let (bisector, _cross_dir) = section_basis(n1, n2, tangent);
 
+    // The inward normals alone cannot distinguish a convex edge from a
+    // concave (notch) one — both wedges share the same bounding planes.
+    // The tie-breaker is the faces' extent: a convex neighbour face lies on
+    // the material (inward) side of the other plane, a concave one on the
+    // void side. On a concave edge the fillet centre and contacts sit up the
+    // OUTWARD bisector, and the in-plane contact projections then follow the
+    // real walls instead of their extensions.
+    let w1 = material_side_witness(topo, face1, n2, p_start)?;
+    let w2 = material_side_witness(topo, face2, n1, p_start)?;
+    let bisector = if w1 < -ANALYTIC_TOL_LIN && w2 < -ANALYTIC_TOL_LIN {
+        -bisector
+    } else {
+        bisector
+    };
+
     let center_offset = radius / sin_half;
 
     let cyl_origin = p_start + bisector * center_offset;
@@ -477,7 +520,6 @@ fn plane_plane_fillet(
     let c1_end = p_end + contact_dir1 * contact_offset;
     let c2_start = p_start + contact_dir2 * contact_offset;
     let c2_end = p_end + contact_dir2 * contact_offset;
-
     let contact1 = nurbs_line(c1_start, c1_end)?;
     let contact2 = nurbs_line(c2_start, c2_end)?;
 

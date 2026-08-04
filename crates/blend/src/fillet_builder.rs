@@ -23,7 +23,7 @@ use crate::corner;
 use crate::radius_law::RadiusLaw;
 use crate::spine::Spine;
 use crate::stripe::{Stripe, StripeResult};
-use crate::trimmer::{self, TrimSide};
+use crate::trimmer;
 use crate::walker::{Walker, WalkerConfig, approximate_blend_surface};
 use crate::{BlendError, BlendResult};
 
@@ -191,39 +191,21 @@ impl<'a> FilletBuilder<'a> {
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
             let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
 
-            // Compute which side to keep: the side AWAY from the blend ball center.
-            // Use the first section's ball center to determine direction relative
-            // to each face normal. If center is on the normal side, keep Right
-            // (away from center); otherwise keep Left.
-            let keep_side1 =
-                if let (Some(sec), Ok(face)) = (stripe.sections.first(), topo.face(stripe.face1)) {
-                    let n = face.surface().normal(0.0, 0.0);
-                    if n.dot(sec.center - sec.p1) > 0.0 {
-                        TrimSide::Right
-                    } else {
-                        TrimSide::Left
-                    }
-                } else {
-                    TrimSide::Right
-                };
-            let keep_side2 =
-                if let (Some(sec), Ok(face)) = (stripe.sections.first(), topo.face(stripe.face2)) {
-                    let n = face.surface().normal(0.0, 0.0);
-                    if n.dot(sec.center - sec.p2) > 0.0 {
-                        TrimSide::Right
-                    } else {
-                        TrimSide::Left
-                    }
-                } else {
-                    TrimSide::Right
-                };
+            // Keep the side of the contact line AWAY from the spine edge: the
+            // strip between the contact line and the old edge is what the
+            // blend face replaces. The side is resolved inside the trimmer,
+            // whose Left/Right frame follows each face's wire traversal and
+            // cannot be predicted here; a ball-centre plane-side test flips
+            // for concave edges even though the in-plane keep side does not.
+            let spine_pt = stripe.spine.evaluate(topo, 0.0)?;
+            let keep = trimmer::TrimKeep::AwayFrom(spine_pt);
 
             // Trim face 1 — use current replacement if face was already trimmed.
             let current_face1 = face_replacements
                 .get(&stripe.face1)
                 .copied()
                 .unwrap_or(stripe.face1);
-            let trim1 = trimmer::trim_face_general(topo, current_face1, &contact1_pts, keep_side1);
+            let trim1 = trimmer::trim_face_general(topo, current_face1, &contact1_pts, keep);
 
             match trim1 {
                 Ok(tr) if tr.trimmed_face != current_face1 => {
@@ -244,7 +226,7 @@ impl<'a> FilletBuilder<'a> {
                 .get(&stripe.face2)
                 .copied()
                 .unwrap_or(stripe.face2);
-            let trim2 = trimmer::trim_face_general(topo, current_face2, &contact2_pts, keep_side2);
+            let trim2 = trimmer::trim_face_general(topo, current_face2, &contact2_pts, keep);
 
             match trim2 {
                 Ok(tr) if tr.trimmed_face != current_face2 => {

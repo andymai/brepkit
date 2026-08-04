@@ -16,7 +16,7 @@ use crate::analytic;
 use crate::builder_utils::sample_nurbs_endpoints;
 use crate::spine::Spine;
 use crate::stripe::StripeResult;
-use crate::trimmer::{self, TrimSide};
+use crate::trimmer::{self, TrimKeep, TrimSide};
 use crate::{BlendError, BlendResult};
 
 /// Internal representation of a chamfer edge set with its distance parameters.
@@ -238,7 +238,7 @@ impl<'a> ChamferBuilder<'a> {
                 current_face1,
                 &contact1_pts,
                 &[(0.0, 0.0), (1.0, 0.0)],
-                keep_side1,
+                TrimKeep::Side(keep_side1),
             );
 
             match trim1 {
@@ -263,7 +263,7 @@ impl<'a> ChamferBuilder<'a> {
                 current_face2,
                 &contact2_pts,
                 &[(0.0, 0.0), (1.0, 0.0)],
-                keep_side2,
+                TrimKeep::Side(keep_side2),
             );
 
             match trim2 {

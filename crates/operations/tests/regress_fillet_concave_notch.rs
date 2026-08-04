@@ -1,6 +1,12 @@
-//! Probe: does the FILLET's plane-plane path share the chamfer's concave
-//! tangent-branch defect? Its contact directions still come from the
-//! bisector projection.
+//! A fillet on a CONCAVE (reflex-notch) edge must fill the corner with a
+//! small sliver, not carve material. Two roots closed here: the analytic
+//! plane-plane fillet placed its whole cross-section down the inward-normal
+//! bisector (the material side; a convex and a concave edge are
+//! indistinguishable from the inward normals alone, so a face-extent witness
+//! supplies the missing bit), and the trim keep-side keyed on which side of
+//! the PLANE the ball centre sits, which flips for concave edges even though
+//! the in-plane keep side does not (now resolved inside the trimmer via
+//! TrimKeep::AwayFrom, since its Left/Right frame follows wire traversal).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -32,11 +38,6 @@ fn edge_use_counts(topo: &Topology, solid: SolidId) -> HashMap<EdgeId, usize> {
 }
 
 #[test]
-#[ignore = "ready repro: a 0.02 fillet on a reflex notch REMOVES 0.077 instead of adding the \
-            blend sliver. REFUTED: swapping only the contact directions to the \
-            material-oriented form (the chamfer fix) makes it WORSE (removes 10.5) and breaks \
-            the calibrated convex pins — the fillet's concave case needs the full geometry \
-            (cylinder centre side, section orientation, keep-side) treated together."]
 fn fillet_v2_concave_notch_adds_only_the_fillet_sliver() {
     let mut topo = Topology::new();
     // A shallow ridge: the vertex at (5, 0.05) makes the two top laterals
