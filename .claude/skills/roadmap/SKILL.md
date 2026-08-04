@@ -125,7 +125,6 @@ doc comment — read that, not this.**
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** (open since 2026-07-16) | operations | `mesh_boolean_fallback` warns its output is not a closed 2-manifold and uses it anyway; there is no further fallback, so rejecting means the op fails outright. A product call, not just a fix |
 | **Divider residual geometry** (3 cases, re-confirmed 2026-08-01 with the compound + shell fixes overlaid: 3 failed / 12 passed, 820 s) | algo/GFA | `mitsukude lattice on dividers` (**boundary 6** — was non-manifold 4 before the shell fix, so the signature MOVED), `kumiko dividers perforate the compartment walls`, `dividers + scoops keep the ramp footings solid` (boundary 4). The first two are the SAME 2x2x6 mitsukude bin with 2x1 compartments differing only in `dividers: true/false`, which argues against the divider carry-through being the cause; `__kernel-tests__/mitsukudeNmProbe.test.ts` isolates pattern vs compartments vs footprint |
 | **snapClip 0.6 mm-nozzle export chain** breaks at op-cut-3 (posBad=10, analytic but leaky) | algo/GFA | Root is marched FF sections on curved faces carrying `pave_block_id=None`, bypassing the pave machinery. Canonical altitude is pave-block attachment at phase-FF/make_blocks; every face-splitter-level attempt broke calibrated chains |
-| **algo ray-cast classifier has no `Torus` arm** — torus faces fall to the flat Newell-polygon fallback | algo | PREVENTIVE, no failing repro: re-probed 2026-08-03, every torus landscape green (lib torus tests, `parity_boolean_curved`, `cut_torus_by_box_notch_is_analytic_watertight`, census `torus − box` analytic). Rank below repro-backed work. If built: the quartic ray×torus machinery exists in `check/src/classify/ray_surface.rs` but algo cannot depend on check — the solver would have to move to math |
 | **v2 trimmer residuals** (4, all evidenced by the regress test's 12 free edges) | blend | Keep-side selection is degenerate under tangency; `create_blend_face` builds its own contact edges; no end-cap notch trim; `chamfer_v2` solves the external tangent branch. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
 
 The remaining `#[ignore]` entries are diagnostics or slow perf runs, not open bugs: the
@@ -672,6 +671,12 @@ Measured A/B, same day, same tool commit, each overlay md5-verified through brep
   firing that helps against one that hurts.
 
 ## Closed: root cause + where the detail lives
+- **Torus ray-cast arm** — whole-torus faces (degenerate boundary, < 3 polygon verts) were
+  DROPPED from parity counting entirely, and full-tube laterals fell to the flat polygon
+  fallback. `FaceGeom::Torus` + `math::intersect_line_torus` (the solver already lived in
+  math, no layer move needed) close both; TWO-RIM tube bands decline by design
+  (side-ambiguous from boundary vertices alone). Full-u detection is largest-gap-based
+  (max−min fails on sampled circles). `ray_cast.rs::whole_torus_classifies_inside_and_outside`
 
 - **Kumiko corner cut** — 4 roots: no rescue for a partial cylinder band; graze refinement scaled to
   face extent not arc length; NURBS boundary edges represented by their CHORD; and a reverse-twin
