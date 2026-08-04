@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785848346001,
+  "lastUpdate": 1785848926240,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16955,6 +16955,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25722353,
             "range": "± 58484",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ac604e8a244a26317d201947a8b1847cc659939e",
+          "message": "chore(main): release 2.128.25 (#1310)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.25](https://github.com/andymai/brepkit/compare/v2.128.24...v2.128.25)\n(2026-08-04)\n\n\n### Bug Fixes\n\n* **blend:** notch end caps with the fillet end cross-section arcs\n([#1309](https://github.com/andymai/brepkit/issues/1309))\n([453a7be](https://github.com/andymai/brepkit/commit/453a7be9cd63a2f1e238f9a6c598eb0cfe98eed1))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.25 of `brepkit-wasm`, improving blend end-cap geometry at\nfilleted ends to avoid visual artifacts.\n\n- **Bug Fixes**\n- Notch end caps with fillet end cross-section arcs in blend operations\nto prevent overlaps and gaps.\n\n<sup>Written for commit 1fa29202a1209abbe46fc49b86f6133b075bb3c3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1310?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-04T13:06:08Z",
+          "tree_id": "2ca928632d420f7aefebf0aba0d237c7ef58a9c1",
+          "url": "https://github.com/andymai/brepkit/commit/ac604e8a244a26317d201947a8b1847cc659939e"
+        },
+        "date": 1785848924322,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 918192,
+            "range": "± 2204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 997916,
+            "range": "± 9806",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11868,
+            "range": "± 233",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 683351,
+            "range": "± 9115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24267633,
+            "range": "± 115252",
             "unit": "ns/iter"
           }
         ]
