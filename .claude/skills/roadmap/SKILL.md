@@ -324,6 +324,21 @@ near the crossed face, the micro-facet is real and the splitter must instead acc
 2.4e-3 chain gap at 935 (bridge chain ends within the measured operand-noise scale,
 gated to chain-END pairs only). Either way the campaign remains ONE decision from a
 closed fixture.
+SIXTEENTH PASS (2026-08-03, DECIDED — branch b): measured with an EF-site probe. The
+crossing C comes from B-edge `Id(3093)` × A-face `Id(400)` at t=0.482 (both edge
+endpoints ~0.18 OFF the face: clean transversal, no endpoint incidence). Operand vertex
+A and FF junction B both lie ON face 400's surface to 3.5e-10/5.9e-11 — so A and C sit
+on the SAME line (plane(400) ∩ {x=38.0}), 2.36e-3 apart ALONG it: B's edge genuinely
+crosses 2.36e-3 away from A's vertex. The micro-structure is REAL and the fix is the
+PENDANT-CHAIN BRIDGE in the face splitter: for a planar face, after collecting sections,
+find pendant chain ends (section endpoints shared with no other section or boundary
+within the weld band) and connect PAIRS of pendant ends within a bridge band (~3e-3,
+the measured operand-noise scale; genuine features are >= 1.1e-2) with a Line section —
+the micro-facet edge the true result needs. Implementation notes: measure 935's actual
+section chains near the hexagon first (which ends dangle and where); gate the bridge to
+pendant-END pairs only (never mid-chain), and keep the guard that a bridged pair must
+be mutually nearest. Then verify sub-face 2067 splits into the inside strip + the
+outside hexagon, classification keeps the hexagon, and the fixture closes.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
 phase level all lied because the noise was born at EMISSION, not intersection.
