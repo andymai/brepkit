@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785846842455,
+  "lastUpdate": 1785847187493,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16793,6 +16793,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23977651,
             "range": "± 82950",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "243db8fa884945fc15ae27beee20b3414e1d3b2e",
+          "message": "fix(blend): thread chamfer trims into shared contact edges (#1307)\n\nMirrors #1305 for the chamfer builder: stripe trim results now feed the\nshared-contact blend-face constructor, removing the duplicate-contact\nclass from chamfer flanks; the always-mint wrapper is removed now that\nboth builders thread their trims. Blend, operations, and io suites\ngreen; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nChamfer builder now reuses trimmed neighbors’ contact edges when\ncreating blend faces, removing duplicate contacts and avoiding open\nshells along chamfer flanks. Also removes the always-mint blend-face\nwrapper now that trims are threaded.\n\n- **Bug Fixes**\n- Passes each stripe’s trim `contact_edge` into\n`create_blend_face_with_contacts`, adopting shared contacts when\nendpoints match within weld.\n- Removes duplicate contact entities on chamfer flanks and keeps the\nshell closed; behavior matches the fillet builder.\n\n- **Refactors**\n- Deletes `create_blend_face` (always-mint);\n`create_blend_face_with_contacts` is now used directly.\n  - Updates `SKILL.md` to reflect chamfer contact reuse.\n\n<sup>Written for commit 794ef3de380e4f0d636c0745d657b5257688ccb4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1307?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T12:37:11Z",
+          "tree_id": "b71d55b31cb80519bd2b2f1ecae762f4d3dff644",
+          "url": "https://github.com/andymai/brepkit/commit/243db8fa884945fc15ae27beee20b3414e1d3b2e"
+        },
+        "date": 1785847186395,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 923498,
+            "range": "± 5015",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1000512,
+            "range": "± 13292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11855,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 693014,
+            "range": "± 7774",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24520334,
+            "range": "± 139620",
             "unit": "ns/iter"
           }
         ]
