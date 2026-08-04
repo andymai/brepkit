@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785854446230,
+  "lastUpdate": 1785854669543,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17171,6 +17171,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19918592,
             "range": "± 197964",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a93730cdd372274107658be95545d39283116e4",
+          "message": "test(blend): ready repro for the concave-fillet branch defect (#1314)\n\nAdds the concave-fillet sibling of the chamfer tangent-branch repro\n(ignored ready-repro), with the measured refutation of the direct fix\ntransplant documented in the ignore reason and roadmap. No behavior\nchange.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an ignored ready repro for the concave fillet tangent-branch defect\nand updates the roadmap with measured findings and a refuted fix. No\nbehavior change.\n\n- **New Features**\n- Added `crates/operations/tests/regress_fillet_concave_notch.rs`\n(ignored): a 0.02 fillet on a reflex notch incorrectly removes 0.077\ninstead of adding a small sliver.\n- Updated `.claude/skills/roadmap/SKILL.md`: notes that transplanting\nthe chamfer’s material-oriented contact directions worsens removal\n(~10.5) and breaks convex pins; the concave fillet fix must couple\ncylinder centre side, section orientation, and keep-side.\n\n<sup>Written for commit 43551b37fbe6c395b92cc344971a9a26e8546f49.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1314?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T14:41:57Z",
+          "tree_id": "899fe5ba1cea4709049e763b01bffc469d76ecac",
+          "url": "https://github.com/andymai/brepkit/commit/8a93730cdd372274107658be95545d39283116e4"
+        },
+        "date": 1785854668111,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 917144,
+            "range": "± 2828",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 996791,
+            "range": "± 1753",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12085,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 684131,
+            "range": "± 737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24111950,
+            "range": "± 96730",
             "unit": "ns/iter"
           }
         ]
