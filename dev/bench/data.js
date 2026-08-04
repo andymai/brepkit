@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785819146903,
+  "lastUpdate": 1785820174418,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15767,6 +15767,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24381616,
             "range": "± 237318",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd6549023a50b26f7f27471d6fe5e3374f2258c6",
+          "message": "docs(roadmap): kumiko seventeenth pass finds the graze-dropped micro-section (#1289)\n\nSeventeenth-pass finding for the kumiko lattice band fuse:\n\n- The z~9.9 rim line is covered by per-facet-pair micro-sections; the\nfinal ~2e-3 piece (from the FF-junction anchor to the EF exit on the\nboundary edge) is missing, dropped by the in-both/graze filtering for\nthe A-facet pair that owns it.\n- The pendant-chain-bridge plan narrows to loosening exactly the gate\nthat eats this real corner crossing; the eighteenth-pass instrument is\nrecorded.\n- A degenerate-refine rescue for the boundary-junction snap was\nimplemented and reverted (no effect on this fixture; the idea is\nrecorded for corners that show the degenerate signature directly).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap with the 17th-pass finding: a real corner-crossing\nmicro-section (~2e-3) on the 935–400 rim is being dropped by the graze\nfilter in `restrict_curves_to_faces`. Records the 18th-pass plan to\ninstrument that filter and loosen the specific gate, plus notes a\nreverted degenerate-refine idea in `snap_to_boundary_junction_band`.\n\n<sup>Written for commit 37ce8b0dd4e5a1b1fb49f356851b346fc521fbfb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1289?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T22:06:48-07:00",
+          "tree_id": "a560f03a16581cc2e3c007ab0dfec33006a2769f",
+          "url": "https://github.com/andymai/brepkit/commit/bd6549023a50b26f7f27471d6fe5e3374f2258c6"
+        },
+        "date": 1785820172452,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 917869,
+            "range": "± 786",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1000095,
+            "range": "± 1529",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12102,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 685562,
+            "range": "± 14510",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24350081,
+            "range": "± 48422",
             "unit": "ns/iter"
           }
         ]
