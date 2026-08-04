@@ -126,9 +126,11 @@ fn plane_plane_60_degree_fillet() {
         other => panic!("Expected Cylinder surface, got {other:?}"),
     }
 
-    // Verify center offset matches expected geometry
+    // Inward normals 60 deg apart bound a 120-deg material wedge; the ball
+    // tangent to both planes sits r / sin(60) from the edge (at the old
+    // r / sin(30) = 3.0 the centre is 2.6 from each plane, not tangent).
     let cos_angle = n1.dot(n2);
-    let half = cos_angle.acos() / 2.0;
+    let half = (std::f64::consts::PI - cos_angle.acos()) / 2.0;
     let expected_offset = radius / half.sin();
 
     let center = result.stripe.sections[0].center;
