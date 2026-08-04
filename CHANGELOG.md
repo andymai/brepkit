@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.21](https://github.com/andymai/brepkit/compare/v2.128.20...v2.128.21) (2026-08-04)
+
+
+### Bug Fixes
+
+* **algo:** analytic torus arm for the ray-cast classifier ([#1300](https://github.com/andymai/brepkit/issues/1300)) ([8c0c530](https://github.com/andymai/brepkit/commit/8c0c530a74b248fc1d1623601c20be584576b5af))
+
 ## [2.128.20](https://github.com/andymai/brepkit/compare/v2.128.19...v2.128.20) (2026-08-04)
 
 
