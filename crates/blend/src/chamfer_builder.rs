@@ -291,7 +291,8 @@ impl<'a> ChamferBuilder<'a> {
                 .copied()
                 .unwrap_or((None, None));
             let blend_face_id =
-                crate::builder_utils::create_blend_face_with_contacts(topo, &sr.stripe, c1, c2)?;
+                crate::builder_utils::create_blend_face_with_contacts(topo, &sr.stripe, c1, c2)?
+                    .face;
             blend_face_ids.push(blend_face_id);
         }
 

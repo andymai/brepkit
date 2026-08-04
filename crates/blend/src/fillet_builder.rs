@@ -260,6 +260,11 @@ impl<'a> FilletBuilder<'a> {
             }
         }
 
+        let mut blend_cross_edges: Vec<(
+            brepkit_topology::edge::EdgeId,
+            brepkit_topology::vertex::VertexId,
+            brepkit_topology::vertex::VertexId,
+        )> = Vec::new();
         for (si, sr) in regular_results.iter().enumerate() {
             let stripe = &sr.stripe;
 
@@ -270,16 +275,37 @@ impl<'a> FilletBuilder<'a> {
                 .get(si)
                 .copied()
                 .unwrap_or((None, None));
-            let blend_face_id =
-                crate::builder_utils::create_blend_face_with_contacts(topo, stripe, c1, c2)?;
-            blend_face_ids.push(blend_face_id);
+            let info = crate::builder_utils::create_blend_face_with_contacts(topo, stripe, c1, c2)?;
+            blend_face_ids.push(info.face);
+            blend_cross_edges.push(info.cross_end);
+            blend_cross_edges.push(info.cross_start);
+        }
+
+        // Notch the fillet's end cross-section arcs out of the faces that
+        // still cover the scooped corner (the untouched end caps): replace
+        // each cap's two-edge corner path with the blend's own cross edge so
+        // both sides share one edge entity.
+        for arc in &blend_cross_edges {
+            let candidates: Vec<(FaceId, FaceId)> = original_faces
+                .iter()
+                .map(|&f| (f, face_replacements.get(&f).copied().unwrap_or(f)))
+                .collect();
+            for (orig, fid) in candidates {
+                if let Some(nf) = crate::builder_utils::notch_face_corner_with_arc(topo, fid, *arc)?
+                {
+                    face_replacements.insert(orig, nf);
+                    break;
+                }
+            }
         }
 
         let mut result_faces: Vec<FaceId> = Vec::new();
 
         for &fid in &original_faces {
             if !touched_faces.contains(&fid) {
-                result_faces.push(fid);
+                // An untouched face may still have been rebuilt by the
+                // end-cap notch pass.
+                result_faces.push(face_replacements.get(&fid).copied().unwrap_or(fid));
             }
         }
 

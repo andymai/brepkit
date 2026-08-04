@@ -43,7 +43,7 @@ pub fn create_blend_face_with_contacts(
     stripe: &Stripe,
     contact1_edge: Option<brepkit_topology::edge::EdgeId>,
     contact2_edge: Option<brepkit_topology::edge::EdgeId>,
-) -> Result<FaceId, BlendError> {
+) -> Result<BlendFaceInfo, BlendError> {
     const WELD: f64 = 1e-5;
     let (t0_1, t1_1) = stripe.contact1.domain();
     let (t0_2, t1_2) = stripe.contact2.domain();
@@ -115,7 +115,31 @@ pub fn create_blend_face_with_contacts(
         },
         |(eid, fwd, _, _)| (eid, fwd),
     );
-    let e1 = topo.add_edge(Edge::new(v1e, v2e, EdgeCurve::Line));
+    // Cross edges carry the true end cross-section arcs when the stripe has
+    // sections: the fillet's end profile is a circular arc, and a straight
+    // chord both misrepresents the surface boundary and can never be shared
+    // with a notched end cap. The arc's plane normal comes from the two
+    // contact endpoints and the section centre.
+    let arc_curve =
+        |sec: &crate::section::CircSection, a: Point3, b: Point3| -> Option<EdgeCurve> {
+            let u = a - sec.center;
+            let v = b - sec.center;
+            let n = u.cross(v);
+            let n = n.normalize().ok()?;
+            let circle = brepkit_math::curves::Circle3D::new(sec.center, n, sec.radius).ok()?;
+            Some(EdgeCurve::Circle(circle))
+        };
+    let end_curve = stripe
+        .sections
+        .last()
+        .and_then(|sec| arc_curve(sec, p1_end, p2_end))
+        .unwrap_or(EdgeCurve::Line);
+    let start_curve = stripe
+        .sections
+        .first()
+        .and_then(|sec| arc_curve(sec, p2_start, p1_start))
+        .unwrap_or(EdgeCurve::Line);
+    let e1 = topo.add_edge(Edge::new(v1e, v2e, end_curve));
     let (e2, e2_fwd) = adopt2.map_or_else(
         || {
             (
@@ -129,7 +153,7 @@ pub fn create_blend_face_with_contacts(
         },
         |(eid, fwd, _, _)| (eid, fwd),
     );
-    let e3 = topo.add_edge(Edge::new(v2s, v1s, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v2s, v1s, start_curve));
 
     let wire = Wire::new(
         vec![
@@ -145,7 +169,92 @@ pub fn create_blend_face_with_contacts(
     let face = Face::new(wire_id, Vec::new(), stripe.surface.clone());
     let face_id = topo.add_face(face);
 
-    Ok(face_id)
+    Ok(BlendFaceInfo {
+        face: face_id,
+        cross_end: (e1, v1e, v2e),
+        cross_start: (e3, v2s, v1s),
+    })
+}
+
+/// A created blend face plus its two cross edges (the end cross-section
+/// arcs), each with its (from, to) vertices in the blend wire's traversal
+/// direction — the handles the end-cap notch surgery needs to SHARE those
+/// arcs instead of leaving both sides use-1.
+pub struct BlendFaceInfo {
+    /// The blend face.
+    pub face: FaceId,
+    /// Cross edge at the spine end: `(edge, from, to)`.
+    pub cross_end: (brepkit_topology::edge::EdgeId, VertexId, VertexId),
+    /// Cross edge at the spine start: `(edge, from, to)`.
+    pub cross_start: (brepkit_topology::edge::EdgeId, VertexId, VertexId),
+}
+
+/// Replace a face's two-edge corner path `from -> corner -> to` with the
+/// single cross-section arc `edge`, notching the fillet's end profile out of
+/// an end cap so the cap and the blend share one edge entity. Both replaced
+/// edges must be straight (the box corner sides); returns whether a
+/// replacement happened.
+pub fn notch_face_corner_with_arc(
+    topo: &mut Topology,
+    face_id: FaceId,
+    arc: (brepkit_topology::edge::EdgeId, VertexId, VertexId),
+) -> Result<Option<FaceId>, BlendError> {
+    let (arc_eid, va, vb) = arc;
+    let wire_id = topo.face(face_id)?.outer_wire();
+    let oes = topo.wire(wire_id)?.edges().to_vec();
+    let n = oes.len();
+    if n < 3 {
+        return Ok(None);
+    }
+    let ends = |oe: &OrientedEdge| -> Result<(VertexId, VertexId), BlendError> {
+        let e = topo.edge(oe.edge())?;
+        Ok((oe.oriented_start(e), oe.oriented_end(e)))
+    };
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (s0, e0) = ends(&oes[i])?;
+        let (s1, e1) = ends(&oes[j])?;
+        if e0 != s1 || e0 == va || e0 == vb {
+            continue;
+        }
+        let fwd = s0 == va && e1 == vb;
+        let rev = s0 == vb && e1 == va;
+        if !(fwd || rev) {
+            continue;
+        }
+        let both_straight = [oes[i].edge(), oes[j].edge()].iter().all(|&eid| {
+            topo.edge(eid)
+                .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+        });
+        if !both_straight {
+            continue;
+        }
+        let mut new_oes: Vec<OrientedEdge> = Vec::with_capacity(n - 1);
+        for (k, oe) in oes.iter().enumerate() {
+            if k == i {
+                new_oes.push(OrientedEdge::new(arc_eid, fwd));
+            } else if k != j {
+                new_oes.push(*oe);
+            }
+        }
+        let new_wire = topo.add_wire(Wire::new(new_oes, true)?);
+        let (surface, reversed, inners) = {
+            let f = topo.face(face_id)?;
+            (
+                f.surface().clone(),
+                f.is_reversed(),
+                f.inner_wires().to_vec(),
+            )
+        };
+        let new_face = if reversed {
+            Face::new_reversed(new_wire, inners, surface)
+        } else {
+            Face::new(new_wire, inners, surface)
+        };
+        let nf = topo.add_face(new_face);
+        return Ok(Some(nf));
+    }
+    Ok(None)
 }
 
 /// Adapter that provides [`ParametricSurface`] for a `FaceSurface::Plane`.
