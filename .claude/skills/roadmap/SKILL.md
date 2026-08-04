@@ -424,9 +424,23 @@ top-south strip (z>9.86, y -41.30..-42.75) sits ABOVE B's slope and must be kept
 that strip is exactly the six-edge hole's wall side. The wall lacks a split along
 z=9.8922 south of y=-41.30: the rim edges (38.05,y,9.8922) lie on x=38.05 ∩
 z=9.8922, i.e. the section owed by pair (398 × B's HORIZONTAL top face at z=9.8922),
-which is missing/truncated in 398's inputs. TWENTY-FIFTH PASS: find the B-face with
-plane z=9.8922 covering y∈[-42.75,-41.30] near x=38.05 (WALL-probe recipe with the
-normal test on z), then RESTRICT_IN/OUT-probe the pair (398 × it). The campaign's
+which is missing/truncated in 398's inputs. TWENTY-FIFTH PASS
+(2026-08-04, answered): NO z=9.8922 plane exists in either solid, and no FF pair
+produces the constant-z rim line — because the rim edges (38.05,y,9.8922) are A's OWN
+OPERAND RIDGE (the boundary edge between A-slope `400` and A-wall `398`; their planes
+meet along that horizontal line). The slope side of the ridge survives (product
+`2323<-400`); the wall side sits inside the straddle-dropped middle band `1490`. So
+the missing face is the wall strip y∈[-42.75,-41.30] bounded ABOVE by the ridge — and
+the split 398 lacks is the VERTICAL cut near y≈-41.30 below the slope line (B's
+boundary at the strip's north edge), which would separate the keep-strip from the
+genuinely-inside middle band. TWENTY-SIXTH PASS: RESTRICT-probe pairs (398 × B-faces)
+in the region x≈38.05, y∈[-41.35,-41.25], z∈[4.5,9.9] to see whether that vertical
+section is computed and where it is truncated. ALSO worth implementing independently
+(robustness backstop, foil-gated): straddle DETECTION in classification — classify
+each sub-face at 3-5 spread samples instead of one; disagreement marks the sub-face
+as straddling (under-split), which can at least abort with a precise diagnostic
+instead of silently dropping volume. Every recent kumiko root would have been caught
+at its face by that check. The campaign's
 generic lesson is now sharp: every remaining defect is one instance of "a pair
 section truncated where operand geometry rides a boundary, cascading into a
 straddle-drop"; each pass peels one instance, and the same probe recipes
