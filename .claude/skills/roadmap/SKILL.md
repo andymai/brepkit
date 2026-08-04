@@ -379,10 +379,21 @@ exit paves like C are section-free). MEASURED: z=4.5 closes COMPLETELY; the z~9.
 defect shrinks to ONE six-edge hole rim ((38.05,-41.30)→A→B→C→(-42.75)→
 (38.05,-42.7477)→back). Remaining defect: face 935's splitter STILL yields only 2
 sub-faces (2066 Outside kept / 2067 Inside dropped, probe unchanged) — the strip region
-bounded by the bridged chain is not traced as its own region. TWENTIETH PASS: find why
-(SPLIT_PATH probe on 935: which path fires; if the plane arrangement computes 3 regions
-but the adoption gate `result.len() > loops.len()` refuses, or the greedy merges the
-strip into 2067). Foils NOT yet run on the branch — run algo/ops/io before any ship. Also REVERTED this pass (no effect,
+bounded by the bridged chain is not traced as its own region. TWENTIETH PASS (2026-08-03,
+answered; branch now @ cf8c53af): the plane arrangement IS the adopted path for 935,
+and the bridge never reached it — the arrangement reads `sections` while the bridge
+lived only in `all_edges` (the greedy input). Fixed: bridge sections now augment the
+section list ahead of both paths. STILL 2 interior regions (`ARR935 traced=3
+interior=2`): the bridged chain's NORTH anchor (38.05,-41.3002,9.8922) must land on
+935's ridge boundary (x=38.05) for the chain to separate a region, and the T-junction
+there does not register — the endpoint likely sits just past the tol*100=1e-5
+endpoint-T window off the ridge chord, or the ridge edge in the arrangement inputs is
+the unsplit image piece whose interior the endpoint misses. TWENTY-FIRST PASS: measure
+the distance from (38.050000000,-41.300229084,9.892195827) to 935's ridge boundary
+edges in the arrangement inputs, then either widen the endpoint-T window for
+section-chain ends at the operand-noise scale (gated like the bridge) or anchor the
+chain end onto the ridge via the same image-vertex adoption. Foils STILL not run on
+the branch — run algo/ops/io before any ship. Also REVERTED this pass (no effect,
 principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
 band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
 edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
