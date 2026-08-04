@@ -131,8 +131,12 @@ ridge loses 12% of the solid, 242 → 212.4). MEASURED REFUTATION on record: an 
 cross-contact side discriminant (keep the side of the contact line opposite the projected
 other-contact direction) flipped the CALIBRATED box case while leaving the 12% loss
 UNCHANGED — so the loss is at least partly in the trim geometry itself at shallow incidence,
-not only the side dot; separate the two sub-defects before re-attempting. Also remaining:
-`chamfer_v2` external tangent branch. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
+not only the side dot; separate the two sub-defects before re-attempting. `chamfer_v2` external tangent branch CLOSED
+2026-08-04: on a concave edge the bisector-projected contact direction flips onto the faces'
+extensions (0.02 chamfer grew a notched prism 6.7%); the chamfer's plane-plane path now uses
+the material-oriented direction (effective-normal × wire-traversal tangent), bisector as
+fallback. `regress_chamfer_obtuse_ridge.rs`. NOTE: the FILLET plane-plane path still uses the
+bisector projection — probe a concave fillet before assuming it shares the defect. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
 
 The remaining `#[ignore]` entries are diagnostics or slow perf runs, not open bugs: the
 `profile_intersect.rs` box-sphere probes are stale (box-sphere shipped analytic in #1006),
