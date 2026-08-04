@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785817381233,
+  "lastUpdate": 1785817536051,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15605,6 +15605,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22087396,
             "range": "± 182653",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f931b43d359f44fbeeae603a91a3a0374606d4d4",
+          "message": "docs(roadmap): kumiko fourteenth pass reduces the campaign to one missing face (#1286)\n\nFourteenth-pass structure finding for the kumiko lattice band fuse\n(post-#1284, 7 free edges):\n\n- The 7 free edges form one closed loop: a single hexagonal hole on the\nslope at the z~9.9 crossing. This is a missing face, not a weld problem.\n- Cluster member identities pinned by backtrace: an operand vertex, an\nEF crossing 2.36e-3 away, and an FF junction 3.75e-4 away - all rim\nvertices of the one hole.\n- Rim ownership points at source face 935 (B's slope): the fifteenth\npass dumps its split products and their BOP classification verdicts to\ndetermine whether the covering strip was classified out or never traced.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the kumiko roadmap with fourteenth-pass results: the seven free\nedges form one closed-loop hexagonal hole at z≈9.9, confirming a missing\nface (not a weld). Adds a fifteenth-pass plan to dump `Id(935)` split\nproducts and BOP classification near the hole to locate the missing\ncover.\n\n<sup>Written for commit cbf64b397c5b0106758d1f2a4282325aa24f9be1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1286?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T21:22:01-07:00",
+          "tree_id": "0cfd24e4e4520ad8e5b0770d23e97d67cdf41170",
+          "url": "https://github.com/andymai/brepkit/commit/f931b43d359f44fbeeae603a91a3a0374606d4d4"
+        },
+        "date": 1785817535024,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 945931,
+            "range": "± 1251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1034465,
+            "range": "± 6048",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13114,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 693156,
+            "range": "± 1458",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25117586,
+            "range": "± 44127",
             "unit": "ns/iter"
           }
         ]
