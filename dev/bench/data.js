@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785879499951,
+  "lastUpdate": 1785881503428,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17711,6 +17711,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24227741,
             "range": "± 50275",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b7f4cd3dfad683fe5f3756addc60da8fc108b80e",
+          "message": "fix(shell): emit the chamfer strip a swallowed corner fillet collapses to (#1324)\n\n## Root cause (the thick-wall residual, second root in the same arm)\n\nWhen a shell thickness swallows a corner fillet's radius, the\ncollapsed-cylinder arm emitted **no inner face at all**, leaving the\ninner shell a corner-wide gap at every swallowed corner. The spec\nassembler closed the gap the only way it could: by threading the top\nring's inner wire down the cavity verticals and across the floor chamfer\ndiagonals — a 16-edge non-planar inner wire on a z=const plane face.\nThat body is edge-paired (free=0, passes every health check), but the\nwire is geometrically degenerate, so the next fuse's hole-shell grouping\ncorrectly aborted with \"open hole shell with 9 faces\", dropped to the\nmesh fallback, and the fallback's open output carried 17-23 boundary\nedges into every later fuse and the export.\n\n## Fix\n\nThe collapsed cylinder's wire vertices mapped through the\nalready-computed miter positions form exactly the right chamfer quad\n(z-extent included, because the shared corner keys carry the cap\nnormals). The arm now emits that strip instead of nothing.\n\n## Measured end-to-end (exported mesh boundary edges, halfSockets bins)\n\n| case | pre #1243 | after #1243 | after this PR |\n|---|---|---|---|\n| 1x1x10 wall 3.8 / 3.9 / 4.0 | 149 / 159 / 160 | 23 / 19 / 17 | **0 / 0\n/ 0** |\n| 2x2 wall 4 / wall 6 | 832 / 898 | 20 / 20 | **0 / 0** |\n\nThe 2x2 cases are the arena where the refuted true-corner variant\nregressed to 318/544; they are clean here. The captured six-boolean\nchain replays fully analytic natively (the aborting fuse now yields F=67\nfree=0; the final assembly fuse goes from the poisoned F=655/free=17 to\nF=203 free=0).\n\n## Validation\n\n- `shell_thickness_past_corner_radius_gives_a_sharp_corner` extended:\nasserts the four 45-degree chamfer strips.\n- `thickwall_sharp_cavity_fuse_inmem.rs`: operands re-captured post-fix,\nfuse pin un-ignored and active.\n- Suites green: operations 1012, io 232, algo 209; approximation census\nunchanged.\n- Adds a `BK_SHELLS` shell-membership probe (complements\n`BK_OPEN_SHELL`) and a `dump_solid` example (prints every wire\nedge-by-edge — the degenerate inner wire was invisible until wires were\nprinted that way).\n\nRoadmap updated in the same PR: thick-wall cavity row closed with both\nroots and the measured table.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nEmit a 45° chamfer strip when shell thickness consumes a corner fillet,\nfixing the missing inner face that caused “open hole shell” aborts and\nmesh-fallback leaks. Exports now show 0 boundary edges in the measured\nhalf-socket cases.\n\n- **Bug Fixes**\n- In `shell`, when a corner cylinder collapses (inner radius ≤ tol),\nbuild a planar chamfer face from the cylinder’s wire vertices mapped\nthrough existing miter positions instead of emitting nothing.\n- Restores a closed inner shell and keeps the next fuse analytic; tests\nupdated: `shell_thickness_past_corner_radius_gives_a_sharp_corner`\nasserts 4 chamfer strips; `thickwall_sharp_cavity_fuse_inmem`\nre-captured and passes. End-to-end: 1x1x10 wall 3.8/3.9/4.0 → 0/0/0; 2x2\nwall 4/6 → 0/0 boundary edges.\n\n- **New Features**\n- `BK_SHELLS=1` probe to log face-to-shell membership at grouping time.\n- New `dump_solid` example to print faces and wire vertices for\ndebugging.\n\n<sup>Written for commit b8ba4eaa4935e4c2f6b11164170cbfdf51ad6153.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1324?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T22:09:19Z",
+          "tree_id": "a1de9702f61f57a88e91e0f73abb3574f94670d9",
+          "url": "https://github.com/andymai/brepkit/commit/b7f4cd3dfad683fe5f3756addc60da8fc108b80e"
+        },
+        "date": 1785881501958,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 966296,
+            "range": "± 12721",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1054726,
+            "range": "± 5678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13012,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 692401,
+            "range": "± 944",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25463465,
+            "range": "± 52972",
             "unit": "ns/iter"
           }
         ]
