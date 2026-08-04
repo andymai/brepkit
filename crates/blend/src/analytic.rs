@@ -351,13 +351,16 @@ fn nurbs_line(p0: Point3, p1: Point3) -> Result<NurbsCurve, BlendError> {
     Ok(curve)
 }
 
-/// Compute the dihedral half-angle between two plane normals.
-///
-/// Returns the half-angle in radians. The angle is between 0 and pi/2
-/// for convex edges and pi/2 to pi for concave edges.
+/// Half-angle of the material wedge between two planes, from their inward
+/// normals: `(pi - angle_between_normals) / 2`. The fillet centre sits at
+/// `r / sin(half)` up the bisector and the contacts at `r / tan(half)` from
+/// the edge. Halving the normal angle instead coincides with this only at a
+/// 90-degree dihedral (both give 45) and explodes near tangency: a 178.9-deg
+/// ridge has a wedge half-angle of 89.45 deg (contacts ~r*0.01 from the
+/// edge), not 0.55 deg (contacts 100*r away).
 fn dihedral_half_angle(n1: Vec3, n2: Vec3) -> f64 {
     let cos_angle = n1.dot(n2).clamp(-1.0, 1.0);
-    cos_angle.acos() / 2.0
+    (std::f64::consts::PI - cos_angle.acos()) / 2.0
 }
 
 /// Compute the section plane basis from two plane normals and spine tangent.

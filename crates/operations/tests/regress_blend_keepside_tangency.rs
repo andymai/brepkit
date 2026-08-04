@@ -1,6 +1,10 @@
-//! Repro for the v2 trimmer's keep-side residual: at a near-tangent dihedral
-//! the section centre lies almost in both face planes, so the keep-side dot
-//! products approach zero and the trim can keep the wrong side.
+//! A near-tangent ridge fillet must barely change the solid. The 12% loss
+//! this pinned was not keep-side selection at all: `dihedral_half_angle`
+//! returned half the angle BETWEEN the normals where the geometry needs the
+//! material wedge half-angle `(pi - angle)/2`. The two coincide only at a
+//! 90-degree dihedral (both 45), so every box-calibrated case passed while a
+//! 178.9-degree ridge got contacts r/tan(0.55 deg) = 100*r from the edge
+//! instead of r*tan(0.55 deg), trimming away a fifth of each top face.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -32,11 +36,6 @@ fn edge_use_counts(topo: &Topology, solid: SolidId) -> HashMap<EdgeId, usize> {
 }
 
 #[test]
-#[ignore = "ready repro: a 0.02-radius fillet on a 178.9-degree ridge loses 12% of the solid \
-            (242 -> 212.4). NOT purely the keep-side dot: an in-plane cross-contact side \
-            discriminant was tried and flipped the calibrated box case while leaving this \
-            loss unchanged, so part of the loss is in the trim geometry itself at shallow \
-            incidence. Two sub-defects to separate before re-attempting."]
 fn fillet_v2_near_tangent_ridge_keeps_correct_sides() {
     let mut topo = Topology::new();
     // A shallow ridge: the vertex at (5, 0.05) makes the two top laterals
