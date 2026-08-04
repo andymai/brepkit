@@ -1,0 +1,21 @@
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_7ff36fc7322bef::t_5bd4bf94c3afca 38-46
+  s_7ff36fc7322bef::t_7eba4678570ae9 278
+  s_7ff36fc7322bef::t_a96705b3601f85 279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "e0f3f799f27e6b7545549f0453d26d33dce46e47",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
