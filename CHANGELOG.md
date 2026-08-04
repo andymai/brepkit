@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.29](https://github.com/andymai/brepkit/compare/v2.128.28...v2.128.29) (2026-08-04)
+
+
+### Bug Fixes
+
+* **shell:** emit the chamfer strip a swallowed corner fillet collapses to ([#1324](https://github.com/andymai/brepkit/issues/1324)) ([b7f4cd3](https://github.com/andymai/brepkit/commit/b7f4cd3dfad683fe5f3756addc60da8fc108b80e))
+
 ## [2.128.28](https://github.com/andymai/brepkit/compare/v2.128.27...v2.128.28) (2026-08-04)
 
 
