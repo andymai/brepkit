@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785860982195,
+  "lastUpdate": 1785865422957,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17279,6 +17279,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20544495,
             "range": "± 195555",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2bfb5dc7692a764b61e27b27a4b3d1a512036012",
+          "message": "docs(roadmap): the full export matrix is green on the post-campaign kernel (#1316)\n\nCapstone measurement: all four export-matrix arms (base styles, bin\nstyles with the kumiko/mitsukude wall patterns, custom shapes, half\nsockets) pass 73/73 in about 31 seconds on the freshly built kernel -\nthe families that historically ran 14 minutes per arm with failures.\nRecorded alongside the green isolation probes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to record that the full export matrix is green on the\npost‑campaign kernel. All four arms—`binGenerator.export.baseStyles`,\n`.binStyles` (kumiko/mitsukude walls), `.customShape`,\n`.halfSockets`—pass 73/73 in ~31s under default `vitest`, with notes on\nprobe renames and that the profile config’s include misses these tests.\n\n<sup>Written for commit 4e5e63bbd1ff4d16e21f4bbd562523d5c48a4290.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1316?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T17:41:15Z",
+          "tree_id": "011e24121c7b02801db4f0608526b1acedeb9510",
+          "url": "https://github.com/andymai/brepkit/commit/2bfb5dc7692a764b61e27b27a4b3d1a512036012"
+        },
+        "date": 1785865421822,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 927171,
+            "range": "± 1671",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1002745,
+            "range": "± 1779",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12333,
+            "range": "± 79",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 691698,
+            "range": "± 1462",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24533374,
+            "range": "± 57855",
             "unit": "ns/iter"
           }
         ]
