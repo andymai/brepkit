@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.22](https://github.com/andymai/brepkit/compare/v2.128.21...v2.128.22) (2026-08-04)
+
+
+### Bug Fixes
+
+* **algo:** close the kumiko lattice band fuse ([#1302](https://github.com/andymai/brepkit/issues/1302)) ([719585c](https://github.com/andymai/brepkit/commit/719585c9264f20c3aa3262f5934a496c215ef0e0))
+
 ## [2.128.21](https://github.com/andymai/brepkit/compare/v2.128.20...v2.128.21) (2026-08-04)
 
 
