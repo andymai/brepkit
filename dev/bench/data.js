@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785881979185,
+  "lastUpdate": 1785884640271,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17819,6 +17819,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24258311,
             "range": "± 42624",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a262d897b98004710c7997145a6a518355bbd58b",
+          "message": "test(io): pin the mitsukude panel cut that drops to the mesh fallback (#1326)\n\nProfiled the kumiko-dividers scenario (183 s vs the tool's 180 s\nbudget): one `compoundCut(base, 8 tools)` call is 82 of each bin's 86\nseconds. Splitting it to the smallest failing subset shows the raw GFA\ncut of a single lattice panel out of the 2x2x6 bin body **succeeds in\n~200 ms with every cone and cylinder preserved but leaves 8 free\nedges**, so the ops validity gate declares it unusable and takes the\nmesh fallback — the perf gap is a correctness gap.\n\nThe 8 free edges form one connected loop at the stacking-lip transition\nband on the east wall (x 38.05/38.00 planes joined by an r=0.05 arc band\nand a 45-degree chamfer): a strut pocket crosses the three-surface\njunction and the sub-face patch spanning it is lost. The 8-panel\ncompound cut fails adjacently (a 4-face, 0.57 mm^3 open hole-shell\nfragment trips the assembly guard's face-count threshold).\n\nThis PR banks the dig entry point:\n\n- `crates/io/tests/mitsukude_panel_cut_inmem.rs`: captured operands (262\nKB), operand-health pin active, cut repro ignored with the\ncharacterization.\n- `replay_pair` gains a `FREE_EDGES=1` dump (prints unpaired-edge\npositions, which is how the loop was located).\n- Roadmap row with the geometry, the compound-cut abort variant, and the\ncapture recipe.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins a small, in‑memory repro for the mitsukude panel cut that leaves an\n8‑edge loop at the lip transition, causing the ops gate to drop to the\nmesh fallback and driving the kumiko‑dividers 183 s runtime. Adds a\nfree‑edge debug dump to `replay_pair` and documents the capture and\ngeometry in the roadmap.\n\n- **New Features**\n- Ignored ready‑repro test\n`crates/io/tests/mitsukude_panel_cut_inmem.rs` with captured operands\n(`mitsukude_bin_body.bin`, `mitsukude_panel_tool.bin`): raw GFA cut\npreserves analytic surfaces (~200 ms) but yields 8 free edges; mesh\nfallback then consumes ~82 s.\n- `replay_pair` accepts `FREE_EDGES=1` to print unpaired edge endpoints\n(helps locate the loop).\n- Roadmap updated with the panel‑cut defect, failure geometry, and\ncapture recipe.\n\n<sup>Written for commit 73972b41cd4f3ff0ed3ab41a37021c26ea804b6c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1326?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T23:01:30Z",
+          "tree_id": "e0e94880f6c09ad14b635203832b89a675a9f5b9",
+          "url": "https://github.com/andymai/brepkit/commit/a262d897b98004710c7997145a6a518355bbd58b"
+        },
+        "date": 1785884638455,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000430,
+            "range": "± 1666",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1041241,
+            "range": "± 2185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13046,
+            "range": "± 56",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 692053,
+            "range": "± 1355",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25451767,
+            "range": "± 82314",
             "unit": "ns/iter"
           }
         ]
