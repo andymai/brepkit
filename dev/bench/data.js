@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785877919594,
+  "lastUpdate": 1785879499951,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17657,6 +17657,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24159871,
             "range": "± 59942",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "03bafc5a44cd2475a0bbd201793cead3c5ecf860",
+          "message": "docs(roadmap): close the divider residual geometry row after re-probe (#1323)\n\nRe-probed the divider-pattern scenario suite on the current kernel (post\nkumiko campaign, post blend-trimmer closures). All 15 scenarios pass\ntheir assertions, including the three historic defects: `mitsukude\nlattice on dividers` (was boundary 6), `dividers + scoops keep the ramp\nfootings solid` (was boundary 4), and `kumiko dividers perforate the\ncompartment walls`.\n\nTwo residuals, neither geometry:\n\n1. `kumiko dividers` completes all assertions in ~183 s (the scenario\ngenerates two full 2x2x6 mitsukude bins, ~91 s each) against the tool's\n180 s vitest budget, so the test is still marked failed on timeout. This\nis a perf gap on the mitsukude wall-pattern compound cut.\n2. The tool pins patched brepjs 18.119.2, whose adapter lacks compound\n`applyMatrix` (added upstream in brepjs 18.119.3+). Tool change #3225\nnow rotates/translates compound shapes, so 11 of 15 scenarios throw\npre-geometry under the pinned brepjs. The 15/15 measurement required\ntemporarily overlaying the brepjs 18.119.7 dist alongside the kernel;\nthe tool repo was restored to its pinned state afterward.\n\nRoadmap row updated with the measured detail and the unblock condition.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to close the divider residual geometry row after a\nfresh probe on the current kernel; all 15 divider-pattern scenarios now\npass. Two non-geometry residuals remain: `kumiko dividers` exceeds the\ntool’s 180s test budget by ~3s, and the tool is pinned to `brepjs`\n18.119.2 which lacks compound `applyMatrix`, causing pre-geometry\nfailures until the tool bumps `brepjs` (18.119.3+).\n\n<sup>Written for commit a3058fac8c391c20feb8749263ce32905fb2162d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1323?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T21:35:39Z",
+          "tree_id": "c21874ee3b3ab1c06eac0f2fdd02d0deaebaac0c",
+          "url": "https://github.com/andymai/brepkit/commit/03bafc5a44cd2475a0bbd201793cead3c5ecf860"
+        },
+        "date": 1785879498461,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 927233,
+            "range": "± 2466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 999894,
+            "range": "± 1540",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12158,
+            "range": "± 80",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 685990,
+            "range": "± 1226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24227741,
+            "range": "± 50275",
             "unit": "ns/iter"
           }
         ]
