@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785829205324,
+  "lastUpdate": 1785830027359,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16361,6 +16361,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24037876,
             "range": "± 27632",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f1f3aff55d1ab3ab387e0f31457a2af2a6a751d2",
+          "message": "docs(roadmap): kumiko twenty-seventh pass reaches the campaign's final form (#1299)\n\nTwenty-seventh-pass consolidation for the kumiko lattice band fuse:\n\n- The trim probe vindicates the wall clip: the slope line exits at the\nridge correctly.\n- Assembling all passes: the remaining six-edge hole is a 0.03-tall\nsliver where A's top slope and B's bottom slope are near-coincident; the\njunction chain rides their common line, and every artifact from passes\n14-26 is collateral of that one unpaired near-coincident overlap.\n- This is the coaxial same-domain frontier in planar-sloped form,\nexactly as the SD scope memory predicted. The twenty-eighth pass\n(near-coincident SD pairing at operand-noise separation) is specced as a\nfresh-session item, with the product-decision alternative noted.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClarifies the twenty-seventh pass: the wall ridge clip is correct, and\nthe remaining six‑edge hole is a ~0.03‑tall ridge sliver caused by\nnear‑coincident slopes (A `400` top vs B `935` bottom). Outlines next\nsteps to add same‑domain pairing for near‑coincident plane pieces and\nsuggests a straddle‑detection backstop, with mesh fallback remaining\nacceptable.\n\n<sup>Written for commit 646910dc3b016b3498169b4675ce4e412e09214f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1299?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T07:51:06Z",
+          "tree_id": "4fa3866b5e2520cb72b04c2b80381895e8f61054",
+          "url": "https://github.com/andymai/brepkit/commit/f1f3aff55d1ab3ab387e0f31457a2af2a6a751d2"
+        },
+        "date": 1785830025337,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 946358,
+            "range": "± 21319",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1030549,
+            "range": "± 8617",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13039,
+            "range": "± 224",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 692932,
+            "range": "± 3030",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25054088,
+            "range": "± 29489",
             "unit": "ns/iter"
           }
         ]
