@@ -135,8 +135,13 @@ not only the side dot; separate the two sub-defects before re-attempting. `chamf
 2026-08-04: on a concave edge the bisector-projected contact direction flips onto the faces'
 extensions (0.02 chamfer grew a notched prism 6.7%); the chamfer's plane-plane path now uses
 the material-oriented direction (effective-normal × wire-traversal tangent), bisector as
-fallback. `regress_chamfer_obtuse_ridge.rs`. NOTE: the FILLET plane-plane path still uses the
-bisector projection — probe a concave fillet before assuming it shares the defect. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
+fallback. `regress_chamfer_obtuse_ridge.rs`. The FILLET
+plane-plane path DOES share a concave defect but milder and DIFFERENT (probed 2026-08-04,
+`regress_fillet_concave_notch.rs` ignored ready-repro: a 0.02 fillet on the reflex notch
+REMOVES 0.077 instead of adding the sliver). REFUTED: transplanting only the chamfer's
+material-oriented contact directions makes it WORSE (removes 10.5) and breaks the calibrated
+convex pins — the fillet's concave case couples the cylinder-centre side, section
+orientation, and keep-side and must be treated as one geometry change. End-cap notch CLOSED 2026-08-04: cross edges are the true end cross-section arcs and the caps are notched to share them (the caps previously COVERED the scooped corner — a volumetric error invisible to the free-edge count); chamfer contact reuse threaded alongside the fillet's. `crates/operations/tests/regress_blend_trim_neighbor_split.rs` |
 
 The remaining `#[ignore]` entries are diagnostics or slow perf runs, not open bugs: the
 `profile_intersect.rs` box-sphere probes are stale (box-sphere shipped analytic in #1006),
