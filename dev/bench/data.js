@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785884640271,
+  "lastUpdate": 1785885340015,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17873,6 +17873,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25451767,
             "range": "± 82314",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59c4e02b671ac8432d995c5645a2e46c8aac6512",
+          "message": "docs(roadmap): record the mitsukude free-edge loop ownership (#1327)\n\nFollow-up instrument on the #1326 repro: `replay_pair`'s `FREE_EDGES=1`\ndump now prints the faces using each unpaired edge. On the mitsukude\npanel cut, each of the 8 free edges has exactly ONE user — the east-wall\nplane (Id 786/529), the lip chamfer cone (Id 813), and the corner\ncylinders (Id 528/520/788) — so the missing partners are the wall\nsub-faces bounded by the loop (at least two, since the loop spans both\nwall planes and the cone).\n\nRoadmap row updated with the ownership map and the next dig step: dump\nthe face-splitter output and FaceClass decisions for the east-wall\nsource faces in that window to see whether the sub-faces were never\nemitted or classified out.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds owner reporting (face ids + surface tags) to `replay_pair`'s\nFREE_EDGES dump, confirming in the mitsukude panel cut that all 8 free\nedges have a single user and the missing partners are wall sub‑faces.\nUpdates the roadmap with the ownership map and the next step to trace\neast‑wall sub‑face emission/classification.\n\n<sup>Written for commit 3e1fd998ab078592e16deecb2b8fef5be1bec47c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1327?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T23:13:07Z",
+          "tree_id": "017e059a2d89fadf3e8188a945ea72799abc5653",
+          "url": "https://github.com/andymai/brepkit/commit/59c4e02b671ac8432d995c5645a2e46c8aac6512"
+        },
+        "date": 1785885338215,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000679,
+            "range": "± 1911",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1047576,
+            "range": "± 1203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13179,
+            "range": "± 180",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 693953,
+            "range": "± 2204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25447076,
+            "range": "± 32173",
             "unit": "ns/iter"
           }
         ]
