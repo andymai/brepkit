@@ -214,16 +214,23 @@ owners `Id(1436)<-365` (a DIAGONAL lattice edge (38.0,-42.75)→(38.05,-42.95), 
 eprintlns in `process_coplanar_pair`: the z=34.8 coplanar pair is A-top `Id(364)` (outer wire =
 a 4-edge RECTANGLE whose corner is exactly the shared free-edge vertex (38.05,-42.95)) ×
 B-top `Id(852)` (16 outer edges, extends past x=38.05), and the pair emitted ZERO coplanar
-sections. The diagonal free edge is an INNER-WIRE segment of A-top (the lattice outline hole),
-and `face_boundary_polygon_2d` / `face_boundary_edges_2d` in `phase_ff_coplanar.rs` read ONLY
-`face.outer_wire()` — B's edges are clipped against A's outer rectangle with the holes
-invisible, `is_shared_boundary_edge` cannot see B edges riding A's inner wires, and the
-common-block pass never links inner-wire boundary pieces. Same one-wire blindness the junction
-snap had before its inner-wire fix (snap-clip campaign). FIX SHAPE: include inner wires in the
-polygon (point-in-polygon with even-odd over all loops), the edge list, and the shared-edge /
-common-block passes; then re-check whether A-top's split product still over-covers the hole
-triangle at the corner (the top product's wire takes the rectangle corner instead of the
-inner diagonal, which is what leaves both edges use-1).
+sections. The diagonal free edge is an INNER-WIRE segment of A-top (the lattice outline hole).
+NINTH PASS (2026-08-03): the coplanar-phase inner-wire theory is REFUTED for this corner. The
+full inner-wire extension of `phase_ff_coplanar` was implemented (loops over outer+inner wires,
+even-odd `point_in_loops`, multi-span `clip_section_to_loops` that no longer bridges holes) and
+had ZERO effect: the clip then finds the corner span (B edge `Id(2784)` → 1 span into A's
+material triangle) but `has_existing_section_at` correctly suppresses it — the section ALREADY
+EXISTS from the transversal pair (A-top × B's south wall), so A-top 364 receives every section
+it needs. Reverted per verify-or-revert (the hole-bridging clip fix is real but has no repro).
+THE ACTUAL ROOT is in 364's SPLIT: its inner lattice wire PINCHES ONTO the outer rectangle
+corner (the diagonal ends exactly at (38.05,-42.95), so material wedges to zero width there).
+A boundary-touching "hole" is not a proper hole, and the splitter's hole distribution
+(assign whole inner wires to containing sub-faces) mis-handles it: the split product `Id(2309)`
+takes the outer corner path WITHOUT weaving the diagonal, over-covering the pinched wedge, so
+the diagonal (wall side) and the east-edge piece (top side) are each left use-1. Fix altitude
+is the face splitter's hole integration for inner wires that touch the outer wire (same pinch
+class as the tessellation "hole-less containers defeat inner_wires guards" lesson), not the
+coplanar phase.
 An `emit_riding_sections` variant (exact-vertex sub-spans for chain-riding coplanar
 candidates) was implemented and REVERTED: A/B showed zero effect on these 2 edges.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
