@@ -5584,6 +5584,7 @@ fn split_face_2d_impl(
     // boundary vertex completes the partition with the micro-facet edge the
     // true result needs. Genuine features sit >= 1.1e-2 apart, so the band
     // cannot conflate distinct corners.
+    let mut bridge_sections: Vec<super::split_types::SectionEdge> = Vec::new();
     if is_plane {
         const BRIDGE_BAND: f64 = 3e-3;
         let weld = tol.linear * 100.0;
@@ -5695,8 +5696,35 @@ fn split_face_2d_impl(
                 }
             }
         }
+        if !bridges.is_empty() {
+            bridge_sections = bridges
+                .iter()
+                .map(|br| super::split_types::SectionEdge {
+                    curve_3d: EdgeCurve::Line,
+                    pcurve_a: br.pcurve.clone(),
+                    pcurve_b: br.pcurve.clone(),
+                    start: br.start_3d,
+                    end: br.end_3d,
+                    start_uv_a: Some(br.start_uv),
+                    end_uv_a: Some(br.end_uv),
+                    start_uv_b: Some(br.start_uv),
+                    end_uv_b: Some(br.end_uv),
+                    target_face: None,
+                    pave_block_id: None,
+                })
+                .collect();
+        }
         all_edges.extend(bridges);
     }
+    // The arrangement path reads `sections`, not `all_edges` — augment it so
+    // a bridged partition survives arrangement adoption.
+    let sections_aug: Vec<super::split_types::SectionEdge>;
+    let sections: &[super::split_types::SectionEdge] = if bridge_sections.is_empty() {
+        sections
+    } else {
+        sections_aug = sections.iter().cloned().chain(bridge_sections).collect();
+        &sections_aug
+    };
 
     // Drop pendant section edges that dangle into the face interior — left
     // in, the traversal walks out and back along them, spuriously
