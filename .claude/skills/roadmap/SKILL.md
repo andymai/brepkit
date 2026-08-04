@@ -304,12 +304,26 @@ rising with x), so this is a MISSING FACE, not a weld problem. Cluster member id
 junction 3.75e-4 from A — with the seeding shipped in #1284 the A/C pair sits wider than
 the guarded band and the ratio guard rightly refuses. But the loop structure shows the
 copies are all RIM vertices of the one hole. Rim owners: `2375<-913` (two edges),
-`2388<-935` (three edges: B's slope split), `2370<-910`, `2323<-400`. FIFTEENTH-PASS
-TARGET: the missing cover is almost certainly another sub-face of source `Id(935)`'s
-split spanning the hexagon — dump 935's split products near the hole and the BOP
-classification verdict for each (kept/dropped): if the strip exists but classified OUT
-it is a classifier bug (probe-point on the noisy rim?); if the splitter never produced
-it, a partition gap at the multi-copy rim. The campaign is down to ONE missing face.
+`2388<-935` (three edges: B's slope split), `2370<-910`, `2323<-400`. FIFTEENTH PASS
+(2026-08-03, answered): source `Id(935)` split into only TWO sub-faces — `Id(2066)`
+Outside/kept and `Id(2067)` INSIDE/DROPPED with probe point (38.0199,-41.0126,9.7837),
+whose y sits OUTSIDE the hole's y-range [-42.75,-41.30]. So 2067 STRADDLES solid A's
+boundary: 935 was UNDER-SPLIT — the FF section chain that should partition the outside
+hexagon from the inside strip gaps by exactly the 2.4e-3 B/C anchor disagreement (the FF
+junction B and the EF crossing C at the z≈9.9 rim), the splitter rejects the pendant
+chain, and single-point classification then drops the whole straddling face. SIXTEENTH-
+PASS TARGET (one decision, then mechanical): determine whether the EF crossing C
+(38.0,-41.317472,9.863328) is REAL geometry or operand noise — measure the distance from
+operand vertex A (38.0,-41.315108,9.863328) to the face crossed by C's EF interference.
+If A lies within operand-noise (~1e-3) of that face, the crossing IS A's vertex-face
+incidence solved 2.36e-3 along the edge, and the EF endpoint-drop window (currently tol,
+or tol/sin only when the endpoint is ON-surface at weld scale) must widen its on-surface
+test to the operand-noise scale for Line edges — C then collapses to A, the FF chain
+anchors agree, 935 partitions, and the hexagon face survives classification. If A is NOT
+near the crossed face, the micro-facet is real and the splitter must instead accept the
+2.4e-3 chain gap at 935 (bridge chain ends within the measured operand-noise scale,
+gated to chain-END pairs only). Either way the campaign remains ONE decision from a
+closed fixture.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
 phase level all lied because the noise was born at EMISSION, not intersection.
