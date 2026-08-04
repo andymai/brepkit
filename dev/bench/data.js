@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785811845020,
+  "lastUpdate": 1785812714907,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15389,6 +15389,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29891809,
             "range": "± 101484",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cbb293a43227701927fbce6679eb7b3d91dd58d5",
+          "message": "docs(roadmap): kumiko eleventh pass exhausts registry-side theories (#1282)\n\nEleventh-pass findings for the kumiko lattice band fuse (parked branch\n`diag/kumiko-in-gate-abs`, 14 free edges):\n\n- Zero registry near-misses at the twin positions, and pre-seeding the\njunction registry with all operand boundary vertices leaves the free\nedges byte-identical (experiment reverted). The twin endpoints never\npass through phase-FF endpoint resolution.\n- The minting site is therefore in the pave machinery or the builder's\nedge splitting; the next instrument is the Vertex::new backtrace on the\nliteral coordinate, the same recipe that localized the seventh-pass\nroot.\n- Records why the shipped 2-edge state looked better than the parked\n14-edge state while being structurally worse (off-plane wall wires were\naccidentally load-bearing).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd eleventh-pass notes to the Kumiko roadmap to document findings and\nredirect the investigation. Registry-side causes for the 14 resurfaced\nedges are ruled out (no `JunctionRegistry::resolve` near-misses;\nregistry pre-seeding had no effect), so focus shifts to pave/builder\nedge minting with a `Vertex::new` backtrace next; we also note the\nremoved warped wall faces were accidentally load-bearing, explaining why\nthe earlier 2-edge state looked better while being structurally worse.\n\n<sup>Written for commit 1954bc7c2988b6f8f781aff9e2f395244191fd72.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1282?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T20:02:44-07:00",
+          "tree_id": "e29459b48d2cc5afb599de3734c9a105736d137e",
+          "url": "https://github.com/andymai/brepkit/commit/cbb293a43227701927fbce6679eb7b3d91dd58d5"
+        },
+        "date": 1785812713297,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1011203,
+            "range": "± 2587",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1094465,
+            "range": "± 2124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11924,
+            "range": "± 432",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 671988,
+            "range": "± 1167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30198255,
+            "range": "± 459734",
             "unit": "ns/iter"
           }
         ]
