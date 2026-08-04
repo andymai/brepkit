@@ -666,9 +666,15 @@ old parked branch `fix/kumiko-corner-window-cut` is GONE from the remote (its 5
 `kumiko_corner_window_inmem.rs` fixtures and their data went with it); its four documented
 roots remain unshipped, and re-attempting them means re-capturing fixtures first. The
 thickwall ready-repro still aborts identically on the new machinery (`open hole shell with 9
-faces`, pre-shell-fix operands — re-capture before drawing conclusions). REMAINING
-VERIFICATION for the divider/mitsukude scenario family is TOOL-SIDE: rebuild the kernel into
-the layout tool and run the scenario matrix (recipes below); the native suites cannot see it.
+faces`, pre-shell-fix operands — re-capture before drawing conclusions). TOOL-SIDE RE-PROBE DONE
+2026-08-04 on the post-campaign kernel (wasm built `--skip-opt`, deployed via the
+`parity-loop.sh` copy step; bypass pnpm's dep check by invoking
+`./node_modules/.bin/vitest` directly or the purge prompt clobbers the copied kernel):
+`gomaBoundaryProbe`, `kumikoNubProbe`, `dividerCrossLap`, `honeycombManifoldCheck` — 4 files,
+8/8 tests green in 53 s. Note the tool's test files were RENAMED since the recipes below were
+written (`topologyParity` and `mitsukudeNmProbe` no longer exist; the probes above are their
+successors). The full scenario matrix (~14 min/arm) remains unrun; the probes are the
+recorded isolation tests for the kumiko/goma/divider families.
 
 **Historical state (pre-closure):** branch `fix/kumiko-corner-window-cut` closed four real
 engine defects with fixtures but was **PARKED** — it regressed goma from 8 to 65 exported
