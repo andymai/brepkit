@@ -375,6 +375,26 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
         shells.push(shell);
     }
 
+    if std::env::var("BK_SHELLS").is_ok() {
+        for (si, sh) in shells.iter().enumerate() {
+            for &fid in sh {
+                let Ok(f) = topo.face(fid) else { continue };
+                let p = topo.wire(f.outer_wire()).ok().and_then(|w| {
+                    let e = topo.edge(w.edges().first()?.edge()).ok()?;
+                    Some(topo.vertex(e.start()).ok()?.point())
+                });
+                if let Some(p) = p {
+                    log::debug!(
+                        "SHELLS s{si} {fid:?} {} at ({:.3},{:.3},{:.3})",
+                        f.surface().type_tag(),
+                        p.x(),
+                        p.y(),
+                        p.z()
+                    );
+                }
+            }
+        }
+    }
     log::debug!(
         "BuilderSolid: {} shells (sizes: {:?})",
         shells.len(),

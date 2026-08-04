@@ -121,7 +121,7 @@ doc comment — read that, not this.**
 
 | Item | Layer | Repro / first probe |
 |---|---|---|
-| **Thick-wall cavity — ROOT FIXED and MEASURED; a residual remains and the "more correct" fix is REFUTED** | operations/shell | See the dedicated entry below |
+| **Thick-wall cavity — CLOSED 2026-08-04** | operations/shell | See the dedicated entry below: the residual root was a SECOND missing-face defect in the same shell arm, and every measured case is now bnd=0 | |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** (open since 2026-07-16) | operations | `mesh_boolean_fallback` warns its output is not a closed 2-manifold and uses it anyway; there is no further fallback, so rejecting means the op fails outright. A product call, not just a fix |
 | **Divider residual geometry — GEOMETRY CLOSED (re-probed 2026-08-04 on the post-campaign kernel)** | algo/GFA | All 15 divider-pattern scenarios pass their assertions, including the 3 historic defects (`mitsukude lattice on dividers` was bnd=6, `dividers + scoops keep the ramp footings solid` was bnd=4, `kumiko dividers perforate the compartment walls`): the kumiko campaign + blend closures reached them. TWO residuals, neither geometry: (1) `kumiko dividers` completes in ~183 s (two full 2x2x6 mitsukude bins, ~91 s each) against the tool's 180 s vitest budget, so the TEST still fails on timeout — a perf gap on the mitsukude wall-pattern compound cut; (2) the tool pins patched brepjs 18.119.2, whose adapter lacks compound `applyMatrix` (added upstream in brepjs #1925, 18.119.3+), and tool change #3225 now rotates/translates compounds, so 11/15 scenarios throw pre-geometry under the PINNED brepjs — the 15/15 measurement required overlaying brepjs 18.119.7 dist (both pnpm locations) alongside the kernel; it unblocks when the tool bumps brepjs (mind the [[feedback_brepjs_emnapi_lockfile]] gotcha) | |
 | **snapClip 0.6 mm-nozzle export chain** breaks at op-cut-3 (posBad=10, analytic but leaky) | algo/GFA | Root is marched FF sections on curved faces carrying `pave_block_id=None`, bypassing the pave machinery. Canonical altitude is pave-block attachment at phase-FF/make_blocks; every face-splitter-level attempt broke calibrated chains |
@@ -132,41 +132,49 @@ The remaining `#[ignore]` entries are diagnostics or slow perf runs, not open bu
 `staircase_fuse_with_cylinders` is a ~2 min perf run, and the two `#696` dovetail entries plus
 `diverge_first_cut` are print-only.
 
-## Thick-wall cavity: fixed, measured, and one refuted "improvement"
+## Thick-wall cavity: CLOSED (two stacked roots in the same shell arm)
 
-**Root (fixed, `fac84c7f`):** `shell_op` SILENTLY DROPPED a corner cylinder whose radius the
-thickness swallowed — the `new_radius > tol` arm had no else, while the Sphere arm right below it
-errors for the same condition. The two neighbouring walls then kept their original tangent extent
-and overshot each other by `thickness − radius`, leaving a sub-tolerance chamfer. The body stayed
-closed and manifold so nothing complained, but the next fuse aborted `open hole shell with 9 faces`,
-fell to the mesh fallback, and that fallback's open output poisoned every later fuse.
-Fix: feed a collapsing fillet's vertices BOTH extreme normals so the miter resolves the corner.
-Pinned by `shell_thickness_past_corner_radius_gives_a_sharp_corner` (differentially verified).
+**Root 1 (fixed, `fac84c7f`):** the miter at a swallowed corner saw only one normal, so the
+neighbouring walls overshot. Fix: feed a collapsing fillet's vertices BOTH extreme normals.
+That took exported boundary edges from 149-160 down to 17-23 but did NOT close the case.
 
-**Measured end-to-end** (exported STL boundary edges, 1x1x10 halfSockets unless noted):
+**Root 2 (fixed 2026-08-04, the residual):** the SAME `new_radius > tol` arm still emitted NO
+inner face for the collapsed cylinder, so the inner shell had a corner-wide gap at every
+swallowed corner. The spec assembler closed it the only way it could: by threading the top
+ring's inner wire down the cavity verticals and across the floor chamfer diagonals — a 16-edge
+non-planar inner wire on a z=const plane face. That body is edge-paired (free=0, passes every
+health check) but geometrically degenerate, so the next fuse's hole-shell grouping correctly
+aborted `open hole shell with 9 faces`, fell to the mesh fallback, and the fallback's open
+output carried the 17-23 boundary edges to the export. Fix: emit the sharp-corner chamfer
+strip — the collapsed cylinder's WIRE vertices mapped through the already-computed miter
+positions form exactly the right planar quad (z-extent included, because the shared corner
+keys carry the bottom/top normals).
 
-| case | before | after |
-|---|---|---|
-| wall 3.8 / 3.9 / 4.0 | 149 / 159 / 160 | **23 / 19 / 17** |
-| 2x2 wall 4 / wall 6 | 832 / 898 | **20 / 20** |
+**Measured end-to-end** (exported mesh boundary edges, 1x1x10 halfSockets unless noted):
 
-Everything at or below wall 3.7 was and stays 0. So this is a large improvement, NOT a closure —
-a residual remains at every thickness past the corner radius.
+| case | pre root 1 | after root 1 | after root 2 |
+|---|---|---|---|
+| wall 3.8 / 3.9 / 4.0 | 149 / 159 / 160 | 23 / 19 / 17 | **0 / 0 / 0** |
+| 2x2 wall 4 / wall 6 | 832 / 898 | 20 / 20 | **0 / 0** |
 
-**REFUTED, do not re-implement: placing the collapsed corner EXACTLY.** The miter is a
-TRANSLATION (`inner = outer − t·m`), so a tangent vertex that does not already sit on the far
-neighbour's plane lands short of the corner — the shipped fix leaves the walls ending at
-`half − thickness − radius` rather than `half − thickness`. Solving for the true corner from the arc
-CENTRE instead (`nᵢ·(x−C) = radius − thickness`, verified against the measured 16.95) IS
-geometrically right and IS worse in practice: wall 3.8/3.9 close to bnd=0, but 2x2 wall 4 goes
-20 → **318** (nm 171, 46 s → 150 s) and 2x2 wall 6 goes 20 → **544** (nm 197, 366 s). Implemented,
-measured, reverted. Whatever is wrong is in how the two extreme normals are chosen on a bin with
-many corners — check that before assuming the formula.
+Pins: `shell_thickness_past_corner_radius_gives_a_sharp_corner` (now also asserts the 4
+chamfer strips) and `crates/io/tests/thickwall_sharp_cavity_fuse_inmem.rs` (re-captured
+post-fix operands, fuse pin active: F=67 analytic, free=0).
 
-**Residual next step:** the 17-23 boundary edges left at wall ≥ 3.75. Capture is cheap
-(`wallThickCapture`, 6 booleans, `replay_pair`); the fixture
-`crates/io/tests/thickwall_sharp_cavity_fuse_inmem.rs` holds PRE-FIX operands, so it stays
-`#[ignore]`d and replaying it does NOT test the fix — re-capture before using it.
+**REFUTED, do not re-implement: placing the collapsed corner EXACTLY.** Solving for the true
+corner from the arc centre (`nᵢ·(x−C) = radius − thickness`) is geometrically right and
+measured WORSE (2x2 wall 4: 20 → 318, wall 6: 20 → 544). With root 2 fixed the octagonal
+cavity (walls ending at `half − thickness − radius`, 45-degree chamfer strips between) is
+watertight and analytic end-to-end, so the true-corner formula is moot.
+
+**Diagnostic recipes that broke this open:** `BK_SHELLS=1` dumps every assembled shell's face
+membership at grouping time (builder_solid), complementing `BK_OPEN_SHELL=1`; the committed
+`dump_solid` example prints every wire of a serialized operand with edge ids — the degenerate
+16-edge inner wire was invisible until wires were printed edge-by-edge. Capture recipe: a
+temporary tool-side kernel test monkey-patching the raw kernel's boolean methods with
+`serializeSolid` on every numeric arg (flatten arrays: `compoundCut` passes tools as an
+array), then `replay_pair` per captured op.
+
 
 **THE TWO MITSUKUDE "DIVIDER" FAILURES ARE MISFILED: neither dividers nor compartments are
 involved.** Isolation (2026-08-01, one case per process): a 2x2x6 bin with the mitsukude wall
