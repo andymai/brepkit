@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785828446182,
+  "lastUpdate": 1785829205324,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16307,6 +16307,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25032895,
             "range": "± 30982",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7f00e2f821ecd48b54dd78db6fb33310c7c291f5",
+          "message": "docs(roadmap): kumiko twenty-sixth pass finds a common truncation cause (#1298)\n\nTwenty-sixth-pass answer for the kumiko lattice band fuse:\n\n- No vertical section exists near the strip; the slope-line section\narrives at restrict already truncated.\n- Two different pairs against face 935 truncate at the identical point,\nimplicating a common clipping cause rather than per-pair noise; 935's\nown polygon extends well past the cutoff.\n- The twenty-seventh-pass probe (raw line plus both clip outcomes in the\ntrim arm) is recorded and decisive.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the kumiko roadmap with the twenty-sixth-pass result: no\nvertical section exists near the wall strip; the slope-line section\narrives at restrict already truncated at (38.05, -41.3002, 9.8922),\nmatching a shared cutoff against face 935. Adds a twenty-seventh-pass\nprobe of `trimRR` (raw line, per-face `clip_line_to_face`, final trim)\nto identify which clip causes the -41.30 stop, and notes a foil-gated\nstraddle-detection backstop.\n\n<sup>Written for commit ef5f9f46c99d501d2e8c4891580df8413b6d94cb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1298?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T00:37:40-07:00",
+          "tree_id": "a23d9d4d94b66333c8589a41c432513f98340708",
+          "url": "https://github.com/andymai/brepkit/commit/7f00e2f821ecd48b54dd78db6fb33310c7c291f5"
+        },
+        "date": 1785829204259,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 910405,
+            "range": "± 15418",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 990998,
+            "range": "± 1466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12063,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 689794,
+            "range": "± 4171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24037876,
+            "range": "± 27632",
             "unit": "ns/iter"
           }
         ]
