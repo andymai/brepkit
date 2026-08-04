@@ -397,12 +397,24 @@ chain runs (38.05,-40.4644,9.635)→anchor→A→B→[bridge]→C: south end now
 boundary-anchored at C, but the NORTH continuation past (38.05,-40.4644,9.635) — the
 SEVENTH-pass z=9.635 corner, the very first near-miss/orphan this campaign measured —
 must ultimately reach 935's boundary for the arrangement to separate the region, and
-it evidently does not (2 interior regions traced). TWENTY-SECOND PASS: dump face 935's
-FULL section adjacency (every section's endpoints, which coincide within weld, which
-touch boundary inputs) and find each place the network fails to reach the boundary;
-each such gap is another operand-noise pendant for the same gated bridge (or the same
-exit-pave/image treatment). The campaign's remaining defect is now purely "the
-separating chain across face 935 is boundary-anchored at only one end". Also REVERTED this pass (no effect,
+it evidently does not (2 interior regions traced). TWENTY-SECOND PASS
+(2026-08-03, the adjacency dump REFRAMES everything): 935's chain IS boundary-anchored
+at BOTH ends (north anchor (38.05,-40.4644,9.635) is a degree-3 boundary vertex; south
+anchor C via the bridge), and the arrangement's 2-region partition is locally CORRECT
+for its inputs. The real missing piece is a WHOLE ABSENT SECTION, not a pendant: the
+result's rim edge (38.05,-41.3002,9.8922)→(38.05,-42.7477,9.8922) (1.45 long, use-1,
+carried by the A-side x=38.05 wall products) shows A's material continues south of
+-41.30 at x=38.05 — face 398's pair with 935 contributed only [(38.05,-40.4644)→
+(38.05,-41.3002)] because 398 ENDS there, and the NEXT A-wall face's pair with 935
+(which owes the [(38.05,-41.30)→(38.05,-42.7477)] continuation) produced NOTHING among
+935's 20 arrangement inputs. Without it 935's partition lacks the full A-boundary
+trace, the hexagon merges into the big kept east region, and the rim mismatches.
+TWENTY-THIRD PASS (targeted): identify the A-face owning the x=38.05 wall for
+y∈[-42.75,-41.30] (list solid-A faces whose plane is x=38.05 and extent covers that
+span), then RESTRICT_IN/RESTRICT_OUT-probe the pair (that face × 935) — the section is
+either never computed (pair AABB-rejected?), emitted then dropped by the in-both
+filter, or clipped to empty by the trim arm. Same recipe as the seventeenth pass, now
+aimed at a 1.45-long section, so whichever gate eats it is unambiguous. Also REVERTED this pass (no effect,
 principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
 band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
 edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
