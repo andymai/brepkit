@@ -433,9 +433,22 @@ meet along that horizontal line). The slope side of the ridge survives (product
 the missing face is the wall strip y∈[-42.75,-41.30] bounded ABOVE by the ridge — and
 the split 398 lacks is the VERTICAL cut near y≈-41.30 below the slope line (B's
 boundary at the strip's north edge), which would separate the keep-strip from the
-genuinely-inside middle band. TWENTY-SIXTH PASS: RESTRICT-probe pairs (398 × B-faces)
-in the region x≈38.05, y∈[-41.35,-41.25], z∈[4.5,9.9] to see whether that vertical
-section is computed and where it is truncated. ALSO worth implementing independently
+genuinely-inside middle band. TWENTY-SIXTH PASS
+(2026-08-04, answered): NO vertical section exists — the only (398 × B) section near
+the strip is the slope line, and it arrives at restrict ALREADY truncated at
+(38.05,-41.3002,9.8922). Crucially the (400×935) section truncates at the SAME point
+(twenty-second pass data): two different pairs, both against 935, stopping at the
+identical spot — a COMMON CAUSE in how pair sections against face 935 are clipped
+(the trimRR mutual-overlap arm or 935's FaceExtent), not per-pair noise. 935's own
+outer polygon DOES extend south to y=-42.75 (IN935 dump), so the truncation is not
+its true extent. TWENTY-SEVENTH PASS (decisive): probe the trimRR arm for the pair
+(398,935) — print the RAW line (pre-trim), `clip_line_to_face` results for both
+faces (Range fractions / Indeterminate / Empty), and the trim outcome. Whichever
+clip yields the -41.30 cutoff is the defect; note 935's outline is NON-convex, so
+its Cyrus-Beck clip returns Indeterminate and the cutoff likely comes from the
+`clip_line_to_polygon_general` fallback or 398's own polygon (whose top edge IS the
+ridge — the clip of the slope line against the wall polygon near the ridge corner is
+ill-conditioned in exactly the twenty-third-pass sense). ALSO worth implementing independently
 (robustness backstop, foil-gated): straddle DETECTION in classification — classify
 each sub-face at 3-5 spread samples instead of one; disagreement marks the sub-face
 as straddling (under-split), which can at least abort with a precise diagnostic
