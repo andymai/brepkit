@@ -1336,14 +1336,15 @@ fn log_open_growth_shell(
             }
         }
         log::debug!(
-            "growth shell OPENSHELL free {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) same_id_outside={same_id_outside} coincident_other_id={coincident_other_id}",
+            "growth shell OPENSHELL free {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) len={:.3e} same_id_outside={same_id_outside} coincident_other_id={coincident_other_id}",
             e.curve().type_tag(),
             a.x(),
             a.y(),
             a.z(),
             b.x(),
             b.y(),
-            b.z()
+            b.z(),
+            (b - a).length()
         );
     }
 }
@@ -1430,6 +1431,7 @@ fn assemble(
     for hole in &hole_shells {
         if !shell_is_closed(topo, hole) {
             if hole.len() >= 4 {
+                log_open_growth_shell(topo, hole, &all_faces, face_source);
                 // Same fail-safe as the growth side: a sizeable open "hole"
                 // is a mis-signed or mis-selected LUMP, not a cavity sliver —
                 // silently discarding it deletes real material or cavity
@@ -1752,7 +1754,7 @@ fn weld_coincident_vertices(topo: &mut Topology, face_ids: &mut [FaceId]) -> Res
     use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
     use brepkit_topology::vertex::VertexId;
 
-    let snap = MERGE_TOL * 10.0;
+    let snap = MERGE_TOL * 100.0;
 
     // Collect distinct vertices (id + position) referenced by the faces.
     let mut seen: HashSet<VertexId> = HashSet::new();
