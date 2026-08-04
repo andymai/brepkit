@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785881503428,
+  "lastUpdate": 1785881979185,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17765,6 +17765,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25463465,
             "range": "± 52972",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4ffb335545f5146d60d84a0b5adf7a7edf578c00",
+          "message": "chore(main): release 2.128.29 (#1325)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.29](https://github.com/andymai/brepkit/compare/v2.128.28...v2.128.29)\n(2026-08-04)\n\n\n### Bug Fixes\n\n* **shell:** emit the chamfer strip a swallowed corner fillet collapses\nto ([#1324](https://github.com/andymai/brepkit/issues/1324))\n([b7f4cd3](https://github.com/andymai/brepkit/commit/b7f4cd3dfad683fe5f3756addc60da8fc108b80e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.128.29 with a bug fix for shell geometry: emit\nthe chamfer strip when a swallowed corner fillet collapses. Includes\nversion and changelog updates.\n\n<sup>Written for commit e594e0af58a085bf102402fff51921ef9cbd444c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1325?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-04T22:17:07Z",
+          "tree_id": "245a34540343a0cf67bc70133d774be0757867e5",
+          "url": "https://github.com/andymai/brepkit/commit/4ffb335545f5146d60d84a0b5adf7a7edf578c00"
+        },
+        "date": 1785881977418,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 926598,
+            "range": "± 920",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1005728,
+            "range": "± 10953",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12052,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 690225,
+            "range": "± 1876",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24258311,
+            "range": "± 42624",
             "unit": "ns/iter"
           }
         ]
