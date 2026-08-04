@@ -296,12 +296,20 @@ solver-minted, not operand vertices); (b) cluster-canonical adoption in `resolve
 new long free edges, because consumers that bypass endpoint resolution keep their own
 anchors and a canonical only helps if every consumer converges; (c) seeding alone on the
 pre-ceiling main — neutral (the old 2-edge state was stitched by the invalid off-plane
-wires the ceiling removes). FOURTEENTH-PASS TARGET: the one remaining cluster at the
-z≈9.9 crossing — copies spread 2.4e-3 (wider than the 1e-3 guarded band), chains
-(38.0,-41.3151..-41.3175, 9.8631..9.8633) plus their x=38.05 partners; the pairwise
-guard refuses multi-copy clusters, so the fix must make the NON-resolve consumers (the
-chains anchored at each copy) converge — likely by unifying at the pave/make_blocks
-altitude rather than widening any FF band.
+wires the ceiling removes). FOURTEENTH PASS (2026-08-03, structure cracked): the 7 free edges form ONE CLOSED LOOP — a
+single hexagonal hole on the slope at the z≈9.9 crossing (x∈[38.0,38.05], z 9.863→9.892
+rising with x), so this is a MISSING FACE, not a weld problem. Cluster member identities
+(Vertex::new backtrace): A=(38.0,-41.315108,9.863328) is an OPERAND vertex, C=(38.0,
+-41.317472,9.863328) an EF crossing 2.36e-3 away, B=(37.9997,-41.315202,9.863147) an FF
+junction 3.75e-4 from A — with the seeding shipped in #1284 the A/C pair sits wider than
+the guarded band and the ratio guard rightly refuses. But the loop structure shows the
+copies are all RIM vertices of the one hole. Rim owners: `2375<-913` (two edges),
+`2388<-935` (three edges: B's slope split), `2370<-910`, `2323<-400`. FIFTEENTH-PASS
+TARGET: the missing cover is almost certainly another sub-face of source `Id(935)`'s
+split spanning the hexagon — dump 935's split products near the hole and the BOP
+classification verdict for each (kept/dropped): if the strip exists but classified OUT
+it is a classifier bug (probe-point on the noisy rim?); if the splitter never produced
+it, a partition gap at the multi-copy rim. The campaign is down to ONE missing face.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
 phase level all lied because the noise was born at EMISSION, not intersection.
