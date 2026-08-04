@@ -587,6 +587,23 @@ impl Builder {
                         sf.rank,
                         sf.classification
                     );
+                    if std::env::var("BK_CLS").is_ok()
+                        && (37.9..38.11).contains(&point.x())
+                        && (-41.8..-40.0).contains(&point.y())
+                        && (31.4..34.9).contains(&point.z())
+                    {
+                        let tag = self.topo.face(sf.face_id)?.surface().type_tag();
+                        log::debug!(
+                            "CLS face={:?} {tag} rank={:?} src={:?} pt=({:.3},{:.3},{:.3}) class={:?}",
+                            sf.face_id,
+                            sf.rank,
+                            sf.source_face,
+                            point.x(),
+                            point.y(),
+                            point.z(),
+                            sf.classification
+                        );
+                    }
                 }
                 Err(e) => {
                     return Err(AlgoError::ClassificationFailed(format!(
