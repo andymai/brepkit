@@ -266,6 +266,23 @@ result), and the warped wall faces the ceiling removed were "accidentally load-b
 the z=4.5/9.9 corners — geometrically invalid (0.05 off-plane vertices in plane-face wires)
 but topologically stitching, which is why the shipped 2-edge state looked better than this
 parked 14-edge state while being structurally worse.
+TWELFTH PASS (2026-08-03, backtrace instrument): the twin vertex (38.049699651, -42.747694041,
+4.5135955) is minted by `phase_ef::check_edge_face_pairs` — an EF crossing of B's slope-bottom
+edge with a slope plane — and its 3.5e-4 offset from A's operand corner is REAL OPERAND-LEVEL
+DISAGREEMENT: the two bands are independently faceted and their outlines miss each other by up
+to ~1e-3 at lattice corners. Nothing at the EF altitude unifies the crossing with the nearby
+operand vertex: the existing mid-edge tangential snap (`find_nearby_pave_vertex_widened`,
+window `tol/sin_angle` capped 1e-3) only fires for near-tangential crossings AND requires the
+candidate to lie on the crossed surface at weld scale, which the OTHER operand's corner fails
+by the same operand noise. FIX SHAPE for the next session: guarded wide adoption at the EF
+crossing (band ~1e-3 with the 10x nearest-2 ambiguity ratio guard from `JunctionRegistry`,
+candidate on-surface band widened to the same scale) so interference solutions within the
+operands' own inconsistency adopt one shared vertex. RISK: this touches the honeycomb-
+calibrated endpoint windows (the 2.7e-7..2.2e-6 measurements and the "regressed the honeycomb
+wall-cut raw residual" caution in `phase_ef.rs`) — implement with the full foil suite and the
+honeycomb residual ceilings in the loop. The larger lesson for the campaign: every remaining
+kumiko defect traces to the operands disagreeing at ~1e-3 while the engine welds at 1e-5;
+per-vertex tolerance adoption at interference altitude is the unifying frontier.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
 phase level all lied because the noise was born at EMISSION, not intersection.
