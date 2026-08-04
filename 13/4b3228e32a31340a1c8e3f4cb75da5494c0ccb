@@ -1,0 +1,27 @@
+crates/algo/src/classifier/ray_cast.rs
+  s_7ff36fc7322bef::t_3c306fc78f7a5d 59-72,729-731
+  s_7ff36fc7322bef::t_da4c11c19ecf3a 871-923
+  s_7ff36fc7322bef::t_8764ab2a0ccebf 1248
+  s_7ff36fc7322bef::t_8a287b98db1b5b 1238,1255,1258,1261,1264
+  s_7ff36fc7322bef::t_96255f7a654777 567,571,574-584
+  s_7ff36fc7322bef::t_7a1069604c84a8 585-591,597,600
+  s_7ff36fc7322bef::t_3cd8e525f94111 535-566,568-570,572-573,592-596,598-599,601-610
+  s_7ff36fc7322bef::t_2606eb9c335a2e 1233-1237,1239-1247,1249-1254,1256-1257,1259-1260,1262-1263,1265-1266
+  s_7ff36fc7322bef::t_07c3475b283ac0 1232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "134b3228e32a31340a1c8e3f4cb75da5494c0ccb",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
