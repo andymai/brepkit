@@ -39,6 +39,27 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
     }
     let free = uses.values().filter(|&&c| c == 1).count();
     let over = uses.values().filter(|&&c| c > 2).count();
+    if std::env::var("FREE_EDGES").is_ok() {
+        for (eid, n) in &uses {
+            if *n != 2
+                && let Ok(e) = topo.edge(*eid)
+                && let (Ok(a), Ok(b)) = (topo.vertex(e.start()), topo.vertex(e.end()))
+            {
+                let (a, b) = (a.point(), b.point());
+                println!(
+                    "  {} edge {eid:?} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                    if *n == 1 { "FREE" } else { "OVER" },
+                    e.curve().type_tag(),
+                    a.x(),
+                    a.y(),
+                    a.z(),
+                    b.x(),
+                    b.y(),
+                    b.z()
+                );
+            }
+        }
+    }
     let mut mix: Vec<_> = mix.into_iter().collect();
     mix.sort_unstable();
     let vol =
