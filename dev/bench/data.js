@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785843478102,
+  "lastUpdate": 1785846371056,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16685,6 +16685,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25524948,
             "range": "± 121520",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cc34788f0911cedf3d06ca1b8c528aedeaa0a75e",
+          "message": "fix(blend): reuse trimmer contact edges in the v2 blend face (#1305)\n\n## Summary\n\nCloses one of the four documented v2 trimmer residuals:\n`create_blend_face` built its own contact edges, duplicating curves the\ntrimmed neighbour faces already carried and opening the shell along\nevery blend flank.\n\n- The fillet builder threads each stripe's `TrimResult::contact_edge`\ninto blend-face creation.\n- `create_blend_face_with_contacts` adopts a trimmer edge (and its\nvertices, in either orientation) when its endpoints match the stripe\ncontact endpoints within the weld band; a mismatched side falls back to\nthe previous fresh-edge behaviour.\n- Regress boundary mesh edges drop 22 -> 7; the pin is tightened from <\n28 to <= 7. The remaining openings are the characterized end-cap notch\nand keep-side residuals (roadmap updated: 4 -> 3).\n\n## Testing\n\n- `regress_blend_trim_neighbor_split`: green at the tightened pin\n- blend, operations, and io suites green; clippy -D warnings clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReuse trimmer contact edges when building v2 blend faces so the blend\nshares edge entities with neighbors, fixing shell openings along both\nflanks. Boundary mesh edges drop from 22 to 7 and the regress test pin\nis tightened.\n\n- **Bug Fixes**\n- Added `create_blend_face_with_contacts` and threaded each stripe’s\n`TrimResult::contact_edge` from the fillet builder.\n- Adopt existing contact edges (and vertices) when endpoints match\nwithin weld; otherwise fall back to fresh edges.\n  - Respect edge orientation when reusing contacts.\n- Tightened `regress_blend_trim_neighbor_split` assertion to `bnd <= 7`;\nroadmap updated (v2 trimmer residuals 4 → 3).\n\n<sup>Written for commit 8ea3652ecb1cc00ee0c91f9c9e5a3cf9962b907c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1305?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T12:23:30Z",
+          "tree_id": "2cbda0ebc996f061ba9370a607a35cb52a71ab87",
+          "url": "https://github.com/andymai/brepkit/commit/cc34788f0911cedf3d06ca1b8c528aedeaa0a75e"
+        },
+        "date": 1785846369180,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960552,
+            "range": "± 2641",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046142,
+            "range": "± 907",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13227,
+            "range": "± 208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 689045,
+            "range": "± 9955",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25365198,
+            "range": "± 38950",
             "unit": "ns/iter"
           }
         ]
