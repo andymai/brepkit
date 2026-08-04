@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.25](https://github.com/andymai/brepkit/compare/v2.128.24...v2.128.25) (2026-08-04)
+
+
+### Bug Fixes
+
+* **blend:** notch end caps with the fillet end cross-section arcs ([#1309](https://github.com/andymai/brepkit/issues/1309)) ([453a7be](https://github.com/andymai/brepkit/commit/453a7be9cd63a2f1e238f9a6c598eb0cfe98eed1))
+
 ## [2.128.24](https://github.com/andymai/brepkit/compare/v2.128.23...v2.128.24) (2026-08-04)
 
 
