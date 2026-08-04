@@ -671,6 +671,18 @@ Measured A/B, same day, same tool commit, each overlay md5-verified through brep
   firing that helps against one that hurts.
 
 ## Closed: root cause + where the detail lives
+- **Kumiko lattice band fuse — CLOSED after 29 passes** (`kumiko_lattice_bands_fuse_closed`
+  un-ignored and green). Final mechanism, all in the face splitter: (1) DEMAND-GATED outer-wire
+  image expansion — a planar hole-free face expands a boundary edge's pave-split images only
+  when an interior image junction sits within 3e-3 of a section endpoint but NOT within the
+  weld band (coincident junctions are already served by the calibrated splitting; expanding
+  them de-analytics the divider-lip fuse, and expanding periodic laterals' seam edges breaks
+  the perpendicular-cylinder fuse — both gates measured); (2) pendant→boundary-vertex bridge
+  (section-free targets only); (3) pendant→pendant bridge (mutually nearest within 3e-3,
+  10x isolation, twin-deduped) — the final 2.3e-3 gap was TWO section pendants on face 400.
+  The "near-coincident slope SD" framing of pass 27 was REFUTED by direct measurement (planes
+  15° apart; A/B/C share their intersection LINE, which does not make the planes coincident).
+  Honeycomb raw residuals re-pinned (pcut1 53→83, pcut2 28→30, production tests unchanged).
 - **Torus ray-cast arm** — whole-torus faces (degenerate boundary, < 3 polygon verts) were
   DROPPED from parity counting entirely, and full-tube laterals fell to the flat polygon
   fallback. `FaceGeom::Torus` + `math::intersect_line_torus` (the solver already lived in

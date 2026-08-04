@@ -4323,8 +4323,27 @@ fn split_face_2d_impl(
     // end at u=2pi connects to seam start at u=0). Keep it enabled.
     let (u_periodic, v_periodic) = info.map_or((false, false), SurfaceInfo::periodicity);
 
-    let mut boundary_edges = if is_plane {
-        boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, Some(frame))
+    // Outer-wire image expansion is gated to HOLE-FREE PLANAR faces: a
+    // periodic lateral's seam is a Line edge too, and expanding it hands
+    // the calibrated seam machinery multiple seam pieces where it expects
+    // one (the perpendicular-cylinder fuse loses both mutually-trimmed
+    // walls); a holed cap's integrate-holes weave is likewise calibrated
+    // against the unexpanded boundary (the divider-lip fuse de-analytics
+    // with expansion applied).
+    let section_anchor_pts: Vec<Point3> = sections
+        .iter()
+        .flat_map(|sct| [sct.start, sct.end])
+        .collect();
+    let mut boundary_edges = if is_plane && face.inner_wires().is_empty() {
+        super::face_splitter::conversion::boundary_edges_to_pcurve_with_images(
+            topo,
+            face.outer_wire(),
+            &surface,
+            &wire_pts,
+            Some(frame),
+            edge_images,
+            &section_anchor_pts,
+        )
     } else {
         boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
     };
@@ -5559,6 +5578,242 @@ fn split_face_2d_impl(
             }
         }
     }
+
+    // Bridge a pendant section end to a nearby boundary vertex BEFORE the
+    // pendant drop. Independently built operands disagree at their shared
+    // outlines by up to ~2.4e-3 (measured, kumiko z~9.9 rim): the pair-level
+    // mutual-overlap clip then legitimately ends a section where the line
+    // leaves the PARTNER face, a fraction short of where this face's own
+    // boundary carries the exit pave (now visible in the boundary via the
+    // image expansion). Bridging the pendant end to its unambiguous nearest
+    // boundary vertex completes the partition with the micro-facet edge the
+    // true result needs. Genuine features sit >= 1.1e-2 apart, so the band
+    // cannot conflate distinct corners.
+    let mut bridge_sections: Vec<super::split_types::SectionEdge> = Vec::new();
+    // Bridging is gated to HOLE-FREE planar faces: on a holed cap the
+    // integrate-holes weave owns chain-end reconciliation, and a bridge
+    // minted next to a woven hole boundary de-analytics the divider-lip
+    // fuse (its production fixture drops from >=32 curved faces to 0).
+    if is_plane && original_inner_wires.is_empty() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::Vec2;
+        const BRIDGE_BAND: f64 = 3e-3;
+        let weld = tol.linear * 100.0;
+        let n_all = all_edges.len();
+        let mut bridges: Vec<OrientedPCurveEdge> = Vec::new();
+        let mut pendants: Vec<(Point3, Point2, Point3)> = Vec::new();
+        for si in n_boundary_edges..n_all {
+            for pick_start in [true, false] {
+                let (p3, puv) = if pick_start {
+                    (all_edges[si].start_3d, all_edges[si].start_uv)
+                } else {
+                    (all_edges[si].end_3d, all_edges[si].end_uv)
+                };
+                // Pendant: coincides with no other edge endpoint (boundary or
+                // section) within the weld band. Sections arrive as
+                // forward/reverse twin pairs, so an edge with the same
+                // undirected endpoint set is the twin, not a continuation.
+                let (s_si, e_si) = (all_edges[si].start_3d, all_edges[si].end_3d);
+                let shared = all_edges.iter().enumerate().any(|(oi, oe)| {
+                    if oi == si {
+                        return false;
+                    }
+                    let twin = ((oe.start_3d - s_si).length() <= weld
+                        && (oe.end_3d - e_si).length() <= weld)
+                        || ((oe.start_3d - e_si).length() <= weld
+                            && (oe.end_3d - s_si).length() <= weld);
+                    !twin
+                        && ((oe.start_3d - p3).length() <= weld
+                            || (oe.end_3d - p3).length() <= weld)
+                });
+                if shared {
+                    continue;
+                }
+                // The pendant edge's own other endpoint is not a bridge
+                // target: bridging back onto it would duplicate the pendant
+                // edge itself.
+                let own_other = if pick_start {
+                    all_edges[si].end_3d
+                } else {
+                    all_edges[si].start_3d
+                };
+                let mut best: Option<(f64, Point3, Point2)> = None;
+                let mut second = f64::INFINITY;
+                for be in &all_edges[..n_boundary_edges] {
+                    for (b3, buv) in [(be.start_3d, be.start_uv), (be.end_3d, be.end_uv)] {
+                        if (b3 - own_other).length() <= weld {
+                            continue;
+                        }
+                        let d = (b3 - p3).length();
+                        match &best {
+                            Some((bd, bp, _)) => {
+                                if d < *bd {
+                                    if (*bp - b3).length() > weld {
+                                        second = *bd;
+                                    }
+                                    best = Some((d, b3, buv));
+                                } else if (*bp - b3).length() > weld {
+                                    second = second.min(d);
+                                }
+                            }
+                            None => best = Some((d, b3, buv)),
+                        }
+                    }
+                }
+                // A target vertex some SECTION already reaches is part of
+                // the section network; the pendant connects to it through
+                // that network and a direct bridge would over-connect the
+                // corner (edge use-3 at the z=4.5 corner). Bridge only onto
+                // section-free boundary vertices — the exit paves nothing
+                // else reaches.
+                let target_in_sections = |b3: Point3| -> bool {
+                    all_edges[n_boundary_edges..].iter().any(|se| {
+                        (se.start_3d - b3).length() <= weld || (se.end_3d - b3).length() <= weld
+                    })
+                };
+                let boundary_bridge = best.is_some_and(|(d, b3, _)| {
+                    d > weld && d <= BRIDGE_BAND && second >= 1e-2 && !target_in_sections(b3)
+                });
+                if !boundary_bridge {
+                    pendants.push((p3, puv, own_other));
+                }
+                if let Some((_d, b3, buv)) = best
+                    && boundary_bridge
+                    && !bridges.iter().any(|br: &OrientedPCurveEdge| {
+                        ((br.start_3d - p3).length() <= weld && (br.end_3d - b3).length() <= weld)
+                            || ((br.start_3d - b3).length() <= weld
+                                && (br.end_3d - p3).length() <= weld)
+                    })
+                {
+                    use brepkit_math::curves2d::{Curve2D, Line2D};
+                    use brepkit_math::vec::Vec2;
+                    let duv = Vec2::new(buv.x() - puv.x(), buv.y() - puv.y());
+                    let len = duv.length();
+                    let dir = if len > 1e-12 {
+                        Vec2::new(duv.x() / len, duv.y() / len)
+                    } else {
+                        Vec2::new(1.0, 0.0)
+                    };
+                    let Ok(l2d) = Line2D::new(puv, dir) else {
+                        continue;
+                    };
+                    bridges.push(OrientedPCurveEdge {
+                        curve_3d: EdgeCurve::Line,
+                        pcurve: Curve2D::Line(l2d),
+                        start_uv: puv,
+                        end_uv: buv,
+                        start_3d: p3,
+                        end_3d: b3,
+                        forward: true,
+                        source_edge_idx: None,
+                        pave_block_id: None,
+                    });
+                }
+            }
+        }
+        // Pendant-to-pendant bridging: a chain gap between TWO section ends
+        // (the triple-point wedge on the kumiko slope, where the pair
+        // sections stop 2.3e-3 apart at the operands' disagreement) has no
+        // boundary vertex to target — the missing connector runs between
+        // the pendants themselves. Bridge mutually-nearest pendant pairs
+        // within the band, with the same isolation guard against every
+        // other pendant.
+        // Each section arrives as a forward/reverse twin pair, so a pendant
+        // endpoint is recorded once per twin — dedupe by position or the
+        // zero-distance duplicate defeats the mutual-nearest pairing.
+        pendants.dedup_by(|a, b| (a.0 - b.0).length() <= weld);
+        for i in 0..pendants.len() {
+            let (pi, uvi, own_i) = pendants[i];
+            let mut best_j: Option<(f64, usize)> = None;
+            let mut second = f64::INFINITY;
+            for (j, &(pj, _, _)) in pendants.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                let d = (pj - pi).length();
+                match best_j {
+                    Some((bd, _)) if d < bd => {
+                        second = bd;
+                        best_j = Some((d, j));
+                    }
+                    Some(_) => second = second.min(d),
+                    None => best_j = Some((d, j)),
+                }
+            }
+            let Some((d, j)) = best_j else { continue };
+            let (pj, uvj, own_j) = pendants[j];
+            if d <= weld || d > BRIDGE_BAND || second < 1e-2 {
+                continue;
+            }
+            let mutual = pendants
+                .iter()
+                .enumerate()
+                .filter(|&(k, _)| k != j)
+                .map(|(_, &(pk, _, _))| (pk - pj).length())
+                .fold(f64::INFINITY, f64::min)
+                >= d - 1e-12;
+            if !mutual
+                || (pj - own_i).length() <= weld
+                || (pi - own_j).length() <= weld
+                || bridges.iter().any(|br: &OrientedPCurveEdge| {
+                    ((br.start_3d - pi).length() <= weld && (br.end_3d - pj).length() <= weld)
+                        || ((br.start_3d - pj).length() <= weld
+                            && (br.end_3d - pi).length() <= weld)
+                })
+            {
+                continue;
+            }
+            let duv = Vec2::new(uvj.x() - uvi.x(), uvj.y() - uvi.y());
+            let len = duv.length();
+            let dir = if len > 1e-12 {
+                Vec2::new(duv.x() / len, duv.y() / len)
+            } else {
+                Vec2::new(1.0, 0.0)
+            };
+            let Ok(l2d) = Line2D::new(uvi, dir) else {
+                continue;
+            };
+            bridges.push(OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve: Curve2D::Line(l2d),
+                start_uv: uvi,
+                end_uv: uvj,
+                start_3d: pi,
+                end_3d: pj,
+                forward: true,
+                source_edge_idx: None,
+                pave_block_id: None,
+            });
+        }
+        if !bridges.is_empty() {
+            bridge_sections = bridges
+                .iter()
+                .map(|br| super::split_types::SectionEdge {
+                    curve_3d: EdgeCurve::Line,
+                    pcurve_a: br.pcurve.clone(),
+                    pcurve_b: br.pcurve.clone(),
+                    start: br.start_3d,
+                    end: br.end_3d,
+                    start_uv_a: Some(br.start_uv),
+                    end_uv_a: Some(br.end_uv),
+                    start_uv_b: Some(br.start_uv),
+                    end_uv_b: Some(br.end_uv),
+                    target_face: None,
+                    pave_block_id: None,
+                })
+                .collect();
+        }
+        all_edges.extend(bridges);
+    }
+    // The arrangement path reads `sections`, not `all_edges` — augment it so
+    // a bridged partition survives arrangement adoption.
+    let sections_aug: Vec<super::split_types::SectionEdge>;
+    let sections: &[super::split_types::SectionEdge] = if bridge_sections.is_empty() {
+        sections
+    } else {
+        sections_aug = sections.iter().cloned().chain(bridge_sections).collect();
+        &sections_aug
+    };
 
     // Drop pendant section edges that dangle into the face interior — left
     // in, the traversal walks out and back along them, spuriously

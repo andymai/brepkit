@@ -82,7 +82,6 @@ fn lattice_band_operands_are_clean_and_outward() {
 }
 
 #[test]
-#[ignore = "ready repro: GFA aborts with 'open growth shell with 67 faces' fusing two clean lattice bands"]
 fn kumiko_lattice_bands_fuse_closed() {
     let mut topo = Topology::new();
     let a = load("kumiko_lattice_band_a.bin", &mut topo);
