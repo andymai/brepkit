@@ -162,15 +162,15 @@ fn fillet_v2_box_edge_propagates_boundary_splits() {
 
     // Export-tolerance mesh (0.01 mm / 5 deg). Pre-fix this configuration
     // produced 28 boundary mesh edges: the shared spans tessellated as
-    // unwelded T-junction cracks on both sides. The remaining openings are
-    // the characterized separate v2 gaps (untrimmed end-face notches,
-    // trimmed-face/blend contact edges built as duplicate edge ids, and the
-    // keep-side selection defect), not the propagation defect.
+    // unwelded T-junction cracks on both sides. With the blend face reusing
+    // the trimmers' contact edges the duplicate-contact class is gone too
+    // (22 -> 7 measured); the remaining openings are the characterized
+    // untrimmed end-face notches and the keep-side selection defect.
     let mesh =
         tessellate_solid_with_tolerance(&topo, result.solid, 0.01, 5.0_f64.to_radians()).unwrap();
     let bnd = boundary_edge_count(&mesh);
     assert!(
-        bnd < 28,
-        "T-junction cracks along propagated splits should be gone; bnd = {bnd}"
+        bnd <= 7,
+        "propagated-split cracks and duplicate contact edges should be gone; bnd = {bnd}"
     );
 }

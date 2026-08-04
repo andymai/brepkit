@@ -18,9 +18,7 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::analytic;
 use crate::blend_func::{ConstRadBlend, EvolRadBlend};
-use crate::builder_utils::{
-    FlippedNormalSurface, create_blend_face, sample_nurbs_endpoints, surface_ref_or_adapter,
-};
+use crate::builder_utils::{FlippedNormalSurface, sample_nurbs_endpoints, surface_ref_or_adapter};
 use crate::corner;
 use crate::radius_law::RadiusLaw;
 use crate::spine::Spine;
@@ -182,8 +180,13 @@ impl<'a> FilletBuilder<'a> {
             corner_face_ids.push(cr.face_id);
         }
 
+        let mut stripe_contact_edges: Vec<(
+            Option<brepkit_topology::edge::EdgeId>,
+            Option<brepkit_topology::edge::EdgeId>,
+        )> = Vec::new();
         for sr in &regular_results {
             let stripe = &sr.stripe;
+            stripe_contact_edges.push((None, None));
 
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
             let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
@@ -224,6 +227,9 @@ impl<'a> FilletBuilder<'a> {
 
             match trim1 {
                 Ok(tr) if tr.trimmed_face != current_face1 => {
+                    if let Some(slot) = stripe_contact_edges.last_mut() {
+                        slot.0 = tr.contact_edge;
+                    }
                     face_replacements.insert(stripe.face1, tr.trimmed_face);
                 }
                 Ok(_) => {} // untrimmed (non-planar), keep original
@@ -242,6 +248,9 @@ impl<'a> FilletBuilder<'a> {
 
             match trim2 {
                 Ok(tr) if tr.trimmed_face != current_face2 => {
+                    if let Some(slot) = stripe_contact_edges.last_mut() {
+                        slot.1 = tr.contact_edge;
+                    }
                     face_replacements.insert(stripe.face2, tr.trimmed_face);
                 }
                 Ok(_) => {}
@@ -251,11 +260,18 @@ impl<'a> FilletBuilder<'a> {
             }
         }
 
-        for sr in &regular_results {
+        for (si, sr) in regular_results.iter().enumerate() {
             let stripe = &sr.stripe;
 
-            // For v1, we create a minimal wire from the contact curve endpoints.
-            let blend_face_id = create_blend_face(topo, stripe)?;
+            // Reuse the trimmed neighbours' contact edges so the blend flank
+            // shares one edge entity per contact instead of minting a
+            // duplicate that leaves both faces' copies use-1.
+            let (c1, c2) = stripe_contact_edges
+                .get(si)
+                .copied()
+                .unwrap_or((None, None));
+            let blend_face_id =
+                crate::builder_utils::create_blend_face_with_contacts(topo, stripe, c1, c2)?;
             blend_face_ids.push(blend_face_id);
         }
 
