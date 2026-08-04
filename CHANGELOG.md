@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.24](https://github.com/andymai/brepkit/compare/v2.128.23...v2.128.24) (2026-08-04)
+
+
+### Bug Fixes
+
+* **blend:** thread chamfer trims into shared contact edges ([#1307](https://github.com/andymai/brepkit/issues/1307)) ([243db8f](https://github.com/andymai/brepkit/commit/243db8fa884945fc15ae27beee20b3414e1d3b2e))
+
 ## [2.128.23](https://github.com/andymai/brepkit/compare/v2.128.22...v2.128.23) (2026-08-04)
 
 
