@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785821977014,
+  "lastUpdate": 1785823382402,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15875,6 +15875,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19661096,
             "range": "± 63256",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1eae9e40c2ffeeecd7cdfe744e8affe229c560db",
+          "message": "docs(roadmap): kumiko nineteenth pass shrinks the defect to one six-edge hole (#1291)\n\nNineteenth-pass progress for the kumiko lattice band fuse (parked on\n`fix/outer-wire-images`):\n\n- Outer-wire image expansion implemented: faces now see their exit paves\nas boundary vertices.\n- The pendant bridge returns with the correct gates (including a new\nsection-free-target gate that prevents the z=4.5 over-connection).\n- Measured: z=4.5 closes completely; z~9.9 shrinks to one six-edge hole.\nThe last defect is that face 935's splitter still yields 2 sub-faces\ninstead of tracing the bridged strip as its own region; the\ntwentieth-pass probe plan is recorded. Foils still to run before any\nship.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the kumiko roadmap with the nineteenth pass. Documents\nouter‑wire boundary‑image expansion\n(`boundary_edges_to_pcurve_with_images`) and a correctly gated pendant\nbridge that closes z=4.5 and shrinks z~9.9 to one six‑edge hole, and\nnotes the remaining face 935 splitter issue and next‑pass probes.\n\n<sup>Written for commit 06cec58e229d0ff17d5a5427ad12e791d3b9e910.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1291?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T23:00:25-07:00",
+          "tree_id": "a7c69acbbbc9d8ae8b44af51d51517e36806a659",
+          "url": "https://github.com/andymai/brepkit/commit/1eae9e40c2ffeeecd7cdfe744e8affe229c560db"
+        },
+        "date": 1785823380949,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 884597,
+            "range": "± 1577",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 962647,
+            "range": "± 1882",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11911,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650202,
+            "range": "± 2324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23643358,
+            "range": "± 51608",
             "unit": "ns/iter"
           }
         ]
