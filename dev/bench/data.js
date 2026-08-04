@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785810122989,
+  "lastUpdate": 1785811845020,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15335,6 +15335,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29656448,
             "range": "± 35532",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7494d9bdde4f51a9b04486ba67fea84ac319c23b",
+          "message": "docs(roadmap): kumiko tenth pass parks the EF-IN absolute ceiling (#1281)\n\nRecords the tenth-pass result for the kumiko lattice band fuse:\n\n- The ninth pass's pinched-hole theory is also refuted: A-top has zero\ninner wires and its split is a correct partition.\n- True root of the z=34.8 corner: `fill_ef_in`'s deviation-ratio gate\nadmits long shallow-crossing leaves (0.05 off the wall plane at 2.7% of\na 1.8 chord), contaminating the east wall's splitter input and warping\nits partition.\n- Fix parked on `diag/kumiko-in-gate-abs` (absolute ceiling 1e-2 on the\nratio band): closes the z=34.8 corner fully (abort 67 -> 51 faces) but\nthe fixture's free-edge count regresses 2 -> 14 because the seventh\npass's junction-copy pairs resurface. The eleventh-pass plan is recorded\nin the entry.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRecord the Kumiko tenth-pass findings and park the EF-IN gate absolute\nceiling fix. Documents the true cause of the z=34.8 corner issue and the\nmeasured impact of the proposed gate change.\n\n- **Bug Fixes**\n  - Ninth-pass “pinched-hole” theory refuted; A-top split was correct.\n- Root cause: `fill_ef_in` ratio gate (`IN_FACE_MAX_DEVIATION_RATIO`)\nadmitted long shallow crossings, warping the east wall partition.\n- Parked fix on `diag/kumiko-in-gate-abs`: add\n`IN_FACE_MAX_DEVIATION_ABS = 1e-2`.\n- Results: corner closes (abort 67 → 51), but free edges rise 2 → 14 as\njunction-copy pairs resurface; eleventh pass will target those before\ntuning the ceiling.\n\n<sup>Written for commit 94146cbbfa7ad2ee2dafe77b3e494f74e94ed93b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1281?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T19:48:20-07:00",
+          "tree_id": "89f075b3b3be96c263f04a33ac1089adffc28fa5",
+          "url": "https://github.com/andymai/brepkit/commit/7494d9bdde4f51a9b04486ba67fea84ac319c23b"
+        },
+        "date": 1785811843442,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1017333,
+            "range": "± 2353",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1095364,
+            "range": "± 2889",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13093,
+            "range": "± 410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675880,
+            "range": "± 1832",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29891809,
+            "range": "± 101484",
             "unit": "ns/iter"
           }
         ]
