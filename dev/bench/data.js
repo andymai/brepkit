@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785830027359,
+  "lastUpdate": 1785833034662,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -16415,6 +16415,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25054088,
             "range": "± 29489",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8c0c530a74b248fc1d1623601c20be584576b5af",
+          "message": "fix(algo): analytic torus arm for the ray-cast classifier (#1300)\n\n## Summary\n\nCloses the deferred roadmap item \"algo ray-cast classifier has no Torus\narm\".\n\n- Whole-torus faces (degenerate boundary, under 3 polygon vertices) were\npreviously dropped from parity counting entirely; full-tube laterals\nfell to the flat Newell-polygon fallback, which mis-counts up to four\nreal crossings.\n- `FaceGeom::Torus` collects both cases and counts crossings via the\nresidual-verified ray/torus quartic already in `brepkit_math`, filtered\nto the tube-angle band, with near-tangent root pairs and band-border\nhits flagged as unreliable (mirroring the cylinder/cone conventions).\n- Two-rim tube bands are declined by design (side-ambiguous from\nboundary vertices alone) and keep the current fallback;\nfull-major-revolution detection is largest-gap-based because\nmax-minus-min fails on sampled rim circles.\n\n## Testing\n\n- New `whole_torus_classifies_inside_and_outside` (spine Inside; donut\nhole, outer equator, and above-tube Outside)\n- Calibrated `coaxial_torus` suite: 9/9 unchanged\n- algo 209, operations and io suites all green; clippy `-D warnings`\nclean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an analytic torus arm to the ray-cast classifier to correctly count\nray/torus crossings for whole tori and full-tube lateral faces. Fixes\ndropped faces and miscounts that led to wrong inside/outside results\naround toroidal geometry.\n\n- Introduced `FaceGeom::Torus` and use the residual-verified ray/torus\nquartic from `brepkit_math`, with an optional tube-angle band to filter\nhits.\n- Detect whole tori (degenerate boundary) and full-major-revolution tube\nbands via largest angular gap; keep two-rim bands on the polygon\nfallback by design.\n- Flag near-tangent and band-border hits as unreliable (consistent with\ncylinder/cone), and added a `whole_torus_classifies_inside_and_outside`\ntest; existing suites remain green.\n\n<sup>Written for commit 134b3228e32a31340a1c8e3f4cb75da5494c0ccb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1300?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T08:41:20Z",
+          "tree_id": "3e239a6ef80cace979a299ff9b1650ea04129dac",
+          "url": "https://github.com/andymai/brepkit/commit/8c0c530a74b248fc1d1623601c20be584576b5af"
+        },
+        "date": 1785833033595,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 907501,
+            "range": "± 2358",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 983738,
+            "range": "± 5484",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11961,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 684829,
+            "range": "± 14553",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24242745,
+            "range": "± 37649",
             "unit": "ns/iter"
           }
         ]
