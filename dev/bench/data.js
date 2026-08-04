@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785809078659,
+  "lastUpdate": 1785810122989,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15281,6 +15281,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29697397,
             "range": "± 144999",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d7910928ccb349c5f470679c0ec3a27134380d6f",
+          "message": "docs(roadmap): kumiko ninth pass — root is pinched-hole integration in the splitter (#1280)\n\nNinth-pass finding for the kumiko lattice band fuse (2 free edges\nremaining):\n\n- The eighth pass's coplanar-phase inner-wire theory is refuted: the\nfull inner-wire extension of `phase_ff_coplanar` (hole-aware loops,\neven-odd containment, multi-span clip) was implemented and had zero\neffect, because the corner section already exists from the transversal\nA-top x B-south-wall pair and the dedup correctly suppresses the\ncoplanar duplicate. Reverted per verify-or-revert.\n- The actual root: A-top `Id(364)`'s inner lattice wire pinches onto its\nouter rectangle corner, and the splitter's hole distribution mis-handles\na boundary-touching inner wire — the split product takes the outer\ncorner path without weaving the diagonal, leaving the diagonal and the\neast-edge piece each use-1. Fix altitude is the face splitter's hole\nintegration for pinched inner wires.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the kumiko roadmap (ninth pass) to record that the coplanar\ninner‑wire theory was tested and refuted, and to identify the true root\ncause: a pinched inner wire touching the outer corner causes the face\nsplitter to mis-assign hole wires. The doc notes the revert of the\ncoplanar inner‑wire/riding‑sections experiments and moves the fix target\nto the splitter’s hole integration for boundary‑touching inner wires.\n\n<sup>Written for commit e162a67648565b3096b93f063cd700c74080a050.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1280?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-03T19:19:39-07:00",
+          "tree_id": "75bbab82e30d7e30474fc6c4c65c9fab40de69d1",
+          "url": "https://github.com/andymai/brepkit/commit/d7910928ccb349c5f470679c0ec3a27134380d6f"
+        },
+        "date": 1785810121573,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1010533,
+            "range": "± 4053",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1090033,
+            "range": "± 3211",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11918,
+            "range": "± 93",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673325,
+            "range": "± 1040",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29656448,
+            "range": "± 35532",
             "unit": "ns/iter"
           }
         ]
