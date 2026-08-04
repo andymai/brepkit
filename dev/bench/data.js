@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785865422957,
+  "lastUpdate": 1785870213561,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17333,6 +17333,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24533374,
             "range": "± 57855",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1f5836cc83403f3d8f93584288a1bfaeaddeb47f",
+          "message": "test(blend): pin convex chamfer volume; record the winding inconsistency (#1317)\n\nAdds a convex chamfer volume pin and records two measured findings from\nthe concave-fillet re-attempt: constructor-dependent wire winding\n(make_box vs extrude wind oppositely relative to outward normals), and\nproof that the concave fillet's defect is in its reflex-angle geometry,\nnot contact directions (identical error under three schemes). No\nbehavior change.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a volume-pin test for `chamfer_v2` on a convex ridge to ensure it\nremoves a small amount of material and catch future contact-direction\nsign regressions. Updates the roadmap to document the `make_box` vs\n`extrude` wire-winding mismatch and confirm the concave fillet bug stems\nfrom reflex-angle geometry, not contact directions.\n\n<sup>Written for commit 35a792f7d40c5b163ed634d437afd7eb91ddaf01.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1317?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T19:00:55Z",
+          "tree_id": "56cacef3b26231833f14db655ad8468f3eed8df4",
+          "url": "https://github.com/andymai/brepkit/commit/1f5836cc83403f3d8f93584288a1bfaeaddeb47f"
+        },
+        "date": 1785870212002,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 920105,
+            "range": "± 1179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 996578,
+            "range": "± 1786",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12275,
+            "range": "± 345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 685882,
+            "range": "± 10689",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24222854,
+            "range": "± 84131",
             "unit": "ns/iter"
           }
         ]
