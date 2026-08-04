@@ -128,6 +128,12 @@ impl JunctionRegistry {
         }
     }
 
+    fn seed(&mut self, p: Point3) {
+        if self.lookup(p, 1e-4).is_none() {
+            self.cells.insert(Self::key(p), p);
+        }
+    }
+
     fn nearest_two(&self, p: Point3) -> Option<(f64, Point3, f64)> {
         let mut best: Option<(f64, Point3)> = None;
         let mut second = f64::INFINITY;
@@ -157,6 +163,31 @@ pub fn perform(
     let faces_b = brepkit_topology::explorer::solid_faces(topo, solid_b)?;
 
     let mut junction_registry = JunctionRegistry::default();
+    // Seed the registry with every vertex the earlier phases already minted
+    // (operand vertices from block init plus VE/EE/VF/EF interference
+    // vertices). A section endpoint refined here lands up to ~1e-3 from the
+    // EF crossing another solver placed at the same physical corner (the
+    // operands themselves disagree at that scale); without the seed the FF
+    // side registers its own copy first-wins and the two anchors never
+    // weld. Guarded adoption (band + 10x ambiguity ratio) does the rest.
+    for pbs in arena.edge_pave_blocks.values() {
+        for &pb_id in pbs {
+            if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                for vid in [pb.start.vertex, pb.end.vertex] {
+                    let resolved = arena.resolve_vertex(vid);
+                    if let Ok(v) = topo.vertex(resolved) {
+                        junction_registry.seed(v.point());
+                    }
+                }
+                for pave in &pb.extra_paves {
+                    let resolved = arena.resolve_vertex(pave.vertex);
+                    if let Ok(v) = topo.vertex(resolved) {
+                        junction_registry.seed(v.point());
+                    }
+                }
+            }
+        }
+    }
 
     // Pre-compute face AABBs for rejection
     let bboxes_a = compute_face_bboxes(topo, &faces_a, tol)?;

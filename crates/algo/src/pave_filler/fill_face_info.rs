@@ -35,6 +35,15 @@ const ON_SURFACE_BAND_FACTOR: f64 = 100.0;
 /// bands cannot separate the two classes.
 const IN_FACE_MAX_DEVIATION_RATIO: f64 = 0.2;
 
+/// Absolute ceiling on the ratio band. A LONG leaf crossing at a shallow
+/// angle keeps a small deviation/chord ratio while sitting a macroscopic
+/// distance off the face — the kumiko band's slope-bottom edge crosses a
+/// wall plane 0.05 away at 2.7% of its 1.8 chord, and admitting it feeds
+/// the wall's splitter an off-plane section that warps the partition. A
+/// genuinely grazing contact hugs the surface in absolute terms as well;
+/// beyond this the leaf is transversal regardless of ratio.
+const IN_FACE_MAX_DEVIATION_ABS: f64 = 1e-2;
+
 /// Populate [`FaceInfo`] for all faces with their classified pave blocks.
 ///
 /// - `pave_blocks_on`: split boundary edges of each face
@@ -266,7 +275,19 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                         }
                     }
                     let chord = (pev.point() - psv.point()).length();
-                    dev <= on_band.max(IN_FACE_MAX_DEVIATION_RATIO * chord)
+                    // The absolute ceiling applies to STRAIGHT leaves only: a
+                    // line's deviation from a crossed plane grows linearly, so
+                    // ratio-small + absolute-large means a long transversal
+                    // crossing, never a graze. A curved contact (the
+                    // calibrated socket-loft corner arcs) hugs via curvature
+                    // and legitimately reaches larger absolute deviations at
+                    // its span ends; it keeps the pure ratio gate.
+                    let band = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                        (IN_FACE_MAX_DEVIATION_RATIO * chord).min(IN_FACE_MAX_DEVIATION_ABS)
+                    } else {
+                        IN_FACE_MAX_DEVIATION_RATIO * chord
+                    };
+                    dev <= on_band.max(band)
                 })
                 .collect();
             let fi = arena.face_info_mut(face_id);
