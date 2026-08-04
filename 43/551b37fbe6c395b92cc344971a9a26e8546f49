@@ -1,0 +1,22 @@
+crates/operations/tests/regress_fillet_concave_notch.rs
+  s_7ff36fc7322bef::t_5b2b91cf3fbefc 1-34,40-102
+  s_7ff36fc7322bef::t_212ae19bd71f7a 35-39
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_0811ff4005aa47 138-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "43551b37fbe6c395b92cc344971a9a26e8546f49",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
