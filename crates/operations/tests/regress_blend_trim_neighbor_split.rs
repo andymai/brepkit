@@ -130,8 +130,11 @@ fn fillet_v2_box_edge_propagates_boundary_splits() {
     }
 
     // The two end faces (planes x=0 and x=10) each gained both split
-    // vertices: (x, 1, 10) from the top-face trim and (x, 0, 9) from the
-    // front-face trim, growing from 4 to 6 boundary edges.
+    // vertices — (x, 1, 10) from the top-face trim and (x, 0, 9) from the
+    // front-face trim — and the corner path between them is REPLACED by the
+    // fillet's end cross-section arc (shared with the blend face), so the
+    // scooped corner vertex (x, 0, 10) is gone: 4 original edges + 2 splits
+    // - 2 corner sides + 1 arc = 5 boundary edges.
     for x in [0.0, 10.0] {
         let end_face = faces
             .iter()
@@ -149,7 +152,11 @@ fn fillet_v2_box_edge_propagates_boundary_splits() {
             .unwrap()
             .edges()
             .len();
-        assert_eq!(n_edges, 6, "end face at x={x} should gain 2 edges");
+        assert_eq!(n_edges, 5, "end face at x={x} should be notched to 5 edges");
+        assert!(
+            !wire_has_vertex_at(&topo, end_face, Point3::new(x, 0.0, 10.0)),
+            "end face at x={x} should no longer reach the scooped corner"
+        );
         assert!(
             wire_has_vertex_at(&topo, end_face, Point3::new(x, 1.0, 10.0)),
             "end face at x={x} missing top-trim split vertex"
