@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785876756859,
+  "lastUpdate": 1785877298165,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17495,6 +17495,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25622937,
             "range": "± 97736",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ec32b4a4615cf0e67ad3acc4cae5faec41ff205f",
+          "message": "chore(main): release 2.128.27 (#1320)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.27](https://github.com/andymai/brepkit/compare/v2.128.26...v2.128.27)\n(2026-08-04)\n\n\n### Bug Fixes\n\n* **blend:** fill concave edges on the correct side of the analytic\nfillet ([#1319](https://github.com/andymai/brepkit/issues/1319))\n([b0d6ed7](https://github.com/andymai/brepkit/commit/b0d6ed7e8cf11d4cfbb0735a3b651a90a458d0ce))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` v2.128.27 with a blend fix that fills concave\nedges on the correct side of analytic fillets, preventing wrong-side\npatches in concave cases.\n\n<sup>Written for commit bfc5c573b09e1b0f280cc98bd365ad3e1a9028c3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1320?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-04T20:58:58Z",
+          "tree_id": "c8dab88007721a28c3bd4a4389ca48a64b5eba89",
+          "url": "https://github.com/andymai/brepkit/commit/ec32b4a4615cf0e67ad3acc4cae5faec41ff205f"
+        },
+        "date": 1785877295978,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 914351,
+            "range": "± 1234",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 989196,
+            "range": "± 1718",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12117,
+            "range": "± 563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 685547,
+            "range": "± 1157",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24166384,
+            "range": "± 21705",
             "unit": "ns/iter"
           }
         ]
