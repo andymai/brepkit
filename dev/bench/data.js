@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785808343288,
+  "lastUpdate": 1785808850012,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -15173,6 +15173,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29656822,
             "range": "± 504390",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "64ab121990cd91cc483c6c954606183ec15df885",
+          "message": "chore(main): release 2.128.19 (#1278)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.19](https://github.com/andymai/brepkit/compare/v2.128.18...v2.128.19)\n(2026-08-04)\n\n\n### Bug Fixes\n\n* **algo:** keep exact operand geometry through arrangement emission and\nwelds ([#1277](https://github.com/andymai/brepkit/issues/1277))\n([dd152bd](https://github.com/andymai/brepkit/commit/dd152bd6f057cb18408dcab24e924b9ef840cb86))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.19 of `brepkit-wasm`. Fixes geometry handling to preserve\nexact operand shapes through arrangement emission and welds, reducing\ndrift and artifacts.\n\n<sup>Written for commit 09870d3b990e3e0ba83ca1337d72ca5afcbfeeb9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1278?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-04T01:58:17Z",
+          "tree_id": "2c5693e5643594e4940bb875e04300a6c9fdfabd",
+          "url": "https://github.com/andymai/brepkit/commit/64ab121990cd91cc483c6c954606183ec15df885"
+        },
+        "date": 1785808848132,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1066005,
+            "range": "± 1621",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1151908,
+            "range": "± 2915",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13108,
+            "range": "± 155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 679707,
+            "range": "± 1841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 31426938,
+            "range": "± 32174",
             "unit": "ns/iter"
           }
         ]
