@@ -283,6 +283,25 @@ wall-cut raw residual" caution in `phase_ef.rs`) — implement with the full foi
 honeycomb residual ceilings in the loop. The larger lesson for the campaign: every remaining
 kumiko defect traces to the operands disagreeing at ~1e-3 while the engine welds at 1e-5;
 per-vertex tolerance adoption at interference altitude is the unifying frontier.
+THIRTEENTH PASS (2026-08-03, SHIPPED from the former parked branch): the EF-IN absolute
+ceiling is scoped to STRAIGHT leaves (an unscoped ceiling broke `fuse_shelled_box_with_
+socket_loft` — the calibrated grazing arcs legitimately exceed 1e-2 absolute; a Line's
+deviation from a crossed plane grows linearly so ratio-small + absolute-large is always a
+long transversal crossing), and the FF junction registry is seeded with every previously
+minted pave vertex so FF refinements adopt the anchors EF already placed (14 -> 7 free
+edges). All foils green, honeycomb ceilings unchanged. REFUTED this pass: (a) guarded wide
+VV merge of cross-solid operand vertex pairs — byte-identical free edges (the twins are
+solver-minted, not operand vertices); (b) cluster-canonical adoption in `resolve`
+(CLUSTER_BAND 3e-3 / ISOLATION 1e-2, lexicographic canonical) — net-negative 7 -> 9 with
+new long free edges, because consumers that bypass endpoint resolution keep their own
+anchors and a canonical only helps if every consumer converges; (c) seeding alone on the
+pre-ceiling main — neutral (the old 2-edge state was stitched by the invalid off-plane
+wires the ceiling removes). FOURTEENTH-PASS TARGET: the one remaining cluster at the
+z≈9.9 crossing — copies spread 2.4e-3 (wider than the 1e-3 guarded band), chains
+(38.0,-41.3151..-41.3175, 9.8631..9.8633) plus their x=38.05 partners; the pairwise
+guard refuses multi-copy clusters, so the fix must make the NON-resolve consumers (the
+chains anchored at each copy) converge — likely by unifying at the pave/make_blocks
+altitude rather than widening any FF band.
 Instrument recipe that finally localized the mint: bisect topology vertex scans across pipeline
 stages, then an env-gated backtrace in `Vertex::new` on the literal coordinate — probes at the
 phase level all lied because the noise was born at EMISSION, not intersection.
