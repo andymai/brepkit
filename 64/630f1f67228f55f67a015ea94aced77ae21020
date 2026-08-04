@@ -1,0 +1,25 @@
+crates/blend/src/analytic.rs
+  s_7ff36fc7322bef::t_c80ff904bebbb6 354-360,363
+crates/operations/tests/regress_blend_keepside_tangency.rs
+  s_7ff36fc7322bef::t_a7329005419393 1-7
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_a7329005419393 128
+crates/blend/src/analytic/tests.rs
+  s_7ff36fc7322bef::t_36eb47088b8a8f 129-131,133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "64630f1f67228f55f67a015ea94aced77ae21020",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
