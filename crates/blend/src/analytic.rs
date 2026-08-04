@@ -379,6 +379,32 @@ fn section_basis(n1: Vec3, n2: Vec3, spine_tangent: Vec3) -> (Vec3, Vec3) {
     (bisector, cross_dir)
 }
 
+/// The in-plane direction from the spine INTO `face`'s material: the left
+/// side of the face's own traversal of the spine edge (`effective normal x
+/// traversal tangent` under the CCW-outer-wire convention). Returns `None`
+/// when the spine's first edge is not in the face's wires.
+fn material_contact_direction(
+    topo: &Topology,
+    face: FaceId,
+    spine: &Spine,
+    normal: Vec3,
+    tangent: Vec3,
+) -> Option<Vec3> {
+    let spine_edge = *spine.edges().first()?;
+    let f = topo.face(face).ok()?;
+    let n_eff = if f.is_reversed() { -normal } else { normal };
+    for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+        let w = topo.wire(wid).ok()?;
+        for oe in w.edges() {
+            if oe.edge() == spine_edge {
+                let t = if oe.is_forward() { tangent } else { -tangent };
+                return n_eff.cross(t).normalize().ok();
+            }
+        }
+    }
+    None
+}
+
 /// Compute the direction from edge toward contact point on a plane.
 ///
 /// This is the component of the bisector projected onto the plane surface,
@@ -540,8 +566,18 @@ fn plane_plane_chamfer(
 
     let (bisector, _cross_dir) = section_basis(n1, n2, tangent);
 
-    let contact_dir1 = compute_contact_direction(n1, bisector);
-    let contact_dir2 = compute_contact_direction(n2, bisector);
+    // Material-oriented contact directions: the bisector projection points
+    // INTO each face's material only on a CONVEX edge — on a concave edge it
+    // flips onto the faces' extensions, placing the contacts on the external
+    // tangent branch (a 0.02 chamfer on a reflex notch grew the solid by
+    // 6.7%). The exact, convexity-independent direction is the wire-traversal
+    // left side (`effective_normal x traversal_tangent` for a CCW-wound
+    // face); the bisector projection remains the fallback when the spine
+    // edge is not found in a face's wires.
+    let contact_dir1 = material_contact_direction(topo, face1, spine, n1, tangent)
+        .unwrap_or_else(|| compute_contact_direction(n1, bisector));
+    let contact_dir2 = material_contact_direction(topo, face2, spine, n2, tangent)
+        .unwrap_or_else(|| compute_contact_direction(n2, bisector));
 
     let c1_start = p_start + contact_dir1 * d1;
     let c1_end = p_end + contact_dir1 * d1;
