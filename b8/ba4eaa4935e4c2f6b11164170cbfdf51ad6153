@@ -1,0 +1,38 @@
+crates/operations/src/shell_op.rs
+  s_7ff36fc7322bef::t_cf320535f1cc64 362-378,380-382,384-406
+  s_7ff36fc7322bef::t_d2a22bec2c0ce1 379,383
+crates/io/examples/dump_solid.rs
+  s_7ff36fc7322bef::t_b35920cdad8751 12-29,36-40,46
+  s_7ff36fc7322bef::t_0adcdb44b6f4a6 6
+  s_7ff36fc7322bef::t_123a8405d3d861 49-57,65-72
+  s_7ff36fc7322bef::t_d2a22bec2c0ce1 30-35,58-64
+  s_7ff36fc7322bef::t_0cb6be3807a145 1-5,7-11,41-45,47-48,73-75
+crates/io/tests/data/thickwall_sharp_cavity_body.bin
+  s_7ff36fc7322bef::t_198d781d502dc0 1
+crates/algo/src/builder/builder_solid.rs
+  s_7ff36fc7322bef::t_934e070b856dca 378-397
+crates/operations/src/shell_op/tests.rs
+  s_7ff36fc7322bef::t_a2423241b72059 983-1002
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_4ddae09edef52f 124,135-176
+crates/io/tests/thickwall_sharp_cavity_fuse_inmem.rs
+  s_7ff36fc7322bef::t_974897cb36d555 2-12
+  s_7ff36fc7322bef::t_198d781d502dc0 112-114
+  s_7ff36fc7322bef::t_5958c502deb56e 111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "b8ba4eaa4935e4c2f6b11164170cbfdf51ad6153",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
