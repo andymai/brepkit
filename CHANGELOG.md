@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.23](https://github.com/andymai/brepkit/compare/v2.128.22...v2.128.23) (2026-08-04)
+
+
+### Bug Fixes
+
+* **blend:** reuse trimmer contact edges in the v2 blend face ([#1305](https://github.com/andymai/brepkit/issues/1305)) ([cc34788](https://github.com/andymai/brepkit/commit/cc34788f0911cedf3d06ca1b8c528aedeaa0a75e))
+
 ## [2.128.22](https://github.com/andymai/brepkit/compare/v2.128.21...v2.128.22) (2026-08-04)
 
 
