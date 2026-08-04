@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785874458924,
+  "lastUpdate": 1785876756859,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17441,6 +17441,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26061568,
             "range": "± 242743",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b0d6ed7e8cf11d4cfbb0735a3b651a90a458d0ce",
+          "message": "fix(blend): fill concave edges on the correct side of the analytic fillet (#1319)\n\n## Root causes\n\nA 0.02 fillet on a reflex-notch edge removed material instead of adding\nthe corner sliver (`regress_fillet_concave_notch.rs`, previously an\nignored ready-repro). Instrumenting the analytic fillet found two\nindependent roots:\n\n1. **The analytic plane-plane fillet always placed its cross-section\ndown the inward-normal bisector.** Inward normals alone cannot\ndistinguish a convex edge from a concave one: both wedges share the same\nbounding planes and give the same dihedral. The missing bit is the\nfaces' extent: a convex neighbour face lies on the material side of the\nother plane, a concave one on the void side. A face-extent witness now\nflips the bisector on concave edges, which also lands the in-plane\ncontact projections on the real walls instead of their extensions.\n\n2. **The trim keep-side keyed on which side of the PLANE the ball centre\nsits.** The centre-to-contact vector is perpendicular to the face plane,\nso that test only measures which side of the plane the centre is on, and\nit flips for concave edges even though the correct in-plane keep side\n(away from the spine edge) does not. The fillet path now passes\n`TrimKeep::AwayFrom(spine point)` and the trimmer resolves the side in\nits own frame. Resolving externally is impossible in principle: the\ntrimmer's Left/Right frame follows each face's wire traversal order,\nwhich callers cannot predict; this frame-fragility is what broke all\nthree previously refuted external sign schemes.\n\n## Validation\n\n- `regress_fillet_concave_notch.rs` un-ignored and green (fillet adds\nthe sliver).\n- Calibrated pins unchanged: `regress_blend_trim_neighbor_split` (bnd <=\n7), `regress_chamfer_obtuse_ridge`, `convex_chamfer_volume_check`.\n- Full suites green: blend 96, operations 1010, io 231, algo 209.\n- `regress_blend_keepside_tangency` (separate near-tangent defect)\nunchanged, stays ignored.\n\nRoadmap updated in the same PR: v2 trimmer residuals down to 1\n(keep-side/trim geometry under tangency).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes concave plane-plane fillets so they add the corner sliver instead\nof carving material on reflex-notch edges. Chooses the correct bisector\nand keep side; the concave-notch repro is green and convex cases are\nunchanged.\n\n- **Bug Fixes**\n- Bisector selection: added a face-extent material witness to detect\nconcave edges and flip to the outward bisector, so contact projections\nland on the real walls.\n- Keep-side resolution: fillet now passes `TrimKeep::AwayFrom(spine\npoint)` and the `trimmer` resolves Left/Right in its own frame\n(replacing the plane-side-of-center heuristic); updated\n`trim_face`/`trim_face_general` to accept `TrimKeep`.\n\n<sup>Written for commit 0a12b6920eec24463deefbd30a103e1cd2b832ed.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1319?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T20:49:59Z",
+          "tree_id": "4e8e3fac33c186879f48b425f2e9392b2ffe75e2",
+          "url": "https://github.com/andymai/brepkit/commit/b0d6ed7e8cf11d4cfbb0735a3b651a90a458d0ce"
+        },
+        "date": 1785876755689,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 962762,
+            "range": "± 1818",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1047388,
+            "range": "± 23946",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13131,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698186,
+            "range": "± 10159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25622937,
+            "range": "± 97736",
             "unit": "ns/iter"
           }
         ]
