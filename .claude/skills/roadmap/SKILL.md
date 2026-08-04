@@ -388,12 +388,21 @@ interior=2`): the bridged chain's NORTH anchor (38.05,-41.3002,9.8922) must land
 935's ridge boundary (x=38.05) for the chain to separate a region, and the T-junction
 there does not register — the endpoint likely sits just past the tol*100=1e-5
 endpoint-T window off the ridge chord, or the ridge edge in the arrangement inputs is
-the unsplit image piece whose interior the endpoint misses. TWENTY-FIRST PASS: measure
-the distance from (38.050000000,-41.300229084,9.892195827) to 935's ridge boundary
-edges in the arrangement inputs, then either widen the endpoint-T window for
-section-chain ends at the operand-noise scale (gated like the bridge) or anchor the
-chain end onto the ridge via the same image-vertex adoption. Foils STILL not run on
-the branch — run algo/ops/io before any ship. Also REVERTED this pass (no effect,
+the unsplit image piece whose interior the endpoint misses. TWENTY-FIRST PASS
+(2026-08-03, measured): NO boundary input lies within 5e-3 of that anchor — the point
+is a MID-FACE junction where sections i=16 ((38.05,-40.4644,9.6350)→anchor, the
+x=38.05 line) and i=18 (A→anchor) meet at t=1.0/t=1.0. The x=38.05 line is INTERIOR
+to 935 (the neighbour wall's crossing), not its ridge. So the would-be separating
+chain runs (38.05,-40.4644,9.635)→anchor→A→B→[bridge]→C: south end now
+boundary-anchored at C, but the NORTH continuation past (38.05,-40.4644,9.635) — the
+SEVENTH-pass z=9.635 corner, the very first near-miss/orphan this campaign measured —
+must ultimately reach 935's boundary for the arrangement to separate the region, and
+it evidently does not (2 interior regions traced). TWENTY-SECOND PASS: dump face 935's
+FULL section adjacency (every section's endpoints, which coincide within weld, which
+touch boundary inputs) and find each place the network fails to reach the boundary;
+each such gap is another operand-noise pendant for the same gated bridge (or the same
+exit-pave/image treatment). The campaign's remaining defect is now purely "the
+separating chain across face 935 is boundary-anchored at only one end". Also REVERTED this pass (no effect,
 principled but unverified): a degenerate-refine rescue in `snap_to_boundary_junction_
 band` (detect a flat refine objective, re-refine along the nearest TRANSVERSAL boundary
 edge within 3e-3) — the B endpoint never routes through a degenerate snap; keep the
