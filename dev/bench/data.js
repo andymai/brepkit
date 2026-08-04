@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785854669543,
+  "lastUpdate": 1785860982195,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17225,6 +17225,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24111950,
             "range": "± 96730",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ccd8639bccfcea14495da109bb16696e47cd837",
+          "message": "docs(roadmap): tool-side scenario probes green on the post-campaign kernel (#1315)\n\nFirst tool-side validation since the kumiko campaign and blend fixes\nshipped: the goma/kumiko/divider/honeycomb isolation probes all pass on\nthe freshly built kernel (8/8 in 53s). Records the renamed test files\nand the pnpm dep-check pitfall in the recipe.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRecord tool-side validation on the post-campaign kernel: 8/8 tests\npassed in 53s across `gomaBoundaryProbe`, `kumikoNubProbe`,\n`dividerCrossLap`, and `honeycombManifoldCheck`. Docs now note the\nrenamed probes and a `pnpm` dep-check workaround when running `vitest`.\n\n- **Migration**\n- Build wasm with `--skip-opt` and deploy via the `parity-loop.sh` copy\nstep.\n- Run `./node_modules/.bin/vitest` directly to bypass `pnpm`’s dep\ncheck, which otherwise purges the copied kernel.\n- Use the new probe names; `topologyParity` and `mitsukudeNmProbe` were\nremoved.\n\n<sup>Written for commit a30b88603a58584ea2971612ed30213a8cf99271.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1315?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T16:27:19Z",
+          "tree_id": "5babbd075b50eec24b7668bf94bae64882b1622a",
+          "url": "https://github.com/andymai/brepkit/commit/7ccd8639bccfcea14495da109bb16696e47cd837"
+        },
+        "date": 1785860981080,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 806881,
+            "range": "± 12741",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 879041,
+            "range": "± 20227",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10048,
+            "range": "± 171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 595612,
+            "range": "± 28540",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20544495,
+            "range": "± 195555",
             "unit": "ns/iter"
           }
         ]
