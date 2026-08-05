@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785962609290,
+  "lastUpdate": 1785963191565,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20195,6 +20195,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24971124,
             "range": "± 39525",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa78e5f4cc64acd2b71d7b8f6b56d4d4cff37984",
+          "message": "fix(operations): extrude side wires must match cap traversal senses (#1371)\n\nThird site of the orientation-emission campaign (#1365; revolve closed\nin #1367/#1369).\n\n## Roots (two, both measured with the same-sense probe)\n1. **Outer side walls**: when `side_face_surface` marks a wall reversed,\nthe builder kept the unreversed quad wire with `Face::new_reversed` —\nthe same defect shape as the revolve sites. Fixed with the same rule:\nbuild the reversed-winding wire when the face is reversed.\n2. **Inner hole walls**: the quad pattern was selected by hole winding\n(`is_cw`). The measured truth table refutes that: the caps hold the\ninput hole wires reversed (bottom) / forward (top), so the wall's\nEFFECTIVE bottom-edge sense must equal the input orientation, which\nmeans the pattern follows the REVERSAL flag alone. The hollow box\n(rev=false walls, old choice CW) carried 8 same-sense pairs; the\nclosed-circle wall (forced rev=true, CW) was already consistent. Both\nagree with the new selector.\n\n## Measured\nExtruded hollow box: 8 same-sense pairs to 0.\n`extruded_hollow_box_is_valid` and\n`extrude_rect_with_circular_hole_uses_exact_cylinder` both pass with\n`check_orientation` enabled.\n\n## Verification\nWorkspace suite 0 failed. Remaining campaign sites (sweep 6, loft 1,\npipe 1 — shared cap.rs) recorded in the roadmap.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes extrude side-face orientation by matching side-wire winding to\nface reversal and cap traversal, removing same-sense edge pairs in\nextruded solids. Hollow-box and circular-hole extrudes now validate\ncleanly with orientation checks on.\n\n- **Bug Fixes**\n- Outer walls: when `side_face_surface` marks the face reversed, build\nthe reversed-winding quad wire (instead of pairing an unreversed wire\nwith `Face::new_reversed`).\n- Inner hole walls: select the quad pattern by the face’s reversal flag\nonly (not hole winding) so the wall’s effective bottom-edge sense\nmatches the input orientation; aligns with caps holding bottom wires\nreversed and top wires forward.\n- Results: 0 same-sense pairs on hollow box and circular-hole cases;\n`extruded_hollow_box_is_valid` and\n`extrude_rect_with_circular_hole_uses_exact_cylinder` pass with\n`check_orientation` enabled.\n\n<sup>Written for commit 23e03da3f88eb8569882627ad03abe510f4d2094.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1371?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T20:50:32Z",
+          "tree_id": "4d0e5a6f2fb4b64257646260d3f08585023e7862",
+          "url": "https://github.com/andymai/brepkit/commit/fa78e5f4cc64acd2b71d7b8f6b56d4d4cff37984"
+        },
+        "date": 1785963190194,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 943264,
+            "range": "± 2952",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1022426,
+            "range": "± 30631",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11973,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700682,
+            "range": "± 1043",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25245418,
+            "range": "± 88898",
             "unit": "ns/iter"
           }
         ]
