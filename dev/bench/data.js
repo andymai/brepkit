@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785954113530,
+  "lastUpdate": 1785955462798,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19601,6 +19601,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20187696,
             "range": "± 60584",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "599772784bc20583ba974282c7f2c807b12d1fbc",
+          "message": "fix(algo): within-rank SD dedup must not drop a cross-shell coincident face (#1360)\n\nCloses the 2x2 slotted no-lip fuse abort at its root (fixtured in #1353;\nthe second of the three export-drift cases, and the last boolean-family\none).\n\n## Root\nThe no-lip bin body has an internal void whose ceiling (32-edge plane,\ninner shell) is coplanar with and contained in the exterior top disc\n(8-edge plane, outer shell): a zero-thickness roof. The rank-agnostic\ngeometric-containment pass in detect_same_domain unions the pair, and\nwithin-rank emission treats group membership as the #696 residue\nsignature, dropping the ceiling before classification. Every free edge\nof the aborting 45-face open hole shell is the cavity band's top rim at\nz=21, exactly the ceiling's boundary.\n\n## Discriminant selection (two refuted, one shipped)\n- Extent (edge-set coextensivity): REFUTED. The honeycomb's genuine\nresidue caps are split differently across sequential cuts and are not\ncoextensive with their representatives; requiring coextensivity broke 3\nof 4 honeycomb tests.\n- Outward orientation: REFUTED. Both the residue caps and the slotted\nroof pair measure same_outward=Some(true) (a zero-thickness region makes\nthe operand's orientation degenerate), so orientation cannot separate\nthem.\n- Shell membership: HOLDS. Residue accumulates within one shell; a\ncoincidence between an outer-shell face and a void-shell face is\nstructural. Measured directly: Id(9) is in the body's outer shell,\nId(31) in its inner shell.\n\n## Change\ndetect_same_domain_with_shells takes a face-to-shell map (built by the\nBuilder from both operands' outer + inner shells) and skips within-rank\nduplicate emission when the pair's source faces live in different\nshells. Without the map behavior is unchanged; the old signature remains\nas the test-only wrapper. BK_SD env probe added (pairs, duplicates, gate\ndecisions).\n\n## Verification\n- Slotted fixture un-ignored and ACTIVE: watertight, full analytic mix\n(32 cones + 40 cylinders + 120 planes), volume pinned to the exact\noperand sum (135237.533 = 106091.810 + 29145.724; the sockets attach\nwithout overlap, so the sum is ground truth).\n- Honeycomb foils: 4/4, residual pins unchanged (pcut1 50, pcut2 28,\npcut3 0).\n- Workspace suite 2708 passed, 0 failed. Heavy fixtures: kumiko lattice\n5.2s, goma band 3.6s, honeycomb 9.6s.\n- Census: all primitive booleans exact analytic.\n- Export matrix on the deployed kernel (md5-verified): 459/459\nassertions pass.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPrevented within-rank same-domain dedup from dropping cross-shell\ncoincident faces by gating duplicates with shell membership, fixing the\nslotted no‑lip fuse to stay watertight and fully analytic.\n\n- **Bug Fixes**\n- Added `detect_same_domain_with_shells` to skip within-rank dedup when\nthe pair’s source faces belong to different shells (outer vs void).\nFalls back to prior behavior if no shell map is provided.\n- `Builder` now builds and passes a face→shell map across both operands’\nouter and inner shells.\n- Un-ignored the slotted no‑lip fuse test: result is watertight, stays\nanalytic, and the volume equals the operand sum. Honeycomb residuals\nunchanged; export matrix remains green.\n  - Added `BK_SD` probe to log SD pairs, duplicates, and gate decisions.\n\n<sup>Written for commit 2950442d0676a553f1e35faa338099cbb5cacc56.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1360?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T18:41:42Z",
+          "tree_id": "8f0e267baa294134fbea9854a1497ac8122e053b",
+          "url": "https://github.com/andymai/brepkit/commit/599772784bc20583ba974282c7f2c807b12d1fbc"
+        },
+        "date": 1785955461222,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1010701,
+            "range": "± 19966",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1078470,
+            "range": "± 20005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13001,
+            "range": "± 175",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704100,
+            "range": "± 1540",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26230953,
+            "range": "± 99590",
             "unit": "ns/iter"
           }
         ]
