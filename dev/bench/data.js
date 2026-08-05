@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785946117557,
+  "lastUpdate": 1785946614996,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19223,6 +19223,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24912967,
             "range": "± 45528",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6758235b665ba7a2183ef8ab4c47f36fa877e874",
+          "message": "chore(main): release 2.128.31 (#1353)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.31](https://github.com/andymai/brepkit/compare/v2.128.30...v2.128.31)\n(2026-08-05)\n\n\n### Bug Fixes\n\n* **algo:** expand NURBS boundary images so coaxial revolve cuts split\n([#1352](https://github.com/andymai/brepkit/issues/1352))\n([6e2a55d](https://github.com/andymai/brepkit/commit/6e2a55d316bb0e880c8755a7fd35f00e2cf1a915))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.31 of `brepkit-wasm`, fixing a geometry bug where coaxial\nrevolve cuts didn’t split surfaces. NURBS boundary images are expanded\nso splits are detected reliably.\n\n- **Bug Fixes**\n- Expand NURBS boundary images during revolve operations to correctly\nsplit faces when the cut axis is coaxial.\n\n<sup>Written for commit b6d4eec90369f3867a099fe0dd061a9c903bf954.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1353?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-05T16:14:25Z",
+          "tree_id": "55ad9f9827506d0c83950a09bfbe0025f2b0c50b",
+          "url": "https://github.com/andymai/brepkit/commit/6758235b665ba7a2183ef8ab4c47f36fa877e874"
+        },
+        "date": 1785946611990,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 769549,
+            "range": "± 5766",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 840610,
+            "range": "± 15969",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9583,
+            "range": "± 117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 562175,
+            "range": "± 2502",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20491627,
+            "range": "± 33331",
             "unit": "ns/iter"
           }
         ]
