@@ -1,0 +1,22 @@
+crates/algo/src/builder/mod.rs
+  s_7ff36fc7322bef::t_7b04f948e1884b 590-627
+  s_7ff36fc7322bef::t_fe594faf3e1334 628-629
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_83e626c6fbf69f 127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "0ab072ce0614c93af5aa02e1765e4d05b403cf17",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
