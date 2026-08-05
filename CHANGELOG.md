@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.3](https://github.com/andymai/brepkit/compare/v2.129.2...v2.129.3) (2026-08-05)
+
+
+### Bug Fixes
+
+* **operations:** extrude side wires must match cap traversal senses ([#1371](https://github.com/andymai/brepkit/issues/1371)) ([fa78e5f](https://github.com/andymai/brepkit/commit/fa78e5f4cc64acd2b71d7b8f6b56d4d4cff37984))
+
 ## [2.129.2](https://github.com/andymai/brepkit/compare/v2.129.1...v2.129.2) (2026-08-05)
 
 
