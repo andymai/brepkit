@@ -26,6 +26,14 @@
 //! and NURBS faces at the ring positions (x,y around +-18.7/+-22.45,
 //! z=-2.6): the quarter-socket NURBS pieces fail to pair with their plane
 //! neighbours after selection.
+//!
+//! The unpaired edges are the bin's four corner CHAMFER-BAND arcs: Circle
+//! edges (len 5.30) at z=0 and z=0.7 plus the slanted 1.21-length corner
+//! connectors between them. Operand A carries these as Circle edges; the
+//! suspect is that B's quarter-socket side carries coincident twins in a
+//! different representation (NURBS or different segmentation), the
+//! mismatched-representation coincident-boundary class that endpoint-pair
+//! edge merging cannot reconcile by design.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
