@@ -1471,19 +1471,6 @@ pub fn revolve(
                 true
             };
 
-            let side_wire = Wire::new(
-                vec![
-                    OrientedEdge::new(outer.ring_edges[seg][i], fwd_seg),
-                    OrientedEdge::new(outer.arc_edges[seg][next_i], true),
-                    OrientedEdge::new(outer.ring_edges[next][i], !fwd_next),
-                    OrientedEdge::new(outer.arc_edges[seg][i], false),
-                ],
-                true,
-            )
-            .map_err(crate::OperationsError::Topology)?;
-
-            let side_wire_id = topo.add_wire(side_wire);
-
             let p0_start = topo.vertex(outer.ring_verts[seg][i])?.point();
             let p0_end = topo.vertex(outer.ring_verts[next][i])?.point();
             let p1_start = topo.vertex(outer.ring_verts[seg][next_i])?.point();
@@ -1500,6 +1487,35 @@ pub fn revolve(
                 axis,
                 seg_angle,
             )?;
+
+            // A reversed face flips every edge's effective traversal, so the
+            // wire must be built reversed too (same idiom as the inner side
+            // faces below) or the face traverses its shared edges in the same
+            // effective sense as its neighbours.
+            let side_wire = if reversed {
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(outer.arc_edges[seg][i], true),
+                        OrientedEdge::new(outer.ring_edges[next][i], fwd_next),
+                        OrientedEdge::new(outer.arc_edges[seg][next_i], false),
+                        OrientedEdge::new(outer.ring_edges[seg][i], !fwd_seg),
+                    ],
+                    true,
+                )
+            } else {
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(outer.ring_edges[seg][i], fwd_seg),
+                        OrientedEdge::new(outer.arc_edges[seg][next_i], true),
+                        OrientedEdge::new(outer.ring_edges[next][i], !fwd_next),
+                        OrientedEdge::new(outer.arc_edges[seg][i], false),
+                    ],
+                    true,
+                )
+            }
+            .map_err(crate::OperationsError::Topology)?;
+
+            let side_wire_id = topo.add_wire(side_wire);
 
             let fid = if reversed {
                 topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
