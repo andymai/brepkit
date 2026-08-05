@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785885340015,
+  "lastUpdate": 1785888031206,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17927,6 +17927,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25447076,
             "range": "± 32173",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e9038be1dd71e479f96cf856b29d761e2a8e919d",
+          "message": "docs(roadmap): the mitsukude wall patch is never emitted, not classified out (#1328)\n\nSecond instrument on the #1326 repro: an env-gated `BK_CLS` window probe\nin `classify_sub_faces` logs every sub-face decision inside the\nfree-edge loop's bbox. Result: only four sub-faces classify there — the\nbody's three r=0.05 lip-band cylinder sub-faces (Inside, correctly\ndropped by the cut) and one tool plane at x=38.05. **No body wall-plane\nsub-face is emitted in the window**, so the kept tool pocket faces get\nno wall partner: the face splitter never emits the wall patch;\nclassification is not the culprit.\n\nNext probe recorded in the roadmap: match the 8 free-edge endpoints\nagainst every pre-selection sub-face wire in the arena to distinguish an\nun-selected patch from one never created by the splitter.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an env-gated `BK_CLS` window probe to log sub-face classification\nin the Mitsukude lip-transition region. Confirms the wall patch is never\nemitted by the splitter (not classified out); roadmap entry updated to\nreflect this.\n\n- **New Features**\n- `BK_CLS` enables windowed debug logs in `classify_sub_faces` for the\nlip-transition loop, reporting face id, type, rank, source, sample\npoint, and classification.\n\n<sup>Written for commit dbcccfb00ce13db507cd6ee367bf19f7ed2a3096.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1328?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-04T23:57:58Z",
+          "tree_id": "84222eadacf001a4440ecabdfbeb13af7be3670c",
+          "url": "https://github.com/andymai/brepkit/commit/e9038be1dd71e479f96cf856b29d761e2a8e919d"
+        },
+        "date": 1785888029541,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 999929,
+            "range": "± 15213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046743,
+            "range": "± 12897",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13100,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 690998,
+            "range": "± 13586",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25532635,
+            "range": "± 75025",
             "unit": "ns/iter"
           }
         ]
