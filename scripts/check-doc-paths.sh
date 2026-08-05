@@ -54,12 +54,15 @@ for doc in "${DOCS[@]}"; do
     [ -z "$p" ] && continue
     is_allowlisted "$p" && continue
 
-    if ! echo "$FILE_LIST" | grep -qF "/${p}"; then
+    # Herestrings, not `echo | grep -q`: under pipefail, grep -q exiting at
+    # the first match can EPIPE the echo and flip the pipeline status to
+    # failure, reporting an existing file as a violation (a CI-only flake).
+    if ! grep -qF "/${p}" <<< "$FILE_LIST"; then
       echo "VIOLATION: $doc references '$p', which does not exist"
       # A split into a directory is the common case; point at it directly.
       dir="${p%.rs}"
-      if echo "$FILE_LIST" | grep -qE "/${dir}/[^/]+\.rs$"; then
-        members=$(echo "$FILE_LIST" | grep -oE "/${dir}/[^/]+\.rs$" | sed "s|.*/||; s|\.rs$||" | sort | tr '\n' ' ')
+      if grep -qE "/${dir}/[^/]+\.rs$" <<< "$FILE_LIST"; then
+        members=$(grep -oE "/${dir}/[^/]+\.rs$" <<< "$FILE_LIST" | sed "s|.*/||; s|\.rs$||" | sort | tr '\n' ' ')
         echo "           it is now a directory: ${dir}/ (${members% })"
       fi
       FAIL=1
