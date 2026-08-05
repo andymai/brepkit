@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785930819165,
+  "lastUpdate": 1785934667334,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18899,6 +18899,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25235484,
             "range": "± 93482",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5e57bd89f3428e72f4a01a6c274174d77b4fbc90",
+          "message": "docs(roadmap): three export cases leak under tool-side generator drift (#1347)\n\nDoctrine re-probe of the export matrix on the cumulative session kernel\nfound 70/73 (was 73/73): `2x2 slotted no lip` (bnd 107-109), `2x2\nmixed-detail per-cell half sockets` (bnd 259), `3x3 O-shape + half\nsockets` (nm 8).\n\nA full kernel bisect (current main, pre-#1343, pre-#1324, session-start\n73a4c2ce) reproduces the same three failures byte-for-byte at every\npoint — **every engine PR from this session is exonerated**. The tool's\ngenerator changes since the 73/73 measurement (the #3223-#3227 era)\naltered these configurations' geometry into shapes the kernel has never\nhandled.\n\nRecorded as new scenario-coverage gaps in the slotted and\nper-cell/mixed-socket families with the operand-capture recipe;\nbaseStyles stays 26/26 and kumiko-dividers stays within budget.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocument export matrix drift in the roadmap: re-probe now passes 70/73\nand three cases leak (2x2 slotted no lip, 2x2 mixed-detail per-cell half\nsockets, 3x3 O-shape + half sockets).\nKernel bisect exonerates engine changes; tool-side generator drift is\nthe cause, now tracked as new scenario-coverage gaps with an\noperand-capture recipe; baseStyles stays 26/26.\n\n<sup>Written for commit 85fe8dcfcd941126c86509f6f770e33d085c7a44.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1347?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T12:55:27Z",
+          "tree_id": "4f470e2756cfb238e161dd9f156f58bf33fa0a3b",
+          "url": "https://github.com/andymai/brepkit/commit/5e57bd89f3428e72f4a01a6c274174d77b4fbc90"
+        },
+        "date": 1785934665571,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 772115,
+            "range": "± 3392",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 841115,
+            "range": "± 6291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10145,
+            "range": "± 780",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 559910,
+            "range": "± 1175",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20485328,
+            "range": "± 42779",
             "unit": "ns/iter"
           }
         ]
