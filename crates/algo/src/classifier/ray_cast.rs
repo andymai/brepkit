@@ -235,10 +235,9 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
     // fires when ALL THREE cardinal rays are suspicious.
     let traced = ray_trace_target().is_some_and(|(t, r)| (point - t).length() <= r);
 
-    let vote = |dirs: &[Vec3; 3], label: &str| -> (u8, u8) {
-        let mut inside_votes = 0u8;
-        let mut suspicious_rays = 0u8;
-        for ray_dir in dirs {
+    let vote = |dirs: &[Vec3; 3], label: &str| -> [(bool, bool); 3] {
+        let mut rays = [(false, false); 3];
+        for (i, ray_dir) in dirs.iter().enumerate() {
             let mut crossings = 0i32;
             let mut suspicious = false;
             for geom in face_data {
@@ -246,12 +245,7 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
                 crossings += c;
                 suspicious |= s;
             }
-            if crossings % 2 != 0 {
-                inside_votes += 1;
-            }
-            if suspicious {
-                suspicious_rays += 1;
-            }
+            rays[i] = (crossings % 2 != 0, suspicious);
             if traced {
                 log::debug!(
                     "RAYTRACE {label} dir=({:.3},{:.3},{:.3}) crossings={crossings} parity={} suspicious={suspicious}",
@@ -262,19 +256,61 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
                 );
             }
         }
-        (inside_votes, suspicious_rays)
+        rays
     };
+    let count_inside = |rays: &[(bool, bool); 3]| rays.iter().filter(|r| r.0).count() as u8;
 
-    let (cardinal, suspicious) = vote(&cardinal_dirs, "cardinal");
+    let rays = vote(&cardinal_dirs, "cardinal");
+    let cardinal = count_inside(&rays);
+    let suspicious = rays.iter().filter(|r| r.1).count() as u8;
+    // Clean/suspicious conflict: a clean ray's parity is trustworthy while a
+    // suspicious ray's is unreliable by its own report, so a suspicious pair
+    // must not silently outvote a clean minority (the O-shape chamfer strip:
+    // an interior sample lying in an opposing rim plane sends both horizontal
+    // rays grazing that structure, each losing a crossing and voting Inside
+    // against the clean vertical ray's Outside). On that signature, re-cast
+    // with the generic directions — but adopt the re-cast ONLY when it is
+    // unanimous. In exact arithmetic every ray from one point has the same
+    // parity, so a split generic vote proves the neighborhood defeats the
+    // crossing counter (suspicion detection has false negatives: a honeycomb
+    // landscape produced three CLEAN generic rays voting 2/1) and the
+    // calibrated historic verdict stands. Mixed suspicious votes or any
+    // suspicious ray agreeing with the clean verdict keep the historic result
+    // outright.
+    let clean_verdicts: Vec<bool> = rays.iter().filter(|r| !r.1).map(|r| r.0).collect();
+    let clean_vs_suspicious_conflict = suspicious > 0
+        && !clean_verdicts.is_empty()
+        && clean_verdicts.iter().all(|&v| v == clean_verdicts[0])
+        && rays
+            .iter()
+            .filter(|r| r.1)
+            .all(|r| r.0 != clean_verdicts[0]);
     if traced {
         log::debug!(
-            "RAYTRACE point=({:.3},{:.3},{:.3}) faces={} cardinal_inside={cardinal} suspicious={suspicious} recast={}",
+            "RAYTRACE point=({:.3},{:.3},{:.3}) faces={} cardinal_inside={cardinal} suspicious={suspicious} conflict={clean_vs_suspicious_conflict}",
             point.x(),
             point.y(),
             point.z(),
             face_data.len(),
-            suspicious >= 3
         );
+    }
+    if clean_vs_suspicious_conflict {
+        let generic = vote(&generic_dirs, "generic");
+        let inside = count_inside(&generic);
+        if std::env::var("BK_CONFLICT").is_ok() {
+            log::debug!(
+                "CONFLICT pt=({:.4},{:.4},{:.4}) cardinal={cardinal} generic={inside} generic_susp={} clean_verdict={}",
+                point.x(),
+                point.y(),
+                point.z(),
+                generic.iter().filter(|r| r.1).count(),
+                clean_verdicts[0]
+            );
+        }
+        if inside == 0 || inside == 3 {
+            return Ok(inside);
+        }
+        return Ok(cardinal);
     }
     if suspicious < 3 {
         return Ok(cardinal);
@@ -283,8 +319,8 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
     // when both instruments graze degenerate structure there is no cleaner
     // signal left, and the generic directions are still the less-aligned,
     // better-conditioned of the two.
-    let (generic, _) = vote(&generic_dirs, "generic");
-    Ok(generic)
+    let generic = vote(&generic_dirs, "generic");
+    Ok(count_inside(&generic))
 }
 
 /// Distance from a point to the closed polyline through `verts`.

@@ -108,7 +108,12 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
 struct Tap;
 impl log::Log for Tap {
     fn enabled(&self, m: &log::Metadata) -> bool {
-        m.target().starts_with("brepkit_") && m.level() <= log::Level::Debug
+        let max = if std::env::var("BK_TRACE").is_ok() {
+            log::Level::Trace
+        } else {
+            log::Level::Debug
+        };
+        m.target().starts_with("brepkit_") && m.level() <= max
     }
     fn log(&self, r: &log::Record) {
         if self.enabled(r.metadata()) {
@@ -121,7 +126,11 @@ static TAP: Tap = Tap;
 
 fn main() {
     let _ = log::set_logger(&TAP);
-    log::set_max_level(log::LevelFilter::Debug);
+    log::set_max_level(if std::env::var("BK_TRACE").is_ok() {
+        log::LevelFilter::Trace
+    } else {
+        log::LevelFilter::Debug
+    });
 
     let a_path = PathBuf::from(std::env::var_os("A").expect("A=<path>"));
     let b_path = PathBuf::from(std::env::var_os("B").expect("B=<path>"));

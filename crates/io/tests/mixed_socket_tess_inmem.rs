@@ -12,6 +12,13 @@
 //!
 //! Operands captured 2026-08-05 via the kernel-test boolean monkey-patch
 //! (call 008, the final fuse of the export chain).
+//!
+//! EXPORT-LEVEL STATUS 2026-08-05: the `2x2 mixed-detail per-cell half
+//! sockets` export test passes on the ray-cast conflict re-cast kernel —
+//! the chain's booleans now classify differently and the exported mesh is
+//! watertight. This CAPTURED fused B-Rep still tessellates with 511
+//! boundary edges, so the repro below stays as an open tessellation-parity
+//! defect; it no longer gates export parity.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
