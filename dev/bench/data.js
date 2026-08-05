@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785897530294,
+  "lastUpdate": 1785899952112,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18251,6 +18251,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24508406,
             "range": "± 31319",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7471b080837bfb00a2c19fdddf63e7c38ba173e9",
+          "message": "docs(roadmap): wedge section inventory pins the coaxial FF emission gap (#1334)\n\nFinal characterization round on the wedge repro: the debug section\ninventory shows the wedge's y=0 cap receives **zero FF sections** even\nthough the strut's coaxial cylinder walls cross it in vertical lines —\nthe plane-contains-axis x coaxial-cylinder FF case emits nothing — and\nthe few sections that are emitted (one per z-plane, four on one strut\nface) each \"split into 1 sub-faces\", i.e. the splitter declines them.\n\nThe 12-face fixture is therefore the purest known form of the coaxial\nsame-domain frontier (the recorded unifying root of the last gridfinity\ngaps). The fix session's entry point is `phase_ff` for\nplane-containing-axis and coaxial-cylinder pairs, with the wedge fixture\nas the oracle.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to capture the wedge section inventory and pin the\ncoaxial FF emission gap in the kumiko corner wedge fixture.\nNotes zero sections on the y=0 cap for the plane-contains-axis ×\ncoaxial-cylinder case and sets `phase_ff` as the fix entry point.\n\n<sup>Written for commit e3d4fc31bf8642b84f12694d4e913e92f4fd2f21.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1334?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T03:16:44Z",
+          "tree_id": "8ad839d654e674e959f5c4be3483e7e6a1191085",
+          "url": "https://github.com/andymai/brepkit/commit/7471b080837bfb00a2c19fdddf63e7c38ba173e9"
+        },
+        "date": 1785899950885,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1005854,
+            "range": "± 17223",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1055155,
+            "range": "± 874",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13226,
+            "range": "± 125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698023,
+            "range": "± 1152",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26012772,
+            "range": "± 84256",
             "unit": "ns/iter"
           }
         ]
