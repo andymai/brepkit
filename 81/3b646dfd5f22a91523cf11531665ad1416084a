@@ -1,0 +1,23 @@
+crates/io/tests/mixed_socket_tess_inmem.rs
+  s_7ff36fc7322bef::t_848e5f32b6f13d 15-21
+crates/io/tests/slotted_nolip_fuse_inmem.rs
+  s_7ff36fc7322bef::t_848e5f32b6f13d 23-29
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_c9ebf31d0136f4 128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "813b646dfd5f22a91523cf11531665ad1416084a",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
