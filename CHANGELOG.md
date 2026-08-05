@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.30](https://github.com/andymai/brepkit/compare/v2.128.29...v2.128.30) (2026-08-05)
+
+
+### Bug Fixes
+
+* **algo:** clip sections to true NURBS boundary arcs, perf-safe ([#1343](https://github.com/andymai/brepkit/issues/1343)) ([c465e90](https://github.com/andymai/brepkit/commit/c465e90c3031587cb43af77435a1763f0b53f2ff))
+
 ## [2.128.29](https://github.com/andymai/brepkit/compare/v2.128.28...v2.128.29) (2026-08-04)
 
 
