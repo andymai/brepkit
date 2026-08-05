@@ -1,0 +1,22 @@
+crates/operations/src/revolve.rs
+  s_7ff36fc7322bef::t_496c57fae2669f 1491-1518
+  s_7ff36fc7322bef::t_a3ce95936945c5 1519
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_4046fc01780484 128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "cbae82afb7620434d0c98d9340469de709b8f52c",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
