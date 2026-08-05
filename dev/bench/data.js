@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785963191565,
+  "lastUpdate": 1785963681156,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20249,6 +20249,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25245418,
             "range": "± 88898",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b4e9836427309c003088902630dbf07812e08aa9",
+          "message": "chore(main): release 2.129.3 (#1372)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.3](https://github.com/andymai/brepkit/compare/v2.129.2...v2.129.3)\n(2026-08-05)\n\n\n### Bug Fixes\n\n* **operations:** extrude side wires must match cap traversal senses\n([#1371](https://github.com/andymai/brepkit/issues/1371))\n([fa78e5f](https://github.com/andymai/brepkit/commit/fa78e5f4cc64acd2b71d7b8f6b56d4d4cff37984))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.129.3 for `brepkit-wasm`, fixing extrude operations so side\nwires match cap traversal senses. This prevents orientation mismatches\nduring extrusion and avoids invalid geometry.\n\n<sup>Written for commit 8e7e2589deb6befba6b0fa6ddbf9262c6f81b70e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1372?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-05T20:58:48Z",
+          "tree_id": "9f01d2cd754fb4a82497b08d0083ed7d246eb721",
+          "url": "https://github.com/andymai/brepkit/commit/b4e9836427309c003088902630dbf07812e08aa9"
+        },
+        "date": 1785963678960,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 983782,
+            "range": "± 2329",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1068834,
+            "range": "± 2051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13212,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707777,
+            "range": "± 30452",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26129151,
+            "range": "± 14051",
             "unit": "ns/iter"
           }
         ]
