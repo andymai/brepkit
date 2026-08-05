@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785958617436,
+  "lastUpdate": 1785958775511,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19817,6 +19817,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24889475,
             "range": "± 33999",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "06d439e2f2f51a8f0045c9cae902d852237cb92b",
+          "message": "docs(io): the mixed-socket winding residual is an upstream operand defect (#1364)\n\nBanks the measurement that closes out this iteration's dig on the\n116-edge winding residual (from #1362).\n\nThree measurements, in order: (1) per-face triangle normals all AGREE\nwith each face's stored outward orientation, exonerating the\ntessellator; (2) the reversal-corrected edge-traversal check (sense =\nis_forward XOR is_reversed, a consistent closed shell uses each edge\ntwice with opposite senses) finds 20 same-sense pairs in the captured\nBODY operand itself, zero in the assembly; (3) the fuse output inherits\nand grows this to 40. So the winding errors originate in whatever\nearlier op of the export chain produced the body, not in this fuse and\nnot in tessellation.\n\nNext steps recorded in the fixture header: re-capture the full\nmixed-detail chain and bisect with the traversal check; consider\npromoting the check into validate's shell checks (edge-use counting\nalone calls these operands clean).\n\nDoc-only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocumented that the mixed‑socket tessellation winding residual is caused\nby an upstream operand, not the tessellator: the captured body has 20\nsame‑sense edge pairs, the assembly has none, and the fuse inherits 40;\nall triangle windings match their face orientation. Updated fixture\nnotes in `crates/io/tests/mixed_socket_tess_inmem.rs` and the roadmap to\nrecord the measurement and next steps (re‑capture the chain, bisect with\nthe traversal check, and consider adding the check to shell validation).\n\n<sup>Written for commit 338b8ee7f3d7dc3ca9f9dfa759801766ac452b06.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1364?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T19:37:01Z",
+          "tree_id": "c6b873a0088b10609eb1e7fc78d05b2d748aa44a",
+          "url": "https://github.com/andymai/brepkit/commit/06d439e2f2f51a8f0045c9cae902d852237cb92b"
+        },
+        "date": 1785958774180,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 940330,
+            "range": "± 1690",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1021311,
+            "range": "± 7006",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12076,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699863,
+            "range": "± 1399",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24742298,
+            "range": "± 84758",
             "unit": "ns/iter"
           }
         ]
