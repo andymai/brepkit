@@ -27,13 +27,16 @@
 //! z=-2.6): the quarter-socket NURBS pieces fail to pair with their plane
 //! neighbours after selection.
 //!
-//! The unpaired edges are the bin's four corner CHAMFER-BAND arcs: Circle
-//! edges (len 5.30) at z=0 and z=0.7 plus the slanted 1.21-length corner
-//! connectors between them. Operand A carries these as Circle edges; the
-//! suspect is that B's quarter-socket side carries coincident twins in a
-//! different representation (NURBS or different segmentation), the
-//! mismatched-representation coincident-boundary class that endpoint-pair
-//! edge merging cannot reconcile by design.
+//! The unpaired edges are operand B's OWN corner rims: the top rims of its
+//! four corner cylinders (Circle arcs, len 5.30, at z=0, faces Id 17/19/21/
+//! 23 spanning z -1.2..0) plus matching rims at z=0.7 and the slanted 1.21
+//! connectors. Operand A has NO geometry at the corner radius (nothing at
+//! x or y near 23.85), so this is not a coincident-twin mismatch between
+//! operands: the fuse drops or fails to select the B faces ABOVE those rims
+//! (or their split pieces), leaving B's rim edges single-used in the
+//! assembled shell. Next: account for the sub-faces of B's corner-adjacent
+//! upper faces through the splitter and classifier (the wedge campaign's
+//! BK_CLS3/BK_SPLITW recipes apply directly).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
