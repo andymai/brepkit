@@ -2418,6 +2418,7 @@ fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
 /// start/end vertices, on the side through its midpoint) — not the full circle.
 ///
 /// Returns the 3D crossing points (with the edge's angle, unused by callers).
+#[allow(clippy::too_many_arguments)]
 fn arc_segment_crossings(
     curve: &EdgeCurve,
     edge_start: Point3,
@@ -2426,27 +2427,68 @@ fn arc_segment_crossings(
     line_start: Point3,
     line_end: Point3,
     tol: f64,
+    plane_normal: Option<brepkit_math::vec::Vec3>,
 ) -> Vec<(Point3, f64)> {
     let circle = match curve {
         EdgeCurve::Circle(c) => c,
         // A NURBS boundary edge (e.g. a revolve's arc, which serializes as
         // NurbsCurve rather than Circle) is intersected with the section line
-        // via bezier clipping; the curve's own domain bounds the hits, so no
-        // arc-span filter is needed. Clipping such an edge by its CHORD put a
-        // coaxial revolve cut's section endpoints 0.75 mm inside the face
-        // (the chord crossings), where the splitter could not anchor them and
-        // declined every split.
-        EdgeCurve::NurbsCurve(nc) => {
-            let Ok(line_nc) = brepkit_math::nurbs::fitting::interpolate(&[line_start, line_end], 1)
-            else {
+        // by sampled sign-change bisection in the face plane: the signed side
+        // function s(t) = ((C(t) - S) x D) . n has a root at each crossing.
+        // Bounded cost (33 evaluations plus ~48 bisection steps per root);
+        // the bezier-clipping variant decomposed the same boundary edge once
+        // per section and regressed the honeycomb fixture 150x. A non-planar
+        // face keeps the chord fallback. Clipping such an edge by its CHORD
+        // put a coaxial revolve cut's section endpoints 0.75 mm inside the
+        // face, where the splitter could not anchor them and declined every
+        // split.
+        EdgeCurve::NurbsCurve(_) => {
+            let Some(n) = plane_normal else {
                 return Vec::new();
             };
-            let Ok(hits) =
-                brepkit_math::nurbs::bezier_clip::curve_curve_intersect(nc, &line_nc, tol)
-            else {
-                return Vec::new();
-            };
-            return hits.into_iter().map(|h| (h.point, 0.0)).collect();
+            let _ = tol;
+            let dir = line_end - line_start;
+            let side = |p: Point3| (p - line_start).cross(dir).dot(n);
+            let eval =
+                |f: f64| super::pcurve_compute::evaluate_edge_at_t(curve, edge_start, edge_end, f);
+            let mut hits = Vec::new();
+            let mut prev_f = 0.0_f64;
+            let mut prev_s = side(eval(0.0));
+            for i in 1..=32 {
+                let f = f64::from(i) / 32.0;
+                let sv = side(eval(f));
+                if prev_s == 0.0 || (prev_s < 0.0) != (sv < 0.0) {
+                    let (mut lo, mut hi, mut slo) = (prev_f, f, prev_s);
+                    for _ in 0..48 {
+                        let mid = 0.5 * (lo + hi);
+                        let sm = side(eval(mid));
+                        if (slo < 0.0) == (sm < 0.0) {
+                            lo = mid;
+                            slo = sm;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                    hits.push((eval(0.5 * (lo + hi)), 0.0));
+                }
+                prev_f = f;
+                prev_s = sv;
+            }
+            if std::env::var("BK_ARC").is_ok() {
+                log::debug!(
+                    "ARC nurbs hits={} s0={:.4} sN={:.4} es=({:.3},{:.3},{:.3}) ee=({:.3},{:.3},{:.3})",
+                    hits.len(),
+                    side(eval(0.0)),
+                    side(eval(1.0)),
+                    edge_start.x(),
+                    edge_start.y(),
+                    edge_start.z(),
+                    edge_end.x(),
+                    edge_end.y(),
+                    edge_end.z()
+                );
+            }
+            return hits;
         }
         // Only circular arcs and NURBS are handled here. Ellipse arcs are not
         // produced on the corner-straddle path, and a Line has no true-arc
@@ -2577,8 +2619,20 @@ fn clip_line_to_face_boundary(
             // original segment, so extension can never grow the section.
             let ext_start = line_start - line_dir;
             let ext_end = line_end + line_dir;
-            let arc_hits =
-                arc_segment_crossings(curve, *asp, *aep, *closed, ext_start, ext_end, tol);
+            let clip_plane_normal = match face.surface() {
+                FaceSurface::Plane { normal, .. } => Some(*normal),
+                _ => None,
+            };
+            let arc_hits = arc_segment_crossings(
+                curve,
+                *asp,
+                *aep,
+                *closed,
+                ext_start,
+                ext_end,
+                tol,
+                clip_plane_normal,
+            );
             for (p, _) in arc_hits {
                 let t = (p - line_start).dot(line_dir) / (line_len * line_len);
                 crossings_ext.push(t);
@@ -3453,6 +3507,7 @@ mod tests {
             Point3::new(20.0, 10.0, 0.0),
             Point3::new(0.0, 10.0, 0.0),
             1e-7,
+            None,
         );
         assert_eq!(hits.len(), 2, "both chord crossings must survive");
         let xs: Vec<f64> = hits.iter().map(|(p, _)| p.x()).collect();
