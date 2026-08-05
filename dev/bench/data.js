@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785918946332,
+  "lastUpdate": 1785922571454,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18791,6 +18791,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17362556,
             "range": "± 34804",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9b2d0e106614ba1657bd8213a3bf5ddc94417695",
+          "message": "docs(roadmap): record the parked NURBS boundary expansion and its blocker (#1345)\n\nThe wedge campaign's splitter layer is found and nearly closed on the\nparked branch `fix/nurbs-boundary-image-expansion`:\n\n- Root: the boundary-image expansion was Line-only, so NURBS arcs never\narrive pre-split at their pave junctions and sections cannot anchor.\n- The branch extends the expansion to NURBS edges behind three gates,\neach earned by a measured foil break: circle-likeness (marched free-form\nNURBS — the snapClip deepened-notch walls — broke under expansion;\nrevolve arcs are circles), weld-coincidence of junction and section\nanchor, and planar hole-free faces.\n- Result: the wedge z-planes split and the cut removes material for the\nFIRST time (285.9 to 276.2 stable; to 247.5 watertight all-analytic when\nthe cylinder side also pairs). snapClip, honeycomb (0.74 s), algo 209,\nops 1012 all green.\n- Blocker: watertightness is knife-edge across BUILDS of identical\nsource (free=0 vs free=8, each stable within a binary) — sub-tolerance\nfloat sensitivity in the cylinder-side anchoring. The branch parks until\nthat weave is hardened; the first candidate is widening the\ncylinder-side junction matching to the weld band instead of exact vertex\nidentity.\n\nThe wedge fixture's volume pin (240..280 band) is written and re-ignored\nwith this state.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to document the parked branch\n`fix/nurbs-boundary-image-expansion`, which extends boundary-image\nexpansion to NURBS edges (gated by circle-likeness, weld-coincidence,\nand planar faces) so the wedge cut finally removes material and can be\nwatertight. It also records the blocker: build-to-build float\nsensitivity at the cylinder-side anchoring, with the next step to widen\nmatching to the weld band.\n\n<sup>Written for commit ccbaeac68153f0cb29784839f1cbb468d4f0220b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1345?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T09:33:50Z",
+          "tree_id": "6a2f838b70c70eff267ace1d553cd7a11b4a061e",
+          "url": "https://github.com/andymai/brepkit/commit/9b2d0e106614ba1657bd8213a3bf5ddc94417695"
+        },
+        "date": 1785922570189,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 942422,
+            "range": "± 15722",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1019248,
+            "range": "± 6470",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12052,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 695376,
+            "range": "± 1614",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24824520,
+            "range": "± 25375",
             "unit": "ns/iter"
           }
         ]
