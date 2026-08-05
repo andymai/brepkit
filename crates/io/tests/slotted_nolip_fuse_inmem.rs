@@ -14,6 +14,12 @@
 //!
 //! Operands captured 2026-08-05 via the kernel-test boolean monkey-patch on
 //! the failing export scenario (call 009 of 10).
+//!
+//! BK_OPEN_SHELL characterization: the aborting 45-face shell has signed
+//! volume -51259 and is built from the BODY's own faces (src 10-13, the
+//! outer walls and corner cylinders) — the fuse classifies a body-sized
+//! chunk as a hole shell, the "no outer shell / misgrouped interior" family
+//! rather than a small-fragment drop.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
