@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785915192365,
+  "lastUpdate": 1785918498348,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18683,6 +18683,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24566513,
             "range": "± 72867",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c465e90c3031587cb43af77435a1763f0b53f2ff",
+          "message": "fix(algo): clip sections to true NURBS boundary arcs, perf-safe (#1343)\n\nSuccessor to #1341 (closed when CI caught a 154x honeycomb regression).\nSame correctness goal, perf-safe mechanism:\n\n- FF sections crossing `NurbsCurve` boundary edges (every revolve arc)\nwere clipped to the edge's CHORD; on the coaxial wedge oracle the\nsection endpoints landed 0.75 mm inside the face (r=4.000/1.306 instead\nof the true arc crossings at 4.75/1.55) where the splitter could not\nanchor them.\n- The crossing is now found by **sampled sign-change bisection in the\nface plane** (33 evaluations + ~48 bisection steps per root, only for\nplanar faces; non-planar keeps the chord fallback). Honeycomb stays at\n0.75 s where the bezier variant took 115.6 s.\n- A chord crossing is dropped as a **phantom border only when its\nsegment's true-arc hit lands within the section range** — dropping it\nunconditionally broke the honeycomb residual pins (measured, reverted to\nthe narrow gate).\n\nOn the wedge oracle the section is now ONE clean arc-to-arc piece (r\n4.7497 to 1.5504). The cut is not yet watertight — the splitter still\ndeclines the geometrically-perfect section, recorded in the roadmap as\nthe next layer — so the fixture's cut pin stays ignored.\n\n## Validation\n\n- Suites green: algo 209, operations 1012, io 233.\n- Approximation census unchanged (7 documented non-boolean fallbacks).\n- Timing gates: `gridfinity_honeycomb_cut_inmem` 0.74 s (main: 0.75 s);\nkumiko lattice + goma band fixtures 0.8 s combined.\n- Includes env-gated `BK_ARC`/`BK_CLIP` probes alongside the existing\ndiagnostics.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClips section lines against true arcs on `NurbsCurve` boundary edges\nusing plane bisection instead of the chord, so section endpoints land on\nthe real boundary. Performance unchanged; tests green; remaining\nsplitter anchoring is tracked.\n\n- **Bug Fixes**\n- Intersect `NurbsCurve` edges by sampled sign‑change bisection in the\nface plane; non‑planar faces keep the chord fallback.\n- Drop a chord crossing only when that segment’s true‑arc hit falls\nwithin the section range.\n- Circles/Ellipses unchanged; lines stay chord‑only; added env‑gated\nprobes `BK_ARC`, `BK_CLIP`, `BK_PAVES`.\n- Result: wedge oracle section is one clean arc‑to‑arc piece. Cut not\nyet watertight due to a residual split at the old chord point. Honeycomb\nand kumiko timings unchanged.\n- Docs: fixed concatenated roadmap table rows and updated the shipped\nclip‑fix entry.\n\n<sup>Written for commit 1cc694291388d5f6f9cd43f1f9fb155f538e3b09.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1343?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T08:25:49Z",
+          "tree_id": "01a1f118036e81d975432361b92b1fb52cb51b24",
+          "url": "https://github.com/andymai/brepkit/commit/c465e90c3031587cb43af77435a1763f0b53f2ff"
+        },
+        "date": 1785918497104,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1035981,
+            "range": "± 1503",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1082859,
+            "range": "± 1356",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13935,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 718906,
+            "range": "± 6245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26233070,
+            "range": "± 41650",
             "unit": "ns/iter"
           }
         ]
