@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785951831594,
+  "lastUpdate": 1785953454625,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19439,6 +19439,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25144538,
             "range": "± 73785",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2f1096716e683ce949b74fe5f5066702ff3e0407",
+          "message": "fix(algo): re-cast grazed cardinal rays when clean rays unanimously disagree (#1357)\n\nCloses the 3x3 O-shape half-socket fuse abort (the last boolean-family\ncase of the export-matrix drift, fixtured in #1353 and root-caused in\n#1356).\n\n## Root\nThe strip samples of operand B's chamfer band land at\nz=0.6999999999999998, inside operand A's rim plane at z=0.7. From there\ntwo of the three cardinal rays graze A's structure: each reports one\ncrossing, flags itself suspicious, and votes Inside. The vertical ray is\nclean with zero crossings. The generic re-cast only fired when ALL THREE\nrays were suspicious, so the suspicious pair outvoted the clean ray,\nthree whole strips classified Inside and dropped, and the fuse aborted\nwith the 45-face open growth shell.\n\n## Fix\nOn the clean/suspicious conflict signature (every clean ray on one\nverdict, every suspicious ray on the opposite), re-cast with the generic\ndirections and adopt that vote only when unanimous. The unanimity gate\nis load-bearing: in exact arithmetic every ray from one point has the\nsame crossing parity, so a split generic vote proves the neighborhood\ndefeats the crossing counter regardless of suspicion flags. A honeycomb\nlandscape demonstrated this concretely: three CLEAN generic rays voting\n2 to 1 at a point whose calibrated verdict is Outside. On a split vote\nthe historic verdict stands.\n\n## Verification\n- The O-shape fixture is un-ignored and ACTIVE: watertight (free=0,\nover=0), full analytic mix preserved (12 cones + 24 cylinders + 12 NURBS\n+ 50 planes), and volume pinned to the exact operand sum (8391.860 =\n6151.772 + 2240.088; the halves are complementary, so the sum is exact\nground truth).\n- Honeycomb residuals IMPROVED and re-pinned: pcut1 free 83 to 50, pcut2\n30 to 28, pcut3 held 0; over-shared 0 everywhere.\n- Full workspace suite: 2321 passed, 0 failed. Heavy fixtures timed:\nhoneycomb 9.6s, kumiko lattice 5.2s, goma band 3.5s, wedge 0.4s.\n- replay_pair gains BK_TRACE=1 (trace-level tap passthrough), used to\nfind the sample points.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes ray-cast misclassification by re-casting when clean rays\nunanimously disagree with suspicious ones. This makes the O-shape\nhalf-socket fuse analytic and watertight and brings the export matrix to\n73/73 green.\n\n- **Bug Fixes**\n- Re-cast on clean-vs-suspicious conflicts; use generic directions and\nadopt only if unanimous. On split, keep the historic verdict. Keep the\nexisting “all three suspicious” re-cast path.\n- O-shape socket fuse test is active: watertight, full analytic mix\npreserved, fuse volume equals the sum of operands.\n- Export matrix is 73/73; slotted and mixed-detail export tests now\npass. Captured engine repros for those chains remain ignored; honeycomb\nresiduals improved (pcut1 83→50, pcut2 30→28; over-shared 0).\n\n- **New Features**\n  - `replay_pair` honors `BK_TRACE=1` to enable trace-level logs.\n\n<sup>Written for commit 813b646dfd5f22a91523cf11531665ad1416084a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1357?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T18:08:14Z",
+          "tree_id": "a5f8bca7d24070d8e3727d6a53360deb27e08858",
+          "url": "https://github.com/andymai/brepkit/commit/2f1096716e683ce949b74fe5f5066702ff3e0407"
+        },
+        "date": 1785953452584,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1022362,
+            "range": "± 21278",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1065104,
+            "range": "± 3076",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13157,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703129,
+            "range": "± 23095",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26753998,
+            "range": "± 181648",
             "unit": "ns/iter"
           }
         ]
