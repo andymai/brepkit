@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785888031206,
+  "lastUpdate": 1785888794289,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -17981,6 +17981,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25532635,
             "range": "± 75025",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5a71909c63fd3ea75c1d33cfe7971995201ccba1",
+          "message": "docs(roadmap): mitsukude loop is missing BODY corner-sliver sub-faces (#1329)\n\nThird instrument round on the #1326 repro, narrowing another layer:\n\n- `BK_CLS2` (wire-touch window probe): 23 sub-faces touch the loop\nwindow; the tool's end plane at x=38.05 (src 470) classifies Outside and\nno body sub-face covers the window.\n- Point oracles (`POINT_IN`): the Outside verdicts are CORRECT — the\nbody is genuinely void at the tool end-plane samples, while body\nmaterial exists at x=38.025 beside them.\n\nSo the missing partners are BODY sub-faces: the corner-sliver pieces of\nthe lip-band cylinders (src 7/15/83) and wall planes (src 8/16/80/90)\nthat the tool's end plane should split off. Each of those faces was\nsplit into only two pieces (pocket Inside + far Outside), so the kept\npieces end short of x=38.05 and the 8-edge loop stays unpaired.\n\nNext probe recorded in the roadmap: dump the FF section curves deposited\non those source faces to split the blame between phase_ff emission and\nface-splitter incorporation.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd a `BK_CLS2` wire‑touch probe to log surface\ntype/rank/source/point/classification for faces whose wires touch the\nloop window, and update the roadmap with the verdict: the mitsukude loop\nis caused by missing body corner‑sliver sub‑faces, not a misclassified\ntool plane. This confirms the tool end plane is correctly dropped and\nsets the next step to dump FF section curves on the affected source\nfaces.\n\n<sup>Written for commit 0ab072ce0614c93af5aa02e1765e4d05b403cf17.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1329?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T00:10:37Z",
+          "tree_id": "6c39fbad894ed94befb227251d70b25c27f98b0d",
+          "url": "https://github.com/andymai/brepkit/commit/5a71909c63fd3ea75c1d33cfe7971995201ccba1"
+        },
+        "date": 1785888792547,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 968233,
+            "range": "± 12237",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1055157,
+            "range": "± 9770",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13284,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701022,
+            "range": "± 1421",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25553296,
+            "range": "± 151150",
             "unit": "ns/iter"
           }
         ]
