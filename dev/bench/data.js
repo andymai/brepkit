@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785922571454,
+  "lastUpdate": 1785930819165,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18845,6 +18845,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24824520,
             "range": "± 25375",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "494497d9d762315774cfde6cf7f749daa564186d",
+          "message": "docs(roadmap): kumiko-dividers passes within the tool budget post-clip-fix (#1346)\n\nTool-side re-measurement on the post-#1343 kernel: the `kumiko dividers\nperforate the compartment walls` scenario completes in **166.6 s**\nagainst the tool's 180 s vitest budget and passes (was 183 s, failing on\ntimeout). The NURBS section-clip fix shaved about 17 s off the mitsukude\ncompound cut.\n\nThis resolves the divider-scenario row's perf residual; the underlying\nmesh-fallback correctness gap (the lip-transition pinch) stays tracked\nin the mitsukude panel-cut row.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap to mark the “kumiko dividers perforate the compartment\nwalls” scenario as passing within the tool’s 180 s vitest budget (166.6\ns) after the NURBS section-clip fix, closing the divider performance\nresidual. The note clarifies that the mesh-fallback correctness gap\nremains tracked under the mitsukude panel-cut item.\n\n<sup>Written for commit 5603e8fc1638f3f84c02b233acf1025e4b15f94b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1346?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T11:51:13Z",
+          "tree_id": "259716c51ff1f0857f33eaa88fecc75a0e85d1b8",
+          "url": "https://github.com/andymai/brepkit/commit/494497d9d762315774cfde6cf7f749daa564186d"
+        },
+        "date": 1785930817652,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 945143,
+            "range": "± 1947",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1024701,
+            "range": "± 3272",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12054,
+            "range": "± 63",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697117,
+            "range": "± 5929",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25235484,
+            "range": "± 93482",
             "unit": "ns/iter"
           }
         ]
