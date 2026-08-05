@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785902537625,
+  "lastUpdate": 1785903372518,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18359,6 +18359,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24470337,
             "range": "± 70984",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f5128a0d23ab056c5ff96fd4c93aa29f37966289",
+          "message": "docs(roadmap): wedge root is the EF chord-containment drop, not emission (#1336)\n\nFinal mechanism round on the wedge repro, reversing two earlier framings\nwith the `BK_RAWC` pair census and EF logs:\n\n- Every AABB rejection is geometrically CORRECT: the strut radially\nengulfs the wedge (cylinders at r 1.04/5.19 bracket the wedge's\n1.55..4.75), so the wedge's y=0 cap lies wholly inside the strut and its\nremoval is right.\n- The only genuine boundary-boundary intersection curves are the four\nsections against the strut's far angular cap — and all four ARE emitted.\n- The defect: the EF phase drops the crossings that would anchor those\nsections into the wedge faces' boundaries (`EF: dropping crossing ...\noutside face Id(2) boundary` at t=0.031/0.969), exactly where the strut\ncap crosses the wedge's **NURBS-arc** boundary edges. The containment\ntest uses the arc's chord — the same arc-vs-chord class recorded for the\nsocket-loft coincident cap — so all four sections fail to split their\nfaces and nothing is cut (volume unchanged, free edges at the dropped\ncap's rim).\n\nFix entry recorded: the EF crossing \"outside face boundary\" containment\nfor crossings near NURBS boundary edges, with the 12-face fixture as the\noracle.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClarifies the wedge-strut cut root cause: EF drops crossings at\nNURBS-arc boundaries due to chord-based containment, not FF section\nemission. Adds opt-in debug logs to trace AABB rejects and raw section\ncounts to aid reproduction.\n\n- **New Features**\n- `BK_RAWC`: logs AABB rejections with face types and bounding boxes,\nand logs raw section counts per face pair in `phase_ff`.\n\n<sup>Written for commit d4cf16db4501f156457065cdbb8ab59c3c8681a0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1336?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T04:13:47Z",
+          "tree_id": "6f33bbfb2fa1bbcfbbc45405663d9c73fd7048e2",
+          "url": "https://github.com/andymai/brepkit/commit/f5128a0d23ab056c5ff96fd4c93aa29f37966289"
+        },
+        "date": 1785903371094,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 936948,
+            "range": "± 5725",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1014771,
+            "range": "± 2280",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11900,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697210,
+            "range": "± 4045",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24958215,
+            "range": "± 735823",
             "unit": "ns/iter"
           }
         ]
