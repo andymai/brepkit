@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785889442926,
+  "lastUpdate": 1785892228846,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18089,6 +18089,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17054573,
             "range": "± 31987",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "23f7d976bf372529c092cd00377d1c08090c27df",
+          "message": "docs(roadmap): the mitsukude loop is a tangential-contact pinch, not a splitter bug (#1331)\n\nFifth and final instrument round on the #1326 repro — the previous\nlayer's conclusion is reversed by better data:\n\n- `BK_SPLITW` (per-piece wire dump): the splitter produced NINE pieces\nfor the src-7 lip-band cylinder, and the kept Outside piece carries the\nx=38.05 ruling edge on its boundary.\n- `BK_CLS3` (post-classification dump of all sub-faces per source): all\nnine registered and classified; the eight pocket-window pieces are\ngenuinely inside the tool and correctly dropped.\n\nThe structural fact that explains the loop: **the panel's end plane at\nx=38.05 is exactly tangent to the r=0.05 lip-band cylinders** (centre\nx=38.0 + r). The end-plane \"sections\" are tangent rulings; the body\nmaterial pinches to zero width there, so no end-cap sub-face exists on\neither side and the kept cylinder piece's ruling edge has no partner.\nThe mitsukude case therefore joins the recurring **tangential-contact\nfamily** (inscribed cylinder-box rulings, the cone-box tangency-count\nmap): the panel generator sizes pockets to end exactly at the band\ntangent.\n\nFix shape recorded: pinch-aware handling at tangent rulings (collapse\nthe zero-width wedge so the tangent surfaces share the ruling edge), not\na splitter section fix. All five probes (BK_CLS, BK_CLS2, BK_CLS3,\nBK_SECS, BK_SPLITW) are committed env-gated for the fix session.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClarifies the Mitsukude panel-cut loop as a tangential-contact pinch at\nthe x=38.05 end plane (tangent to the r=0.05 lip-band cylinders), not a\nsplitter bug. Adds env-gated probes to inspect split wires and\npost-classification sub-faces to support the pinch-aware fix.\n\n- **New Features**\n- `BK_SPLITW`: logs outer/inner wire edges for each split piece of a\nface when the env var matches its source face index.\n- `BK_CLS3`: logs sub-faces after classification for a given source face\nindex.\n- Roadmap updated: defect is in the tangential-contact family; proposed\nfix is pinch-aware handling at tangent rulings (collapse the zero-width\nwedge). No runtime change unless the env vars are set.\n\n<sup>Written for commit 303a6af72aeadba00ffc781432b6ac762e7933d0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1331?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T01:07:43Z",
+          "tree_id": "b91a00f2de013f22b184b2bc95871c8bd716cc9b",
+          "url": "https://github.com/andymai/brepkit/commit/23f7d976bf372529c092cd00377d1c08090c27df"
+        },
+        "date": 1785892226833,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 932566,
+            "range": "± 7689",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1012530,
+            "range": "± 18085",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12052,
+            "range": "± 226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 688574,
+            "range": "± 1785",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24644447,
+            "range": "± 288592",
             "unit": "ns/iter"
           }
         ]
