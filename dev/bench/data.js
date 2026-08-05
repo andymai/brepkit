@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785951197292,
+  "lastUpdate": 1785951831594,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19385,6 +19385,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25047445,
             "range": "± 103811",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bfb4cd83c3ec132fe9b5729f8bb3f687567afa1b",
+          "message": "docs(io): the O-shape root is whole-strip ray-cast misclassification (#1356)\n\nBanks the measured root for the 3x3 O-shape half-socket fuse abort on\ntop of #1355's rim correction.\n\nBK_CLS3 on operand B's chamfer band (builder ids 83-90) shows the band\nalternates NURBS corner pieces, classified Outside and kept, with thin\nslanted plane strips. Three of the four strips (84/86/88) classify\nInside as whole faces with zero FF sections (has_sections=false), so\nthey drop unsplit. The independent POINT_IN ray-cast oracle reports\nA=Outside at every strip sample, contradicting the builder classifier:\nthe Inside verdicts are misclassifications from near-tangent ray\ncrossings against operand A's socket cones. Dropping the strips orphans\nthe corner rims below and the connectors above, which is exactly the\n45-face open growth shell the fuse aborts on.\n\nFix entry recorded in the fixture doc: instrument the classifier's ray\nfor face 84's interior sample and find which crossing parity flips.\n\nDoc-only: the fixture header and the roadmap row. No engine code\ntouched.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments the O-shape half-socket fuse failure: three thin chamfer-band\nplane strips of operand B are misclassified Inside as whole faces due to\nnear‑tangent ray crossings, causing the 45‑face open growth shell.\nUpdates the fixture doc with the measurement and an instrumentation note\n(probe the classifier ray on face 84) and refreshes the roadmap row; no\nengine code changed.\n\n<sup>Written for commit 55bc771b943f66e7333cee7be29caf0960ec64ee.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1356?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T17:41:07Z",
+          "tree_id": "9611df168568f3e896faa9ba31e09971cf417cd5",
+          "url": "https://github.com/andymai/brepkit/commit/bfb4cd83c3ec132fe9b5729f8bb3f687567afa1b"
+        },
+        "date": 1785951829886,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 942347,
+            "range": "± 2802",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1023688,
+            "range": "± 6224",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12015,
+            "range": "± 100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 695868,
+            "range": "± 29078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25144538,
+            "range": "± 73785",
             "unit": "ns/iter"
           }
         ]
