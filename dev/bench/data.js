@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785948681377,
+  "lastUpdate": 1785951197292,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19331,6 +19331,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26112444,
             "range": "± 74758",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bcde2b7bcb5372ba84b38b8485cae0526af27db9",
+          "message": "docs(io): correct the O-shape suspect to dropped upper faces over B's rims (#1355)\n\nMeasured correction to #1354's suspect: operand A has NO geometry at the\ncorner radius (nothing near x/y = 23.85), so the free arcs are not\nmismatched coincident twins between operands. They are operand B's OWN\ncorner-cylinder top rims (z=0, faces Id 17/19/21/23) and 0.7-chamfer\nrims, left single-used because the B faces above them — or their split\npieces — are dropped during the fuse.\n\nThe dig's entry point is sub-face accounting for B's corner-adjacent\nupper faces through the splitter and classifier; the wedge campaign's\n`BK_CLS3`/`BK_SPLITW` recipes apply directly.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClarifies the O-shape fuse analysis: the free arcs are operand B’s own\ncorner-cylinder top and chamfer rims, left single-used because the faces\nabove them are dropped during the fuse, not a coincident-twin mismatch\nwith operand A.\n\nUpdates the doc comment in crates/io/tests/oshape_socket_fuse_inmem.rs\nto reflect this and note next steps for sub-face accounting via the\nsplitter/classifier (BK_CLS3/BK_SPLITW).\n\n<sup>Written for commit 6e2b16840dbd83ccaedae4edacbbfe980eefba3b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1355?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T17:30:38Z",
+          "tree_id": "48a5d327d0f43c38c4219abf10fe85d7aff647ef",
+          "url": "https://github.com/andymai/brepkit/commit/bcde2b7bcb5372ba84b38b8485cae0526af27db9"
+        },
+        "date": 1785951194840,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 943668,
+            "range": "± 1871",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1022944,
+            "range": "± 11594",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12013,
+            "range": "± 212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 691979,
+            "range": "± 7488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25047445,
+            "range": "± 103811",
             "unit": "ns/iter"
           }
         ]
