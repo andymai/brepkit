@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785946614996,
+  "lastUpdate": 1785948681377,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19277,6 +19277,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20491627,
             "range": "± 33331",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "57ba73e5ffeb453e77c6a2d417392bc05a462c9a",
+          "message": "docs(io): the O-shape unpaired edges are the corner chamfer-band arcs (#1354)\n\nFree-edge map of the O-shape fixture's failing shell: the unpaired edges\nare the bin's four corner CHAMFER-BAND arcs — Circle edges (length 5.30)\nat z=0 and z=0.7 plus the slanted 1.21 connectors between them. Operand\nA carries these as Circle edges; the suspect is that the quarter-socket\nside carries coincident twins in a different representation (NURBS or\ndifferent segmentation) — the mismatched-representation\ncoincident-boundary class that endpoint-pair edge merging cannot\nreconcile by design (the frontier's original eighth-vs-quarter\nstatement, now in Circle-vs-NURBS form). Appended to the fixture header\nas the dig's entry point.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClarifies the failing edges in the O-shape socket fuse test. Notes the\nfour corner chamfer-band Circle arcs at z=0 and z=0.7 and their slanted\nconnectors as unpaired, and documents the suspected Circle vs\nNURBS/segmentation mismatch that blocks endpoint-pair merging.\n\n<sup>Written for commit 0d700bba1a37ba33e2f5da389aab74fcf575b5bf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1354?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T16:48:43Z",
+          "tree_id": "fd3841aa2f022122cad00fe303df3d87a823a747",
+          "url": "https://github.com/andymai/brepkit/commit/57ba73e5ffeb453e77c6a2d417392bc05a462c9a"
+        },
+        "date": 1785948679760,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 979977,
+            "range": "± 5298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1066994,
+            "range": "± 2021",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13135,
+            "range": "± 240",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703132,
+            "range": "± 4075",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26112444,
+            "range": "± 74758",
             "unit": "ns/iter"
           }
         ]
