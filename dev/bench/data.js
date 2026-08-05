@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785940967022,
+  "lastUpdate": 1785946117557,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19169,6 +19169,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24524717,
             "range": "± 99058",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6e2a55d316bb0e880c8755a7fd35f00e2cf1a915",
+          "message": "fix(algo): expand NURBS boundary images so coaxial revolve cuts split (#1352)\n\nCloses the coaxial wedge campaign. A section whose endpoints land\nexactly on a NURBS boundary arc (via #1343's exact clipping) still could\nnot anchor: boundary-image expansion was **Line-only**, so the arcs\nnever arrived pre-split at their pave junctions and the splitter\ndeclined every cut.\n\n`boundary_edges_to_pcurve_with_images` now serves hole-free faces of ANY\nsurface type, behind two gates each earned by a measured foil break:\n\n- **Circle-likeness** (5-sample circumcircle fit): marched free-form\nNURBS boundaries — the snapClip deepened-notch walls — broke under\nexpansion and are never circles; revolve arcs are.\n- **Weld-coincidence** of the junction with a section anchor (the\nwedge's EF paves and clip endpoints agree to ~1e-9).\n\nLine expansion stays planar-gated to protect the periodic seam\nmachinery.\n\n## Result\n\nThe 12-face coaxial wedge oracle — the purest repro of the coaxial\nsame-domain frontier — is **watertight, analytic, and volume-pinned**\n(285.861 removes the true 38.4 overlap to 247.460), with its cut pin\nACTIVE after being ignored through seven investigation layers.\n\n**Retraction**: the parked \"knife-edge across builds\" blocker was a\nstale-binary artifact (`cargo build --tests` does not rebuild examples;\nthe free=0 readings came from an example binary still carrying this\narm). The source is deterministic.\n\n## Validation\n\n- Suites green: algo 209, operations 1012, io 237 (wedge cut + volume\npins now active).\n- Approximation census unchanged (7 documented non-boolean fallbacks).\n- Timing gates: honeycomb 0.83 s; snapClip deepened-notch green;\nkumiko/goma fixtures green.\n- The sibling drift fixtures (slotted, O-shape) fail on their own\ndistinct roots, unaffected.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nExpand NURBS boundary-image splitting so section endpoints that land on\nboundary arcs can anchor and split, fixing failed coaxial revolve cuts\n(e.g., the kumiko corner wedge). The cut is now watertight and analytic\nwith correct volume removal (285.861 → 247.460).\n\n- Bug Fixes\n- Added NURBS boundary-image expansion in\n`boundary_edges_to_pcurve_with_images` for hole-free faces of any\nsurface, gated by: circle-likeness (5-point fit) and weld-coincident\njunction with a section anchor.\n- Kept line expansion planar-only for seam stability; NURBS expansion\nalso serves non‑planar faces without affecting free‑form marched NURBS.\n- Passed section anchors and an expand-lines flag into the splitter;\nincluded optional `BK_SPLIT_TRACE` logging.\n- Updated `crates/io/tests/kumiko_corner_wedge_inmem.rs` to assert\nwatertight, manifold output and a loose volume band (240–280). Suites\nremain green; perf unchanged.\n\n<sup>Written for commit 28b238543af31c91339673859cf07f3504fd7e5e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1352?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T16:05:54Z",
+          "tree_id": "4bdd07ea9cbefb5a3d8d9eb353d8c7cef27ee353",
+          "url": "https://github.com/andymai/brepkit/commit/6e2a55d316bb0e880c8755a7fd35f00e2cf1a915"
+        },
+        "date": 1785946115646,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 941696,
+            "range": "± 1324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1019008,
+            "range": "± 17470",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11967,
+            "range": "± 59",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 696060,
+            "range": "± 2536",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24912967,
+            "range": "± 45528",
             "unit": "ns/iter"
           }
         ]
