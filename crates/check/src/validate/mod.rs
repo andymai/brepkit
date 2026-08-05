@@ -3,7 +3,7 @@
 pub mod checks;
 pub(crate) mod edge;
 pub(crate) mod face;
-pub(crate) mod shell;
+pub mod shell;
 pub(crate) mod solid;
 pub(crate) mod vertex;
 pub(crate) mod wire;

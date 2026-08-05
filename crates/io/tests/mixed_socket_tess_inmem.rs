@@ -96,6 +96,42 @@ fn brep_health(topo: &Topology, sid: brepkit_topology::solid::SolidId) -> (usize
 }
 
 #[test]
+fn mixed_socket_body_operand_orientation_defect_is_pinned() {
+    // The captured body operand carries the winding root: 20 shared edges
+    // traversed same-sense by adjacent faces (the assembly operand has 0,
+    // asserted via the same strict option). Validation only sees this with
+    // check_orientation on; the default stays off until the construction-op
+    // orientation campaign closes. An upstream fix that changes these
+    // numbers must update this pin.
+    let mut topo = Topology::new();
+    let opts = brepkit_operations::validate::ValidationOptions {
+        check_orientation: true,
+        ..Default::default()
+    };
+    let body = load("mixed_socket_body.bin", &mut topo);
+    let report =
+        brepkit_operations::validate::validate_solid_with_options(&topo, body, &opts).unwrap();
+    assert!(
+        report.issues.iter().any(|i| i
+            .description
+            .contains("20 shared edges have inconsistent face orientations")),
+        "body must report its documented 20 same-sense pairs, got {:?}",
+        report.issues
+    );
+    let assembly = load("mixed_socket_assembly.bin", &mut topo);
+    let report =
+        brepkit_operations::validate::validate_solid_with_options(&topo, assembly, &opts).unwrap();
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inconsistent face orientations")),
+        "assembly must stay orientation-clean, got {:?}",
+        report.issues
+    );
+}
+
+#[test]
 fn mixed_socket_fuse_is_brep_watertight() {
     // The B-Rep side is HEALTHY: this pin holds the boolean blameless so the
     // ignored tessellation repro below cannot be misread as a GFA defect.
