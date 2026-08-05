@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.4](https://github.com/andymai/brepkit/compare/v2.129.3...v2.129.4) (2026-08-05)
+
+
+### Bug Fixes
+
+* **operations:** sweep and shared-cap wires reverse with their faces; strict orientation validation by default ([#1373](https://github.com/andymai/brepkit/issues/1373)) ([e5f1109](https://github.com/andymai/brepkit/commit/e5f1109edcf5879894d026160613fd693611c5d0))
+
 ## [2.129.3](https://github.com/andymai/brepkit/compare/v2.129.2...v2.129.3) (2026-08-05)
 
 
