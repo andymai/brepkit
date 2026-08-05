@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785907140266,
+  "lastUpdate": 1785907775829,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18575,6 +18575,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24696788,
             "range": "± 191022",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b0e33f6bcc63d217ad497d0ec830e4a643a6605b",
+          "message": "docs(roadmap): the true arc crossings survive EF; only FF curve paves chord (#1340)\n\nOne more decisive fact for the wedge fix session: the EF phase finds and\nKEEPS the four TRUE arc crossings (wedge arc edges x strut far cap, all\nat t=0.1436 — exact NURBS crossings, identical angle as a coaxial cap\nrequires). The earlier-logged EF drops are the strut's cylinder edges\npiercing outside the wedge sector — correct drops, closing that\nquestion.\n\nSo the system already holds the true junctions as paves on the wedge's\nboundary arcs; only the FF section curve's OWN end paves sit at the\nsingle-chord crossings (r=4.000/1.306, arithmetic exact to four\ndecimals). The fix shape is now a choice: make the FF-curve pave\nplacement intersect the true NurbsCurve instead of its chord, or have\nthe FF curve adopt the coincident EF arc-pave junctions (the same\nphysical points). The wedge oracle flips green when the section\nendpoints join the arc paves.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to confirm EF keeps the four true NURBS arc\ncrossings (t=0.1436) and that the logged EF drops were the strut\ncylinder edges outside the wedge, which is correct. Clarifies that only\nthe FF section curve’s endpoints are paved at the chords, and the fix is\nto place FF paves on the true `NurbsCurve` or reuse the EF arc paves to\nanchor the section endpoints.\n\n<sup>Written for commit 0f55f6e0a2842bbf998614fc92efedec9652b5c0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1340?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T05:27:15Z",
+          "tree_id": "218a1ba59373f814c1ce0f75b3de41c375ab973a",
+          "url": "https://github.com/andymai/brepkit/commit/b0e33f6bcc63d217ad497d0ec830e4a643a6605b"
+        },
+        "date": 1785907773887,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 756679,
+            "range": "± 12811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 822715,
+            "range": "± 10729",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10287,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 548716,
+            "range": "± 12059",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20003496,
+            "range": "± 101122",
             "unit": "ns/iter"
           }
         ]
