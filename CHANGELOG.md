@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.32](https://github.com/andymai/brepkit/compare/v2.128.31...v2.128.32) (2026-08-05)
+
+
+### Bug Fixes
+
+* **algo:** re-cast grazed cardinal rays when clean rays unanimously disagree ([#1357](https://github.com/andymai/brepkit/issues/1357)) ([2f10967](https://github.com/andymai/brepkit/commit/2f1096716e683ce949b74fe5f5066702ff3e0407))
+
 ## [2.128.31](https://github.com/andymai/brepkit/compare/v2.128.30...v2.128.31) (2026-08-05)
 
 
