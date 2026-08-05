@@ -248,6 +248,25 @@ pub fn perform(
                 .expanded(tol.linear)
                 .intersects(bbox_b.expanded(tol.linear))
             {
+                if std::env::var("BK_RAWC").is_ok() {
+                    log::debug!(
+                        "RAWC-REJ a[{idx_a}]={} b[{idx_b}]={} A[{:.3},{:.3},{:.3}..{:.3},{:.3},{:.3}] B[{:.3},{:.3},{:.3}..{:.3},{:.3},{:.3}]",
+                        surfs_a[idx_a].type_tag(),
+                        surfs_b[idx_b].type_tag(),
+                        bbox_a.min.x(),
+                        bbox_a.min.y(),
+                        bbox_a.min.z(),
+                        bbox_a.max.x(),
+                        bbox_a.max.y(),
+                        bbox_a.max.z(),
+                        bbox_b.min.x(),
+                        bbox_b.min.y(),
+                        bbox_b.min.z(),
+                        bbox_b.max.x(),
+                        bbox_b.max.y(),
+                        bbox_b.max.z()
+                    );
+                }
                 if traced {
                     log::debug!(
                         "FF_TRACE reject-aabb a={} b={} A[{:.2},{:.2},{:.2}..{:.2},{:.2},{:.2}] B[{:.2},{:.2},{:.2}..{:.2},{:.2},{:.2}]",
@@ -276,6 +295,14 @@ pub fn perform(
             let v_range_b = v_ranges_b[idx_b];
             let raw_curves =
                 compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?;
+            if std::env::var("BK_RAWC").is_ok() {
+                log::debug!(
+                    "RAWC a[{idx_a}]={} b[{idx_b}]={} n={}",
+                    surf_a.type_tag(),
+                    surf_b.type_tag(),
+                    raw_curves.len()
+                );
+            }
             // For plane-plane Line curves with all-straight-edge faces, trim
             // each curve to the mutual overlap of the two faces' clipped
             // ranges. Without this the section curve spans the union of both
