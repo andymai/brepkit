@@ -1,0 +1,33 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_7ff36fc7322bef::t_6faf176adc06b6 4301-4302
+  s_7ff36fc7322bef::t_cf005efcf8dae5 4306-4311
+  s_7ff36fc7322bef::t_dd8bdc9ae22e7c 4345-4349,4356,4359
+crates/io/tests/kumiko_corner_wedge_inmem.rs
+  s_7ff36fc7322bef::t_fef88400995999 148-155
+  s_7ff36fc7322bef::t_6faf176adc06b6 113-118
+  s_7ff36fc7322bef::t_26ccbebcc67135 156
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_7ff36fc7322bef::t_42086ea326715d 138-172,204-205
+  s_7ff36fc7322bef::t_6faf176adc06b6 195,206-207
+  s_7ff36fc7322bef::t_e32c3ce3df5ea2 126-130,173-182,184-191,194,196-199,201-202
+  s_7ff36fc7322bef::t_446eb4bddf9bd2 58
+  s_7ff36fc7322bef::t_dd8bdc9ae22e7c 84,203
+  s_7ff36fc7322bef::t_90a6c4e97abd13 131-137,183
+  s_7ff36fc7322bef::t_8e63d0ea6fc8a7 71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "a1ef29b9d34571ad6ecf004b7d227536c7ed2077",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
