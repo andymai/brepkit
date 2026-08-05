@@ -20,6 +20,13 @@
 //! outer walls and corner cylinders) — the fuse classifies a body-sized
 //! chunk as a hole shell, the "no outer shell / misgrouped interior" family
 //! rather than a small-fragment drop.
+//!
+//! EXPORT-LEVEL STATUS 2026-08-05: the `2x2 slotted no lip` export test
+//! passes on the ray-cast conflict re-cast kernel (the O-shape fix) — the
+//! chain's upstream booleans now classify differently and no longer feed
+//! this aborting operand pair into the final fuse. These CAPTURED operands
+//! still reproduce the abort, so the repro below stays as an open engine
+//! defect (misgrouped-interior family); it no longer gates export parity.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
