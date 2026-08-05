@@ -10,6 +10,10 @@ use super::checks::{CheckId, EntityRef, Severity, ValidationIssue};
 use crate::CheckError;
 
 /// Check shell is not empty.
+///
+/// # Errors
+///
+/// Returns [`CheckError`] on a topology lookup failure.
 pub fn check_shell_empty(
     topo: &Topology,
     shell_id: ShellId,
@@ -48,6 +52,10 @@ fn face_edge_ids(
 }
 
 /// Check shell connectivity: all faces connected via shared edges (BFS).
+///
+/// # Errors
+///
+/// Returns [`CheckError`] on a topology lookup failure.
 #[allow(clippy::too_many_lines)]
 pub fn check_shell_connected(
     topo: &Topology,
@@ -103,6 +111,10 @@ pub fn check_shell_connected(
 
 /// Check that shell face orientations are consistent: for each edge shared
 /// by two faces, it should be used once FORWARD and once REVERSED.
+///
+/// # Errors
+///
+/// Returns [`CheckError`] on a topology lookup failure.
 pub fn check_shell_orientation(
     topo: &Topology,
     shell_id: ShellId,
@@ -160,6 +172,10 @@ pub fn check_shell_orientation(
 }
 
 /// Check shell closure: every edge shared by exactly 2 faces.
+///
+/// # Errors
+///
+/// Returns [`CheckError`] on a topology lookup failure.
 pub fn check_shell_closed(
     topo: &Topology,
     shell_id: ShellId,

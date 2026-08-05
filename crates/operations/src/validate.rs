@@ -71,12 +71,21 @@ pub struct ValidationOptions {
     /// length check and the degenerate face area check. Default is `1.0`.
     /// A value of `10.0` means tolerances are 10x more permissive.
     pub tolerance_scale: f64,
+    /// Also check shell orientation consistency: adjacent faces must
+    /// traverse each shared edge in opposite effective senses
+    /// (is_forward XOR is_reversed). Default `false`: several construction
+    /// ops (loft, pipe, revolve, sweep, extrude side shells) still emit
+    /// same-sense shells, so enabling this flags their output today. Flip
+    /// the default once that family is fixed (roadmap: orientation
+    /// emission campaign).
+    pub check_orientation: bool,
 }
 
 impl Default for ValidationOptions {
     fn default() -> Self {
         Self {
             tolerance_scale: 1.0,
+            check_orientation: false,
         }
     }
 }
@@ -476,6 +485,31 @@ pub fn validate_solid_with_options(
                     edge.end().index()
                 ),
             });
+        }
+    }
+
+    // Orientation consistency: adjacent faces must traverse a shared edge in
+    // opposite effective senses (is_forward XOR is_reversed). Edge-use
+    // counting alone cannot see this — the mixed-socket bin's body operand
+    // passed every count while 20 shared edges carried same-sense uses,
+    // which surfaced two subsystems later as winding-inverted mesh triangles.
+    // Delegates to the check-crate shell validator per shell.
+    if options.check_orientation {
+        let solid_data = topo.solid(solid)?;
+        let shells = std::iter::once(solid_data.outer_shell())
+            .chain(solid_data.inner_shells().iter().copied())
+            .collect::<Vec<_>>();
+        for shell_id in shells {
+            for issue in brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
+                .map_err(|e| crate::OperationsError::InvalidInput {
+                    reason: e.to_string(),
+                })?
+            {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: issue.description,
+                });
+            }
         }
     }
 

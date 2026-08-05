@@ -869,6 +869,7 @@ fn scaled_tolerance_reduces_normal_warnings() {
     // Scaled up 100x: should not warn (1e-5 < 1e-7 * 100 = 1e-5)
     let opts = ValidationOptions {
         tolerance_scale: 100.0,
+        ..Default::default()
     };
     let scaled_report = validate_solid_with_options(&topo, solid, &opts).unwrap();
     let normal_warnings_scaled = scaled_report
@@ -907,6 +908,7 @@ fn fillet_box_with_options() {
     // With relaxed + scaled options, should pass clean
     let opts = ValidationOptions {
         tolerance_scale: 10.0,
+        ..Default::default()
     };
     let report = validate_solid_relaxed_with_options(&topo, result, &opts).unwrap();
     assert!(
