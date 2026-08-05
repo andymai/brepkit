@@ -71,13 +71,13 @@ pub struct ValidationOptions {
     /// length check and the degenerate face area check. Default is `1.0`.
     /// A value of `10.0` means tolerances are 10x more permissive.
     pub tolerance_scale: f64,
-    /// Also check shell orientation consistency: adjacent faces must
-    /// traverse each shared edge in opposite effective senses
-    /// (is_forward XOR is_reversed). Default `false`: several construction
-    /// ops (loft, pipe, revolve, sweep, extrude side shells) still emit
-    /// same-sense shells, so enabling this flags their output today. Flip
-    /// the default once that family is fixed (roadmap: orientation
-    /// emission campaign).
+    /// Check shell orientation consistency: adjacent faces must traverse
+    /// each shared edge in opposite effective senses (is_forward XOR
+    /// is_reversed). Every construction op emits consistent shells (the
+    /// orientation-emission campaign: revolve, extrude, sweep sides, shared
+    /// end caps), but GFA BOOLEAN outputs can still carry same-sense pairs
+    /// (the gridfinity D1 lip-ring loft cut measures one), so the default
+    /// stays `false` until the boolean assembler is closed too.
     pub check_orientation: bool,
 }
 
