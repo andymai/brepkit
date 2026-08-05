@@ -110,12 +110,6 @@ fn captured_operands_are_outward_oriented() {
 }
 
 #[test]
-#[ignore = "NEARLY closed by the circle-gated NURBS boundary expansion (branch \
-            fix/nurbs-boundary-image-expansion): the z-planes split, material is removed \
-            (285.9 -> 276.2 stable, -> 247.5 when watertight), snapClip stays green — but \
-            watertightness is knife-edge across BUILDS of identical source (free=0 vs free=8, \
-            each stable 6/6 within a binary), a sub-tolerance float sensitivity in the \
-            cylinder-side anchoring. Harden that weave before activating this pin."]
 fn kumiko_corner_wedge_cut_stays_analytic() {
     let mut topo = Topology::new();
     let wedge = load("kumiko_corner_wedge.bin", &mut topo);

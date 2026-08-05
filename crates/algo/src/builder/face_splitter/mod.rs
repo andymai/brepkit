@@ -4347,7 +4347,7 @@ fn split_face_2d_impl(
     // faces, whose boundary arcs never split in their own machinery either
     // (the coaxial wedge's cylinder patches refused their axial sections
     // for the same reason its z-planes did).
-    let mut boundary_edges = if is_plane && face.inner_wires().is_empty() {
+    let mut boundary_edges = if face.inner_wires().is_empty() {
         super::face_splitter::conversion::boundary_edges_to_pcurve_with_images(
             topo,
             face.outer_wire(),
