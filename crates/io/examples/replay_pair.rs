@@ -78,8 +78,29 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
     mix.sort_unstable();
     let vol =
         brepkit_operations::measure::oriented_solid_volume(topo, sid, 0.05).unwrap_or(f64::NAN);
+    // TESS_BND=1 additionally tessellates at export tolerance (0.01 mm /
+    // 5 degrees, matching the tool's STL export) and reports mesh boundary
+    // and non-manifold edge counts — the discriminant between a B-Rep leak
+    // and a tessellation-parity leak on a clean B-Rep.
+    let tess = if std::env::var("TESS_BND").is_ok() {
+        match brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+            topo,
+            sid,
+            0.01,
+            5.0_f64.to_radians(),
+        ) {
+            Ok(mesh) => format!(
+                " tess_bnd={} tess_nm={}",
+                brepkit_operations::tessellate::boundary_edge_count(&mesh),
+                brepkit_operations::tessellate::non_manifold_edge_count(&mesh)
+            ),
+            Err(e) => format!(" tess_err={e}"),
+        }
+    } else {
+        String::new()
+    };
     println!(
-        "  {label}: F={} mix={mix:?} free={free} over={over} vol={vol:.3}",
+        "  {label}: F={} mix={mix:?} free={free} over={over} vol={vol:.3}{tess}",
         faces.len()
     );
 }
