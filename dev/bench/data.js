@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785955462798,
+  "lastUpdate": 1785955948376,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19655,6 +19655,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26230953,
             "range": "± 99590",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "341c71d90eff0d662c3dfed803e2911e362d844f",
+          "message": "chore(main): release 2.128.33 (#1361)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.33](https://github.com/andymai/brepkit/compare/v2.128.32...v2.128.33)\n(2026-08-05)\n\n\n### Bug Fixes\n\n* **algo:** within-rank SD dedup must not drop a cross-shell coincident\nface ([#1360](https://github.com/andymai/brepkit/issues/1360))\n([5997727](https://github.com/andymai/brepkit/commit/599772784bc20583ba974282c7f2c807b12d1fbc))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPublish `brepkit-wasm` 2.128.33 with a fix so within-rank SD dedup does\nnot drop cross-shell coincident faces. This prevents accidental face\nloss and keeps geometry intact.\n\n<sup>Written for commit 0e9e9bb090bec767c0df0145a86096fa5ebd9a24.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1361?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-05T18:50:03Z",
+          "tree_id": "194ffb8e0f28be9a79981eb956452d311e458806",
+          "url": "https://github.com/andymai/brepkit/commit/341c71d90eff0d662c3dfed803e2911e362d844f"
+        },
+        "date": 1785955946564,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 942477,
+            "range": "± 4543",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1022842,
+            "range": "± 3328",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11807,
+            "range": "± 118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699157,
+            "range": "± 1574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24861022,
+            "range": "± 49062",
             "unit": "ns/iter"
           }
         ]
