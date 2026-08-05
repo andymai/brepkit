@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785953632782,
+  "lastUpdate": 1785954113530,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19547,6 +19547,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24843366,
             "range": "± 50221",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "33f9d4db6fc28e82c588773989dc2fc17ea2c89e",
+          "message": "chore(main): release 2.128.32 (#1359)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.32](https://github.com/andymai/brepkit/compare/v2.128.31...v2.128.32)\n(2026-08-05)\n\n\n### Bug Fixes\n\n* **algo:** re-cast grazed cardinal rays when clean rays unanimously\ndisagree ([#1357](https://github.com/andymai/brepkit/issues/1357))\n([2f10967](https://github.com/andymai/brepkit/commit/2f1096716e683ce949b74fe5f5066702ff3e0407))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-05T18:19:41Z",
+          "tree_id": "905a95244130edb82a3430d891b4bb05b2f254ea",
+          "url": "https://github.com/andymai/brepkit/commit/33f9d4db6fc28e82c588773989dc2fc17ea2c89e"
+        },
+        "date": 1785954111413,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 759326,
+            "range": "± 1646",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 824518,
+            "range": "± 1685",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10160,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 543818,
+            "range": "± 1025",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20187696,
+            "range": "± 60584",
             "unit": "ns/iter"
           }
         ]
