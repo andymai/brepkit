@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.1](https://github.com/andymai/brepkit/compare/v2.129.0...v2.129.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **operations:** analytic revolve rim senses must account for face reversal ([#1367](https://github.com/andymai/brepkit/issues/1367)) ([53c9063](https://github.com/andymai/brepkit/commit/53c90631d4d2544bf9a8dcc4de023c97ad18e766))
+
 ## [2.129.0](https://github.com/andymai/brepkit/compare/v2.128.34...v2.129.0) (2026-08-05)
 
 
