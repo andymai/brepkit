@@ -233,9 +233,14 @@ fn honeycomb_cut_residual_documented() {
     // noise-dependence class as pcut1's earlier re-pins (it leaned on
     // splits the bridges now resolve differently) — while pcut3 held 0
     // and every production-level test in this file stayed green.
+    //
+    // Re-pinned with the clean/suspicious conflict re-cast in the ray-cast
+    // classifier (the O-shape chamfer-strip fix): pcut1 IMPROVED 83 -> 50
+    // and pcut2 30 -> 28 (unanimous generic re-casts correcting grazed
+    // cardinal votes), pcut3 held 0, over-shared stayed 0 everywhere.
     let residual_free: &[(&str, usize)] = &[
-        ("a2hcomb_pcut1.bin", 83),
-        ("a2hcomb_pcut2.bin", 30),
+        ("a2hcomb_pcut1.bin", 50),
+        ("a2hcomb_pcut2.bin", 28),
         ("a2hcomb_pcut3.bin", 0),
     ];
     for &(tool, expect_free) in residual_free {

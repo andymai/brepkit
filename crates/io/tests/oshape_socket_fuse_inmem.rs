@@ -1,9 +1,12 @@
 //! Fusing two half-socket pieces of the 3x3 O-shape bin must stay analytic.
-//! Today it aborts with "open growth shell with 45 faces", falls to the mesh
-//! fallback, and the fallback output poisons the next fuse (whose other
-//! operand replays as 1022 all-planar faces), ending in the export's 8
-//! non-manifold edges (the `3x3 O-shape + half sockets` export-integrity
-//! failure).
+//! FIXED by the clean/suspicious conflict re-cast in the ray-cast classifier
+//! (votes_from_geoms): the fuse is watertight, keeps the full analytic mix,
+//! and its volume equals the operand sum exactly (the halves are
+//! complementary and non-overlapping). Historically it aborted with "open
+//! growth shell with 45 faces", fell to the mesh fallback, and the fallback
+//! output poisoned the next fuse (whose other operand replays as 1022
+//! all-planar faces), ending in the export's 8 non-manifold edges (the
+//! `3x3 O-shape + half sockets` export-integrity failure).
 //!
 //! Both operands are clean 49-face socket pieces: one all-analytic
 //! (12 cones + 12 cylinders), the other carrying 12 NURBS faces (the
@@ -46,8 +49,17 @@
 //! ray-cast classifier is unstable for thin 45-degree strips near operand
 //! A's socket cones (near-tangent crossings flip the parity). Dropping the
 //! strips orphans the corner rims below and the connectors above, producing
-//! the 45-face open growth shell. Fix entry: instrument the classifier's
-//! ray for face 84's interior sample and see which crossing parity flips.
+//! the 45-face open growth shell.
+//!
+//! PARITY FLIP MEASURED (BK_RAY_POINT): the strip samples land at
+//! z=0.6999999999999998, in operand A's rim plane at z=0.7. From there the
+//! two horizontal cardinal rays graze A's structure, each reporting ONE
+//! crossing and flagging itself suspicious, while the vertical ray is clean
+//! with zero crossings; the 2-vote suspicious pair outvoted the 1 clean ray
+//! (the re-cast fired only when ALL THREE rays were suspicious). One
+//! micrometre off the plane (z=0.701, face 90's sample) the same rays count
+//! two clean crossings each. The fix re-casts on that conflict signature
+//! and adopts the generic vote only when unanimous (here 0/3: Outside).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -101,13 +113,12 @@ fn oshape_operands_are_clean() {
 }
 
 #[test]
-#[ignore = "ready repro: the half-socket piece fuse aborts with 'open growth shell with 45 \
-            faces', drops to the mesh fallback, and its open output poisons the next fuse, \
-            ending in the O-shape export's 8 non-manifold edges"]
 fn oshape_socket_fuse_is_analytic_watertight() {
     let mut topo = Topology::new();
     let a = load("oshape_socket_a.bin", &mut topo);
     let b = load("oshape_socket_b.bin", &mut topo);
+    let vol_a = brepkit_operations::measure::oriented_solid_volume(&topo, a, 0.05).unwrap();
+    let vol_b = brepkit_operations::measure::oriented_solid_volume(&topo, b, 0.05).unwrap();
 
     let result = brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, a, b)
         .expect("analytic fuse should not abort");
@@ -116,4 +127,13 @@ fn oshape_socket_fuse_is_analytic_watertight() {
     assert!(curved > 0, "all-planar output is the mesh-fallback tell");
     assert_eq!(over, 0, "fuse must stay manifold, got {over} over-shared");
     assert_eq!(free, 0, "fuse must be closed, got {free} free edges");
+
+    // The halves are complementary and non-overlapping, so the fuse volume
+    // must equal the operand sum (measured 8391.860 = 6151.772 + 2240.088).
+    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - (vol_a + vol_b)).abs() < 0.01,
+        "fuse volume {vol:.3} must equal the operand sum {:.3}",
+        vol_a + vol_b
+    );
 }
