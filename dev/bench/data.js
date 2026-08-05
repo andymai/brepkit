@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785961697596,
+  "lastUpdate": 1785962153347,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20087,6 +20087,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24783145,
             "range": "± 29679",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fe645a44bd278e9bc3934cb892b6ee66c7842cd0",
+          "message": "fix(operations): segmented revolve side wires must reverse with the face (#1369)\n\nSecond site of the orientation-emission campaign (#1365, first site\n#1367).\n\n## Root\nThe segmented revolve's outer side-face builder pairs a fixed-sense quad\nwire `[ring, arc, ring, arc]` with `Face::new_reversed` whenever the\nband surface's natural normal opposes material-outward. Reversal flips\nevery edge's effective traversal, so the reversed side faces traverse\ntheir shared edges in the same effective sense as their neighbours:\nmeasured 6 same-sense pairs at 90 degrees, 8 at 180, 12 near-full on the\nwasher profile.\n\n## Fix\nWhen `reversed`, build the reversed-winding wire (reverse order, flipped\nsenses) — the exact idiom the inner side faces already use — and keep\n`Face::new_reversed`. Effective traversal then opposes the neighbours as\nrequired.\n\n## Measured\nWasher profile: 0 same-sense pairs on all three revolve paths (partial\n90/180, segmented near-full, analytic full).\n\n## Verification\nWorkspace suite 0 failed; revolve module 27/27; wedge fixture green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes segmented revolve outer side-face wires so they reverse with the\nface when needed, matching `Face::new_reversed`. This removes same-sense\nedge traversal pairs and yields consistent shell orientation across\nsegmented revoles.\n\n- **Bug Fixes**\n- When `reversed`, build the outer side quad wire with reversed order\nand edge senses (same idiom as inner side faces).\n- Keep `Face::new_reversed`; net traversal now opposes neighbors as\nrequired.\n- Measured: washer profile reports 0 same-sense pairs for 90°, 180°, and\nnear-full segmented paths (full analytic path was already green).\n\n<sup>Written for commit cbae82afb7620434d0c98d9340469de709b8f52c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1369?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T20:33:09Z",
+          "tree_id": "593b7857dda565221bad4f586199c2b583066d81",
+          "url": "https://github.com/andymai/brepkit/commit/fe645a44bd278e9bc3934cb892b6ee66c7842cd0"
+        },
+        "date": 1785962151728,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 988075,
+            "range": "± 26960",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1075018,
+            "range": "± 8191",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13207,
+            "range": "± 64",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702406,
+            "range": "± 2176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26293796,
+            "range": "± 95669",
             "unit": "ns/iter"
           }
         ]
