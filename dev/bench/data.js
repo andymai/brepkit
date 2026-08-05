@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785958100875,
+  "lastUpdate": 1785958617436,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19763,6 +19763,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26093098,
             "range": "± 760227",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b99791338d4d5aaed2cc95d6b0f8e695b78a027c",
+          "message": "chore(main): release 2.128.34 (#1363)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.128.34](https://github.com/andymai/brepkit/compare/v2.128.33...v2.128.34)\n(2026-08-05)\n\n\n### Bug Fixes\n\n* **math:** CDT edge recovery must not claim success without the edge\n([#1362](https://github.com/andymai/brepkit/issues/1362))\n([a878bad](https://github.com/andymai/brepkit/commit/a878bad644b2ce18b95247cb414ed2d9fd94ad5f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.128.34 fixes a CDT edge recovery bug that could claim success\nwithout inserting the edge. Also bumps `brepkit-wasm` to 2.128.34.\n\n<sup>Written for commit dcb93bad9382c1b3ba0c579acd2619268d29885c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1363?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-05T19:34:23Z",
+          "tree_id": "653891e63b99f7c37e65802f423a5ddac9f0b50b",
+          "url": "https://github.com/andymai/brepkit/commit/b99791338d4d5aaed2cc95d6b0f8e695b78a027c"
+        },
+        "date": 1785958615036,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 946836,
+            "range": "± 3394",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1025916,
+            "range": "± 6588",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11962,
+            "range": "± 212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700160,
+            "range": "± 3045",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24889475,
+            "range": "± 33999",
             "unit": "ns/iter"
           }
         ]
