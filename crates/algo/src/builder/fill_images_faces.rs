@@ -358,6 +358,27 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             sections
         };
 
+        if std::env::var("BK_SECS").is_ok() {
+            for (si, sec) in sections.iter().enumerate() {
+                let (a, b) = (sec.start, sec.end);
+                let touches = |q: brepkit_math::vec::Point3| {
+                    (37.9..38.11).contains(&q.x())
+                        && (-41.8..-40.0).contains(&q.y())
+                        && (31.4..34.9).contains(&q.z())
+                };
+                if touches(a) || touches(b) {
+                    log::debug!(
+                        "SECS face={face_id:?} sec[{si}] ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                        a.x(),
+                        a.y(),
+                        a.z(),
+                        b.x(),
+                        b.y(),
+                        b.z()
+                    );
+                }
+            }
+        }
         let split_results = split_face_2d(
             topo,
             face_id,
