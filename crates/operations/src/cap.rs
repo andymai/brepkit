@@ -116,19 +116,27 @@ pub fn build_cap_face(
             reason: "cap ring must have at least 3 vertices matching its edge count".into(),
         });
     }
-    let edges: Vec<OrientedEdge> = if start_role {
-        (0..n)
-            .rev()
-            .map(|i| OrientedEdge::new(outer_ring_edges[i], false))
-            .collect()
-    } else {
-        (0..n)
-            .map(|i| OrientedEdge::new(outer_ring_edges[i], true))
-            .collect()
+    // The two role patterns are each other's exact reversals; `flip` selects
+    // the opposite pattern when the face will carry is_reversed=true, so the
+    // EFFECTIVE traversal (is_forward XOR is_reversed) stays opposed to the
+    // side walls (an end cap built reversed with the unreversed wire traversed
+    // its ring in the same effective sense as the walls).
+    let ring_wire = |topo: &mut Topology, flip: bool| -> Result<_, crate::OperationsError> {
+        let edges: Vec<OrientedEdge> = if start_role == flip {
+            (0..n)
+                .map(|i| OrientedEdge::new(outer_ring_edges[i], true))
+                .collect()
+        } else {
+            (0..n)
+                .rev()
+                .map(|i| OrientedEdge::new(outer_ring_edges[i], false))
+                .collect()
+        };
+        Ok(topo.add_wire(Wire::new(edges, true).map_err(crate::OperationsError::Topology)?))
     };
-    let wid = topo.add_wire(Wire::new(edges, true).map_err(crate::OperationsError::Topology)?);
 
     if ring_is_planar(cap_verts, outward) {
+        let wid = ring_wire(topo, false)?;
         let surface = FaceSurface::Plane {
             normal: outward,
             d: dot_normal_point(outward, cap_verts[0]),
@@ -155,6 +163,7 @@ pub fn build_cap_face(
         .normal(0.5, 0.5)
         .map(|nrm| nrm.dot(outward) < 0.0)
         .unwrap_or(false);
+    let wid = ring_wire(topo, reversed)?;
     let mut face = Face::new(wid, vec![], FaceSurface::Nurbs(surf));
     if reversed {
         face.set_reversed(true);

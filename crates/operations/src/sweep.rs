@@ -1025,18 +1025,6 @@ pub fn sweep_smooth(
         let surface =
             interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
 
-        let side_wire = Wire::new(
-            vec![
-                OrientedEdge::new(first_ring_edges[i], true),
-                OrientedEdge::new(rail_edges[next_i], true),
-                OrientedEdge::new(last_ring_edges[i], false),
-                OrientedEdge::new(rail_edges[i], false),
-            ],
-            true,
-        )
-        .map_err(crate::OperationsError::Topology)?;
-
-        let side_wire_id = topo.add_wire(side_wire);
         // The surface normal ∂u×∂v = path×edge points *into* the swept body for
         // a CCW profile; reverse the face when it opposes the geometric outward
         // so the solid's faces are consistently outward. Probe everything at the
@@ -1055,6 +1043,34 @@ pub fn sweep_smooth(
             .normal(0.0, 0.5)
             .map(|nrm| nrm.dot(outward) < 0.0)
             .unwrap_or(false);
+
+        // A reversed face flips every edge's effective traversal, so its wire
+        // must be built with reversed winding or the face traverses the ring
+        // edges in the same effective sense as the caps.
+        let side_wire = if reversed {
+            Wire::new(
+                vec![
+                    OrientedEdge::new(rail_edges[i], true),
+                    OrientedEdge::new(last_ring_edges[i], true),
+                    OrientedEdge::new(rail_edges[next_i], false),
+                    OrientedEdge::new(first_ring_edges[i], false),
+                ],
+                true,
+            )
+        } else {
+            Wire::new(
+                vec![
+                    OrientedEdge::new(first_ring_edges[i], true),
+                    OrientedEdge::new(rail_edges[next_i], true),
+                    OrientedEdge::new(last_ring_edges[i], false),
+                    OrientedEdge::new(rail_edges[i], false),
+                ],
+                true,
+            )
+        }
+        .map_err(crate::OperationsError::Topology)?;
+
+        let side_wire_id = topo.add_wire(side_wire);
         let mut face = Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface));
         if reversed {
             face.set_reversed(true);
