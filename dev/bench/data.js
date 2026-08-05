@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785963681156,
+  "lastUpdate": 1785965360062,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20303,6 +20303,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26129151,
             "range": "± 14051",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e5f1109edcf5879894d026160613fd693611c5d0",
+          "message": "fix(operations): sweep and shared-cap wires reverse with their faces; strict orientation validation by default (#1373)\n\nFourth construction-op site of the orientation-emission campaign (#1365,\n#1367, #1369, #1371).\n\n## Roots\n1. **sweep_smooth side walls**: reversed faces kept the unreversed quad\nwire (the same shape as the revolve and extrude sites). Fixed with the\nsame reversal-aware wire rule.\n2. **build_cap_face, the shared loft/sweep/pipe end cap**: the ring wire\nwas built from `start_role` before the bilinear NURBS branch decided\nreversal, so a reversed end cap traversed its ring in the same effective\nsense as the walls. The pattern is now chosen by `start_role XOR\nreversed`. This one function closed the sweep saddle variants, loft, and\npipe together.\n\n## Default stays off (revised from the first push)\nThe first push flipped `check_orientation` to default ON; CI caught what\nmy fail-fast local sweep missed: GFA BOOLEAN outputs still emit\nsame-sense pairs. The gridfinity D1 lip-ring test cuts two lofts that\neach validate clean, and the cut result carries 1 orientation issue —\nthe boolean assembler is the campaign's next frontier, recorded in the\nroadmap. The default remains false until it closes; construction ops are\nall strict-clean (798 operations-lib tests pass with the option forced\non).\n\n## Verification\n- Full workspace with --no-fail-fast: 2707 passed, 0 failed.\n- Export matrix on the deployed kernel: 469/469.\n- Probe: saddle and straight sweeps, loft, pipe all 0 same-sense pairs.",
+          "timestamp": "2026-08-05T21:26:48Z",
+          "tree_id": "b959e6f458c980276e206d5742ac7846f0aef641",
+          "url": "https://github.com/andymai/brepkit/commit/e5f1109edcf5879894d026160613fd693611c5d0"
+        },
+        "date": 1785965358715,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 984061,
+            "range": "± 1121",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1068762,
+            "range": "± 6616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13043,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700181,
+            "range": "± 1093",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26020057,
+            "range": "± 59570",
             "unit": "ns/iter"
           }
         ]
