@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785934667334,
+  "lastUpdate": 1785935349816,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18953,6 +18953,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20485328,
             "range": "± 42779",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "488a682dd07c0309784d919dc921f8659c8152e1",
+          "message": "test(io): pin the slotted no-lip socket fuse that aborts to the mesh fallback (#1348)\n\nFirst of the three new export-drift gaps captured and reduced. Of the 10\nbooleans in the failing `2x2 slotted no lip` export chain, nine replay\nclean and analytic; only the final socket-assembly fuse fails: a clean\n56-face slotted body fused with a clean 136-face four-socket assembly\naborts with **\"open hole shell with 45 faces\"** (the thick-wall abort\nfamily), and the mesh fallback's open output carries the 107-109\nboundary edges into the export.\n\n- `crates/io/tests/slotted_nolip_fuse_inmem.rs`: operand-health pins\nactive, fuse repro ignored with the characterization; operands 117 KB.\n- Roadmap row updated; the two half-sockets drift cases remain to\ncapture with the same recipe.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins a deterministic repro for the `2x2 slotted no lip` socket-assembly\nfuse that aborts to mesh fallback and yields open boundary edges. Adds\ncaptured operands and an ignored in-memory test to lock the failure for\nfuture fixes.\n\n- **New Features**\n- Added `crates/io/tests/slotted_nolip_fuse_inmem.rs` (ignored) that\ndocuments the abort: “open hole shell with 45 faces” and the mesh\nfallback’s 107–109 boundary edges.\n- Added operand pins: `crates/io/tests/data/slotted_nolip_body.bin` and\n`crates/io/tests/data/slotted_socket_assembly.bin` for deterministic\nreplay.\n- Updated roadmap row to note this case is captured; half-socket drift\ncases remain.\n\n<sup>Written for commit f754bb079c8eb341678077b23631dbe1c75251e3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1348?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T13:06:25Z",
+          "tree_id": "13511cd38c1a078078b3b22b8b8cba2c0c46c6df",
+          "url": "https://github.com/andymai/brepkit/commit/488a682dd07c0309784d919dc921f8659c8152e1"
+        },
+        "date": 1785935348040,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 910866,
+            "range": "± 10526",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 988177,
+            "range": "± 23923",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11520,
+            "range": "± 118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 669903,
+            "range": "± 5647",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24162382,
+            "range": "± 228319",
             "unit": "ns/iter"
           }
         ]
