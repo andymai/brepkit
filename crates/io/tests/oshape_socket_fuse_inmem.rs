@@ -20,6 +20,12 @@
 //!
 //! Operands captured 2026-08-05 via the kernel-test boolean monkey-patch
 //! (call 006 of the export chain; call 007 is its downstream collateral).
+//!
+//! BK_OPEN_SHELL characterization: the open 45-face growth shell has
+//! POSITIVE volume 3628.8 and is the socket ring itself — alternating plane
+//! and NURBS faces at the ring positions (x,y around +-18.7/+-22.45,
+//! z=-2.6): the quarter-socket NURBS pieces fail to pair with their plane
+//! neighbours after selection.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
