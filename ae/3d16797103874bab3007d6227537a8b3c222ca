@@ -1,0 +1,41 @@
+crates/math/src/cdt/constraints.rs
+  s_7ff36fc7322bef::t_cfe436664a354e 72-77,122
+  s_7ff36fc7322bef::t_3f15ca95b1dcc5 111
+  s_7ff36fc7322bef::t_af813e16398835 125-126
+  s_7ff36fc7322bef::t_4ff3ccbb77baef 15-34
+  s_7ff36fc7322bef::t_025a7983955b5c 6-7
+  s_7ff36fc7322bef::t_abcf1570e5b550 105-110,112,116-121,123-124,127-136
+crates/operations/src/tessellate/solid.rs
+  s_7ff36fc7322bef::t_af813e16398835 569-572
+  s_7ff36fc7322bef::t_d6d7d5d9405963 21,520-544,599-614,617-619,629-631
+  s_7ff36fc7322bef::t_025a7983955b5c 424
+  s_7ff36fc7322bef::t_8f3a5ca9a0febd 545-568,573-598
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_f480704af528e8 128
+crates/math/src/cdt/mod.rs
+  s_7ff36fc7322bef::t_f99f5bcc92c497 449-455
+crates/operations/src/tessellate/planar.rs
+  s_7ff36fc7322bef::t_fb2cb7c90e97a8 1219-1224,1227-1236,1238,1241
+  s_7ff36fc7322bef::t_025a7983955b5c 1146-1149,1154
+crates/io/tests/mixed_socket_tess_inmem.rs
+  s_7ff36fc7322bef::t_4740017d74a13e 3-24,43-46
+  s_7ff36fc7322bef::t_36dba72251d36f 25-34,107-136,144-146
+  s_7ff36fc7322bef::t_af813e16398835 137-140
+  s_7ff36fc7322bef::t_2123b5f8ec993e 141-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ae3d16797103874bab3007d6227537a8b3c222ca",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
