@@ -6601,6 +6601,37 @@ fn diag_cone_box_tangency_sweep() {
 /// handled; two or more split it into a CHAIN of arcs that the quadric side
 /// fails to close — open at 2 walls, over-shared at 4.
 #[test]
+fn tangent_wall_fuse_configurations_stay_analytic() {
+    // Regression pin for the tangent-section-circle family (the last
+    // primitive-boolean fallback): a box wall exactly tangent to the
+    // cylinder used to break the section circle by tangency-point count
+    // (2 tangencies gave 4 free edges, 4 gave 4 non-manifold). All counts
+    // are clean since the classifier conflict re-cast and the SD
+    // cross-shell gate; this pins every configuration of the diagnostic
+    // sweep as watertight with its exact analytic face count.
+    use brepkit_math::mat::Mat4;
+    for &(label, xlo, xhi, ylo, yhi, expect_f) in &[
+        ("4 tangent walls", -4.0, 4.0, -4.0, 4.0, 15usize),
+        ("2 tangent walls (x only)", -4.0, 4.0, -9.0, 9.0, 11),
+        ("1 tangent wall  (x=+4)", -9.0, 4.0, -9.0, 9.0, 9),
+        ("0 tangent walls", -9.0, 9.0, -9.0, 9.0, 8),
+    ] {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 4.0, 12.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, xhi - xlo, yhi - ylo, 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(xlo, ylo, 6.0)).unwrap();
+        let r = brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cyl, b)
+            .unwrap_or_else(|e| panic!("{label}: fuse must not abort: {e}"));
+        let n = brepkit_topology::explorer::solid_faces(&topo, r)
+            .unwrap()
+            .len();
+        assert_eq!(n, expect_f, "{label}: analytic face count");
+        super::assembly::validate_boolean_result(&topo, r)
+            .unwrap_or_else(|e| panic!("{label}: result must validate: {e}"));
+    }
+}
+
+#[test]
 #[ignore = "diagnostic — how many tangency points break the section circle?"]
 fn diag_tangency_count() {
     use brepkit_math::mat::Mat4;
