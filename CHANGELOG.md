@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.31](https://github.com/andymai/brepkit/compare/v2.128.30...v2.128.31) (2026-08-05)
+
+
+### Bug Fixes
+
+* **algo:** expand NURBS boundary images so coaxial revolve cuts split ([#1352](https://github.com/andymai/brepkit/issues/1352)) ([6e2a55d](https://github.com/andymai/brepkit/commit/6e2a55d316bb0e880c8755a7fd35f00e2cf1a915))
+
 ## [2.128.30](https://github.com/andymai/brepkit/compare/v2.128.29...v2.128.30) (2026-08-05)
 
 
