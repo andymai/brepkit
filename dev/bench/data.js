@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785903981458,
+  "lastUpdate": 1785906521505,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18467,6 +18467,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24660184,
             "range": "± 79829",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "69501b6b06cb83309f2982f32b59dbea33c7ac78",
+          "message": "docs(roadmap): wedge section endpoints are trimmed to single arc chords (#1338)\n\nThe anchored-section probe closes the mechanism with exact arithmetic:\nface 2's single Line section has endpoints at r=4.000 and r=1.306 —\nprecisely where its line crosses the SINGLE chords of the face's two\n90-degree NURBS arcs (4.75/sqrt(2)/cos(32.9deg) = 4.00;\n1.096/cos(32.9deg) = 1.306) — instead of the true arc crossings at\nr=4.75/1.55. The endpoints float 0.75 mm off the boundary, the splitter\ncannot anchor them, and it declines to split.\n\nAlso established: `restrict_curves_to_faces`' FaceWindow polygon samples\ncurved edges at 16 points (sagitta 0.006 mm) and is NOT the chord\nsource. The fix site is whatever trim sets `SectionEdge` start/end from\nthe wire vertex-only polygon (one chord per arc); the wedge oracle flips\ngreen when the endpoints land on the true arcs.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments the wedge defect: section endpoints were trimmed to single arc\nchords instead of true arc crossings, identifying the trim that uses the\nwire’s vertex-only polygon as the fix site. Adds a `BK_SPLITW`-gated\ndebug dump in `fill_images_faces.rs` to log each section’s curve type\nand 3D endpoints for a selected face to speed diagnosis.\n\n<sup>Written for commit 2521249f18530cc5934b81c967bd9faf07334655.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1338?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T05:06:19Z",
+          "tree_id": "1e3a54d3cb76d16c9e0af97347eb402e536d18e6",
+          "url": "https://github.com/andymai/brepkit/commit/69501b6b06cb83309f2982f32b59dbea33c7ac78"
+        },
+        "date": 1785906520256,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 938638,
+            "range": "± 3167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1017914,
+            "range": "± 51911",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11883,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698814,
+            "range": "± 10917",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24813789,
+            "range": "± 37134",
             "unit": "ns/iter"
           }
         ]
