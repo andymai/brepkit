@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785966032743,
+  "lastUpdate": 1785968660067,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20465,6 +20465,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26361334,
             "range": "± 50321",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6ec63d9c63c525ccf276b951315cf2511c6eea2a",
+          "message": "test(operations): pin the tangent-wall fuse family as analytic (#1376)\n\nThe roadmap's last primitive-boolean fallback (tangent section circles,\nkeyed by tangency-point count) measures CLEAN on the current kernel\nacross every configuration of the diagnostic sweep: 0/1/2/4 tangent\nwalls all fuse watertight with exact analytic face counts (8/9/11/15).\nThe closure is collateral of #1357 (ray-cast conflict re-cast) and #1360\n(SD cross-shell gate) — the historical failure signatures were\nclassification-driven.\n\nThe diagnostics were print-only, so nothing pinned the closure; this\nadds an active regression test asserting each configuration's face count\nand validated result, plus the roadmap closed-section entry.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd a regression test that pins the cylinder∪box tangent-wall fuse as\nanalytic across 0/1/2/4 walls. It validates watertight results and exact\nface counts (8, 9, 11, 15), and updates the roadmap; test:\n`boolean::tests::tangent_wall_fuse_configurations_stay_analytic`.\n\n<sup>Written for commit 0d43e054f5f0f529c5fbf73f437a39023753212c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1376?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T22:21:51Z",
+          "tree_id": "6db7f9b9c1c9a2245acae054a0dfea36a968c02d",
+          "url": "https://github.com/andymai/brepkit/commit/6ec63d9c63c525ccf276b951315cf2511c6eea2a"
+        },
+        "date": 1785968658324,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 983343,
+            "range": "± 3574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1067034,
+            "range": "± 1489",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13208,
+            "range": "± 116",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703085,
+            "range": "± 1363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25978502,
+            "range": "± 25161",
             "unit": "ns/iter"
           }
         ]
