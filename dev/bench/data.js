@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785892228846,
+  "lastUpdate": 1785894951935,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18143,6 +18143,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24644447,
             "range": "± 288592",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f4e0afc08a9f50ad1e9f26d14d6dc91532a04b29",
+          "message": "test(io): re-capture the kumiko corner wedge operands post-revolve-fix (#1332)\n\nCloses the standing re-capture task on `kumiko_corner_wedge_inmem.rs`.\nFresh operands captured from a 1x1x4 mitsukude corner-wrap generation on\nthe current kernel (the wedge pair is the F=6 two-cylinder cut call;\nrecipe now in the fixture header).\n\nOn the re-captured operands the coaxial wedge-strut cut **runs analytic\nin 2 ms and keeps both cylinders** — the old all-planar mesh-fallback\nsignature (the original root of the kumiko export-integrity family) is\ngone. The remaining defect is sharper and newly pinned: a strut that\nonly TOUCHES the wedge drops a face without removing volume (F=6 to F=5,\nfree=4, volume unchanged at 285.861).\n\n- `captured_operands_are_inward_oriented` flips to\n`_are_outward_oriented` (its self-documented re-capture trigger fired).\n- The ignored cut repro now pins the watertight goal state with the\ncurrent failure characterized.\n- Roadmap row added under the touching/coincident-contact family,\nalongside the mitsukude pinch.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRe-captured the kumiko corner wedge/strut test operands on the\npost-`revolve` fix so the coaxial cut runs analytic in ~2 ms and keeps\nboth cylinders, removing the old all‑planar mesh‑fallback signature. The\ntest now asserts outward orientation and pins the remaining\ntouching-contact defect (strut only touching drops a face with no volume\nchange), and the roadmap adds this case under the\ntouching/coincident-contact family.\n\n<sup>Written for commit 77eb91a370c5f3f30e532cd29852b30656437d8f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1332?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T01:53:26Z",
+          "tree_id": "433babfc5bdf22fa45a664923b0c9eb2e3934735",
+          "url": "https://github.com/andymai/brepkit/commit/f4e0afc08a9f50ad1e9f26d14d6dc91532a04b29"
+        },
+        "date": 1785894950469,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 927463,
+            "range": "± 22382",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1001936,
+            "range": "± 1407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11942,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 690457,
+            "range": "± 1480",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24445272,
+            "range": "± 42957",
             "unit": "ns/iter"
           }
         ]
