@@ -1,0 +1,27 @@
+crates/io/tests/data/kumiko_corner_wedge.bin
+  s_7ff36fc7322bef::t_f73260b786f913 1
+crates/io/tests/data/kumiko_corner_strut.bin
+  s_7ff36fc7322bef::t_f73260b786f913 1
+crates/io/tests/kumiko_corner_wedge_inmem.rs
+  s_7ff36fc7322bef::t_261ba8bf088798 1-4,6-9,11-14,16-18
+  s_7ff36fc7322bef::t_77f57e944e3422 91-95,101-102,108-111,135-142
+  s_7ff36fc7322bef::t_0f90d9b56a050e 143
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_2d21775f2b4cd7 127-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "77eb91a370c5f3f30e532cd29852b30656437d8f",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
