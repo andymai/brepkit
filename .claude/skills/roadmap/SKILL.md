@@ -702,6 +702,11 @@ Measured A/B, same day, same tool commit, each overlay md5-verified through brep
   firing that helps against one that hurts.
 
 ## Closed: root cause + where the detail lives
+
+- **Cone/cylinder ∪ box tangent section circle** — the last primitive-boolean fallback; every
+  tangency count (0/1/2/4 walls) now fuses clean and analytic, closed as collateral of the
+  classifier conflict re-cast (#1357) and the SD cross-shell gate (#1360). Pinned ACTIVE with
+  exact face counts: `boolean::tests::tangent_wall_fuse_configurations_stay_analytic`.
 - **Kumiko lattice band fuse — CLOSED after 29 passes** (`kumiko_lattice_bands_fuse_closed`
   un-ignored and green). Final mechanism, all in the face splitter: (1) DEMAND-GATED outer-wire
   image expansion — a planar hole-free face expands a boundary edge's pave-split images only
