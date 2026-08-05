@@ -2599,6 +2599,9 @@ fn clip_line_to_face_boundary(
     let mut crossings_ext: Vec<f64> = Vec::new();
 
     for (seg_idx, (seg_start, seg_end)) in boundary_segments.iter().enumerate() {
+        // Set when this segment's TRUE arc geometry was hit within the
+        // section's own range; the chord crossing is then a phantom border.
+        let mut arc_hit_here = false;
         // For a curved boundary edge, also record the crossing with the TRUE
         // arc geometry. A convex rounded corner bulges OUTWARD past its chord,
         // so the arc crossing extends the section to where it actually exits
@@ -2640,6 +2643,7 @@ fn clip_line_to_face_boundary(
                 // segment; keep its input unchanged.
                 if (-1e-9..=1.0 + 1e-9).contains(&t) {
                     crossings.push(t);
+                    arc_hit_here = true;
                 }
             }
         }
@@ -2689,9 +2693,15 @@ fn clip_line_to_face_boundary(
             (t, s)
         };
 
-        // Boundary segment parameter must be within [0, 1] (with tolerance)
+        // Boundary segment parameter must be within [0, 1] (with tolerance).
+        // When this segment's TRUE arc geometry was hit, its chord crossing is
+        // a phantom border: the chord is not the boundary, and keeping it
+        // splits the section at an interior point the splitter cannot anchor
+        // (the coaxial wedge's section arrived pre-split at the old chord
+        // crossing even after its endpoints reached the true arcs). The chord
+        // stays only as the conservative fallback when the arc was missed.
         let s_tol = tol / seg_dir.length().max(tol);
-        if s >= -s_tol && s <= 1.0 + s_tol {
+        if s >= -s_tol && s <= 1.0 + s_tol && !arc_hit_here {
             crossings.push(t);
         }
     }
@@ -2714,6 +2724,17 @@ fn clip_line_to_face_boundary(
     }
 
     crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if std::env::var("BK_CLIP").is_ok() {
+        log::debug!(
+            "CLIP face={face_id:?} line=({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) crossings={crossings:?} ext={crossings_ext:?}",
+            line_start.x(),
+            line_start.y(),
+            line_start.z(),
+            line_end.x(),
+            line_end.y(),
+            line_end.z()
+        );
+    }
 
     // Select the in-face interval by MIDPOINT CLASSIFICATION rather than the
     // outermost crossing pair. Outermost-pair is only right when every arc
