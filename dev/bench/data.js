@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785938501635,
+  "lastUpdate": 1785940967022,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19115,6 +19115,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25995266,
             "range": "± 1489482",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d9b749c90c5d0aabce93bda466112e8832049dc6",
+          "message": "docs(io): characterize both new abort fixtures' failing shells (#1351)\n\nBK_OPEN_SHELL dumps on the two new drift fixtures, appended to their\nheaders:\n\n- **Slotted no-lip**: the aborting 45-face shell has signed volume\n-51259 and is built from the BODY's own outer walls and corner cylinders\n— the fuse classifies a body-sized chunk as a hole shell (the\nno-outer-shell / misgrouped-interior family), not a small-fragment drop.\n- **O-shape sockets**: the open 45-face growth shell has POSITIVE volume\n3628.8 and is the socket ring itself — alternating plane and NURBS faces\nat the ring positions; the quarter-socket NURBS pieces fail to pair with\ntheir plane neighbours after selection.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdded BK_OPEN_SHELL characterizations to\n`crates/io/tests/slotted_nolip_fuse_inmem.rs` and\n`crates/io/tests/oshape_socket_fuse_inmem.rs` to explain the failing\nshells. Slotted no-lip: 45-face abort shell with signed volume -51259\nbuilt from the body’s outer walls and corner cylinders and misclassified\nas a hole shell; O-shape sockets: 45-face open growth shell with\npositive volume 3628.8 representing the socket ring with alternating\nplane and NURBS faces where quarter-socket NURBS pieces do not pair with\nadjacent planes.\n\n<sup>Written for commit 5f137256ba86102ebe0c50976a41da5a6d98302c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1351?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T14:40:02Z",
+          "tree_id": "0f67224b8918bdd0fb904594fcc97f53647e2868",
+          "url": "https://github.com/andymai/brepkit/commit/d9b749c90c5d0aabce93bda466112e8832049dc6"
+        },
+        "date": 1785940965507,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 915353,
+            "range": "± 1852",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 996008,
+            "range": "± 873",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12254,
+            "range": "± 362",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 653621,
+            "range": "± 797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24524717,
+            "range": "± 99058",
             "unit": "ns/iter"
           }
         ]
