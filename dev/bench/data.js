@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785907775829,
+  "lastUpdate": 1785915192365,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18629,6 +18629,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20003496,
             "range": "± 101122",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e24bd07ad53cc835b7588235c3a27a057a82a53c",
+          "message": "docs(roadmap): park the NURBS clip fix after CI caught a 154x regression (#1342)\n\nHonest closure of the first coaxial-campaign fix attempt (#1341, closed\nunmerged):\n\n- The bezier-clipping variant validated the fix direction — the wedge\nsection endpoints landed exactly on the true arcs, suites green, census\nunchanged — but decomposed the same boundary edge once per section,\nregressing the honeycomb fixture **154x** (0.75 s to 115.6 s). Local\nsuites passed because they count failures, not durations; CI's 20-minute\ngate caught it. Closed per verify-or-revert.\n- A perf-safe sampled-bisection variant (parked on\n`fix/nurbs-boundary-section-clip` with a `BK_ARC` probe) restores 0.75 s\nand finds the same arc hits, but they no longer reach the window\nselection that sets the section endpoints — an unresolved interaction in\nthe border assembly.\n\nThe roadmap row records the resume plan: resolve the bisect-vs-bezier\nwindow discrepancy, drop phantom chord borders when a true-arc hit\nexists, and gate on the honeycomb timing plus full foils.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to park the NURBS boundary-section clipping fix after\nCI caught a 154x slowdown in the honeycomb fixture. Documents that the\nbezier variant regressed performance, the bisection variant is parked,\nand records the follow-up plan (resolve window selection, drop chord\nborders, and gate on timing).\n\n<sup>Written for commit 2e8eacd9f74bdad4f2333f1040192f002f8ff5bb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1342?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T07:30:47Z",
+          "tree_id": "2eeebe85f856459e79ba14ed98eb922f6ef6d00a",
+          "url": "https://github.com/andymai/brepkit/commit/e24bd07ad53cc835b7588235c3a27a057a82a53c"
+        },
+        "date": 1785915191079,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 937546,
+            "range": "± 15345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1019773,
+            "range": "± 22507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11913,
+            "range": "± 115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 694786,
+            "range": "± 1438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24566513,
+            "range": "± 72867",
             "unit": "ns/iter"
           }
         ]
