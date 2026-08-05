@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785906521505,
+  "lastUpdate": 1785907140266,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18521,6 +18521,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24813789,
             "range": "± 37134",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a3db8709a45f85835307a8ac3debe1ec454790e5",
+          "message": "docs(roadmap): narrow the wedge chord trim to the pave placement (#1339)\n\nContinuation of the chord-trim locate: `clip_line_to_face` is exonerated\n(it bails Indeterminate on any non-Line boundary edge, so the wedge's\narc faces are never polygon-clipped there), and `build_section_edges`\nreads section endpoints from the ARENA curve via `curve_endpoints` — so\nthe r=4.00/1.31 chord crossings were PAVED upstream. Prime suspect: the\nEE/EF machinery intersecting the FF section line with the wedge's\nNurbsCurve boundary edges via their chord.\n\nNext probe recorded: dump the arena curve's pave positions and read the\nEE line-x-NurbsCurve intersection method.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nTightened the roadmap entry for the Kumiko wedge issue to pin the\nchord-trim error on pave placement during EE/EF line×NURBS edge\nintersection, not on `clip_line_to_face` or `build_section_edges`.\n\nThe doc now:\n- Exonerates `clip_line_to_face` (skips non-Line boundaries) and notes\nendpoints come from the arena via `curve_endpoints`.\n- Identifies the prime suspect: EE/EF intersecting the section line with\nNurbsCurve edges via their chord endpoints.\n- Adds the next probe: dump arena curve pave positions to confirm and\nread the EE line×NURBS method.\n\n<sup>Written for commit 26199e9fa45efc65456966c3dee11cf861f0fa34.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1339?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T05:16:33Z",
+          "tree_id": "77d80c3dd8a61652abcd87375d115829a7b69457",
+          "url": "https://github.com/andymai/brepkit/commit/a3db8709a45f85835307a8ac3debe1ec454790e5"
+        },
+        "date": 1785907138690,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 934217,
+            "range": "± 2153",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1015491,
+            "range": "± 13954",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12005,
+            "range": "± 74",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 693549,
+            "range": "± 780",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24696788,
+            "range": "± 191022",
             "unit": "ns/iter"
           }
         ]
