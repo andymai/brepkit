@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.33](https://github.com/andymai/brepkit/compare/v2.128.32...v2.128.33) (2026-08-05)
+
+
+### Bug Fixes
+
+* **algo:** within-rank SD dedup must not drop a cross-shell coincident face ([#1360](https://github.com/andymai/brepkit/issues/1360)) ([5997727](https://github.com/andymai/brepkit/commit/599772784bc20583ba974282c7f2c807b12d1fbc))
+
 ## [2.128.32](https://github.com/andymai/brepkit/compare/v2.128.31...v2.128.32) (2026-08-05)
 
 
