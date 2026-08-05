@@ -874,19 +874,6 @@ pub fn extrude(
     for i in 0..n {
         let next = (i + 1) % n;
 
-        let side_wire = Wire::new(
-            vec![
-                OrientedEdge::new(input_edge_ids[i], input_oriented[i].is_forward()),
-                OrientedEdge::new(vertical_edge_ids[next], true),
-                OrientedEdge::new(top_edge_ids[i], false),
-                OrientedEdge::new(vertical_edge_ids[i], false),
-            ],
-            true,
-        )
-        .map_err(crate::OperationsError::Topology)?;
-
-        let side_wire_id = topo.add_wire(side_wire);
-
         let p0 = input_positions[i];
         let p1 = input_positions[next];
         let (edge_curve, e_start, e_end) = {
@@ -897,6 +884,34 @@ pub fn extrude(
         let ce = topo.vertex(e_end)?.point();
         let (surface, reversed) =
             side_face_surface(&edge_curve, p0, p1, cs, ce, offset, outer_is_cw)?;
+
+        // A reversed face flips every edge's effective traversal, so the wire
+        // must be built with reversed winding too, or the face traverses its
+        // shared edges in the same effective sense as its neighbours.
+        let side_wire = if reversed {
+            Wire::new(
+                vec![
+                    OrientedEdge::new(vertical_edge_ids[i], true),
+                    OrientedEdge::new(top_edge_ids[i], true),
+                    OrientedEdge::new(vertical_edge_ids[next], false),
+                    OrientedEdge::new(input_edge_ids[i], !input_oriented[i].is_forward()),
+                ],
+                true,
+            )
+        } else {
+            Wire::new(
+                vec![
+                    OrientedEdge::new(input_edge_ids[i], input_oriented[i].is_forward()),
+                    OrientedEdge::new(vertical_edge_ids[next], true),
+                    OrientedEdge::new(top_edge_ids[i], false),
+                    OrientedEdge::new(vertical_edge_ids[i], false),
+                ],
+                true,
+            )
+        }
+        .map_err(crate::OperationsError::Topology)?;
+
+        let side_wire_id = topo.add_wire(side_wire);
 
         let side_face = if reversed {
             topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
@@ -919,33 +934,6 @@ pub fn extrude(
         for i in 0..iw_n {
             let next = (i + 1) % iw_n;
 
-            let side_edges = if is_cw {
-                // CW inner wire: traverse the quad in the reversed pattern
-                // (up, across, down, back) so that the face normal points
-                // into the hole (away from solid material).
-                vec![
-                    OrientedEdge::new(iwd.vertical_edge_ids[i], true),
-                    OrientedEdge::new(iwd.top_edge_ids[i], true),
-                    OrientedEdge::new(iwd.vertical_edge_ids[next], false),
-                    OrientedEdge::new(iwd.edge_ids[i], !iwd.oriented[i].is_forward()),
-                ]
-            } else {
-                // CCW inner wire: use the same winding pattern as outer
-                // side faces (bottom-edge forward, right up, top back,
-                // left down) which produces inward-pointing normals for
-                // CCW inner geometry.
-                vec![
-                    OrientedEdge::new(iwd.edge_ids[i], iwd.oriented[i].is_forward()),
-                    OrientedEdge::new(iwd.vertical_edge_ids[next], true),
-                    OrientedEdge::new(iwd.top_edge_ids[i], false),
-                    OrientedEdge::new(iwd.vertical_edge_ids[i], false),
-                ]
-            };
-
-            let side_wire =
-                Wire::new(side_edges, true).map_err(crate::OperationsError::Topology)?;
-            let side_wire_id = topo.add_wire(side_wire);
-
             let p0 = iwd.positions[i];
             let p1 = iwd.positions[next];
             let (edge_curve, e_start, e_end) = {
@@ -966,6 +954,39 @@ pub fn extrude(
             // the cylinder's natural outward radial normal, so force the flip.
             let reversed =
                 reversed || (e_start == e_end && matches!(surface, FaceSurface::Cylinder(_)));
+
+            // The two quad patterns below are each other's exact reversals.
+            // The caps hold the input wires REVERSED (bottom) and forward
+            // (top), so consistency requires the wall's EFFECTIVE bottom-edge
+            // sense to equal the input orientation: pattern = CW exactly when
+            // the face is reversed (effective = stored XOR is_reversed),
+            // independent of the hole winding. The measured truth table: the
+            // hollow box (rev=false) needs CCW where the old is_cw choice
+            // gave CW (8 same-sense pairs), while the closed-circle wall
+            // (forced rev=true) needs and had CW.
+            let side_edges = if reversed {
+                // "CW" pattern: traverse the quad up, across, down, back so a
+                // rev=false face's normal points into the hole.
+                vec![
+                    OrientedEdge::new(iwd.vertical_edge_ids[i], true),
+                    OrientedEdge::new(iwd.top_edge_ids[i], true),
+                    OrientedEdge::new(iwd.vertical_edge_ids[next], false),
+                    OrientedEdge::new(iwd.edge_ids[i], !iwd.oriented[i].is_forward()),
+                ]
+            } else {
+                // "CCW" pattern: same winding as the outer side faces
+                // (bottom-edge forward, right up, top back, left down).
+                vec![
+                    OrientedEdge::new(iwd.edge_ids[i], iwd.oriented[i].is_forward()),
+                    OrientedEdge::new(iwd.vertical_edge_ids[next], true),
+                    OrientedEdge::new(iwd.top_edge_ids[i], false),
+                    OrientedEdge::new(iwd.vertical_edge_ids[i], false),
+                ]
+            };
+
+            let side_wire =
+                Wire::new(side_edges, true).map_err(crate::OperationsError::Topology)?;
+            let side_wire_id = topo.add_wire(side_wire);
 
             let side_face = if reversed {
                 topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
