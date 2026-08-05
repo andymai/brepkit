@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785953454625,
+  "lastUpdate": 1785953632782,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19493,6 +19493,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26753998,
             "range": "± 181648",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7b877fee98cc531aeef96d1661ce03170b55caa8",
+          "message": "fix(ci): stop the doc-paths check flaking on an EPIPE under pipefail (#1358)\n\nPR #1357's Doc Paths job failed flagging\n`gridfinity_lipfuse_dividers_inmem.rs` as nonexistent. The file exists;\nthe job log also shows `line 57: echo: write error: Broken pipe`.\n\nMechanism: `echo \"$FILE_LIST\" | grep -qF ...` under `set -o pipefail`.\nWhen grep -q finds its match early and exits, the echo can take EPIPE\nand return nonzero, and pipefail makes the whole pipeline nonzero even\nthough grep matched. The `if !` then reports an existing file as a\nviolation. It is timing-dependent, which is why the local run passes and\nCI intermittently does not.\n\nFix: feed grep with herestrings (no pipe, no EPIPE). Verified locally:\nthe check passes and the failure branch still renders the\ndirectory-split hint.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nStop the Doc Paths CI check from flaking under `set -o pipefail` by\navoiding EPIPE when `grep -q` exits early. This prevents false\nviolations for existing files and keeps the directory-split hint.\n\n- **Bug Fixes**\n- Replaced `echo \"$FILE_LIST\" | grep -q ...` with `grep ... <<<\n\"$FILE_LIST\"` to avoid EPIPE and pipeline failures.\n  - Failure output and the directory members hint remain the same.\n\n<sup>Written for commit e67608e7f83d16ce843a92d78faa7d3f2a070563.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1358?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T18:11:06Z",
+          "tree_id": "1be2939e61cf960f483bbf50d1eda5bac283c4a8",
+          "url": "https://github.com/andymai/brepkit/commit/7b877fee98cc531aeef96d1661ce03170b55caa8"
+        },
+        "date": 1785953630711,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 943193,
+            "range": "± 1821",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1016872,
+            "range": "± 11033",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11971,
+            "range": "± 129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698577,
+            "range": "± 1522",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24843366,
+            "range": "± 50221",
             "unit": "ns/iter"
           }
         ]
