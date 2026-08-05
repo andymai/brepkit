@@ -748,12 +748,23 @@ fn build_analytic_revolution(
                 let outward = e_r * outm.0 + axis * outm.1;
                 let (surface, reversed) =
                     revolution_wall_surface(&pe.class, axis_origin, axis, probe, outward)?;
+                // Rim senses account for the face reversal below: a reversed
+                // face flips every edge's EFFECTIVE traversal (is_forward XOR
+                // is_reversed), so a reversed wall built with the unreversed
+                // rim senses traverses its rims in the SAME effective sense as
+                // the neighbouring caps (the washer's inner wall measured
+                // exactly this). Rim circles are closed edges (start == end),
+                // so flipping their stored sense preserves wire connectivity
+                // and the rim+seam+rim+seam pattern. The seam pair needs no
+                // flip: reversal flips both of its uses together, keeping them
+                // opposed.
+                let rim_fwd = !reversed;
                 let wall_wire = match (rim_circle[idx], rim_circle[next]) {
                     (Some(bot_e), Some(top_e)) => Wire::new(
                         vec![
-                            OrientedEdge::new(bot_e, true),
+                            OrientedEdge::new(bot_e, rim_fwd),
                             OrientedEdge::new(pe.edge, pe.forward),
-                            OrientedEdge::new(top_e, false),
+                            OrientedEdge::new(top_e, !rim_fwd),
                             OrientedEdge::new(pe.edge, !pe.forward),
                         ],
                         true,
@@ -763,7 +774,7 @@ fn build_analytic_revolution(
                     // seam⁻¹), the seam running rim → apex.
                     (Some(rim_e), None) => Wire::new(
                         vec![
-                            OrientedEdge::new(rim_e, true),
+                            OrientedEdge::new(rim_e, rim_fwd),
                             OrientedEdge::new(pe.edge, pe.forward),
                             OrientedEdge::new(pe.edge, !pe.forward),
                         ],
@@ -771,7 +782,7 @@ fn build_analytic_revolution(
                     ),
                     (None, Some(rim_e)) => Wire::new(
                         vec![
-                            OrientedEdge::new(rim_e, true),
+                            OrientedEdge::new(rim_e, rim_fwd),
                             OrientedEdge::new(pe.edge, !pe.forward),
                             OrientedEdge::new(pe.edge, pe.forward),
                         ],
