@@ -1,10 +1,37 @@
 //! The 2x2 mixed-detail per-cell half-sockets bin: every boolean in its
 //! export chain replays clean and analytic, and the final fuse here succeeds
-//! watertight (free=0, over=0) — yet TESSELLATING that valid B-Rep at export
-//! tolerance (0.01 mm / 5 degrees) yields hundreds of mesh boundary edges
-//! (511 measured natively; the tool-side export reports 259 after its own
-//! welding). A tessellation-parity defect on a clean B-Rep, not a boolean
-//! one: the "not every scenario failure is a boolean fallback" class.
+//! watertight (free=0, over=0). FIXED: tessellating that B-Rep at export
+//! tolerance is now watertight too (was 511 mesh boundary edges natively,
+//! 259 tool-side after welding). A tessellation defect on a clean B-Rep,
+//! the "not every scenario failure is a boolean fallback" class.
+//!
+//! ROOT (measured stage by stage): the fused floor plane at z=5 (32-edge
+//! cross-shaped outer wire + one rounded-rect hole) tessellated to ZERO
+//! triangles, and the 395 boundary edges were simply its neighbours' rims.
+//! Two of its outer CDT constraints (33.5 mm rails) carried last-ULP
+//! coordinate noise from boolean vertex welding (0.25000000000001776), and
+//! the CDT's flip-based edge recovery stalled at max_iter through the
+//! resulting corridor of exactly-degenerate quads — then RETURNED OK
+//! without the edge existing. The recorded-but-absent constraint let
+//! remove_exterior's flood pour through the gap and erase the whole face
+//! region; the hole seed then removed the rest. Fixes: recover_edge now
+//! bisects a non-converging constraint with Steiner midpoints (registering
+//! sub-constraints), flood_remove_from_point unions the caller's barrier
+//! with the CDT's own constraints, run_planar_cdt lifts Steiner vertices
+//! instead of dropping their triangles, and boundary Steiner points are
+//! spliced into the shared edge sample chains so neighbour faces stay
+//! crack-free.
+//!
+//! WINDING RESIDUAL (open): after the CDT fix the mesh still counts 116
+//! HALF-EDGE boundary edges while every undirected edge is two-sided —
+//! pairs of triangles traverse a shared rim in the SAME direction. The
+//! owners are the corner cylinder bands (builder faces Id(603)/Id(563)/
+//! Id(450)/Id(390), ~40 half-edges each) against their NURBS
+//! quarter-socket neighbours (Id(589)/Id(510)/Id(615)) at z 19.7-25.3:
+//! one side's triangle winding is inverted along the rim. This was always
+//! present, hidden inside the original 511 count (395 missing-face edges
+//! plus 116 winding). Next: compare the nonplanar NURBS path's needs_flip
+//! decision against the cylinder band's on one shared rim.
 //!
 //! The per-cell dispatch geometry (three full sockets + three quarter
 //! sockets, one 1u block mixed) is what distinguishes this from the sibling
@@ -13,12 +40,10 @@
 //! Operands captured 2026-08-05 via the kernel-test boolean monkey-patch
 //! (call 008, the final fuse of the export chain).
 //!
-//! EXPORT-LEVEL STATUS 2026-08-05: the `2x2 mixed-detail per-cell half
-//! sockets` export test passes on the ray-cast conflict re-cast kernel —
-//! the chain's booleans now classify differently and the exported mesh is
-//! watertight. This CAPTURED fused B-Rep still tessellates with 511
-//! boundary edges, so the repro below stays as an open tessellation-parity
-//! defect; it no longer gates export parity.
+//! EXPORT-LEVEL NOTE: the export test already passed on the conflict
+//! re-cast kernel because the chain's booleans classified differently;
+//! this captured B-Rep kept reproducing the 511-edge leak until the CDT
+//! recovery fix closed the root itself.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -79,9 +104,46 @@ fn mixed_socket_fuse_is_brep_watertight() {
 }
 
 #[test]
-#[ignore = "ready repro: tessellating the CLEAN fused B-Rep at export tolerance yields ~511 \
-            mesh boundary edges — a tessellation-parity defect on the per-cell mixed-socket \
-            geometry, not a boolean one"]
+fn mixed_socket_tessellation_covers_every_face() {
+    // ACTIVE guard for the CDT recovery fix: every mesh edge is used by
+    // exactly two triangles (undirected), i.e. no face drops out of the
+    // tessellation and no T-junction cracks remain. The stricter half-edge
+    // watertightness below stays ignored until the winding residual closes.
+    let mut topo = Topology::new();
+    let body = load("mixed_socket_body.bin", &mut topo);
+    let assembly = load("mixed_socket_assembly.bin", &mut topo);
+    let result = brepkit_algo::gfa::boolean(
+        &mut topo,
+        brepkit_algo::bop::BooleanOp::Fuse,
+        body,
+        assembly,
+    )
+    .expect("analytic fuse must succeed");
+    let mesh = brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+        &topo,
+        result,
+        0.01,
+        5.0_f64.to_radians(),
+    )
+    .unwrap();
+    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+    for t in mesh.indices.chunks(3) {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let single = uses.values().filter(|&&c| c == 1).count();
+    assert_eq!(
+        single, 0,
+        "every mesh edge must be two-sided, got {single} one-sided"
+    );
+}
+
+#[test]
+#[ignore = "residual: 116 half-edge boundary edges from inverted triangle winding on the \
+            NURBS-quarter-socket vs cylinder rims (the CDT recovery fix closed the other \
+            395; see the header's WINDING RESIDUAL note)"]
 fn mixed_socket_tessellation_is_watertight() {
     let mut topo = Topology::new();
     let body = load("mixed_socket_body.bin", &mut topo);
