@@ -392,6 +392,18 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         );
 
         if std::env::var("BK_SPLITW").is_ok_and(|v| v == format!("{}", face_id.index())) {
+            for (si, sec) in sections.iter().enumerate() {
+                log::debug!(
+                    "SPLITW sec[{si}] {} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
+                    sec.curve_3d.type_tag(),
+                    sec.start.x(),
+                    sec.start.y(),
+                    sec.start.z(),
+                    sec.end.x(),
+                    sec.end.y(),
+                    sec.end.z()
+                );
+            }
             for (ri, r) in split_results.iter().enumerate() {
                 for (ei, e) in r.outer_wire.iter().enumerate() {
                     log::debug!(
