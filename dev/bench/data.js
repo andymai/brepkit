@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785960599043,
+  "lastUpdate": 1785961195973,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19979,6 +19979,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25047155,
             "range": "± 119311",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "53c90631d4d2544bf9a8dcc4de023c97ad18e766",
+          "message": "fix(operations): analytic revolve rim senses must account for face reversal (#1367)\n\nFirst site of the orientation-emission campaign (#1365).\n\n## Root\nThe analytic full-revolve wall builder emits the wire `[bot rim fwd,\nseam, top rim rev, seam inv]` and then wraps it in `Face::new_reversed`\nwhen the wall faces inward (a washer's inner wall). Reversal flips every\nedge's EFFECTIVE traversal (is_forward XOR is_reversed), so the reversed\nwall traverses its rims in the same effective sense as the caps: two\nsame-sense shared edges per reversed wall, invisible to edge-use counts\nand flagged by `check_orientation`.\n\n## Fix\nRim senses now flip together with the face reversal. Rim circles are\nclosed edges (start == end), so the flip preserves wire connectivity and\nthe rim+seam+rim+seam structural pattern; the seam pair stays as-is\nsince reversal flips both of its uses together, keeping them opposed.\n\n## Measured\n- Washer (full analytic revolve): 2 same-sense pairs before, 0 after.\n- Remaining sites measured with the same probe and recorded in the\nroadmap: partial revolve 6 (90deg) / 8 (180deg), segmented revolve 12\n(just off a full turn), plus the loft/pipe/sweep/extrude sites.\n\n## Verification\nWorkspace suite 0 failed; wedge + honeycomb fixtures green; census\nrevolve rows stay exact analytic.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix analytic revolve walls by flipping rim circle orientation when the\nwall face is reversed, preventing same‑sense shared edges with caps.\nThis removes the washer inner‑wall orientation error and makes\n`check_orientation` pass for this case.\n\n- **Bug Fixes**\n- Rim edges invert when the face is reversed; seams stay opposed; wire\nconnectivity and rim+seam pattern are preserved.\n- Washer revolve now reports 0 same-sense pairs (was 2); existing tests\nand fixtures remain green.\n\n<sup>Written for commit 2c062f74a3f801aa1cbe74f729aa40c3c0d08ca6.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1367?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T20:17:23Z",
+          "tree_id": "705eb4e0eb02475568eaabc9e6d7d313044c1c2f",
+          "url": "https://github.com/andymai/brepkit/commit/53c90631d4d2544bf9a8dcc4de023c97ad18e766"
+        },
+        "date": 1785961193789,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 940810,
+            "range": "± 5003",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1019844,
+            "range": "± 20310",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11977,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703797,
+            "range": "± 1635",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24850338,
+            "range": "± 67424",
             "unit": "ns/iter"
           }
         ]
