@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785961195973,
+  "lastUpdate": 1785961697596,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20033,6 +20033,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24850338,
             "range": "± 67424",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7efd54ea5d4452643b96c41bd36b50427c0b1f75",
+          "message": "chore(main): release 2.129.1 (#1368)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.1](https://github.com/andymai/brepkit/compare/v2.129.0...v2.129.1)\n(2026-08-05)\n\n\n### Bug Fixes\n\n* **operations:** analytic revolve rim senses must account for face\nreversal ([#1367](https://github.com/andymai/brepkit/issues/1367))\n([53c9063](https://github.com/andymai/brepkit/commit/53c90631d4d2544bf9a8dcc4de023c97ad18e766))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release for `brepkit-wasm` 2.129.1 that fixes analytic revolve rim\nsenses to account for face reversals, preventing wrong rim orientation.\n\n<sup>Written for commit 761a2598740ab9c2dc6fee701745c1db858f026a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1368?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-05T20:25:38Z",
+          "tree_id": "1fe5e3d8891c5de90e49f660469d3cc957e6a8fd",
+          "url": "https://github.com/andymai/brepkit/commit/7efd54ea5d4452643b96c41bd36b50427c0b1f75"
+        },
+        "date": 1785961694960,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 940781,
+            "range": "± 8422",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1017970,
+            "range": "± 27072",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12726,
+            "range": "± 174",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 695339,
+            "range": "± 1159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24783145,
+            "range": "± 29679",
             "unit": "ns/iter"
           }
         ]
