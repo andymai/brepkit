@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785955948376,
+  "lastUpdate": 1785958100875,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19709,6 +19709,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24861022,
             "range": "± 49062",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a878bad644b2ce18b95247cb414ed2d9fd94ad5f",
+          "message": "fix(math): CDT edge recovery must not claim success without the edge (#1362)\n\nCloses the mixed-detail tessellation root (the last engine repro of the\nexport-drift trio, fixtured in #1353): 511 mesh boundary edges reduced\nto a documented 116-edge winding residual, with the missing-face family\nclosed outright.\n\n## Root (measured stage by stage)\nThe fused bin's z=5 floor plane (32-edge cross-shaped outer wire, one\nrounded-rect hole) tessellated to ZERO triangles; the 395 z=5 boundary\nedges were its neighbours' rims. Cause chain:\n- Two 33.5mm outer rails carry last-ULP coordinate noise from boolean\nvertex welding (`0.25000000000001776`), tilting them by 1.8e-14.\n- CDT flip recovery for those constraints stalls through the corridor of\nexactly-degenerate quads and spins to max_iter — then RETURNS OK without\nthe edge existing.\n- The constraint is recorded but no triangulation edge matches it, so\n`remove_exterior`'s flood pours through the gap, erases the whole face\nregion (778 to 77 triangles, all 77 inside the hole), and the hole seed\nremoves the rest.\n\n## Fix (four layers, each measured)\n- `recover_edge`: on non-convergence, bisect the constraint at its\nmidpoint and recover both strictly-shorter halves (depth-capped Steiner\nsplitting, sub-constraints registered). Only genuine non-recovery is an\nerror now.\n- `flood_remove_from_point`: union the caller's barrier with the CDT's\nown constraints so hole floods respect split sub-edges.\n- `run_planar_cdt`: lift Steiner vertices into returned geometry instead\nof silently dropping their triangles (which left fan-shaped holes).\n- Solid tessellator: splice boundary Steiner points into the shared edge\nsample chains, so neighbour faces tessellated afterwards pick them up\nand no T-junction cracks form. Measured: 395 boundary edges to 0 on the\nundirected/every-edge-two-sided metric.\n\n## Residual (independent, pre-existing, documented)\n116 half-edge boundary edges remain: NURBS quarter-socket faces and\ntheir cylinder band neighbours traverse shared rims in the SAME\ndirection (inverted winding on one side, z 19.7-25.3, face list in the\nfixture header). This was always present inside the original 511 (395\nmissing-face + 116 winding). The fixture now has an ACTIVE\nevery-edge-two-sided guard; the strict half-edge watertight pin stays\nignored until the winding root closes.\n\n## Verification\n- Workspace suite 2709 passed, 0 failed.\n- Heavy fixtures in budget: honeycomb 10.3s, kumiko lattice 5.5s, goma\nband 3.9s.\n- Export matrix on the deployed kernel: 459/459.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes CDT edge recovery so it never reports success without the edge,\nand carries Steiner split points through planar and solid tessellation\nto keep faces closed and prevent T-junctions. This closes the\nmixed-detail tessellation leak (511 mesh boundary edges) down to a\ndocumented 116-edge winding-only residual.\n\n- **Bug Fixes**\n- `recover_edge`: on non-convergence, bisect at midpoint and recover\nboth halves; register sub-constraints; only true non-recovery errors.\n- `flood_remove_from_point`: unions caller constraints with the CDT’s,\nso floods respect split sub-edges.\n- `run_planar_cdt`: returns triangles plus Steiner vertices; triangles\ntouching Steiner are kept for lifting.\n- Solid tessellator: lifts Steiner points to 3D and splices boundary\nSteiner points into shared edge sample chains to avoid T-junctions.\n- Tests: mixed-socket fixture adds an active “every-edge-two-sided”\nguard; keeps an ignored pin for the remaining 116 half-edge winding\nresidual.\n\n- **Migration**\n- `run_planar_cdt` now returns `PlanarCdtOutput` = `(triangles,\nsteiner_points)`; update call sites to lift/index Steiner vertices.\n\n<sup>Written for commit ae3d16797103874bab3007d6227537a8b3c222ca.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1362?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T19:25:36Z",
+          "tree_id": "dd5dbe6b8d23a4eac467666eded4c8df5dc848af",
+          "url": "https://github.com/andymai/brepkit/commit/a878bad644b2ce18b95247cb414ed2d9fd94ad5f"
+        },
+        "date": 1785958098926,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1018490,
+            "range": "± 20006",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1062406,
+            "range": "± 7981",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13053,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702155,
+            "range": "± 8441",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26093098,
+            "range": "± 760227",
             "unit": "ns/iter"
           }
         ]
