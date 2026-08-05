@@ -34,9 +34,20 @@
 //! x or y near 23.85), so this is not a coincident-twin mismatch between
 //! operands: the fuse drops or fails to select the B faces ABOVE those rims
 //! (or their split pieces), leaving B's rim edges single-used in the
-//! assembled shell. Next: account for the sub-faces of B's corner-adjacent
-//! upper faces through the splitter and classifier (the wedge campaign's
-//! BK_CLS3/BK_SPLITW recipes apply directly).
+//! assembled shell.
+//!
+//! ROOT CLASS MEASURED (BK_CLS3 + point oracles): B's chamfer band (local
+//! faces 33-40, z 0..0.7, builder ids 83-90) alternates NURBS corner pieces
+//! (classified Outside, kept) with thin slanted PLANE strips, and three of
+//! the four strips (builder ids 84/86/88) classify Inside AS WHOLE FACES
+//! and drop, with ZERO FF sections (has_sections=false for each), unsplit.
+//! The independent ray-cast point oracle (POINT_IN) says A=Outside at every
+//! strip sample, so the Inside verdicts are MISCLASSIFICATIONS: the builder
+//! ray-cast classifier is unstable for thin 45-degree strips near operand
+//! A's socket cones (near-tangent crossings flip the parity). Dropping the
+//! strips orphans the corner rims below and the connectors above, producing
+//! the 45-face open growth shell. Fix entry: instrument the classifier's
+//! ray for face 84's interior sample and see which crossing parity flips.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
