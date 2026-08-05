@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785888794289,
+  "lastUpdate": 1785889442926,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18035,6 +18035,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25553296,
             "range": "± 151150",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3ed367675cca64a035565ee58c1f8b69a07ef089",
+          "message": "docs(roadmap): mitsukude FF sections are emitted; the splitter merges the sliver (#1330)\n\nFourth instrument round on the #1326 repro, isolating the defect to one\ncomponent:\n\nA `BK_SECS` probe (env-gated, window-filtered, logs each SectionEdge\nhanded to `split_face_2d`) shows **phase_ff emission is fine**: each\nr=0.05 lip-band cylinder (src 7/15/83) carries the x=38.05 axial ruling\nsection — byte-identical to the result's free edges — plus the short\ncrossing sections. Yet the splitter produced only TWO pieces per\ncylinder: the corner sliver (beyond the tool's end plane, still body\nmaterial by the point oracle) was merged into the pocket region,\nclassified Inside by that region's single sample, and dropped with it.\n\nSo the defect is **face-splitter incorporation**: an axial ruling\nsection on a small-radius periodic cylinder is not used as a region\nboundary (suspect seam/pcurve handling on the tiny band). Next probe\nrecorded: dump the sub-face wires of the src-7 cylinder pieces and check\nwhether the ruling section appears as an edge of either piece.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an env-gated `BK_SECS` probe that logs FF sections passed to\n`split_face_2d` around the mitsukude lip band to narrow the panel-cut\ndefect. Confirms emission is correct and the issue is in face-splitter\nincorporation on small-radius cylinders (sliver merged into the pocket);\nroadmap updated accordingly.\n\n<sup>Written for commit 4ef8f0aeee892d26f93bf154257565be911b521f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1330?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T00:21:51Z",
+          "tree_id": "3bca9f7f51c3960d77f58d8122e2e46aaaba4673",
+          "url": "https://github.com/andymai/brepkit/commit/3ed367675cca64a035565ee58c1f8b69a07ef089"
+        },
+        "date": 1785889441142,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 624401,
+            "range": "± 1507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 684478,
+            "range": "± 2031",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8146,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 452060,
+            "range": "± 595",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17054573,
+            "range": "± 31987",
             "unit": "ns/iter"
           }
         ]
