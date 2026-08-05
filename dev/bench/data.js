@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785965360062,
+  "lastUpdate": 1785965865841,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20357,6 +20357,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26020057,
             "range": "± 59570",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e7c253919bf1e598e507789286a9d644b75848e8",
+          "message": "chore(main): release 2.129.4 (#1374)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.4](https://github.com/andymai/brepkit/compare/v2.129.3...v2.129.4)\n(2026-08-05)\n\n\n### Bug Fixes\n\n* **operations:** sweep and shared-cap wires reverse with their faces;\nstrict orientation validation by default\n([#1373](https://github.com/andymai/brepkit/issues/1373))\n([e5f1109](https://github.com/andymai/brepkit/commit/e5f1109edcf5879894d026160613fd693611c5d0))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.129.4 for `brepkit-wasm` fixes wire orientation in sweep and\nshared-cap operations. Wires now reverse with their faces, and strict\norientation validation is enabled by default to prevent inconsistent\ntopology.\n\n<sup>Written for commit 0ad763b881d34236c0f9fe4554f269a46a61f382.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1374?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-05T21:35:11Z",
+          "tree_id": "531ecee9ca2eb949c7914cd912e0be05df226ff4",
+          "url": "https://github.com/andymai/brepkit/commit/e7c253919bf1e598e507789286a9d644b75848e8"
+        },
+        "date": 1785965863540,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 947812,
+            "range": "± 2536",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1024334,
+            "range": "± 2415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11959,
+            "range": "± 543",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698065,
+            "range": "± 8599",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25027701,
+            "range": "± 118396",
             "unit": "ns/iter"
           }
         ]
