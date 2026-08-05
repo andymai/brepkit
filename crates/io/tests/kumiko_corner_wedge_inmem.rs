@@ -110,11 +110,6 @@ fn captured_operands_are_outward_oriented() {
 }
 
 #[test]
-#[ignore = "ready repro (re-captured 2026-08-04): the cut runs ANALYTIC in 2 ms with both \
-            cylinders kept (the old all-planar fallback is gone) but is wrong twice over: \
-            the strut genuinely OVERLAPS the wedge (point-oracle verified) yet nothing is \
-            removed (volume stays 285.861), and the coincident y=0 cap is dropped \
-            (F=6 -> F=5, free=4). The watertight assertion below pins the goal state."]
 fn kumiko_corner_wedge_cut_stays_analytic() {
     let mut topo = Topology::new();
     let wedge = load("kumiko_corner_wedge.bin", &mut topo);
@@ -139,12 +134,18 @@ fn kumiko_corner_wedge_cut_stays_analytic() {
         "cut must stay analytic and keep cylindrical corner faces, got {faces} faces {mix:?}"
     );
 
-    // The current defect: a touching strut damages the wedge. The result must
-    // stay watertight and keep the full wedge volume when the strut removes
-    // nothing.
     assert_eq!(
         edge_uses(&topo, result),
         (0, 0),
         "cut result must be watertight and manifold"
+    );
+
+    // The strut genuinely overlaps the wedge (point-oracle verified), so the
+    // cut must REMOVE material. Pin the measured overlap loosely: 285.861
+    // down to 247.460 on the fixed splitter chain.
+    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        vol > 240.0 && vol < 280.0,
+        "cut must remove the overlap: got {vol:.3} from the 285.861 wedge"
     );
 }

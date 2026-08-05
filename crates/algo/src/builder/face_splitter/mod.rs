@@ -4298,9 +4298,17 @@ fn split_face_2d_impl(
         Ok(f) => f,
         Err(_) => return Vec::new(),
     };
+    let trace_split =
+        std::env::var("BK_SPLIT_TRACE").is_ok_and(|v| v == format!("{}", face_id.index()));
     let surface = face.surface().clone();
     let reversed = face.is_reversed();
     let is_plane = matches!(surface, FaceSurface::Plane { .. });
+    if trace_split {
+        log::debug!(
+            "STRACE face={face_id:?} plane={is_plane} sections={}",
+            sections.len()
+        );
+    }
 
     // Use provided frame or build one from wire points (plane faces only).
     let wire_pts = collect_wire_points(topo, face.outer_wire());
@@ -4334,15 +4342,21 @@ fn split_face_2d_impl(
         .iter()
         .flat_map(|sct| [sct.start, sct.end])
         .collect();
-    let mut boundary_edges = if is_plane && face.inner_wires().is_empty() {
+    // Line expansion stays planar-only (the periodic seam machinery expects
+    // one seam piece); NURBS expansion also serves non-planar hole-free
+    // faces, whose boundary arcs never split in their own machinery either
+    // (the coaxial wedge's cylinder patches refused their axial sections
+    // for the same reason its z-planes did).
+    let mut boundary_edges = if face.inner_wires().is_empty() {
         super::face_splitter::conversion::boundary_edges_to_pcurve_with_images(
             topo,
             face.outer_wire(),
             &surface,
             &wire_pts,
-            Some(frame),
+            if is_plane { Some(frame) } else { None },
             edge_images,
             &section_anchor_pts,
+            is_plane,
         )
     } else {
         boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
