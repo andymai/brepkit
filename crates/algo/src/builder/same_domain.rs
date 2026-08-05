@@ -414,12 +414,34 @@ fn build_sd_grouping(
 /// Two-operand same-domain detection: split each coincident group into a
 /// cross-rank [`SameDomainPair`] plus within-rank duplicates for the BOP
 /// selector. Behaviour is unchanged from before the grouping was extracted.
+#[cfg(test)]
 pub fn detect_same_domain<S: BuildHasher>(
+    topo: &Topology,
+    arena: &GfaArena,
+    sub_faces: &[SubFace],
+    face_ranks: &HashMap<FaceId, Rank, S>,
+    tol: Tolerance,
+) -> SameDomainResult {
+    detect_same_domain_with_shells(topo, arena, sub_faces, face_ranks, tol, None)
+}
+
+/// [`detect_same_domain`] with the operands' face-to-shell membership.
+///
+/// `face_shells` maps each INPUT face to an ordinal unique per shell across
+/// both operand solids. When present, a within-rank coincident pair whose
+/// source faces live in DIFFERENT shells of their operand is NOT residue: a
+/// valid solid can carry an internal void whose ceiling is coplanar with and
+/// contained in the exterior top (a zero-thickness roof — the slotted no-lip
+/// bin), and dropping the void face as a "duplicate" orphans the void walls
+/// into an open hole shell. Sequential-boolean residue (#696, the honeycomb's
+/// stacked caps) accumulates within one shell and still dedups.
+pub fn detect_same_domain_with_shells<S: BuildHasher>(
     topo: &Topology,
     arena: &GfaArena,
     sub_faces: &[SubFace],
     _face_ranks: &HashMap<FaceId, Rank, S>,
     tol: Tolerance,
+    face_shells: Option<&HashMap<FaceId, usize>>,
 ) -> SameDomainResult {
     let SdGrouping {
         sd_groups,
@@ -429,6 +451,38 @@ pub fn detect_same_domain<S: BuildHasher>(
 
     let mut pairs = Vec::new();
     let mut within_rank_dups = Vec::new();
+
+    // Within-rank "residue" (#696) accumulates within ONE shell (stacked caps
+    // left by sequential booleans, possibly split differently across cuts —
+    // orientation and extent both measure identically to the legitimate case,
+    // so neither discriminates). A coincident same-rank pair whose SOURCE
+    // faces live in DIFFERENT shells of their operand is structural, not
+    // residue: the slotted no-lip bin's internal void has a ceiling coplanar
+    // with and contained in the exterior top (a zero-thickness roof), and
+    // dropping it as a duplicate orphans the void walls into an open hole
+    // shell. Without shell information (`None`, the test-only path) every
+    // pair keeps the historic dedup.
+    let is_residue = |i: usize, j: usize| -> bool {
+        let cross_shell = face_shells.is_some_and(|fs| {
+            match (
+                fs.get(&sub_faces[i].source_face),
+                fs.get(&sub_faces[j].source_face),
+            ) {
+                (Some(si), Some(sj)) => si != sj,
+                _ => false,
+            }
+        });
+        if std::env::var("BK_SD").is_ok() {
+            log::debug!(
+                "SD residue-gate i={i} face={:?} src={:?} j={j} face={:?} src={:?} cross_shell={cross_shell}",
+                sub_faces[i].face_id,
+                sub_faces[i].source_face,
+                sub_faces[j].face_id,
+                sub_faces[j].source_face
+            );
+        }
+        !cross_shell
+    };
 
     for (root, members) in &sd_groups {
         if members.len() < 2 {
@@ -499,6 +553,9 @@ pub fn detect_same_domain<S: BuildHasher>(
                     } else {
                         idx_b
                     };
+                    if !is_residue(idx, rep) {
+                        continue;
+                    }
                     within_rank_dups.push(WithinRankDuplicate {
                         representative: rep,
                         duplicate: idx,
@@ -511,7 +568,7 @@ pub fn detect_same_domain<S: BuildHasher>(
             // classification (issue #696).
             (Some(rep), None) | (None, Some(rep)) => {
                 for &idx in members {
-                    if idx != rep {
+                    if idx != rep && is_residue(idx, rep) {
                         within_rank_dups.push(WithinRankDuplicate {
                             representative: rep,
                             duplicate: idx,
@@ -535,6 +592,32 @@ pub fn detect_same_domain<S: BuildHasher>(
         pairs.len(),
         within_rank_dups.len()
     );
+    if std::env::var("BK_SD").is_ok() {
+        for p in &pairs {
+            log::debug!(
+                "SD pair idx_a={} face_a={:?} src_a={:?} idx_b={} face_b={:?} src_b={:?} geo={} rep={}",
+                p.idx_a,
+                sub_faces[p.idx_a].face_id,
+                sub_faces[p.idx_a].source_face,
+                p.idx_b,
+                sub_faces[p.idx_b].face_id,
+                sub_faces[p.idx_b].source_face,
+                p.geometric_overlap,
+                p.representative
+            );
+        }
+        for d in &within_rank_dups {
+            log::debug!(
+                "SD within-rank rep={} face={:?} src={:?} dup={} face={:?} src={:?}",
+                d.representative,
+                sub_faces[d.representative].face_id,
+                sub_faces[d.representative].source_face,
+                d.duplicate,
+                sub_faces[d.duplicate].face_id,
+                sub_faces[d.duplicate].source_face
+            );
+        }
+    }
 
     SameDomainResult {
         pairs,

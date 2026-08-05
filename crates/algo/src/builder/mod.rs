@@ -466,12 +466,14 @@ impl Builder {
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
 
         // Step 3: same-domain detection (records pairs, does NOT set FaceClass)
-        let sd_result = same_domain::detect_same_domain(
+        let face_shells = self.build_face_shell_map();
+        let sd_result = same_domain::detect_same_domain_with_shells(
             &self.topo,
             &self.arena,
             &self.sub_faces,
             &self.face_ranks,
             self.tol,
+            Some(&face_shells),
         );
         self.sd_pairs = sd_result.pairs;
         self.sd_within_rank_dups = sd_result.within_rank_dups;
@@ -483,6 +485,33 @@ impl Builder {
         // is to let BOP keep A's face and discard B's (which it already does),
         // then fix edge sharing at the BuilderSolid level via
         // merge_duplicate_edges.
+    }
+
+    /// Map each input face to an ordinal unique per shell across both operand
+    /// solids, so SD emission can tell a cross-shell structural coincidence
+    /// (an internal void's face coplanar with an outer face) from within-shell
+    /// boolean residue. A lookup failure just leaves faces unmapped, which
+    /// keeps the historic dedup for them.
+    fn build_face_shell_map(&self) -> HashMap<FaceId, usize> {
+        let mut map = HashMap::new();
+        let mut ordinal = 0usize;
+        for sid in [self.solid_a, self.solid_b] {
+            let Ok(solid) = self.topo.solid(sid) else {
+                continue;
+            };
+            let shells =
+                std::iter::once(solid.outer_shell()).chain(solid.inner_shells().iter().copied());
+            for shell_id in shells {
+                let Ok(shell) = self.topo.shell(shell_id) else {
+                    continue;
+                };
+                for &fid in shell.faces() {
+                    map.insert(fid, ordinal);
+                }
+                ordinal += 1;
+            }
+        }
+        map
     }
 
     /// Phase 2: classify each sub-face as inside/outside the opposing solid.
