@@ -587,6 +587,46 @@ impl Builder {
                         sf.rank,
                         sf.classification
                     );
+                    if std::env::var("BK_CLS2").is_ok()
+                        && let Ok(face) = self.topo.face(sf.face_id)
+                    {
+                        let mut wires = vec![face.outer_wire()];
+                        wires.extend(face.inner_wires().iter().copied());
+                        let mut touches = false;
+                        'w: for wid in wires {
+                            let Ok(w) = self.topo.wire(wid) else { continue };
+                            for oe in w.edges() {
+                                let Ok(e) = self.topo.edge(oe.edge()) else {
+                                    continue;
+                                };
+                                for vid in [e.start(), e.end()] {
+                                    if let Ok(v) = self.topo.vertex(vid) {
+                                        let q = v.point();
+                                        if (37.9..38.11).contains(&q.x())
+                                            && (-41.8..-40.0).contains(&q.y())
+                                            && (31.4..34.9).contains(&q.z())
+                                        {
+                                            touches = true;
+                                            break 'w;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if touches {
+                            log::debug!(
+                                "CLS2 face={:?} {} rank={:?} src={:?} pt=({:.3},{:.3},{:.3}) class={:?}",
+                                sf.face_id,
+                                self.topo.face(sf.face_id)?.surface().type_tag(),
+                                sf.rank,
+                                sf.source_face,
+                                point.x(),
+                                point.y(),
+                                point.z(),
+                                sf.classification
+                            );
+                        }
+                    }
                     if std::env::var("BK_CLS").is_ok()
                         && (37.9..38.11).contains(&point.x())
                         && (-41.8..-40.0).contains(&point.y())
