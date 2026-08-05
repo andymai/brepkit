@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.0](https://github.com/andymai/brepkit/compare/v2.128.34...v2.129.0) (2026-08-05)
+
+
+### Features
+
+* **operations:** expose shell orientation consistency in solid validation ([#1365](https://github.com/andymai/brepkit/issues/1365)) ([fa06b86](https://github.com/andymai/brepkit/commit/fa06b860b55a4d28f24c8c25c2ce23600b869b6f))
+
 ## [2.128.34](https://github.com/andymai/brepkit/compare/v2.128.33...v2.128.34) (2026-08-05)
 
 
