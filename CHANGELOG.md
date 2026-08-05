@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.2](https://github.com/andymai/brepkit/compare/v2.129.1...v2.129.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* **operations:** segmented revolve side wires must reverse with the face ([#1369](https://github.com/andymai/brepkit/issues/1369)) ([fe645a4](https://github.com/andymai/brepkit/commit/fe645a44bd278e9bc3934cb892b6ee66c7842cd0))
+
 ## [2.129.1](https://github.com/andymai/brepkit/compare/v2.129.0...v2.129.1) (2026-08-05)
 
 
