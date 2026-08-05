@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785894951935,
+  "lastUpdate": 1785897530294,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18197,6 +18197,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24445272,
             "range": "± 42957",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0f8e6ae3b7f96ba3ed141bc4fc09599f37f1c90d",
+          "message": "docs(io): correct the wedge repro characterization to an overlapping cut (#1333)\n\nFollow-up to #1332: point oracles (`POINT_IN`) show the strut genuinely\nOVERLAPS the wedge — B=Inside at (3.15, 0.2, 11.75), a point inside the\nwedge, and the strut protrudes through the wedge's y=0 cap plane — so\nthe analytic cut is wrong twice over: it removes nothing (volume stays\n285.861) AND drops the coincident cap (the cap's interior sample lies on\nthe strut boundary, `classify_coincident_coplanar` defers straddlers,\nray-cast answers Inside). The earlier \"touching-only\" reading inferred\ntoo much from the unchanged volume.\n\nFixture doc, ignore reason, and roadmap row corrected; the deeper miss\nnoted (no FF sections split the wedge where the strut's walls cross its\ninterior).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCorrected the kumiko corner wedge repro: this is an overlapping coaxial\ncut where the strut crosses the wedge and protrudes through the y=0 cap;\nthe analytic cut removes no volume and drops the coincident cap. Updated\nthe roadmap row and the `kumiko_corner_wedge_inmem.rs` fixture\ncomments/ignore note to reflect the overlap (point-oracle verified) and\nthe actual failure mode.\n\n<sup>Written for commit 3b61e59a2d87979a18d0791c51d0e67207188b37.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1333?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T02:36:18Z",
+          "tree_id": "3edfd2ee5acbe94188266c624f797e60ce315023",
+          "url": "https://github.com/andymai/brepkit/commit/0f8e6ae3b7f96ba3ed141bc4fc09599f37f1c90d"
+        },
+        "date": 1785897528796,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 929525,
+            "range": "± 2411",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1009431,
+            "range": "± 811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12227,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 689140,
+            "range": "± 2358",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24508406,
+            "range": "± 31319",
             "unit": "ns/iter"
           }
         ]
