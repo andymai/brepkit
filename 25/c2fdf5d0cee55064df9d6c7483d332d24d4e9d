@@ -1,0 +1,23 @@
+crates/algo/src/builder/fill_images_faces.rs
+  s_7ff36fc7322bef::t_93eb554bb695c2 1244-1249,2440
+  s_7ff36fc7322bef::t_a26b0e207b5a1f 2432-2439,2441-2453,2455,2537-2541,2543-2544
+  s_7ff36fc7322bef::t_b2b6ed80456411 1231-1243,1250-1255
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_93eb554bb695c2 127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "25c2fdf5d0cee55064df9d6c7483d332d24d4e9d",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
