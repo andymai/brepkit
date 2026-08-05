@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785958775511,
+  "lastUpdate": 1785960080987,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19871,6 +19871,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24742298,
             "range": "± 84758",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa06b860b55a4d28f24c8c25c2ce23600b869b6f",
+          "message": "feat(operations): expose shell orientation consistency in solid validation (#1365)\n\nFollow-on from #1364's finding that the mixed-socket winding root is an\nupstream operand defect invisible to edge-use counting.\n\n## What\n`check_shell_orientation` existed in brepkit-check but the public\noperations `validate_solid` wrapper never ran it (the wrapper hand-rolls\nits checks and skips the check-crate shell validators). It is now wired\nin behind `ValidationOptions::check_orientation`, default off. The\ncheck-crate `shell` validator module goes public to be callable across\nthe layer.\n\n## Why default off\nEnabling it today fails 12 existing tests: loft, pipe, revolve, sweep (5\nvariants), and the extruded hollow box all emit orientation-inconsistent\nshells (the revolve washer carries 8 same-sense edges). That is a\ngenuine, previously-invisible defect family in the construction ops, now\nrecorded in the roadmap as a ranked campaign (start with revolve,\nsmallest repro). The default flips once the family closes.\n\n## Verification\n- The mixed-socket fixture pins the strict verdicts: body reports\nexactly its documented 20 same-sense pairs, assembly stays\norientation-clean.\n- Workspace suite passes with the option off (0 failed); the 12 op\nfailures reproduce only under the option, as documented.\n- Validation-only change: no boolean or tessellation paths touched.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an optional shell orientation consistency check to solid\nvalidation. It detects same-sense edge traversals that edge-use counting\nmisses, without changing defaults.\n\n- **New Features**\n- Wire `check_shell_orientation` from `brepkit_check::validate::shell`\ninto `validate_solid_with_options` via\n`brepkit_operations::validate::ValidationOptions::check_orientation`\n(default false).\n  - Make `crates/check/src/validate/shell` public.\n- Pin mixed-socket fixture: body reports 20 inconsistent shared edges;\nassembly remains clean.\n- Keep default off to avoid breaking 12 current construction-op tests\n(loft, pipe, revolve, sweep, extruded hollow box). We will flip after\nthe orientation campaign.\n- Update WASM path to construct `ValidationOptions` with\n`..Default::default()`; no API change.\n\n<sup>Written for commit 1ec1c46bb478bf8aee93b0a4272c89e8574b6f29.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1365?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T19:58:47Z",
+          "tree_id": "06df1cf6ad1192b3f48e69343ff8390494898579",
+          "url": "https://github.com/andymai/brepkit/commit/fa06b860b55a4d28f24c8c25c2ce23600b869b6f"
+        },
+        "date": 1785960079655,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 802166,
+            "range": "± 12642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 918957,
+            "range": "± 10415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10618,
+            "range": "± 312",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 615112,
+            "range": "± 9004",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22196318,
+            "range": "± 235282",
             "unit": "ns/iter"
           }
         ]
