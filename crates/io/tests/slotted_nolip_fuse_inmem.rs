@@ -1,8 +1,10 @@
 //! Fusing the four-socket assembly onto a 2x2 slotted no-lip bin body must
-//! stay analytic. Today it aborts with "open hole shell with 45 faces",
-//! drops to the mesh fallback, and the fallback's open output carries
-//! 107-109 boundary edges into the export (the `2x2 slotted no lip`
-//! export-integrity failure).
+//! stay analytic. FIXED by the within-rank cross-shell gate in
+//! detect_same_domain: the fuse is watertight, keeps the full analytic mix,
+//! and its volume equals the operand sum exactly. Historically it aborted
+//! with "open hole shell with 45 faces", dropped to the mesh fallback, and
+//! the fallback's open output carried 107-109 boundary edges into the
+//! export (the `2x2 slotted no lip` export-integrity failure).
 //!
 //! Both operands are clean: the body (F=56, 8 cylinders, watertight) and the
 //! socket assembly (F=136, 32 cones + 32 cylinders, watertight). Every other
@@ -21,12 +23,31 @@
 //! chunk as a hole shell, the "no outer shell / misgrouped interior" family
 //! rather than a small-fragment drop.
 //!
-//! EXPORT-LEVEL STATUS 2026-08-05: the `2x2 slotted no lip` export test
-//! passes on the ray-cast conflict re-cast kernel (the O-shape fix) — the
-//! chain's upstream booleans now classify differently and no longer feed
-//! this aborting operand pair into the final fuse. These CAPTURED operands
-//! still reproduce the abort, so the repro below stays as an open engine
-//! defect (misgrouped-interior family); it no longer gates export parity.
+//! ROOT MEASURED (BK_TRACE + BK_SD + BK_OPEN_SHELL): every free edge of the
+//! aborting shell lies at z=21 — the top rim of the body's cavity-wall band.
+//! All 191 classified sub-faces were Outside (nothing dropped by
+//! classification); the missing face was the body's cavity CEILING Id(31)
+//! (32-edge plane at z=21), which detect_same_domain declared a WITHIN-RANK
+//! DUPLICATE of the body's exterior top disc Id(9) (8-edge plane, same z=21
+//! plane) and dropped before classification. The two faces are coplanar
+//! because the no-lip bin has a zero-thickness roof (the cavity ceiling and
+//! the exterior top coincide), and the rank-agnostic geometric-containment
+//! pass unioned them; the within-rank emission then treated group
+//! membership as the #696 residue signature. Extent (edge-set equality)
+//! and outward orientation were both tried as discriminants and REFUTED by
+//! measurement: the honeycomb's true residue caps and this load-bearing
+//! pair produce identical signatures on both (same_outward=Some(true),
+//! coextensive=false). The discriminant that holds is SHELL MEMBERSHIP:
+//! Id(9) lives in the body's outer shell and Id(31) in its inner (void)
+//! shell — residue accumulates within one shell, while a cross-shell
+//! coincidence is structural. detect_same_domain now takes the operands'
+//! face-to-shell map and skips within-rank dedup for cross-shell pairs.
+//!
+//! EXPORT-LEVEL NOTE: on the conflict re-cast kernel (the O-shape fix) the
+//! export test already passed because the chain's upstream booleans
+//! classified differently and stopped feeding this operand pair into the
+//! final fuse; the captured operands still reproduced the abort until the
+//! coextensivity gate closed the root itself.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -80,13 +101,13 @@ fn slotted_operands_are_clean() {
 }
 
 #[test]
-#[ignore = "ready repro: the socket-assembly fuse aborts with 'open hole shell with 45 faces' \
-            and drops to the mesh fallback, whose open output carries 107-109 boundary edges \
-            into the slotted no-lip export"]
 fn slotted_nolip_socket_fuse_is_analytic_watertight() {
     let mut topo = Topology::new();
     let body = load("slotted_nolip_body.bin", &mut topo);
     let sockets = load("slotted_socket_assembly.bin", &mut topo);
+    let vol_body = brepkit_operations::measure::oriented_solid_volume(&topo, body, 0.05).unwrap();
+    let vol_sockets =
+        brepkit_operations::measure::oriented_solid_volume(&topo, sockets, 0.05).unwrap();
 
     let result =
         brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, body, sockets)
@@ -96,4 +117,14 @@ fn slotted_nolip_socket_fuse_is_analytic_watertight() {
     assert!(curved > 0, "all-planar output is the mesh-fallback tell");
     assert_eq!(over, 0, "fuse must stay manifold, got {over} over-shared");
     assert_eq!(free, 0, "fuse must be closed, got {free} free edges");
+
+    // The socket assembly attaches below the body without overlapping it, so
+    // the fuse volume must equal the operand sum (measured 135237.533 =
+    // 106091.810 + 29145.724).
+    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - (vol_body + vol_sockets)).abs() < 0.01,
+        "fuse volume {vol:.3} must equal the operand sum {:.3}",
+        vol_body + vol_sockets
+    );
 }
