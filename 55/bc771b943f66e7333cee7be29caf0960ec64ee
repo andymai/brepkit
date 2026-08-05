@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_c999e6a115abd5 128
+crates/io/tests/oshape_socket_fuse_inmem.rs
+  s_7ff36fc7322bef::t_e3ff09c8eb9940 37-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "55bc771b943f66e7333cee7be29caf0960ec64ee",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
