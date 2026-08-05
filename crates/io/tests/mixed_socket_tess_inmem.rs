@@ -30,8 +30,21 @@
 //! quarter-socket neighbours (Id(589)/Id(510)/Id(615)) at z 19.7-25.3:
 //! one side's triangle winding is inverted along the rim. This was always
 //! present, hidden inside the original 511 count (395 missing-face edges
-//! plus 116 winding). Next: compare the nonplanar NURBS path's needs_flip
-//! decision against the cylinder band's on one shared rim.
+//! plus 116 winding).
+//!
+//! WINDING ROOT IS UPSTREAM (measured): every face's triangles agree with
+//! its OWN stored orientation (surface normal x is_reversed), so the
+//! tessellator is faithful — the B-Rep itself is inconsistent. The
+//! reversal-corrected traversal check (edge sense = is_forward XOR
+//! is_reversed; a consistent closed shell uses every edge twice with
+//! opposite senses) counts 20 same-sense pairs in the CAPTURED BODY
+//! operand (cylinder/nurbs/plane around the quarter-socket geometry,
+//! e.g. Id(82) cylinder vs Id(94) nurbs), zero in the assembly, and 40
+//! in the fuse output (inherited and grown). The defect therefore arrives
+//! with the body from an EARLIER op of the export chain (only this final
+//! pair was captured). Next: re-capture the full mixed-detail chain and
+//! bisect which op first emits same-sense pairs; the traversal check is
+//! the discriminant, and it belongs in validate as a shell check.
 //!
 //! The per-cell dispatch geometry (three full sockets + three quarter
 //! sockets, one 1u block mixed) is what distinguishes this from the sibling
