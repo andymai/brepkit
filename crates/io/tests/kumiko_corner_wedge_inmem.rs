@@ -9,9 +9,14 @@
 //! all-planar mesh fallback, which poisoned every kumiko corner band.
 //!
 //! Current state on the re-captured operands: the cut runs ANALYTIC in 2 ms
-//! and keeps both cylinders — but a strut that only TOUCHES the wedge drops a
-//! face without removing volume (F=6 -> F=5, free=4, volume unchanged), so
-//! the ignored test below pins the watertight goal state.
+//! and keeps both cylinders — but it is WRONG twice over. Point oracles show
+//! the strut genuinely OVERLAPS the wedge (B=Inside at (3.15, 0.2, 11.75),
+//! which is inside A; the strut protrudes through the wedge's y=0 cap plane),
+//! yet the result keeps the FULL wedge volume (285.861, nothing removed) AND
+//! drops the y=0 cap, whose region is coplanar with the strut's boundary
+//! there (the cap's interior sample lies ON the strut boundary; the
+//! coincident-coplanar fast path defers straddlers and ray-cast says Inside).
+//! The ignored test below pins the watertight goal state.
 //!
 //! Re-capture recipe: kernel-test boolean monkey-patch on a 1x1x4 mitsukude
 //! corner-wrap generation; the wedge pair is the F=6 two-cylinder cut call
@@ -105,10 +110,11 @@ fn captured_operands_are_outward_oriented() {
 }
 
 #[test]
-#[ignore = "ready repro (re-captured 2026-08-04): the cut now runs ANALYTIC in 2 ms with both \
-            cylinders kept (the old all-planar fallback is gone), but a strut that only \
-            TOUCHES the wedge drops a face without removing volume: F=6 -> F=5, free=4, \
-            volume unchanged at 285.861. The watertight assertion below pins the goal state."]
+#[ignore = "ready repro (re-captured 2026-08-04): the cut runs ANALYTIC in 2 ms with both \
+            cylinders kept (the old all-planar fallback is gone) but is wrong twice over: \
+            the strut genuinely OVERLAPS the wedge (point-oracle verified) yet nothing is \
+            removed (volume stays 285.861), and the coincident y=0 cap is dropped \
+            (F=6 -> F=5, free=4). The watertight assertion below pins the goal state."]
 fn kumiko_corner_wedge_cut_stays_analytic() {
     let mut topo = Topology::new();
     let wedge = load("kumiko_corner_wedge.bin", &mut topo);
