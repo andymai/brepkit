@@ -18,7 +18,7 @@ use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
     cdt_triangulate_simple, collect_wire_global_vertices, project_by_normal,
     remove_closing_duplicate_global, remove_closing_duplicate_ids, run_planar_cdt,
-    tessellate_planar_shared_with_holes,
+    tessellate_planar_shared_with_holes, unproject_point,
 };
 use super::{MERGE_GRID, point_merge_key};
 
@@ -421,7 +421,7 @@ fn tessellate_solid_core(
         is_reversed: bool,
     }
     #[allow(clippy::items_after_statements)]
-    type CdtResult = Result<Vec<(usize, usize, usize)>, crate::OperationsError>;
+    type CdtResult = Result<super::planar::PlanarCdtOutput, crate::OperationsError>;
 
     let mut cdt_jobs: Vec<CdtJob> = Vec::new();
     let mut other_face_indices: Vec<usize> = Vec::new();
@@ -517,12 +517,106 @@ fn tessellate_solid_core(
         .collect();
 
     for (job, result) in cdt_jobs.iter().zip(cdt_results) {
-        let tris = result?;
+        let (tris, steiner) = result?;
+
+        // Lift constraint-recovery Steiner points to 3D and give them global
+        // vertices. A Steiner point that lies ON a shared boundary edge is
+        // additionally spliced into that edge's shared sample chain so the
+        // NEIGHBOUR faces (tessellated after the CDT jobs) pick it up —
+        // without this the neighbour spans the original segment in one piece
+        // and the mesh cracks at a T-junction.
+        let n_input = job.all_positions.len();
+        let mut steiner_positions: Vec<Point3> = Vec::with_capacity(steiner.len());
+        let mut steiner_gids: Vec<u32> = Vec::with_capacity(steiner.len());
+        for p2d in &steiner {
+            let p3d = unproject_point(*p2d, job.normal, &job.all_positions[0]);
+            let key = point_merge_key(p3d, MERGE_GRID);
+            let gid = *point_to_global.entry(key).or_insert_with(|| {
+                #[allow(clippy::cast_possible_truncation)]
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(p3d);
+                merged.normals.push(job.normal);
+                idx
+            });
+            steiner_positions.push(p3d);
+            steiner_gids.push(gid);
+        }
+        if !steiner.is_empty() {
+            let ring_segments: Vec<(usize, usize)> = (0..job.outer_count)
+                .map(|i| (i, (i + 1) % job.outer_count))
+                .chain(job.inner_wire_ranges.iter().flat_map(|&(st, en)| {
+                    (st..en).map(move |i| (i, if i + 1 == en { st } else { i + 1 }))
+                }))
+                .collect();
+            let mut per_segment: DetHashMap<(usize, usize), Vec<(f64, u32)>> =
+                DetHashMap::default();
+            for (si, p2d) in steiner.iter().enumerate() {
+                for &(i, j) in &ring_segments {
+                    let a = job.pts2d[i];
+                    let b = job.pts2d[j];
+                    let ab = (b.x() - a.x(), b.y() - a.y());
+                    let len2 = ab.0 * ab.0 + ab.1 * ab.1;
+                    if len2 < 1e-24 {
+                        continue;
+                    }
+                    let ap = (p2d.x() - a.x(), p2d.y() - a.y());
+                    let t = (ap.0 * ab.0 + ap.1 * ab.1) / len2;
+                    if !(1e-9..=1.0 - 1e-9).contains(&t) {
+                        continue;
+                    }
+                    let cross = ap.0 * ab.1 - ap.1 * ab.0;
+                    if cross * cross / len2 < 1e-18 {
+                        per_segment
+                            .entry((i, j))
+                            .or_default()
+                            .push((t, steiner_gids[si]));
+                        break;
+                    }
+                }
+            }
+            for ((i, j), mut run) in per_segment {
+                run.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let (Some(gi), Some(gj)) = (job.all_global_ids[i], job.all_global_ids[j]) else {
+                    continue;
+                };
+                'chains: for chain in edge_global_indices.values_mut() {
+                    for p in 0..chain.len().saturating_sub(1) {
+                        if chain[p] == gi && chain[p + 1] == gj {
+                            for (k, &(_, gid)) in run.iter().enumerate() {
+                                chain.insert(p + 1 + k, gid);
+                            }
+                            break 'chains;
+                        }
+                        if chain[p] == gj && chain[p + 1] == gi {
+                            for (k, &(_, gid)) in run.iter().rev().enumerate() {
+                                chain.insert(p + 1 + k, gid);
+                            }
+                            break 'chains;
+                        }
+                    }
+                }
+            }
+        }
+
+        let pos_of = |i: usize| -> Point3 {
+            if i < n_input {
+                job.all_positions[i]
+            } else {
+                steiner_positions[i - n_input]
+            }
+        };
+        let gid_of = |i: usize| -> u32 {
+            if i < n_input {
+                job.all_global_ids[i].unwrap_or(0)
+            } else {
+                steiner_gids[i - n_input]
+            }
+        };
 
         let needs_flip = if let Some(&(i0, i1, i2)) = tris.first() {
-            let p0 = job.all_positions[i0];
-            let p1 = job.all_positions[i1];
-            let p2 = job.all_positions[i2];
+            let p0 = pos_of(i0);
+            let p1 = pos_of(i1);
+            let p2 = pos_of(i2);
             let a = p1 - p0;
             let b = p2 - p0;
             let winding_matches = a.cross(b).dot(job.normal) > 0.0;
@@ -532,9 +626,9 @@ fn tessellate_solid_core(
         };
 
         for &(i0, i1, i2) in &tris {
-            let g0 = job.all_global_ids[i0].unwrap_or(0);
-            let g1 = job.all_global_ids[i1].unwrap_or(0);
-            let g2 = job.all_global_ids[i2].unwrap_or(0);
+            let g0 = gid_of(i0);
+            let g1 = gid_of(i1);
+            let g2 = gid_of(i2);
             if let Some(tf) = tri_faces.as_mut() {
                 tf.push(job.face_index);
             }

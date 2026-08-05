@@ -446,6 +446,13 @@ impl Cdt {
         seed: Point2,
         constraints: &DetHashSet<(usize, usize)>,
     ) -> bool {
+        // The flood must also respect the CDT's OWN constraints: edge
+        // recovery may have split a caller-known constraint into sub-pairs
+        // (Steiner points), and the caller's set only carries the original
+        // endpoints. Without the union the flood crosses the sub-edges.
+        let barrier: DetHashSet<(usize, usize)> =
+            constraints.union(&self.constraints).copied().collect();
+        let constraints = &barrier;
         // Use the walking point-location search (O(sqrt(n))) instead of
         // linear scan (O(n)) to find the seed triangle.
         let seed_tri = self.locate_point(seed).ok().map(|(i, _)| i).or_else(|| {

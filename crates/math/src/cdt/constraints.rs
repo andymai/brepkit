@@ -3,6 +3,8 @@ use crate::predicates::orient2d;
 
 use super::{Cdt, segment_intersection_point, segments_properly_intersect, sorted_pair};
 
+const MAX_SPLIT_DEPTH: usize = 16;
+
 impl Cdt {
     /// Recover a constraint edge (v0, v1) by flipping intersecting edges.
     ///
@@ -10,6 +12,26 @@ impl Cdt {
     /// segment and flip them until the constraint edge exists.
     #[allow(clippy::too_many_lines)]
     pub(super) fn recover_edge(&mut self, v0: usize, v1: usize) -> Result<(), MathError> {
+        self.recover_edge_depth(v0, v1, 0)
+    }
+
+    /// [`Cdt::recover_edge`] with a Steiner-split depth budget.
+    ///
+    /// Flip recovery can stall without converging: a long constraint whose
+    /// endpoints carry last-ULP coordinate noise (a 33.5 mm rail tilted by
+    /// 1.8e-14 from boolean vertex welding) threads a corridor of
+    /// exactly-degenerate quads that refuse every flip, and the loop spins to
+    /// `max_iter` with the edge still missing. Returning Ok there poisons the
+    /// caller: the constraint is recorded but no triangulation edge matches
+    /// it, so `remove_exterior`'s flood pours through the gap and can erase
+    /// an entire face (the mixed-socket z=5 floor tessellated to ZERO
+    /// triangles this way). On non-convergence, split the constraint at its
+    /// midpoint and recover both halves — each strictly shorter, so the
+    /// degenerate corridor is bisected until every piece recovers. The
+    /// sub-pairs are registered as constraints (the original pair never
+    /// becomes an edge).
+    #[allow(clippy::too_many_lines)]
+    fn recover_edge_depth(&mut self, v0: usize, v1: usize, depth: usize) -> Result<(), MathError> {
         let max_iter = self.triangles.len() * 4 + 100;
 
         for _ in 0..max_iter {
@@ -47,6 +69,12 @@ impl Cdt {
                         return Ok(());
                     }
                     // Intersection computation failed — give up gracefully.
+                    if std::env::var("BK_CDT").is_ok() {
+                        log::debug!(
+                            "CDT recover_edge: constrained-crossing give-up, edge {v0}->{v1} exists={}",
+                            self.edge_exists(v0, v1)
+                        );
+                    }
                     return Ok(());
                 }
 
@@ -74,14 +102,38 @@ impl Cdt {
                     }
                 }
             } else {
-                // No intersecting edge found — edge should exist now.
-                return Ok(());
+                // No intersecting edge found. If the edge exists the
+                // recovery is done; if it does NOT, the walk failed to see
+                // the crossing (near-degenerate geometry) — fall through to
+                // the Steiner split rather than claiming success.
+                if self.edge_exists(v0, v1) {
+                    return Ok(());
+                }
+                break;
             }
         }
 
-        // If we get here, we couldn't recover the edge. This can happen
-        // with very degenerate input. Return Ok to avoid failing the
-        // entire operation.
+        // Flip recovery did not converge. Bisect: insert the constraint's
+        // midpoint and recover both (strictly shorter) halves.
+        if depth >= MAX_SPLIT_DEPTH {
+            return Err(MathError::ConvergenceFailure {
+                iterations: max_iter,
+            });
+        }
+        let p0 = self.vertices[v0];
+        let p1 = self.vertices[v1];
+        let mid_pt =
+            crate::vec::Point2::new(f64::midpoint(p0.x(), p1.x()), f64::midpoint(p0.y(), p1.y()));
+        let mid = self.insert_point(mid_pt)?;
+        if mid == v0 || mid == v1 {
+            return Err(MathError::ConvergenceFailure {
+                iterations: max_iter,
+            });
+        }
+        self.recover_edge_depth(v0, mid, depth + 1)?;
+        self.constraints.insert(sorted_pair(v0, mid));
+        self.recover_edge_depth(mid, v1, depth + 1)?;
+        self.constraints.insert(sorted_pair(mid, v1));
         Ok(())
     }
 
