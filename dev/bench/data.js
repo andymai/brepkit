@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785936011516,
+  "lastUpdate": 1785938501635,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19061,6 +19061,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25972964,
             "range": "± 36274",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e143cea9c58206007eff4c5ada4d1701989f2c7d",
+          "message": "test(io): pin the mixed-socket tessellation leak on a clean B-Rep (#1350)\n\nCompletes the mixed-detail drift triage into a native fixture. All nine\ncaptured booleans replay clean, and the final fused B-Rep is watertight\n(free=0, over=0) — yet tessellating that valid B-Rep at export tolerance\n(0.01 mm / 5 degrees) yields **511 mesh boundary edges** natively (the\ntool-side export reports 259 after its own welding). A\ntessellation-parity defect on the per-cell mixed-socket geometry, not a\nboolean one.\n\n- `crates/io/tests/mixed_socket_tess_inmem.rs`: an ACTIVE pin holds the\nB-Rep blameless (fuse succeeds watertight) and the ignored repro pins\nthe watertight-mesh goal.\n- `replay_pair` gains `TESS_BND=1`: tessellates the result at export\ntolerance and reports mesh boundary/non-manifold counts — the standing\ndiscriminant between B-Rep leaks and tessellation-parity leaks.\n\nAll three export-drift cases now have native fixtures.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins the mixed-socket export drift as a tessellation-parity issue, not a\nboolean defect. The fused B-Rep is watertight, but tessellating at\nexport tolerance (0.01 mm / 5 degrees) yields 511 mesh boundary edges;\n`replay_pair` now reports tessellation health to make this visible.\n\n- **New Features**\n- Added `crates/io/tests/mixed_socket_tess_inmem.rs` with an active pin\nproving the final fuse is watertight and an ignored repro that\ntessellates at export tolerance; includes `mixed_socket_body.bin` and\n`mixed_socket_assembly.bin` fixtures.\n- Extended `crates/io/examples/replay_pair.rs` with `TESS_BND=1` to\nprint `tess_bnd` and `tess_nm`, distinguishing B-Rep leaks from\ntessellation leaks.\n\n<sup>Written for commit 2e0447de742605d38dad4e3a77363a533ee54913.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1350?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T13:59:11Z",
+          "tree_id": "1cb1465d8f2683c1b204575dbbcabeaee76f710a",
+          "url": "https://github.com/andymai/brepkit/commit/e143cea9c58206007eff4c5ada4d1701989f2c7d"
+        },
+        "date": 1785938499678,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1016631,
+            "range": "± 1644",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1059782,
+            "range": "± 2209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12999,
+            "range": "± 299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703647,
+            "range": "± 2034",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25995266,
+            "range": "± 1489482",
             "unit": "ns/iter"
           }
         ]
