@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785935349816,
+  "lastUpdate": 1785936011516,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -19007,6 +19007,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24162382,
             "range": "± 228319",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1dc13c62d83bf0efb2b4e20c62977c5ff500859a",
+          "message": "test(io): pin the O-shape half-socket fuse and triage the mixed-detail leak (#1349)\n\nCompletes the export-drift capture work:\n\n- **3x3 O-shape + half sockets** (nm 8): root pinned in\n`crates/io/tests/oshape_socket_fuse_inmem.rs` — two clean 49-face socket\npieces (one all-analytic, one carrying 12 NURBS quarter-socket faces\nfrom the per-cell dispatch) abort with **\"open growth shell with 45\nfaces\"**; the chain's later fuse against a 1022-planar-face operand is\nits downstream collateral. Operand pins active, fuse repro ignored.\n- **2x2 mixed-detail per-cell half sockets** (bnd 259): all nine\ncaptured booleans replay clean, analytic, and watertight — the leak is\n**post-boolean** (tessellation/export, or an op class the boolean\ncapture does not hook). Recorded in the roadmap with the triage step:\nnative tessellation boundary count of the final fused body before\nassuming geometry.\n\nWith #1348, all three drift cases are now captured or triaged.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins a reproducible test for the failing fuse in the `3x3 O-shape + half\nsockets` export: fusing two captured 49‑face half‑socket solids aborts\nwith “open growth shell with 45 faces”, falls to the mesh fallback, and\npoisons the next fuse. Updates the roadmap to mark both half‑socket\ncases captured and notes the `2x2 mixed-detail per-cell half sockets`\narm replays clean through all booleans (leak is post‑boolean; triage via\na tessellation boundary‑count check).\n\n- Adds `crates/io/tests/oshape_socket_fuse_inmem.rs` and captured\noperands `crates/io/tests/data/oshape_socket_{a,b}.bin` to pin the\nfailure and assert analytic, watertight output once fixed.\n\n<sup>Written for commit 32f45ab53dc9dd9abf2c7e523cc8050bb14a5af4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1349?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T13:17:28Z",
+          "tree_id": "9ea162db441d23b7bbc81bf041334674dd7da890",
+          "url": "https://github.com/andymai/brepkit/commit/1dc13c62d83bf0efb2b4e20c62977c5ff500859a"
+        },
+        "date": 1785936009482,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 980087,
+            "range": "± 2146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1067666,
+            "range": "± 15072",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13018,
+            "range": "± 59",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699960,
+            "range": "± 2054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25972964,
+            "range": "± 36274",
             "unit": "ns/iter"
           }
         ]
