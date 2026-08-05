@@ -1,0 +1,36 @@
+crates/algo/src/builder/mod.rs
+  s_7ff36fc7322bef::t_557ccd49b0b2a6 469-470,476
+  s_7ff36fc7322bef::t_a32cd1f3548aea 490-516
+crates/algo/src/builder/same_domain.rs
+  s_7ff36fc7322bef::t_003b2665bc1b64 417
+  s_7ff36fc7322bef::t_1b1319be1b94cd 465,475-476,478,482-483,485
+  s_7ff36fc7322bef::t_50d7bae45500eb 486
+  s_7ff36fc7322bef::t_cfceee0cf7c89f 556,571
+  s_7ff36fc7322bef::t_c54ca594569a59 422-438,444
+  s_7ff36fc7322bef::t_4f0b3d2a9b8537 455-464,466-474,477,479-481,484
+  s_7ff36fc7322bef::t_2ae3f6e5436ee8 595-620
+  s_7ff36fc7322bef::t_818fb81348e56d 557-558
+  s_7ff36fc7322bef::t_aa05e23945c2bb 419-421
+crates/io/tests/slotted_nolip_fuse_inmem.rs
+  s_7ff36fc7322bef::t_746f034c7704ce 3-7,26-35,45-50
+  s_7ff36fc7322bef::t_82432a35ca1ad3 108-110,120-129
+  s_7ff36fc7322bef::t_11afaa5f461627 2,36-44
+.claude/skills/roadmap/SKILL.md
+  s_7ff36fc7322bef::t_1f2fcb72c291c5 128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2950442d0676a553f1e35faa338099cbb5cacc56",
+  "prompts": {},
+  "sessions": {
+    "s_7ff36fc7322bef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4125c687-4d22-454b-b422-a95ee692d292",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
