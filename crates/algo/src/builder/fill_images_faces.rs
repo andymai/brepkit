@@ -391,6 +391,36 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             Some(&mut section_split_registry),
         );
 
+        if std::env::var("BK_SPLITW").is_ok_and(|v| v == format!("{}", face_id.index())) {
+            for (ri, r) in split_results.iter().enumerate() {
+                for (ei, e) in r.outer_wire.iter().enumerate() {
+                    log::debug!(
+                        "SPLITW piece[{ri}] e[{ei}] {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                        e.curve_3d.type_tag(),
+                        e.start_3d.x(),
+                        e.start_3d.y(),
+                        e.start_3d.z(),
+                        e.end_3d.x(),
+                        e.end_3d.y(),
+                        e.end_3d.z()
+                    );
+                }
+                for (wi, w) in r.inner_wires.iter().enumerate() {
+                    for (ei, e) in w.iter().enumerate() {
+                        log::debug!(
+                            "SPLITW piece[{ri}] inner[{wi}] e[{ei}] {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                            e.curve_3d.type_tag(),
+                            e.start_3d.x(),
+                            e.start_3d.y(),
+                            e.start_3d.z(),
+                            e.end_3d.x(),
+                            e.end_3d.y(),
+                            e.end_3d.z()
+                        );
+                    }
+                }
+            }
+        }
         log::debug!(
             "fill_images_faces: face {face_id:?} split into {} sub-faces",
             split_results.len()

@@ -317,6 +317,22 @@ impl Builder {
         self.build_face_ranks()?;
         self.fill_images();
         self.classify_sub_faces()?;
+        if let Ok(v) = std::env::var("BK_CLS3")
+            && let Ok(want) = v.parse::<usize>()
+        {
+            for (i, sf) in self.sub_faces.iter().enumerate() {
+                if sf.source_face.index() == want {
+                    log::debug!(
+                        "CLS3 idx={i} face={:?} src={:?} rank={:?} class={:?} pt={:?}",
+                        sf.face_id,
+                        sf.source_face,
+                        sf.rank,
+                        sf.classification,
+                        sf.interior_point
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
