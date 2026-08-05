@@ -1228,6 +1228,31 @@ fn seam_anchor_on_circle(
 }
 
 fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<SectionSource>> {
+    if std::env::var("BK_PAVES").is_ok() {
+        for (ci, curve) in arena.curves.iter().enumerate() {
+            for &pb_id in &curve.pave_blocks {
+                let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                    continue;
+                };
+                let sv = arena.resolve_vertex(pb.start.vertex);
+                let ev = arena.resolve_vertex(pb.end.vertex);
+                if let (Ok(s), Ok(e)) = (topo.vertex(sv), topo.vertex(ev)) {
+                    let (sp, ep) = (s.point(), e.point());
+                    log::debug!(
+                        "PAVES curve#{ci} {} pb={pb_id:?} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4}) extra={}",
+                        curve.curve.type_tag(),
+                        sp.x(),
+                        sp.y(),
+                        sp.z(),
+                        ep.x(),
+                        ep.y(),
+                        ep.z(),
+                        pb.extra_paves.len()
+                    );
+                }
+            }
+        }
+    }
     let mut map: HashMap<FaceId, Vec<SectionSource>> = HashMap::new();
     // Section edges from FF intersection curves.
     // For non-Line curves (Circle, Ellipse, NURBS): use one Curve entry per curve
@@ -2404,11 +2429,30 @@ fn arc_segment_crossings(
 ) -> Vec<(Point3, f64)> {
     let circle = match curve {
         EdgeCurve::Circle(c) => c,
-        // Only circular arcs are handled here. Ellipse arcs are not produced on
-        // the corner-straddle path, and lines/NURBS sections have no true-arc
-        // geometry — all fall back to the chord (handled by the line-line
+        // A NURBS boundary edge (e.g. a revolve's arc, which serializes as
+        // NurbsCurve rather than Circle) is intersected with the section line
+        // via bezier clipping; the curve's own domain bounds the hits, so no
+        // arc-span filter is needed. Clipping such an edge by its CHORD put a
+        // coaxial revolve cut's section endpoints 0.75 mm inside the face
+        // (the chord crossings), where the splitter could not anchor them and
+        // declined every split.
+        EdgeCurve::NurbsCurve(nc) => {
+            let Ok(line_nc) = brepkit_math::nurbs::fitting::interpolate(&[line_start, line_end], 1)
+            else {
+                return Vec::new();
+            };
+            let Ok(hits) =
+                brepkit_math::nurbs::bezier_clip::curve_curve_intersect(nc, &line_nc, tol)
+            else {
+                return Vec::new();
+            };
+            return hits.into_iter().map(|h| (h.point, 0.0)).collect();
+        }
+        // Only circular arcs and NURBS are handled here. Ellipse arcs are not
+        // produced on the corner-straddle path, and a Line has no true-arc
+        // geometry — both fall back to the chord (handled by the line-line
         // crossing in the caller).
-        EdgeCurve::Ellipse(_) | EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return Vec::new(),
+        EdgeCurve::Ellipse(_) | EdgeCurve::Line => return Vec::new(),
     };
     let hits = circle.intersect_segment(line_start, line_end, tol);
     if hits.is_empty() {
@@ -2490,11 +2534,14 @@ fn clip_line_to_face_boundary(
                 let closed = oe.oriented_start(edge) == oe.oriented_end(edge);
                 boundary_arcs.push(Some((edge.curve().clone(), sp, ep, closed)));
             }
-            // A straight edge already equals its chord, and a NURBS boundary edge
-            // has no analytic arc to clip against, so neither contributes a
+            EdgeCurve::NurbsCurve(_) => {
+                let closed = oe.oriented_start(edge) == oe.oriented_end(edge);
+                boundary_arcs.push(Some((edge.curve().clone(), sp, ep, closed)));
+            }
+            // A straight edge already equals its chord and contributes no
             // beyond-the-chord crossing; the chord segment in
-            // `boundary_segments` covers them.
-            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => boundary_arcs.push(None),
+            // `boundary_segments` covers it.
+            EdgeCurve::Line => boundary_arcs.push(None),
         }
     }
 
