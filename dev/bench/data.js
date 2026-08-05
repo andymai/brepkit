@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785899952112,
+  "lastUpdate": 1785902537625,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18305,6 +18305,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26012772,
             "range": "± 84256",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d242bd567eb680e273a8acf899668b6b749d7eff",
+          "message": "docs(roadmap): map the wedge cut's FF pair gaps (#1335)\n\nCampaign-opening instrument on the coaxial FF emission gap, using the\nbuilt-in `BK_FF_TRACE`:\n\n- The only four emitted sections pair wedge faces 1-4 with ONE strut\nplane (its far angular cap). The strut's near cap is NOT coincident with\nthe wedge's y=0 cap — both strut caps are slanted (y ranges\n[-0.57,-0.11] and [0.22,1.10]) and correctly AABB-rejected against it.\n- Two pair classes are silently empty and carry the whole defect: (a)\nstrut coaxial cylinders x wedge z-planes, which should emit full circles\nat the strut radii (and those circles CROSS the wedge faces' cap-side\nboundaries, since the strut protrudes angularly past the wedge), suspect\nthe closed-circle-without-crossings skip; (b) the wedge y=0 cap x strut\ncylinders, which passes the AABB gate yet emits nothing despite the\ndedicated `plane_cylinder_parallel_lines` arm.\n\nNext step named in the roadmap: instrument `compute_raw_curves` for\nexactly those two pair classes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdated the roadmap to map FF section pairings for the kumiko corner\nwedge cut using `BK_FF_TRACE`, pinpointing why the cut removes nothing\nand drops the coincident cap. It records that only four sections emit\n(wedge faces 1–4 vs one strut plane) and identifies two missing pair\nclasses—coaxial strut cylinders vs wedge z-planes and wedge y=0 cap vs\nstrut cylinders—with a next step to instrument `compute_raw_curves` for\nthose cases.\n\n<sup>Written for commit 6a8085fd4aee6e4f9accd74ff7ffcb39310daabc.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1335?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T03:59:48Z",
+          "tree_id": "1a7eb8db5d6d2e3b09440557b3ef7e1576588ad1",
+          "url": "https://github.com/andymai/brepkit/commit/d242bd567eb680e273a8acf899668b6b749d7eff"
+        },
+        "date": 1785902535992,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 929493,
+            "range": "± 1289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1005535,
+            "range": "± 1817",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11838,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 688700,
+            "range": "± 2640",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24470337,
+            "range": "± 70984",
             "unit": "ns/iter"
           }
         ]
