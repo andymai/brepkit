@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.128.34](https://github.com/andymai/brepkit/compare/v2.128.33...v2.128.34) (2026-08-05)
+
+
+### Bug Fixes
+
+* **math:** CDT edge recovery must not claim success without the edge ([#1362](https://github.com/andymai/brepkit/issues/1362)) ([a878bad](https://github.com/andymai/brepkit/commit/a878bad644b2ce18b95247cb414ed2d9fd94ad5f))
+
 ## [2.128.33](https://github.com/andymai/brepkit/compare/v2.128.32...v2.128.33) (2026-08-05)
 
 
