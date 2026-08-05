@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785965865841,
+  "lastUpdate": 1785966032743,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20411,6 +20411,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25027701,
             "range": "± 118396",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "313de78482209ecc22ba2fa1f7bd687cf082735c",
+          "message": "docs(roadmap): first measurements of the boolean orientation frontier (#1375)\n\nBanks this iteration's dig into why GFA boolean outputs fail the strict\norientation check (the reason #1373 kept the default off).\n\nMeasured on the gridfinity D1 lip-ring loft cut: the output carries 32\nsame-sense edge pairs. Applying the construction-op campaign's rule (a\nflip must reverse the wires) to builder_solid's Step 0 Cut-B face flip\nimproves the count to 28 but does not close it — shape_store's\nfsnap.reversed transfer applies set_reversed without wire reversal, and\nthe splitter's sub-face emissions have their own conventions. A one-site\nfix is insufficient; the roadmap entry now records this as a multi-site\ncampaign with the probe recipe.\n\nDoc-only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap with first measurements for the GFA boolean\norientation frontier. The gridfinity D1 lip‑ring loft cut shows 32\nsame‑sense edge pairs; applying the wire‑reversal rule to\n`builder_solid` Cut‑B reduces this to 28, highlighting remaining sites\nin `shape_store` (fsnap.reversed transfer) and the splitter’s sub‑face\nemissions, now tracked as a multi‑site campaign with a probe recipe.\n\n<sup>Written for commit 96b9dd4dc7c74262ffc47e497ac93bcffc0450eb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1375?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T21:38:03Z",
+          "tree_id": "cbdbe6ca891c31289d75ceb27544ad03098315e6",
+          "url": "https://github.com/andymai/brepkit/commit/313de78482209ecc22ba2fa1f7bd687cf082735c"
+        },
+        "date": 1785966031415,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1003596,
+            "range": "± 5016",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1086407,
+            "range": "± 2024",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13546,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 717254,
+            "range": "± 1047",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26361334,
+            "range": "± 50321",
             "unit": "ns/iter"
           }
         ]
