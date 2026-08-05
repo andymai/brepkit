@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785903372518,
+  "lastUpdate": 1785903981458,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -18413,6 +18413,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24958215,
             "range": "± 735823",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e22f8b67815b229091fb4778fbfc5bf9e33c626",
+          "message": "docs(roadmap): soften the wedge EF chord claim to the unresolved probe (#1337)\n\nCorrection on #1336's definitive claim before it misleads the fix\nsession: `build_face_containment` already compensates chording with a\nsagitta margin, and the two dropped EF crossings (edges 15/17) may be\nthe strut's r=1.04/5.19 cylinder edges piercing z=20.8 genuinely OUTSIDE\nthe wedge's sector — correct drops. What remains established: all four\nemitted sections fail to split their faces and nothing is cut.\n\nThe row now records the concrete unresolved probe: identify edges 15/17\ngeometrically, dump the kept EF paves for the strut far-cap radial-edge\npiercings (which do land inside the sector), then instrument why\n`split_face_2d` declines a section even when anchors exist.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSoftened the roadmap entry for the Kumiko corner wedge to retract the\ndefinitive EF chord-containment claim and document the unresolved probe.\nClarifies that `build_face_containment` already applies a sagitta\nmargin, the dropped EF crossings may be correct (outside the wedge\nsector), and lists next steps: identify edges 15/17, dump kept EF paves\nfor far-cap piercings, and instrument why `split_face_2d` declines an\nanchored section.\n\n<sup>Written for commit 4ba314708a78a51c03b362bb0f0cdc4fae7ac2b9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1337?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T04:23:54Z",
+          "tree_id": "8283d076dcf74c5bdaf2cfb4797663a3ff5cad30",
+          "url": "https://github.com/andymai/brepkit/commit/9e22f8b67815b229091fb4778fbfc5bf9e33c626"
+        },
+        "date": 1785903979812,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 937372,
+            "range": "± 6559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1015669,
+            "range": "± 36582",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11830,
+            "range": "± 207",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 696660,
+            "range": "± 6273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24660184,
+            "range": "± 79829",
             "unit": "ns/iter"
           }
         ]
