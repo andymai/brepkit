@@ -471,67 +471,115 @@ fn sample_plane_cone(
     // over-coverage is harmless. The floor handles a vertex at the apex (v_min≈0).
     let v_max = (8.0 * v_min).max(v_min + 4.0);
 
-    let valid: Vec<Option<Point3>> = vs
-        .into_iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let v = v?;
-            if v <= v_max {
-                let u = TAU * (i as f64) / (n_samples as f64);
-                let g = cone.evaluate(u, 1.0) - apex;
-                Some(apex + g * v)
-            } else {
-                None
-            }
-        })
-        .collect();
+    // Per-sample v within the cap; the raw values stay in `vs` for the
+    // boundary solve below.
+    let kept: Vec<Option<f64>> = vs.iter().map(|v| v.filter(|&v| v <= v_max)).collect();
 
-    // Split into contiguous runs of `Some`, treating the array as circular so a
-    // branch straddling u=0 stays in one chain. A fully-valid sweep (ellipse)
-    // becomes a single closed chain.
-    let chains = contiguous_chains(&valid);
-    Ok(chains.into_iter().filter(|c| c.len() >= 2).collect())
-}
+    let point_at = |u: f64, v: f64| -> Point3 {
+        let g = cone.evaluate(u, 1.0) - apex;
+        apex + g * v
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let u_of = |i: usize| TAU * (i as f64) / (n_samples as f64);
+    let n_dot_g_at = |u: f64| -> f64 {
+        let g = cone.evaluate(u, 1.0) - apex;
+        normal.dot(Vec3::new(g.x(), g.y(), g.z()))
+    };
 
-/// Split a circular array of optional samples into contiguous `Some` runs.
-///
-/// If every entry is `Some` the whole array is one chain, closed by repeating
-/// the first point. Otherwise each maximal run of `Some` between `None` gaps is
-/// one chain; a run wrapping past index 0 is rejoined into a single chain.
-fn contiguous_chains(valid: &[Option<Point3>]) -> Vec<Vec<Point3>> {
-    let n = valid.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    if valid.iter().all(Option::is_some) {
-        // Closed loop (ellipse): emit all points and repeat the first to close.
-        let mut pts: Vec<Point3> = valid.iter().filter_map(|p| *p).collect();
+    if kept.iter().all(Option::is_some) {
+        // Closed loop (ellipse regime): emit all points and repeat the first.
+        let mut pts: Vec<Point3> = kept
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.map(|v| point_at(u_of(i), v)))
+            .collect();
         if let Some(&first) = pts.first() {
             pts.push(first);
         }
-        return vec![pts];
+        return Ok(vec![pts]);
     }
-    // Rotate the start to just after a gap so no run wraps the array boundary.
-    let gap = valid.iter().position(Option::is_none).unwrap_or(0);
-    let mut chains: Vec<Vec<Point3>> = Vec::new();
-    let mut current: Vec<Point3> = Vec::new();
-    for k in 0..n {
-        let idx = (gap + k) % n;
-        match valid[idx] {
-            Some(p) => current.push(p),
-            None => {
-                if current.len() >= 2 {
-                    chains.push(std::mem::take(&mut current));
-                } else {
-                    current.clear();
-                }
+
+    // A hyperbola/parabola tail diverges as 1/(n·g), so between the last kept
+    // sample and its dropped neighbour v can leap far past `v_max` in one
+    // uniform-u pitch — and any finite face window inside that leap is lost
+    // (a taper cone grazed 0.05 by a prism plane lost its entire 0.5-tall
+    // section to exactly this aliasing). Extend each run end to the exact
+    // `v_max` boundary: bisect u for `n·g(u) = e/v_max` inside the dropped
+    // pitch (n·g is monotone there — its extrema sit at the conic vertex,
+    // far from any asymptote), then fill the tail with uniform-u samples.
+    let tail = |i_end: usize, forward: bool, kept: &[Option<f64>]| -> Vec<Point3> {
+        let Some(v_end) = kept[i_end] else {
+            return Vec::new();
+        };
+        let u_end = u_of(i_end);
+        #[allow(clippy::cast_precision_loss)]
+        let pitch = TAU / (n_samples as f64);
+        let u_next = if forward {
+            u_end + pitch
+        } else {
+            u_end - pitch
+        };
+        let target = e / v_max;
+        let h_end = n_dot_g_at(u_end) - target;
+        let h_next = n_dot_g_at(u_next) - target;
+        if v_end >= v_max || h_end == 0.0 || h_end.signum() == h_next.signum() {
+            return Vec::new();
+        }
+        let (mut lo, mut hi) = (u_end, u_next);
+        for _ in 0..60 {
+            let mid = f64::midpoint(lo, hi);
+            if (n_dot_g_at(mid) - target).signum() == h_end.signum() {
+                lo = mid;
+            } else {
+                hi = mid;
             }
         }
+        let u_star = f64::midpoint(lo, hi);
+        let tail_n = 8_usize;
+        (1..=tail_n)
+            .filter_map(|k| {
+                #[allow(clippy::cast_precision_loss)]
+                let u = u_end + (u_star - u_end) * (k as f64) / (tail_n as f64);
+                let ng = n_dot_g_at(u);
+                if ng.abs() < 1e-12 {
+                    return None;
+                }
+                let v = e / ng;
+                (v >= -1e-12 && v <= v_max * (1.0 + 1e-9)).then(|| point_at(u, v.max(0.0)))
+            })
+            .collect()
+    };
+
+    // Split into contiguous runs of kept samples, treating the array as
+    // circular (rotate past a gap) so a branch straddling u=0 stays whole.
+    let gap = kept.iter().position(Option::is_none).unwrap_or(0);
+    let mut chains: Vec<Vec<Point3>> = Vec::new();
+    let mut run: Vec<usize> = Vec::new();
+    let flush = |run: &mut Vec<usize>, chains: &mut Vec<Vec<Point3>>| {
+        if run.len() >= 2 {
+            let first = run[0];
+            let last = run[run.len() - 1];
+            let mut pts: Vec<Point3> = tail(first, false, &kept);
+            pts.reverse();
+            pts.extend(
+                run.iter()
+                    .filter_map(|&i| kept[i].map(|v| point_at(u_of(i), v))),
+            );
+            pts.extend(tail(last, true, &kept));
+            chains.push(pts);
+        }
+        run.clear();
+    };
+    for k in 0..n_samples {
+        let idx = (gap + k) % n_samples;
+        if kept[idx].is_some() {
+            run.push(idx);
+        } else {
+            flush(&mut run, &mut chains);
+        }
     }
-    if current.len() >= 2 {
-        chains.push(current);
-    }
-    chains
+    flush(&mut run, &mut chains);
+    Ok(chains.into_iter().filter(|c| c.len() >= 2).collect())
 }
 
 /// Sample the plane-torus intersection as ordered 3D points.

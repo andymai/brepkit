@@ -71,6 +71,46 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
                     b.y(),
                     b.z()
                 );
+                if std::env::var("FREE_EDGES").is_ok_and(|v| v == "2") {
+                    for f in users.get(eid).into_iter().flatten() {
+                        let Ok(fc) = topo.face(*f) else { continue };
+                        let mut lo = [f64::MAX; 3];
+                        let mut hi = [f64::MIN; 3];
+                        let mut nedges = 0;
+                        for wid in
+                            std::iter::once(fc.outer_wire()).chain(fc.inner_wires().iter().copied())
+                        {
+                            let Ok(w) = topo.wire(wid) else { continue };
+                            for oe in w.edges() {
+                                nedges += 1;
+                                let Ok(e2) = topo.edge(oe.edge()) else {
+                                    continue;
+                                };
+                                for vid in [e2.start(), e2.end()] {
+                                    if let Ok(v) = topo.vertex(vid) {
+                                        let p = v.point();
+                                        for (i, c) in [p.x(), p.y(), p.z()].iter().enumerate() {
+                                            lo[i] = lo[i].min(*c);
+                                            hi[i] = hi[i].max(*c);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        println!(
+                            "      owner {f:?} {} rev={} inner={} edges={nedges} bbox=({:.3},{:.3},{:.3})..({:.3},{:.3},{:.3})",
+                            fc.surface().type_tag(),
+                            fc.is_reversed(),
+                            fc.inner_wires().len(),
+                            lo[0],
+                            lo[1],
+                            lo[2],
+                            hi[0],
+                            hi[1],
+                            hi[2]
+                        );
+                    }
+                }
             }
         }
     }

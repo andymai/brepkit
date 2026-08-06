@@ -566,6 +566,25 @@ pub fn perform(
                             _ => false,
                         };
                     }
+                    if traced && std::env::var("BK_F2_TRACE").is_ok() {
+                        let dist = |bb: &Aabb3, p: Point3| -> f64 {
+                            let dx = (bb.min.x() - p.x()).max(0.0).max(p.x() - bb.max.x());
+                            let dy = (bb.min.y() - p.y()).max(0.0).max(p.y() - bb.max.y());
+                            let dz = (bb.min.z() - p.z()).max(0.0).max(p.z() - bb.max.z());
+                            dx.max(dy).max(dz)
+                        };
+                        let da: Vec<f64> = (0..=N).map(|i| dist(&bb_a, sample(i, N))).collect();
+                        let db: Vec<f64> = (0..=N).map(|i| dist(&bb_b, sample(i, N))).collect();
+                        let fmin = |v: &[f64]| v.iter().copied().fold(f64::MAX, f64::min);
+                        log::debug!(
+                            "F2_TRACE drop-candidate {} min_dist_a={:.2e} min_dist_b={:.2e} span=({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                            raw.curve.type_tag(),
+                            fmin(&da),
+                            fmin(&db),
+                            raw.p_start.x(), raw.p_start.y(), raw.p_start.z(),
+                            raw.p_end.x(), raw.p_end.y(), raw.p_end.z()
+                        );
+                    }
                     let approx_len: f64 = (0..N)
                         .map(|i| (sample(i + 1, N) - sample(i, N)).length())
                         .sum();
