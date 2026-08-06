@@ -13,10 +13,17 @@ use super::nurbs::{
 };
 use super::planar::{tessellate_analytic, tessellate_analytic_with_boundary, tessellate_planar};
 
-/// Step shrink factor for spheres: both u and v are curved simultaneously, so
-/// the diagonal sag is the worst case. Tightening the per-direction step keeps
-/// the diagonal within tolerance.
-const SPHERE_DIAG: f64 = 0.7;
+/// Diagonal shrink factors for spheres: both u and v are curved
+/// simultaneously, so the worst-case chord spans a grid cell's diagonal,
+/// whose angular step is `sqrt(2)` times the per-direction step. Sag grows
+/// with the square of the step, so the deflection budget must be halved;
+/// the angular cap is linear in the step, so it shrinks by `1/sqrt(2)`.
+const SPHERE_DIAG_DEFL: f64 = 0.5;
+const SPHERE_DIAG_ANG: f64 = std::f64::consts::FRAC_1_SQRT_2;
+
+/// Legacy single shrink factor, kept verbatim for the curvature-floored
+/// (mesh-boolean) path so its calibrated tessellations stay bit-identical.
+const SPHERE_DIAG_LEGACY: f64 = 0.7;
 
 /// Tessellate a face and return mesh with per-vertex UV coordinates.
 ///
@@ -50,6 +57,22 @@ pub fn tessellate_with_uvs_a(
     face: FaceId,
     deflection: f64,
     angular_tol: f64,
+) -> Result<TriangleMeshUV, crate::OperationsError> {
+    tessellate_with_uvs_floor(topo, face, deflection, angular_tol, false)
+}
+
+/// Like [`tessellate_with_uvs_a`] with an explicit curvature-floor selector.
+///
+/// `curvature_floor` keeps the legacy dense sampling on doubly-curved
+/// surfaces; the mesh-boolean path passes `true` (its co-refinement
+/// robustness and fallback volume accuracy depend on the density), display
+/// and export callers pass `false` (the chord formula already bounds sag).
+pub(super) fn tessellate_with_uvs_floor(
+    topo: &Topology,
+    face: FaceId,
+    deflection: f64,
+    angular_tol: f64,
+    curvature_floor: bool,
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
@@ -173,20 +196,29 @@ pub fn tessellate_with_uvs_a(
             let u_range = compute_angular_range(topo, face_data, |p| sphere.project_point(p));
             let v_range = compute_sphere_v_range(topo, face_data, sphere);
             // Both directions are curved at once; the worst-case sag is along
-            // the diagonal, so shrink the step (~0.7) to keep it within tol.
+            // the diagonal, so shrink the step to keep it within tol.
+            // Without the curvature floor: every normal-section curvature of a
+            // sphere is exactly 1/r, and latitude chords are shorter than
+            // great-circle chords at the same angular step, so the diag-shrunk
+            // chord formula already bounds the surface sag in both directions.
+            let (defl_shrink, ang_shrink) = if curvature_floor {
+                (SPHERE_DIAG_LEGACY, SPHERE_DIAG_LEGACY)
+            } else {
+                (SPHERE_DIAG_DEFL, SPHERE_DIAG_ANG)
+            };
             let nu = segments_for_chord_deviation_a(
                 sphere.radius(),
                 u_range.1 - u_range.0,
-                deflection * SPHERE_DIAG,
-                angular_tol * SPHERE_DIAG,
-                true,
+                deflection * defl_shrink,
+                angular_tol * ang_shrink,
+                curvature_floor,
             );
             let nv = segments_for_chord_deviation_a(
                 sphere.radius(),
                 v_range.1 - v_range.0,
-                deflection * SPHERE_DIAG,
-                angular_tol * SPHERE_DIAG,
-                true,
+                deflection * defl_shrink,
+                angular_tol * ang_shrink,
+                curvature_floor,
             );
             let kind = sphere_analytic_kind(v_range);
             let sphere = sphere.clone();
