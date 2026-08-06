@@ -830,9 +830,10 @@ Measured A/B, same day, same tool commit, each overlay md5-verified through brep
 - **Scenario numbers rot.** Always run the control on the SAME DAY and SAME catalog; a stale
   baseline has twice nearly produced a false conclusion. The catalog grew 408 → 435, so comparing
   against the old 37/371 manufactures 26 phantom regressions.
-- **Current baseline: 62 failed / 372 passed of 435** (families: divider 15, kumiko 14, floor 11,
-  permutation 6, solid cutouts 3, then singles). The divider/floor fix should take this to ~45 once
-  released — NOT yet re-measured as a full matrix.
+- **Current baseline (2026-08-05, kernel c6dbc14a, md5-verified overlay): the ENTIRE tool generator
+  test directory is GREEN, 244 files, 2426 passed / 4 skipped, 0 failures, 297 s wall.** The
+  historic 62-failed/372-passed matrix is fully closed on this surface; compare against THIS
+  number, not the old one.
 - **Overlay verification is mandatory and non-obvious.** Hash the file that
   `require.resolve('brepkit-wasm', {paths:[require.resolve('brepjs')]})` returns, run FROM the
   directory vitest will use. The foils worktree has its OWN `node_modules` (it does NOT resolve the
