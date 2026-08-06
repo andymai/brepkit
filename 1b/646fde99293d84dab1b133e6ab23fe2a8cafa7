@@ -1,0 +1,32 @@
+crates/io/tests/mitsukude_panel_cut_inmem.rs
+  s_3860fd01726708::t_fd4e75aa548371 73-76,92-97
+crates/io/examples/replay_pair.rs
+  s_3860fd01726708::t_fef7403421e1c6 80-81,105-110
+  s_3860fd01726708::t_f461a6c13fafb4 74-79,82-104,111-113
+.claude/skills/roadmap/SKILL.md
+  s_3860fd01726708::t_874aaf42621908 129
+crates/algo/src/pave_filler/phase_ff.rs
+  s_3860fd01726708::t_b5b2a1577b3e16 569,578-587
+  s_3860fd01726708::t_9a1d821f22efee 570-577
+crates/math/src/analytic_intersection.rs
+  s_3860fd01726708::t_8cd842e9fe08dc 474-476,478-495,499,501-516,522-534,537,540-541,543-557,559-579,581-582
+  s_3860fd01726708::t_07413e144cfe50 558
+  s_3860fd01726708::t_fef7403421e1c6 517-521
+  s_3860fd01726708::t_1a34902a56c63a 538-539,542
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "1b646fde99293d84dab1b133e6ab23fe2a8cafa7",
+  "prompts": {},
+  "sessions": {
+    "s_3860fd01726708": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "42097e7f-2817-4d7c-a127-6af5e3f79824",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
