@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785979256393,
+  "lastUpdate": 1785980185239,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20735,6 +20735,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24872147,
             "range": "± 31140",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "18f0410067b385c96beb603568941480b4f8e216",
+          "message": "docs(roadmap): snapClip op-cut-3 replays clean; row re-labeled no-live-repro (#1381)\n\nRe-measured on main (c6dbc14a): the in-repo snapclip export-corner\noperands replay free=0 over=0, fully analytic (80 cones), 43 ms. The\nrow's live-defect claim (posBad=10, analytic but leaky) no longer\nreproduces — the plane-cone exact-circle-arc fix closed it and the\nfixture is active. The pave-block-attachment architecture note is kept\nas guidance for any future leak in this family, no longer as an open\ndeferred item.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdated the roadmap to mark snapClip op-cut-3 as \"no live repro\" after\nre-measuring on `main`, note the export surface run is green (447/447)\non the fix kernel, and set the tool generator matrix baseline to fully\ngreen (2426/2426).\nThe `snapclip_export_corner` operands replay clean (free=0, over=0; 80\ncones analytic in 43 ms) with the plane–cone exact-circle-arc fix; the\nfixture is active, and the pave-block attachment note remains as\nguidance.\n\n<sup>Written for commit d0cb517b6fbe6894b6f874bc5d4cde904b7e0e18.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1381?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T18:33:45-07:00",
+          "tree_id": "e95dd9ceccc353e603b70e4dc5835d7ae82b33c8",
+          "url": "https://github.com/andymai/brepkit/commit/18f0410067b385c96beb603568941480b4f8e216"
+        },
+        "date": 1785980183865,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 952577,
+            "range": "± 1260",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1032484,
+            "range": "± 27927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11878,
+            "range": "± 61",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704629,
+            "range": "± 1532",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25056214,
+            "range": "± 63094",
             "unit": "ns/iter"
           }
         ]
