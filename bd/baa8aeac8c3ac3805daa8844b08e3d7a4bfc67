@@ -1,0 +1,29 @@
+crates/io/examples/fuse_orient.rs
+  s_638644fdff411b::t_0eb55eb9618fee 15,36-43,50,55,57-66,70-71,73-95
+  s_638644fdff411b::t_374550b08e6f5c 1-14,16-35,44-49,51-54,56,67-69,72,96-97
+crates/io/tests/mixed_socket_tess_inmem.rs
+  s_638644fdff411b::t_af998278c13b60 35-57
+  s_638644fdff411b::t_9eb4b62f40a3da 203-263,266
+crates/io/tests/data/mixed_socket_body_fresh.bin
+  s_638644fdff411b::t_553e4b4d4d7dc2 1
+.claude/skills/roadmap/SKILL.md
+  s_638644fdff411b::t_6cbbea2c555ba8 130
+crates/io/examples/orient_scan.rs
+  s_638644fdff411b::t_661eec56e0a980 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "bdbaa8aeac8c3ac3805daa8844b08e3d7a4bfc67",
+  "prompts": {},
+  "sessions": {
+    "s_638644fdff411b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0e007429-ee5b-4225-8328-687d3a33df55",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
