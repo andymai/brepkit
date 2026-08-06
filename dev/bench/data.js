@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785978755804,
+  "lastUpdate": 1785979256393,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20681,6 +20681,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23713603,
             "range": "± 57165",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6ff4f51be1c076e3390eb41ac368f629004873c9",
+          "message": "chore(main): release 2.129.6 (#1380)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.6](https://github.com/andymai/brepkit/compare/v2.129.5...v2.129.6)\n(2026-08-06)\n\n\n### Bug Fixes\n\n* **math:** extend plane-cone section chains to the v_max boundary\n([#1379](https://github.com/andymai/brepkit/issues/1379))\n([c6dbc14](https://github.com/andymai/brepkit/commit/c6dbc14af736f9493acd81edd21798fad5cbaf47))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.129.6 with a math fix that extends plane–cone\nsection chains to the v_max boundary. This prevents edge gaps and\nreturns complete intersection sections.\n\n<sup>Written for commit 76c172773a07359472152bc89ff1194f1a8c781a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1380?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-06T01:18:30Z",
+          "tree_id": "9380fd3c719d59d5c82430e976e2c49e2a678cdc",
+          "url": "https://github.com/andymai/brepkit/commit/6ff4f51be1c076e3390eb41ac368f629004873c9"
+        },
+        "date": 1785979254496,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 951591,
+            "range": "± 15941",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1028767,
+            "range": "± 3664",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12075,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700052,
+            "range": "± 15012",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24872147,
+            "range": "± 31140",
             "unit": "ns/iter"
           }
         ]
