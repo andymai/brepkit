@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.129.9](https://github.com/andymai/brepkit/compare/v2.129.8...v2.129.9) (2026-08-06)
+
+
+### Bug Fixes
+
+* **math:** guard CDT constrained-crossing split against welded intersection vertices ([#1391](https://github.com/andymai/brepkit/issues/1391)) ([4c72b07](https://github.com/andymai/brepkit/commit/4c72b0742d10f0b78950598678df2c52cbc51359))
+
+
+### Performance
+
+* **operations:** exact sag bound for display sphere tessellation ([#1389](https://github.com/andymai/brepkit/issues/1389)) ([7fa1f35](https://github.com/andymai/brepkit/commit/7fa1f356c1d4fdc8745ba7b1566825f7afca946b))
+
 ## [2.129.8](https://github.com/andymai/brepkit/compare/v2.129.7...v2.129.8) (2026-08-06)
 
 
