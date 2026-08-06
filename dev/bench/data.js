@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785985077111,
+  "lastUpdate": 1785993744808,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21059,6 +21059,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24939126,
             "range": "± 33945",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fb6c442b8168a979490a3cd4eab3ce9c47f1ed83",
+          "message": "docs(roadmap): divider brepjs-pin residual closed by the tool's 18.119.9 bump (#1387)\n\nThe tool (PR #3262 there) now pins brepjs 18.119.9 + brepkit-wasm\n2.129.8: all 15 divider scenarios pass on stock pins, no overlay\n(103/103 with the 5-arm export matrix). Also records why the\nintersectCurves bounding-box patch stays a dist patch: upstream brepjs\npins the cache-alive contract with a test (boxes are reused across\nintersections), so the tool's eager-release is by-design tool-side and\nmust be re-targeted on each brepjs bump.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to mark the divider residual as closed after pinning\nthe tool to `brepjs` 18.119.9 and `brepkit-wasm` 2.129.8; all 15 divider\nscenarios now pass on stock pins with no overlay (103/103 across the\n5‑arm export matrix).\nNote: the `intersectCurves` bounding-box change remains a tool-side dist\npatch because upstream `brepjs` keeps boxes alive for reuse, so it must\nbe re-targeted on each `brepjs` bump.\n\n<sup>Written for commit 54742c58870a20073d3bf4580ba1466892656406.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1387?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T22:19:49-07:00",
+          "tree_id": "3172ad59e422c20a811d56c6163d70122e00cdd1",
+          "url": "https://github.com/andymai/brepkit/commit/fb6c442b8168a979490a3cd4eab3ce9c47f1ed83"
+        },
+        "date": 1785993742399,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 989473,
+            "range": "± 4269",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1078054,
+            "range": "± 1008",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13142,
+            "range": "± 183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 717948,
+            "range": "± 1584",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26096687,
+            "range": "± 38852",
             "unit": "ns/iter"
           }
         ]
