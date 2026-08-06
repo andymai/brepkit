@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785983407291,
+  "lastUpdate": 1785983913649,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20897,6 +20897,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25238244,
             "range": "± 100204",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6e14f0503e5b206771c9bfb389453918d6e5064",
+          "message": "chore(main): release 2.129.7 (#1384)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.7](https://github.com/andymai/brepkit/compare/v2.129.6...v2.129.7)\n(2026-08-06)\n\n\n### Bug Fixes\n\n* **operations:** reversed-traversal boundary samplers no longer drop\npolygon corners\n([#1383](https://github.com/andymai/brepkit/issues/1383))\n([7866b9e](https://github.com/andymai/brepkit/commit/7866b9e7a02a29e5fca659b6ccef5e0dc09e77d6))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes reversed-traversal boundary sampling so polygon corners are\npreserved, preventing geometry loss in operations. Releases patch\n2.129.7 for `brepkit-wasm`.\n\n<sup>Written for commit 14881ce139cf79a736a9ce57f20e0ef38f4c4693.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1384?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-06T02:35:57Z",
+          "tree_id": "71b9e3b748206b41875a2ed278c3facf2983cb19",
+          "url": "https://github.com/andymai/brepkit/commit/a6e14f0503e5b206771c9bfb389453918d6e5064"
+        },
+        "date": 1785983911993,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1012795,
+            "range": "± 17777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1075718,
+            "range": "± 27686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13158,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710394,
+            "range": "± 2274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26090102,
+            "range": "± 36495",
             "unit": "ns/iter"
           }
         ]
