@@ -69,10 +69,11 @@ fn mitsukude_operands_are_clean() {
 }
 
 #[test]
-#[ignore = "ready repro: the raw GFA cut preserves every analytic surface but leaves 8 free \
-            edges in one loop at the stacking-lip transition band, so the ops validity gate \
-            drops the whole result to the mesh fallback (82 of the scenario's 86 seconds)"]
 fn mitsukude_panel_cut_is_analytic_watertight() {
+    // Closed by the sample_plane_cone asymptote-tail extension: the free
+    // loop was the taper cone's missing FF section against the prism's
+    // grazing x=38.05 end plane, whose entire in-face window fell between
+    // two adjacent uniform-u samples of the hyperbola near its asymptote.
     let mut topo = Topology::new();
     let body = load("mitsukude_bin_body.bin", &mut topo);
     let panel = load("mitsukude_panel_tool.bin", &mut topo);
@@ -88,4 +89,10 @@ fn mitsukude_panel_cut_is_analytic_watertight() {
     );
     assert_eq!(over, 0, "cut must stay manifold, got {over} over-shared");
     assert_eq!(free, 0, "cut must be closed, got {free} free edges");
+    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - 27045.9).abs() < 5.0,
+        "cut volume drifted: got {vol:.1}, pinned 27045.9 (the pre-fix leak measured 27095.9 \
+         with the pinch band left uncut)"
+    );
 }
