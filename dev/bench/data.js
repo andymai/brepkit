@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785984511810,
+  "lastUpdate": 1785985077111,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21005,6 +21005,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25390443,
             "range": "± 69054",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d83dc95e3fa09561b291e8f9d2c9ea680e8eeb75",
+          "message": "chore(main): release 2.129.8 (#1386)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.8](https://github.com/andymai/brepkit/compare/v2.129.7...v2.129.8)\n(2026-08-06)\n\n\n### Bug Fixes\n\n* **check:** planar fan triangulation uses signed areas\n([#1385](https://github.com/andymai/brepkit/issues/1385))\n([76e5054](https://github.com/andymai/brepkit/commit/76e505450d70c549d23a78e008377ef63dde6a47))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease `brepkit-wasm` 2.129.8 with a bug fix: planar fan triangulation\nnow uses signed areas in the check, improving orientation correctness\nand robustness.\n\n<sup>Written for commit 2c4cebff6924ff6e2f68822ff6538431e1309951.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1386?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-06T02:55:13Z",
+          "tree_id": "56165859922c6a8b1d9fa62d9eb6d1ac2956afc2",
+          "url": "https://github.com/andymai/brepkit/commit/d83dc95e3fa09561b291e8f9d2c9ea680e8eeb75"
+        },
+        "date": 1785985074610,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 947361,
+            "range": "± 1950",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1026366,
+            "range": "± 3142",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11886,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700131,
+            "range": "± 2805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24939126,
+            "range": "± 33945",
             "unit": "ns/iter"
           }
         ]
