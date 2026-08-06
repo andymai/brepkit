@@ -1,0 +1,58 @@
+crates/operations/src/boolean/tests.rs
+  s_3860fd01726708::t_3ae969115b007a 7113
+  s_3860fd01726708::t_f5539c1edfcd6e 7026-7034,7040-7041,7050,7052,7055,7057-7065,7067-7070,7072-7074
+  s_3860fd01726708::t_6b24e51d0041b7 7111-7112,7114-7118
+  s_3860fd01726708::t_c529e0a9397559 7076-7083,7091-7094,7096-7098,7103-7108,7121-7124,7127-7136,7145-7149,7154-7157,7161-7164
+  s_3860fd01726708::t_ffa28fa4ed50bd 7017-7020,7035-7039,7071
+  s_3860fd01726708::t_03d47ae782cbaf 6969-7016,7021-7025,7075,7150-7153,7158-7160,7165
+  s_3860fd01726708::t_4c5385d0a3d93e 7095,7099
+  s_3860fd01726708::t_2f25f64cc38f42 7042-7049,7051
+  s_3860fd01726708::t_8ce402aeb9a2d6 7109-7110,7119-7120,7125-7126,7137-7144
+  s_3860fd01726708::t_f717444c34b190 7084-7090,7100-7102
+  s_3860fd01726708::t_dc3caf5efeb800 7053-7054,7056,7066
+crates/operations/src/validate.rs
+  s_3860fd01726708::t_3b81b9524548b4 76-78
+  s_3860fd01726708::t_a82f6f6243f6be 86
+crates/operations/src/tessellate/nonplanar.rs
+  s_3860fd01726708::t_54b97802e476a6 584-596
+.claude/skills/roadmap/SKILL.md
+  s_3860fd01726708::t_77cd71e279a603 128
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_3860fd01726708::t_3068243878c200 1697
+  s_3860fd01726708::t_4748e8df87ae1c 1772-1774,1780
+  s_3860fd01726708::t_d0619e17702124 1684-1696,1698
+crates/blend/src/fillet_builder.rs
+  s_3860fd01726708::t_86b0716de25fba 610-617,623,625
+  s_3860fd01726708::t_fc15cf4f6f88d4 540,544
+  s_3860fd01726708::t_e5a85589faacf2 619-620
+  s_3860fd01726708::t_f57da012be63ef 609,618,632
+  s_2a4ee505e1d992::t_f333778370de95 601-608
+crates/operations/src/loft.rs
+  s_3860fd01726708::t_ba0fb49f405f25 789-806
+  s_3860fd01726708::t_ffa28fa4ed50bd 807-808
+  s_3860fd01726708::t_016ddfb629a3ae 696-697,700,704-716
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "731bfb4600f174d21cfd0bc80a54fad5eabf60c8",
+  "prompts": {},
+  "sessions": {
+    "s_2a4ee505e1d992": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3b5bc396-723b-4c74-b9e4-2f78bded5f37",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_3860fd01726708": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "42097e7f-2817-4d7c-a127-6af5e3f79824",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
