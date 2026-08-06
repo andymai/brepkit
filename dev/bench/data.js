@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785981336504,
+  "lastUpdate": 1785983407291,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20843,6 +20843,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24833432,
             "range": "± 591983",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7866b9e7a02a29e5fca659b6ccef5e0dc09e77d6",
+          "message": "fix(operations): reversed-traversal boundary samplers no longer drop polygon corners (#1383)\n\n## Summary\n\nCloses the bench-found cut(box,cyl) volume deviation same-day: the\nboolean geometry was **exact** — a three-site endpoint-exclusion class\nin boundary samplers dropped polygon **corner** vertices.\n\n## Root\n\nPer-edge boundary sampling uses a `[traversal-start, traversal-end)`\nconvention where the next edge supplies the excluded endpoint. That\nworks forward, but a **reversed** edge iterated `(0..n).rev()`,\nexcluding `t_end` — its traversal *start* — which no neighbour supplies.\nThe outline then shortcuts the missing corner with a chord whose area\nbite scales with the **neighbour edge's length**, not the sample pitch:\na 256-sample quarter arc still lost 0.53 area units.\n\nThree sites carried the class:\n- `measure/helpers::sample_edge_curve` → now endpoint-inclusive (dedup\nabsorbs seams); `face_area` of the notched cap was 0.0645 short\n- `tessellate/planar::tessellate_planar` and\n`tessellate/edge_sampling::sample_wire_positions` → reversed iteration\nis now `(1..=n).rev()` (include t_end, exclude t_start —\ncount-preserving)\n\nThe volume symptom was deflection-invariant because the cut's reversed\ncylinder wall routes `solid_volume` through the direct-face-tessellation\narm, whose per-face CDT inherited the corner-less outline.\n\n## Measured\n\n| quantity | before | after | exact |\n|---|---|---|---|\n| cut(box 10³, corner cyl r=3) volume | 927.6577 (any deflection) |\n929.3231 | 929.3141 |\n| notched cap face_area | 92.8670 | 92.9315 | 92.9314 |\n| cap per-face mesh | 32 tris / area 92.4026 | 33 tris / 92.9344 |\n92.9314 |\n\nProbe recipe (kept in the roadmap): chain the per-face mesh's own\nboundary edges and shoelace the outline — outline ≠ polygon indicts the\nsampler, not the CDT.\n\n## Verification\n\n- Full workspace `--no-fail-fast` sweep green (golden files, fixture\nfarms, calibrated foils)\n- `bench_equiv_cut_box_corner_cylinder_volume_is_exact` un-ignored and\nactive\n- clippy `-D warnings` clean; boundaries clean\n- Tool-side export-arm re-probe on the overlay to follow before merge\n(tessellation change)\n\nSibling left open (roadmap row): `check::properties` gauss volume\nmeasures 946.43 on the same solid — a separate over-integration.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes reversed edge traversal in boundary samplers so polygon corners\naren’t dropped. Restores exact outlines and fixes the\ndeflection-invariant volume error in cut(box, corner cylinder).\n\n- **Bug Fixes**\n- `measure::helpers::sample_edge_curve` is now endpoint-inclusive (dedup\nhandles seams).\n- `tessellate::planar` and `tessellate::edge_sampling` use\n`(1..=n).rev()` for reversed iteration (include t_end, exclude t_start).\n- Per-face CDT no longer shortcuts corners with chords; volume and face\nareas match closed form.\n  - Re-enabled `bench_equiv_cut_box_corner_cylinder_volume_is_exact`.\n\n- **New Features**\n- Added `BK_VOL_TRACE` debug logs across the volume cascade to trace\nwhich path is used.\n\n<sup>Written for commit 1c577f5af60b603fb5f4dc5b1ea2a8927d97fdf8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1383?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T19:27:20-07:00",
+          "tree_id": "fec3d0b2c4d54f1b5f4af2e40f6e587e74668a8f",
+          "url": "https://github.com/andymai/brepkit/commit/7866b9e7a02a29e5fca659b6ccef5e0dc09e77d6"
+        },
+        "date": 1785983404771,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 952751,
+            "range": "± 3095",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1031747,
+            "range": "± 19135",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11889,
+            "range": "± 466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703390,
+            "range": "± 6378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25238244,
+            "range": "± 100204",
             "unit": "ns/iter"
           }
         ]
