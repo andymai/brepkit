@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785975655816,
+  "lastUpdate": 1785976072202,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20573,6 +20573,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24388400,
             "range": "± 67325",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4ff55d28cfcb0b186c5adc95ee06d4603694ea17",
+          "message": "chore(main): release 2.129.5 (#1378)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.5](https://github.com/andymai/brepkit/compare/v2.129.4...v2.129.5)\n(2026-08-06)\n\n\n### Bug Fixes\n\n* **operations:** close the orientation-emission campaign;\ncheck_orientation defaults on\n([#1377](https://github.com/andymai/brepkit/issues/1377))\n([15fadd5](https://github.com/andymai/brepkit/commit/15fadd58d8812b4051e3282cc3678e6451960494))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.129.5 of `brepkit-wasm` with an operations fix:\n`check_orientation` now defaults to on and the orientation-emission\ncampaign is closed.\n\n- **Bug Fixes**\n- Operations: set `check_orientation` default to on; closed\norientation-emission campaign (fixes #1377).\n\n<sup>Written for commit be055f886fdd4da6486f29a8e5a2566531af1aaf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1378?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-06T00:25:43Z",
+          "tree_id": "4be50c82d524e69ede16d19e971636c5bd1f4306",
+          "url": "https://github.com/andymai/brepkit/commit/4ff55d28cfcb0b186c5adc95ee06d4603694ea17"
+        },
+        "date": 1785976070407,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 634086,
+            "range": "± 45753",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 701691,
+            "range": "± 21431",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8060,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 454865,
+            "range": "± 1413",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17351631,
+            "range": "± 125625",
             "unit": "ns/iter"
           }
         ]
