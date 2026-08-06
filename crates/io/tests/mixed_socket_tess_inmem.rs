@@ -222,6 +222,17 @@ fn mixed_socket_fresh_operands_are_orientation_clean() {
         "fresh body must be orientation-clean, got {:?}",
         report.issues
     );
+    let assembly = load("mixed_socket_assembly.bin", &mut topo);
+    let report =
+        brepkit_operations::validate::validate_solid_with_options(&topo, assembly, &opts).unwrap();
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inconsistent face orientations")),
+        "assembly operand must be orientation-clean, got {:?}",
+        report.issues
+    );
 }
 
 #[test]
