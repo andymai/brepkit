@@ -376,7 +376,14 @@ fn integrate_planar_polygon(polygon: &[Point3], normal: Vec3) -> FaceContributio
         };
     }
 
-    // Fan triangulation from vertex 0
+    // Fan triangulation from vertex 0 with SIGNED triangle areas (projected
+    // onto the face normal): a fan over a NON-CONVEX polygon (a notched
+    // boolean cap) sweeps triangles across the notch, and an unsigned fan
+    // counts those positively — the notch region then adds instead of
+    // cancelling, over-counting by an amount that depends on where vertex 0
+    // happens to sit. Signed accumulation makes the fan exact for any
+    // simple planar polygon; a globally CW polygon nets negative and is
+    // flipped wholesale below.
     let mut area = 0.0;
     let mut vol = 0.0;
     let mut mx = 0.0;
@@ -395,7 +402,7 @@ fn integrate_planar_polygon(polygon: &[Point3], normal: Vec3) -> FaceContributio
             ab.z() * ac.x() - ab.x() * ac.z(),
             ab.x() * ac.y() - ab.y() * ac.x(),
         );
-        let tri_area = cross.length() * 0.5;
+        let tri_area = cross.dot(normal) * 0.5;
         area += tri_area;
 
         // Volume contribution: (1/3) * centroid dot normal * area
@@ -441,15 +448,19 @@ fn integrate_planar_polygon(polygon: &[Point3], normal: Vec3) -> FaceContributio
         cz += centroid.z() * tri_area;
     }
 
+    // A polygon wound CW about `normal` nets a negative signed area; flip
+    // every accumulated quantity so callers keep the historical positive-
+    // area contract (hole handling in `integrate_planar_face` subtracts).
+    let flip = if area < 0.0 { -1.0 } else { 1.0 };
     FaceContribution {
-        area,
-        volume: vol,
-        volume_moment_x: mx,
-        volume_moment_y: my,
-        volume_moment_z: mz,
-        centroid_x: cx,
-        centroid_y: cy,
-        centroid_z: cz,
+        area: area * flip,
+        volume: vol * flip,
+        volume_moment_x: mx * flip,
+        volume_moment_y: my * flip,
+        volume_moment_z: mz * flip,
+        centroid_x: cx * flip,
+        centroid_y: cy * flip,
+        centroid_z: cz * flip,
     }
 }
 
@@ -792,4 +803,41 @@ where
     }
 
     Ok(uv)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_math::vec::{Point3, Vec3};
+
+    #[test]
+    fn planar_fan_is_signed_on_nonconvex_polygons() {
+        // An L-shape (10x10 square minus a 5x5 corner notch, area 75). The
+        // fan pivot at (0,0) sweeps triangles across the notch; an unsigned
+        // fan counted them positively and measured 87.5.
+        let poly = [
+            Point3::new(0.0, 0.0, 2.0),
+            Point3::new(10.0, 0.0, 2.0),
+            Point3::new(10.0, 5.0, 2.0),
+            Point3::new(5.0, 5.0, 2.0),
+            Point3::new(5.0, 10.0, 2.0),
+            Point3::new(0.0, 10.0, 2.0),
+        ];
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let c = integrate_planar_polygon(&poly, up);
+        assert!((c.area - 75.0).abs() < 1e-9, "area {}", c.area);
+        assert!(
+            (c.volume - 2.0 * 75.0 / 3.0).abs() < 1e-9,
+            "vol {}",
+            c.volume
+        );
+
+        // The same polygon wound CW nets negative and must flip wholesale,
+        // preserving the positive-area contract the hole subtraction relies on.
+        let rev: Vec<Point3> = poly.iter().rev().copied().collect();
+        let c2 = integrate_planar_polygon(&rev, up);
+        assert!((c2.area - 75.0).abs() < 1e-9, "rev area {}", c2.area);
+    }
 }
