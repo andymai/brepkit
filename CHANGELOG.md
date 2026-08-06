@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.8](https://github.com/andymai/brepkit/compare/v2.129.7...v2.129.8) (2026-08-06)
+
+
+### Bug Fixes
+
+* **check:** planar fan triangulation uses signed areas ([#1385](https://github.com/andymai/brepkit/issues/1385)) ([76e5054](https://github.com/andymai/brepkit/commit/76e505450d70c549d23a78e008377ef63dde6a47))
+
 ## [2.129.7](https://github.com/andymai/brepkit/compare/v2.129.6...v2.129.7) (2026-08-06)
 
 
