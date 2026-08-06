@@ -1107,6 +1107,9 @@ pub fn solid_volume(
 ) -> Result<f64, crate::OperationsError> {
     // Fast path: exact analytic formula for known primitives.
     if let Some(v) = try_analytic_solid_volume(topo, solid) {
+        if std::env::var("BK_VOL_TRACE").is_ok() {
+            log::debug!("VOL_TRACE try_analytic -> {v}");
+        }
         return Ok(v);
     }
 
@@ -1117,6 +1120,9 @@ pub fn solid_volume(
     // tessellation paths below suffer on bored quadrics (e.g. a cylinder
     // drilled through a sphere).
     if let Some(v) = analytic_faces_solid_volume(topo, solid) {
+        if std::env::var("BK_VOL_TRACE").is_ok() {
+            log::debug!("VOL_TRACE analytic_faces -> {v}");
+        }
         return Ok(v);
     }
 
@@ -1127,6 +1133,9 @@ pub fn solid_volume(
     // does NOT catch boolean results that merely happen to have arc-bounded
     // planar faces (rounded-rect caps, arc-frame lips).
     if let Some(v) = analytic_revolution_solid_volume(topo, solid) {
+        if std::env::var("BK_VOL_TRACE").is_ok() {
+            log::debug!("VOL_TRACE revolution -> {v}");
+        }
         return Ok(v);
     }
 
@@ -1284,6 +1293,9 @@ fn volume_from_per_face_tessellation(
     for &fid in shell.faces() {
         let mesh = tessellate::tessellate(topo, fid, deflection)?;
         let idx = &mesh.indices;
+        if std::env::var("BK_VOL_TRACE").is_ok() {
+            log::debug!("VOL_TRACE direct plane face {fid:?} tris={}", idx.len() / 3);
+        }
         let pos = &mesh.positions;
         let tri_count = idx.len() / 3;
 
@@ -2052,7 +2064,11 @@ pub fn volume_from_direct_face_tessellation(
         // Use exact analytical volume for analytic surface faces.
         match face.surface() {
             FaceSurface::Cylinder(_) => {
-                total += analytic_cylinder_signed_volume(topo, fid)? * 6.0;
+                let v = analytic_cylinder_signed_volume(topo, fid)? * 6.0;
+                if std::env::var("BK_VOL_TRACE").is_ok() {
+                    log::debug!("VOL_TRACE direct cyl face {:?} -> {}", fid, v / 6.0);
+                }
+                total += v;
                 continue;
             }
             FaceSurface::Cone(_) => {
