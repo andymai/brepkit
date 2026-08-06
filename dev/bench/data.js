@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785983913649,
+  "lastUpdate": 1785984511810,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20951,6 +20951,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26090102,
             "range": "± 36495",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "76e505450d70c549d23a78e008377ef63dde6a47",
+          "message": "fix(check): planar fan triangulation uses signed areas (#1385)\n\n## Summary\n\nCloses the sibling defect from the #1383 dig: `check::properties` gauss\nvolume measured 946.43 (+1.8%) on cut(box 10³, corner cylinder r=3)\nwhose closed form is 929.3141.\n\n## Root\n\n`integrate_planar_polygon` fans from vertex 0 with **unsigned** triangle\nareas (`cross.length()`). On a non-convex polygon — any boolean cut's\nnotched cap — the fan's triangles sweep across the notch and get counted\npositively, so the notch adds instead of cancelling. The over-count\ndepends on where vertex 0 sits: the same 92.93-area cap measured 98.07\nfanned from one corner and 94.29 from another. Volume, divergence\nmoments, and centroid terms all inherited the error.\n\n## Fix\n\nProject each fan triangle onto the face normal (signed accumulation),\nexact for any simple planar polygon. A globally-CW polygon nets negative\nand is flipped wholesale, preserving the positive-area contract that\n`integrate_planar_face`'s hole subtraction relies on.\n\n## Verification\n\n- Per-face audit: every contribution matches the closed-form flux\ndecomposition (top cap +309.78 vs exact +309.77; wall −47.124 exact)\n- Gauss solid volume: 946.43 → 929.3236\n- New unit pin: `planar_fan_is_signed_on_nonconvex_polygons` (L-shape,\nboth windings)\n- check suite green; full workspace `--no-fail-fast` sweep green; clippy\nclean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes over-counting in planar fan triangulation by using signed triangle\nareas in `check`, so non-convex caps integrate correctly and Gauss\nvolume matches the closed form.\n\n- **Bug Fixes**\n- Use signed areas via `cross.dot(normal) * 0.5` in\n`integrate_planar_polygon` to avoid notch over-counting on non-convex\nfans.\n- Flip all accumulations when total area is negative to keep the\npositive-area contract used by `integrate_planar_face` hole subtraction.\n- Corrects volume, moments, and centroid terms; Gauss volume 946.43 →\n929.32 (exact 929.3141) on cut(box, corner cylinder).\n- Add `planar_fan_is_signed_on_nonconvex_polygons` test covering both\nwindings.\n\n<sup>Written for commit d957b6ede570c102f5bb385318c90cead78b2ed0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1385?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T19:46:02-07:00",
+          "tree_id": "4a085782282fe9a5d4e165fbe3006c5c30cb0f1b",
+          "url": "https://github.com/andymai/brepkit/commit/76e505450d70c549d23a78e008377ef63dde6a47"
+        },
+        "date": 1785984510145,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 951229,
+            "range": "± 988",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1031296,
+            "range": "± 6027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12063,
+            "range": "± 120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699306,
+            "range": "± 1471",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25390443,
+            "range": "± 69054",
             "unit": "ns/iter"
           }
         ]
