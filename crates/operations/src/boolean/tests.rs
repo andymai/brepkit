@@ -7163,3 +7163,54 @@ fn lip_ring_loft_cut_is_orientation_consistent() {
         "lip-ring cut must have no same-sense edge pairs, got {pairs:?}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Bench-equivalence ready-repros: found by the wasm head-to-head output
+// verification (2026-08-05). The bench harness times ops without checking
+// outputs; these pin the two rows whose results deviate from closed form.
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+#[ignore = "ready repro: intersect(corner box, center sphere) keeps the wrong sphere region — \
+            vol 1304.8 vs the exact octant 268.083, every probe point classifies Outside \
+            (including inside the true octant), and oriented volume (1148.8) disagrees with \
+            the magnitude (1304.8). Three coordinate planes through the sphere center = the \
+            chord-discretized-equator sphere-split family (roadmap TERMINAL-adjacent: the \
+            general UV-space sphere arrangement splitter is the named missing primitive)"]
+fn bench_equiv_intersect_box_corner_sphere_is_the_octant() {
+    let mut topo = Topology::new();
+    let b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let s = crate::primitives::make_sphere(&mut topo, 8.0, 32).unwrap();
+    let r = boolean(&mut topo, BooleanOp::Intersect, b, s).unwrap();
+    let vol = crate::measure::solid_volume(&topo, r, 0.01).unwrap();
+    let exact = std::f64::consts::PI * 8.0_f64.powi(3) * 4.0 / 3.0 / 8.0;
+    assert!(
+        (vol - exact).abs() < 0.5,
+        "octant intersect volume should be ~{exact:.3}, got {vol:.3}"
+    );
+    let inside =
+        crate::classify::classify_point(&topo, r, Point3::new(1.0, 1.0, 1.0), 0.01, 1e-7).unwrap();
+    assert!(
+        matches!(inside, crate::classify::PointClassification::Inside),
+        "a point in the true octant must classify Inside, got {inside:?}"
+    );
+}
+
+#[test]
+#[ignore = "ready repro: cut(corner box, corner cylinder) removes 72.342 instead of the exact \
+            quarter-cylinder 70.686 (result 927.658 vs 929.314, deflection-invariant, so not a \
+            tessellation artifact; the primitive cylinder measures exactly 565.4867 through the \
+            same path). Face census is correct (6 planes + 1 cylinder) — the trimmed geometry \
+            itself deviates"]
+fn bench_equiv_cut_box_corner_cylinder_volume_is_exact() {
+    let mut topo = Topology::new();
+    let b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let c = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+    let r = boolean(&mut topo, BooleanOp::Cut, b, c).unwrap();
+    let vol = crate::measure::solid_volume(&topo, r, 0.01).unwrap();
+    let exact = 1000.0 - std::f64::consts::PI * 9.0 * 10.0 / 4.0;
+    assert!(
+        (vol - exact).abs() < 0.05,
+        "quarter-cylinder cut volume should be ~{exact:.4}, got {vol:.4}"
+    );
+}
