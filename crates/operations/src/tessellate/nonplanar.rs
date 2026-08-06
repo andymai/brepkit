@@ -2132,11 +2132,19 @@ pub(super) fn tessellate_nonplanar_snap(
     face_data: &brepkit_topology::face::Face,
     deflection: f64,
     angular_tol: f64,
+    circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
     point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
-    let mut face_mesh = super::tessellate_with_tolerance(topo, face_id, deflection, angular_tol)?;
+    let mut face_mesh = super::face::tessellate_with_uvs_floor(
+        topo,
+        face_id,
+        deflection,
+        angular_tol,
+        circle_floor,
+    )
+    .map(|uv| uv.mesh)?;
 
     // `tessellate()` already applies the `is_reversed` flip. The caller
     // `tessellate_face_with_shared_edges` will apply its own flip, so undo
