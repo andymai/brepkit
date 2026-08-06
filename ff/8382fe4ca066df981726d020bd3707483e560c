@@ -1,0 +1,48 @@
+crates/operations/examples/perf_probe.rs
+  s_638644fdff411b::t_7920ea8fbc7c4c 99
+  s_638644fdff411b::t_0410e628cf1fed 100-104,106-121
+  s_638644fdff411b::t_af4841eee307a5 1-2,9-11,13-15,42,57,63-69,76-78,81,83-84,95-98
+  s_638644fdff411b::t_0fcabe340c6ce6 16,18-25,33-41,43-44,46-56
+  s_638644fdff411b::t_a08c8855c8e433 17,26-32
+  s_638644fdff411b::t_6f3f47664db3a2 79
+  s_638644fdff411b::t_eefe3e486cc82d 80,85-94
+  s_638644fdff411b::t_ca2bfb6d7fea54 82,105
+  s_638644fdff411b::t_8bce5660e53959 3-8
+  s_638644fdff411b::t_e55f7c9c2c55fd 45
+  s_638644fdff411b::t_005929f15ef4d5 58-62,70-75
+  s_638644fdff411b::t_c1a9ba42ec12d9 12
+tests/golden/data/tessellation_sphere.golden
+  s_638644fdff411b::t_ba4d1c30388f58 2-3
+crates/operations/src/tessellate/face.rs
+  s_638644fdff411b::t_2ee62f63a06ef5 199
+  s_638644fdff411b::t_4263dd04dd28f2 200-208,212-213,219-220
+  s_638644fdff411b::t_f9eb1028c1244a 24-26
+  s_638644fdff411b::t_b633263f49cc70 61-75
+  s_638644fdff411b::t_6fc2afb1599beb 214,221
+  s_638644fdff411b::t_c2718bc4e850ba 16-22
+  s_638644fdff411b::t_6974d7968fa5af 23
+  s_638644fdff411b::t_6b82fe1c11bd18 60
+tests/golden/data/sphere_r3.golden
+  s_638644fdff411b::t_ba4d1c30388f58 2-3,7
+crates/operations/src/tessellate/solid.rs
+  s_638644fdff411b::t_c43835d09261c4 911,1001,1035,1126
+crates/operations/src/tessellate/nonplanar.rs
+  s_638644fdff411b::t_4aabf8fe69728f 2135
+  s_638644fdff411b::t_ca2bfb6d7fea54 2140-2147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ff8382fe4ca066df981726d020bd3707483e560c",
+  "prompts": {},
+  "sessions": {
+    "s_638644fdff411b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0e007429-ee5b-4225-8328-687d3a33df55",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
