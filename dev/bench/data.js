@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785993744808,
+  "lastUpdate": 1786029414115,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21113,6 +21113,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26096687,
             "range": "± 38852",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4e7944fa10ca95a6f97b3b565cc076674d12a214",
+          "message": "test(io): mixed-socket re-capture pins the winding root inside the fuse (#1388)\n\n## Summary\n\nRe-ran the 2x2 mixed-detail per-cell half-sockets export chain capture\non the current kernel (the fixture's standing next step). The result\noverturns the pinned theory:\n\n- All nine boolean stages of the fresh chain are orientation-clean under\nthe strict check. The capture-era body's 20 same-sense pairs are gone\n(the orientation-emission campaign reached this chain); the assembly\noperand is byte-identical to the old capture.\n- Fusing the two clean operands still emits exactly 20 same-sense pairs,\n116 unmatched half-edges at export tolerance, and 112 of them survive\nvertex welding into the exported STL. Export tests stay green only\nbecause their oracle is undirected edge pairing.\n- The winding residual is therefore born inside the GFA fuse's\nface-orientation emission on the NURBS-quarter-socket x cylinder-band\nconfiguration, not inherited from an upstream construction op.\n\n## Changes\n\n- `mixed_socket_body_fresh.bin`: fresh final-fuse body operand (assembly\nreuses the existing byte-identical fixture).\n- Active guard: fresh operands are orientation-clean (protects the\nconstruction-op campaign at this chain's altitude).\n- Active pin: the fuse of the clean pair reports 20\ninconsistent-orientation edges (a fuse-side fix must flip this pin and\nun-ignore the watertight repro).\n- Ignored watertight repro retargeted to the fresh operands.\n- New diagnostics: `orient_scan` (strict validation over captured .bin\nchains) and `fuse_orient` (fuse + per-face unmatched-half-edge\nattribution, ~58 ms).\n- Roadmap row updated with the re-capture measurement.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRe-captured the mixed‑socket export chain and proved the winding defect\nis created by the GFA fuse, not upstream. Both operands are\norientation‑clean, but fusing them creates 20 same‑sense pairs and 116\nunmatched half‑edges (112 after weld).\n\n- **New Features**\n- Added fresh body fixture and tests that guard orientation for both\nbody and assembly operands; pinned the fuse‑side defect and retargeted\nthe watertight repro to the fresh operands.\n- Added diagnostics: `orient_scan` (strict orientation scan over\ncaptured `.bin` chains) and `fuse_orient` (fuse plus per‑face unmatched\nhalf‑edge attribution).\n\n<sup>Written for commit dcc7c86ce96f2882d24fc72e8dc8c6ab3613d662.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1388?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-06T08:13:49-07:00",
+          "tree_id": "4636fc4b786056a43021cfabbfdf60dec968165e",
+          "url": "https://github.com/andymai/brepkit/commit/4e7944fa10ca95a6f97b3b565cc076674d12a214"
+        },
+        "date": 1786029412386,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 943476,
+            "range": "± 19890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1026034,
+            "range": "± 1618",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12192,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697117,
+            "range": "± 2343",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24842613,
+            "range": "± 42836",
             "unit": "ns/iter"
           }
         ]
