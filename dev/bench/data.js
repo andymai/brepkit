@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785980185239,
+  "lastUpdate": 1785981336504,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20789,6 +20789,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25056214,
             "range": "± 63094",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "89e5dad58f8f7d9de1116940c9c8907b17c938f9",
+          "message": "test(operations): pin the two bench-equivalence deviations as ready-repros (#1382)\n\n## Summary\n\nRan the wasm-vs-wasm head-to-head (Procedure 1 + node_modules overlay\nafter discovering the vitest `resolve.alias` never reaches the CJS\nrequire path — an alias-only run silently benches the installed kernel)\nand then verified output equivalence on the boolean rows, per the\nparity-benchmarking doctrine.\n\n**brepkit leads all 16 bench rows** (cut(box,cyl) 2.6×, fuse(box,box)\n88×, meshing 1.4–3.8×, transforms ~4×, STEP export 14.7×). fuse is exact\n(1000.000 on both kernels). Two rows fail equivalence and are pinned as\nignored ready-repros:\n\n1. **intersect(corner box, center sphere)**: keeps the wrong sphere\nregion — 1304.8 vs the exact octant 268.083; every probe point\nclassifies Outside (including inside the true octant); oriented volume\n(1148.8) disagrees with the magnitude while edges stay paired. Three\ncoordinate planes through the sphere center is the\nchord-discretized-equator sphere-split family (TERMINAL-adjacent per the\nroadmap), so the pin notes the fix should scope to the center-plane\nspecial case.\n2. **cut(corner box, corner cylinder)**: removes 2.3% too much (927.6577\nvs 929.3141), deflection-invariant, face census correct — the trimmed\ngeometry deviates. First probe for the next session: per-face area audit\nagainst closed forms.\n\nRoadmap updated with both rows, the verified bench record, and the alias\ngotcha. No production code changes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins two bench-equivalence deviations as ignored ready-repro tests in\nboolean ops, found by the wasm-vs-wasm head-to-head. Intersect(corner\nbox, center sphere) returns the wrong region (should be the spherical\noctant) and cut(corner box, corner cylinder) over-trims (should remove a\nquarter-cylinder); roadmap updated with the head-to-head results and a\n`vitest` `resolve.alias` CJS-path gotcha.\n\n<sup>Written for commit 5fbdb895d1acce496018c160a12a876a620aa7b9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1382?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T18:53:07-07:00",
+          "tree_id": "72a31644dfc3679889d43fb4451ee2b57234ac9b",
+          "url": "https://github.com/andymai/brepkit/commit/89e5dad58f8f7d9de1116940c9c8907b17c938f9"
+        },
+        "date": 1785981334850,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 946017,
+            "range": "± 2008",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1022779,
+            "range": "± 2005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11940,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699517,
+            "range": "± 35798",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24833432,
+            "range": "± 591983",
             "unit": "ns/iter"
           }
         ]
