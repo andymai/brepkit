@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785968660067,
+  "lastUpdate": 1785975655816,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20519,6 +20519,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25978502,
             "range": "± 25161",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "15fadd58d8812b4051e3282cc3678e6451960494",
+          "message": "fix(operations): close the orientation-emission campaign; check_orientation defaults on (#1377)\n\n## Summary\n\nCloses the orientation-emission campaign's boolean-assembler frontier\nand flips `ValidationOptions::check_orientation` to default **on**. The\nwhole workspace is strict-clean under the reversal-corrected traversal\ncheck (every shared edge used in opposite effective senses).\n\nThe campaign's framing was overturned by measurement: the gridfinity D1\nlip-ring cut was never \"a cut of two clean lofts\" — the inner loft\n**operand** carried all 32 same-sense pairs, and the boolean assembler\nwas inheriting them faithfully. `builder_solid`'s Cut-B flip and\n`shape_store`'s reversed transfer are both exonerated (`new_reversed`\nwith unchanged wires flips every effective sense coherently).\n\n## Three roots closed\n\n1. **loft (operations)**: the ruled-NURBS taper side walls set\n`is_reversed` without reversing the wire (the #1367 rule). Fixed by\nflipping the **surface** (swapping the ruled rails negates dS/du) so the\nnormal points outward with no reversal flag — a reversal-flagged loft\nwall also broke downstream boolean consumers (gridfinity d3/d4/d5 Euler\nregressions caught the wire-only fix).\n2. **internal-loops splitter (algo)**: `split_face_with_internal_loops`\nnormalized plane-face discs CW-in-UV and holes CCW-in-UV — backwards vs\nthe effective-CCW-outer / CW-hole convention — so **every flush\npocket/socket cut** emitted its cap hole wound against the flipped tool\nwalls. Plane-gated: periodic lateral window cuts keep the historic\nwinding (the cylinder-slot foil fails on the ungated version).\n3. **blend rim fillet**: the torus band used a fixed wire order +\n`set_reversed`; a fixed order cannot serve both rims of a cylinder.\nSenses are now derived by opposing each contact circle's cap/wall user,\nand the Line-seam band is accepted by the structured two-rim torus\nmesher (the generic path skinned the correctly-wound band as its\ncomplement: mesh area 1857→2440, volume −112).\n\n## Pins\n\n- `lip_ring_loft_cut_is_orientation_consistent` (native D1 clone: both\nlofts + cut, 0 pairs)\n- `coplanar_flush_pocket_cut_is_orientation_consistent` (minimal 2-box\nrepro + hole-winding oracle)\n- `fillet_v2_cylinder_rim_bands_are_orientation_consistent` (0 pairs +\nvolume 6275.7 pin)\n\n## Verification\n\n- `cargo test --workspace --no-fail-fast --exclude brepkit-render`: 115\nsuites ok, 0 failed, **with check_orientation defaulting on**\n- wasm gridfinity suite 27/27; algo 209; io fixture farm all green;\nclippy `-D warnings` clean; boundaries + doc-paths clean\n- Foil that shaped the fix:\n`cut_cylinder_by_box_slot_perpendicular_walls_is_watertight` (rejects\nthe ungated splitter normalization)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nEnable orientation checks by default and fix three roots so lofts,\nbooleans, and rim fillets emit orientation‑consistent shells (no\nsame‑sense edge pairs). This closes the orientation‑emission campaign\nand stabilizes downstream consumers.\n\n- **Bug Fixes**\n- Loft: ruled‑NURBS side walls now flip the surface (swap rails) instead\nof using a reversal flag; reversal‑aware side wires ensure effective\nsenses oppose neighbors.\n- Face splitter (plane faces): normalize discs to effective‑CCW outer\nand effective‑CW holes; gated to planes so periodic window cuts keep\nhistoric winding.\n- Blend rim fillet: derive each contact circle’s sense by opposing its\ncap/wall user; accept Line‑seam bands in the structured two‑rim torus\nmesher.\n\n- **Migration**\n- `ValidationOptions::check_orientation` now defaults to `true`. To opt\nout, set `check_orientation: false` when calling validation (not\nrecommended).\n\n<sup>Written for commit 731bfb4600f174d21cfd0bc80a54fad5eabf60c8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1377?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T17:18:18-07:00",
+          "tree_id": "b6b9980999030033385c5a6259a8f1da7981e000",
+          "url": "https://github.com/andymai/brepkit/commit/15fadd58d8812b4051e3282cc3678e6451960494"
+        },
+        "date": 1785975653879,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 922296,
+            "range": "± 1683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1006141,
+            "range": "± 43388",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12377,
+            "range": "± 182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 660504,
+            "range": "± 564",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24388400,
+            "range": "± 67325",
             "unit": "ns/iter"
           }
         ]
