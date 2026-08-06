@@ -6966,3 +6966,200 @@ fn circle_outside_cone_box_fuse_is_watertight() {
         "volume {vol} should be ~782.449"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Orientation-emission campaign: the boolean assembler frontier.
+// Construction ops (extrude/revolve/sweep/loft/pipe) are strict-clean;
+// GFA boolean outputs still emit same-sense edge pairs. Probe repro:
+// the gridfinity D1 lip-ring loft cut (wasm gridfinity_tests), cloned
+// natively here. check_orientation defaults ON only when this closes.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Reversal-corrected traversal check: shared edges whose two face uses
+/// carry the SAME effective sense (`is_forward() != face.is_reversed()`).
+/// A consistent closed shell has zero.
+fn same_sense_pairs(topo: &Topology, solid: SolidId) -> Vec<(EdgeId, FaceId, FaceId)> {
+    use std::collections::HashMap;
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
+    let mut uses: HashMap<EdgeId, Vec<(FaceId, bool)>> = HashMap::new();
+    for &fid in &faces {
+        let face = topo.face(fid).unwrap();
+        let rev = face.is_reversed();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                uses.entry(oe.edge())
+                    .or_default()
+                    .push((fid, oe.is_forward() != rev));
+            }
+        }
+    }
+    let mut pairs: Vec<(EdgeId, FaceId, FaceId)> = uses
+        .into_iter()
+        .filter(|(_, u)| u.len() == 2 && u[0].1 == u[1].1)
+        .map(|(eid, u)| (eid, u[0].0, u[1].0))
+        .collect();
+    pairs.sort_by_key(|(eid, _, _)| eid.index());
+    pairs
+}
+
+/// Build the gridfinity D1 lip-ring operands: outer flush frustum (2
+/// sections) and inner tapering frustum (5 sections), both lofted.
+fn make_lip_ring_operands(topo: &mut Topology) -> (SolidId, SolidId) {
+    let section = |topo: &mut Topology, z: f64, inset: f64| {
+        let half = (41.5 - 2.0 * inset) / 2.0;
+        let r = (4.0 - inset).max(0.1);
+        make_rounded_rect_arc_face(topo, half, half, r, z)
+    };
+    let outer: Vec<FaceId> = [(-1.2, 0.0), (4.4, 0.0)]
+        .iter()
+        .map(|&(z, inset)| section(topo, z, inset))
+        .collect();
+    let inner: Vec<FaceId> = [(-1.2, 5.2), (0.0, 5.2), (0.7, 4.5), (2.5, 4.5), (4.4, 2.6)]
+        .iter()
+        .map(|&(z, inset)| section(topo, z, inset))
+        .collect();
+    let outer_solid = crate::loft::loft(topo, &outer).unwrap();
+    let inner_solid = crate::loft::loft(topo, &inner).unwrap();
+    (outer_solid, inner_solid)
+}
+
+/// For a PLANAR face: signed area of each wire about the face's EFFECTIVE
+/// normal (surface normal, flipped if `is_reversed`). Convention: outer
+/// wire positive (CCW), hole wires negative (CW). Returns
+/// `(outer_area, inner_areas)` in effective terms, or None if non-planar.
+fn planar_effective_windings(topo: &Topology, fid: FaceId) -> Option<(f64, Vec<f64>)> {
+    let face = topo.face(fid).unwrap();
+    let FaceSurface::Plane { normal, .. } = *face.surface() else {
+        return None;
+    };
+    let eff_normal = if face.is_reversed() {
+        normal * -1.0
+    } else {
+        normal
+    };
+    let signed_area = |wid| {
+        let wire = topo.wire(wid).unwrap();
+        // Effective traversal of a reversed face is the wire in REVERSE
+        // ORDER with flipped senses; flipping senses alone yields the same
+        // cyclic point sequence and hence the unflipped signed area.
+        let oes: Vec<_> = if face.is_reversed() {
+            wire.edges().iter().rev().collect()
+        } else {
+            wire.edges().iter().collect()
+        };
+        let mut pts: Vec<Point3> = Vec::new();
+        for oe in oes {
+            let edge = topo.edge(oe.edge()).unwrap();
+            let a = if oe.is_forward() == face.is_reversed() {
+                edge.end()
+            } else {
+                edge.start()
+            };
+            pts.push(topo.vertex(a).unwrap().point());
+        }
+        let n = pts.len();
+        let mut acc = Vec3::new(0.0, 0.0, 0.0);
+        let origin = pts[0];
+        for i in 1..n - 1 {
+            let u = pts[i] - origin;
+            let v = pts[i + 1] - origin;
+            acc += u.cross(v);
+        }
+        0.5 * acc.dot(eff_normal)
+    };
+    let outer = signed_area(face.outer_wire());
+    let inners = face.inner_wires().iter().map(|&w| signed_area(w)).collect();
+    Some((outer, inners))
+}
+
+#[test]
+fn fillet_v2_cylinder_rim_bands_are_orientation_consistent() {
+    // Both rim-fillet torus bands must traverse the shared contact circles
+    // in the effective sense opposite their cap/wall users; a fixed band
+    // wire order cannot serve both rims of a cylinder. The volume pin
+    // guards the Line-seam band's structured two-rim meshing — the historic
+    // same-sense winding happened to skin the right region through the
+    // generic path, so orientation and mesh coverage must be pinned
+    // together.
+    let mut topo = Topology::new();
+    let cyl = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+    let edges: Vec<EdgeId> = brepkit_topology::explorer::solid_edges(&topo, cyl).unwrap();
+    let result = crate::blend_ops::fillet_v2(&mut topo, cyl, &edges, 0.5)
+        .unwrap()
+        .solid;
+    let pairs = same_sense_pairs(&topo, result);
+    assert!(
+        pairs.is_empty(),
+        "rim-filleted cylinder must have no same-sense edge pairs, got {pairs:?}"
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - 6275.7).abs() < 2.0,
+        "rim-filleted cylinder volume should be ~6275.7 (raw 6283.2 minus two r=0.5 rounds), got {vol:.1}"
+    );
+}
+
+#[test]
+fn coplanar_flush_pocket_cut_is_orientation_consistent() {
+    // A tool flush with the base's bottom or top face leaves a cap-with-hole
+    // whose hole wire must wind effective-CW (opposing the flipped tool
+    // walls that share its edges). The internal-loops splitter emitted it
+    // effective-CCW on plane faces, so every flush socket cut carried
+    // same-sense pairs.
+    for (label, z0, z1) in [("bottom-flush", 0.0, 4.0), ("top-flush", 6.0, 10.0)] {
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 6.0, 6.0, z1 - z0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            b,
+            &brepkit_math::mat::Mat4::translation(7.0, 7.0, z0),
+        )
+        .unwrap();
+        let cut = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let pairs = same_sense_pairs(&topo, cut);
+        assert!(
+            pairs.is_empty(),
+            "{label} pocket cut must have no same-sense edge pairs, got {pairs:?}"
+        );
+        for fid in brepkit_topology::explorer::solid_faces(&topo, cut).unwrap() {
+            if let Some((outer, inners)) = planar_effective_windings(&topo, fid) {
+                assert!(
+                    outer > 0.0,
+                    "{label}: face#{} outer wire must wind effective-CCW, got {outer:+.1}",
+                    fid.index()
+                );
+                for (i, &a) in inners.iter().enumerate() {
+                    assert!(
+                        a < 0.0,
+                        "{label}: face#{} hole {i} must wind effective-CW, got {a:+.1}",
+                        fid.index()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lip_ring_loft_cut_is_orientation_consistent() {
+    // The gridfinity D1 lip ring: both lofts must be strict-clean (the
+    // inner loft's ruled-NURBS taper corners historically carried 32
+    // same-sense pairs from a reversal flag without a reversed wire), and
+    // the concentric cut must add none of its own.
+    let mut topo = Topology::new();
+    let (outer_solid, inner_solid) = make_lip_ring_operands(&mut topo);
+    for (label, sid) in [("outer", outer_solid), ("inner", inner_solid)] {
+        let p = same_sense_pairs(&topo, sid);
+        assert!(
+            p.is_empty(),
+            "{label} loft operand must have no same-sense edge pairs, got {p:?}"
+        );
+    }
+    let cut = boolean(&mut topo, BooleanOp::Cut, outer_solid, inner_solid).unwrap();
+    let pairs = same_sense_pairs(&topo, cut);
+    assert!(
+        pairs.is_empty(),
+        "lip-ring cut must have no same-sense edge pairs, got {pairs:?}"
+    );
+}

@@ -581,14 +581,19 @@ pub(super) fn tessellate_torus_two_rim_band(
                 }
             }
             // A NURBS seam is the analytic revolve of a recognised NURBS-circle
-            // profile arc: the band reuses that original edge as its seam, and
-            // the seam is only midpoint-sampled (via the EdgeCurve delegates)
-            // to pick the covered arc, so any open curve type is safe here.
-            EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) if !closed => match &mut seam {
-                None => seam = Some((oe.edge(), 1)),
-                Some((eid, uses)) if *eid == oe.edge() => *uses += 1,
-                Some(_) => return Ok(false),
-            },
+            // profile arc, and a LINE seam is the rim-fillet band's degenerate
+            // chord between its two contact circles: the band reuses that
+            // original edge as its seam, and the seam is only midpoint-sampled
+            // (via the EdgeCurve delegates) to pick the covered arc — the
+            // chord midpoint projects into the covered arc — so any open
+            // curve type is safe here.
+            EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) | EdgeCurve::Line if !closed => {
+                match &mut seam {
+                    None => seam = Some((oe.edge(), 1)),
+                    Some((eid, uses)) if *eid == oe.edge() => *uses += 1,
+                    Some(_) => return Ok(false),
+                }
+            }
             EdgeCurve::Circle(_)
             | EdgeCurve::NurbsCurve(_)
             | EdgeCurve::Line

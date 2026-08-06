@@ -1681,12 +1681,21 @@ pub(super) fn split_face_with_internal_loops(
             }
             area
         };
-        // If signed area is positive (CW in standard UV), the loop encloses
-        // the "right" region. If negative (CCW), it encloses the complement.
-        // Heuristic: use signed_area sign directly -- negative means CCW in
-        // UV which corresponds to the exterior. Reverse to get interior.
-        if signed_area < 0.0 {
-            // CCW -> enclosing exterior. Reverse to CW -> interior.
+        // PLANE faces: normalize the disc's outer wire to the face-wire
+        // convention — effective winding CCW about the effective normal.
+        // The trapezoid form Σ(x1−x0)(y1+y0) is NEGATIVE for a CCW loop,
+        // and the plane frame is right-handed with the stored normal, so
+        // the stored winding must be CCW for an unreversed parent and CW
+        // for a reversed one. The hole built from its reverse below then
+        // lands effective-CW automatically, opposing both the disc and
+        // the flipped tool walls that share its edges (the coplanar
+        // pocket-cut orientation defect). Non-planar faces keep the
+        // historic CW normalization: the periodic lateral-face machinery
+        // (seam handling, window cuts) is calibrated to it.
+        let is_plane = matches!(surface, FaceSurface::Plane { .. });
+        let want_ccw = is_plane && !reversed;
+        let is_ccw = signed_area < 0.0;
+        if is_ccw != want_ccw {
             loop_edges.reverse();
             for edge in loop_edges.iter_mut() {
                 std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
@@ -1760,14 +1769,15 @@ pub(super) fn split_face_with_internal_loops(
         // this loop consumed an overlapping pre-existing hole, otherwise the
         // reversed loop.
         let hole: Vec<OrientedPCurveEdge> = if let Some(u) = union_hole_by_loop[li].take() {
-            // Normalize to hole winding (CCW in UV — opposite of the CW
-            // interior-enclosing convention applied to the loop above).
+            // Normalize to hole winding: effective-CW about the effective
+            // normal, i.e. stored CW (positive trapezoid area) for an
+            // unreversed parent, stored CCW for a reversed one.
             let area: f64 = u
                 .iter()
                 .map(|e| (e.end_uv.x() - e.start_uv.x()) * (e.end_uv.y() + e.start_uv.y()))
                 .sum();
             let mut u = u;
-            if area > 0.0 {
+            if (area < 0.0) != reversed {
                 u.reverse();
                 for edge in &mut u {
                     std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
