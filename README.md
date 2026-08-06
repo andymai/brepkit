@@ -146,20 +146,21 @@ Layered Cargo workspace. Each crate depends only on the same or lower layers, an
 
 Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs/tree/main/benchmarks) (5 iterations, Node.js, Linux x86_64). WASM is single-threaded. Native benchmarks use criterion.
 
-| Operation                    | brepkit (WASM) | OCCT (WASM) | Speedup    | brepkit (native) |
-| ---------------------------- | -------------- | ----------- | ---------- | ---------------- |
-| fuse(box, box) (×10)         | 0.5 ms         | 45.1 ms     | 90x        | 121 µs           |
-| cut(box, cylinder) (×10)     | 22.9 ms        | 67.0 ms     | 2.9x       | 8.7 ms           |
-| intersect(box, sphere) (×10) | 0.3 ms         | 60.8 ms     | 203x       | 103 µs           |
-| box + chamfer                | 0.2 ms         | 5.6 ms      | 28x        | 46 µs            |
-| box + fillet                 | 0.3 ms         | 6.1 ms      | 20x        | 127 µs           |
-| multi-boolean (16 holes)     | 8.1 ms         | 31.3 ms     | 3.9x       | 4.4 ms           |
-| mesh sphere (tol=0.01)       | 33.9 ms        | 50.1 ms     | 1.5x       | 720 µs           |
-| exportSTEP (×10)             | 0.8 ms         | 15.4 ms     | 19x        | n/a              |
+| Operation                | brepkit (WASM) | OCCT (WASM) | Speedup | brepkit (native) |
+| ------------------------ | -------------- | ----------- | ------- | ---------------- |
+| fuse(box, box) (×10)     | 0.5 ms         | 43.7 ms     | 87x     | 122 µs           |
+| cut(box, cylinder) (×10) | 28.3 ms        | 64.3 ms     | 2.3x    | 9.3 ms           |
+| box + chamfer            | 0.2 ms         | 5.4 ms      | 27x     | 46 µs            |
+| box + fillet             | 0.3 ms         | 6.2 ms      | 21x     | 127 µs           |
+| multi-boolean (16 holes) | 4.7 ms         | 30.1 ms     | 6.4x    | 2.8 ms           |
+| mesh sphere (tol=0.01)   | 7.1 ms         | 51.9 ms     | 7.3x    | 6.0 ms           |
+| exportSTEP (×10)         | 0.9 ms         | 14.3 ms     | 16x     | n/a              |
+
+Every quoted row is output-verified across both kernels before timing is compared: fuse, chamfer, and sphere volumes match exactly; cut, fillet, and multi-boolean volumes agree within 0.004%. The sphere mesh densities are comparable at equal tolerance (9,800 triangles vs 10,176). The `intersect(box, sphere)` row is excluded: brepkit currently keeps the wrong sphere region for that configuration (an open, pinned defect), so its ~200x timing would not be a like-for-like comparison.
 
 Booleans preserve analytic surfaces, so face counts stay low across chained operations. A nine-step compound boolean settles at 72 faces while a mesh-based approach would reach roughly 7,000. The same holds for blends: a straight edge filleted between two planar faces keeps an exact cylindrical wall rather than a NURBS approximation of one.
 
-> The OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js. Boolean and `exportSTEP` rows are timed as batches of ten operations. WASM figures are the median of three runs of `kernel-comparison.bench.test.ts` against a local `wasm-pack --target nodejs --release` build. Native benchmarks: `cargo bench -p brepkit-operations --bench cad_operations`, whose `box+fillet` case drives the same rolling-ball engine the JS binding selects. Full benchmark source: [brepjs/benchmarks](https://github.com/andymai/brepjs/tree/main/benchmarks). Measured 2026-08-02 on brepkit 2.128.8.
+> The OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js. Boolean and `exportSTEP` rows are timed as batches of ten operations. WASM figures are medians of `kernel-comparison.bench.test.ts` (5 iterations) against a local `cargo xtask wasm-build` package, hash-verified at the require path. Native figures: `cargo bench -p brepkit-operations --bench cad_operations`, except the mesh-sphere row, which is measured at the same parameters as the WASM row (`tessellate_solid_with_tolerance`, deflection 0.01, angular 0.1 rad) via `crates/operations/examples/perf_probe.rs` — the criterion suite's sphere case meshes per-face and is not comparable. Full benchmark source: [brepjs/benchmarks](https://github.com/andymai/brepjs/tree/main/benchmarks). Measured 2026-08-06 on brepkit main (post-2.129.8, with the display-sphere tessellation fix).
 
 ## Data Exchange
 
