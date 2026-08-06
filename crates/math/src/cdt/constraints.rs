@@ -32,6 +32,9 @@ impl Cdt {
     /// becomes an edge).
     #[allow(clippy::too_many_lines)]
     fn recover_edge_depth(&mut self, v0: usize, v1: usize, depth: usize) -> Result<(), MathError> {
+        if v0 == v1 {
+            return Ok(());
+        }
         let max_iter = self.triangles.len() * 4 + 100;
 
         for _ in 0..max_iter {
@@ -56,11 +59,27 @@ impl Cdt {
                     let q0 = self.vertices[e0];
                     let q1 = self.vertices[e1];
                     if let Some(mid_pt) = segment_intersection_point(p0, p1, q0, q1) {
+                        // `insert_point` welds onto an existing vertex when the
+                        // intersection lands within snap distance of one, so
+                        // `mid` can come back as any of the four endpoints.
+                        // Recursing with a degenerate pair (v0 == mid) spins
+                        // the flip loop and dead-ends in the bisect backstop
+                        // (its midpoint snaps straight back to the vertex), so
+                        // every recursion and constraint below is guarded.
                         let mid = self.insert_point(mid_pt)?;
-                        // Replace old constraint (e0,e1) with two sub-constraints.
-                        self.constraints.remove(&sorted_pair(e0, e1));
-                        self.constraints.insert(sorted_pair(e0, mid));
-                        self.constraints.insert(sorted_pair(mid, e1));
+                        if mid != e0 && mid != e1 {
+                            // Replace old constraint (e0,e1) with two sub-constraints.
+                            self.constraints.remove(&sorted_pair(e0, e1));
+                            self.constraints.insert(sorted_pair(e0, mid));
+                            self.constraints.insert(sorted_pair(mid, e1));
+                        }
+                        if mid == v0 || mid == v1 {
+                            // The crossing degenerated onto one of our own
+                            // endpoints: the crossed constraint (if any) was
+                            // split there, so it no longer properly crosses
+                            // this segment. Retry the flip loop.
+                            continue;
+                        }
                         // Recover the two halves of the original edge.
                         self.recover_edge(v0, mid)?;
                         self.constraints.insert(sorted_pair(v0, mid));
