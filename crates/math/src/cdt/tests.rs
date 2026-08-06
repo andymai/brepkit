@@ -766,6 +766,40 @@ proptest! {
     }
 }
 
+/// Deterministic replay of the proptest seed 23358 CI failure: the fifth
+/// constraint's recovery returned `ConvergenceFailure { iterations: 288 }`
+/// on this 20-point, 5-constraint arrangement.
+#[test]
+fn cdt_seed_23358_constraints_converge() {
+    // The proptest body computes `seed | 1`, so 23358 becomes 23359.
+    let mut rng_state: u64 = 23359;
+    let n = 20;
+    let mut pts = Vec::with_capacity(n);
+    for _ in 0..n {
+        pts.push(Point2::new(
+            rand_f64(&mut rng_state, 0.0, 100.0),
+            rand_f64(&mut rng_state, 0.0, 100.0),
+        ));
+    }
+    let mut cdt = Cdt::new((Point2::new(-10.0, -10.0), Point2::new(110.0, 110.0)));
+    let mut ids = Vec::with_capacity(n);
+    for pt in &pts {
+        ids.push(cdt.insert_point(*pt).unwrap());
+    }
+    for k in 0..5 {
+        let a = (xorshift64(&mut rng_state) as usize) % n;
+        let b = (xorshift64(&mut rng_state) as usize) % n;
+        if a != b {
+            let result = cdt.insert_constraint(ids[a], ids[b]);
+            assert!(
+                result.is_ok(),
+                "constraint {k} ({a},{b}) failed: {result:?}"
+            );
+        }
+    }
+    assert!(!cdt.triangles().is_empty());
+}
+
 /// Collinear vertex splitting: a constraint from v0→v3 should split through
 /// collinear intermediate vertices v1 and v2, producing three sub-constraints.
 #[test]
