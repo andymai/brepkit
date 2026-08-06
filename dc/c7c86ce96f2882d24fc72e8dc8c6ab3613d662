@@ -1,0 +1,19 @@
+crates/io/tests/mixed_socket_tess_inmem.rs
+  s_638644fdff411b::t_e6acd8520da69b 225-235
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "dcc7c86ce96f2882d24fc72e8dc8c6ab3613d662",
+  "prompts": {},
+  "sessions": {
+    "s_638644fdff411b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0e007429-ee5b-4225-8328-687d3a33df55",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
