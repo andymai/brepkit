@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786055126468,
+  "lastUpdate": 1786058186531,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21221,6 +21221,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26140169,
             "range": "± 27252",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a60bd8eb1ad11f633923f9858782f65824405117",
+          "message": "chore(main): release 2.129.9 (#1392)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.9](https://github.com/andymai/brepkit/compare/v2.129.8...v2.129.9)\n(2026-08-06)\n\n\n### Bug Fixes\n\n* **math:** guard CDT constrained-crossing split against welded\nintersection vertices\n([#1391](https://github.com/andymai/brepkit/issues/1391))\n([4c72b07](https://github.com/andymai/brepkit/commit/4c72b0742d10f0b78950598678df2c52cbc51359))\n\n\n### Performance\n\n* **operations:** exact sag bound for display sphere tessellation\n([#1389](https://github.com/andymai/brepkit/issues/1389))\n([7fa1f35](https://github.com/andymai/brepkit/commit/7fa1f356c1d4fdc8745ba7b1566825f7afca946b))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.129.9 for `brepkit-wasm`. Fixes a CDT constrained-crossing\nsplit edge case and improves sphere tessellation performance with an\nexact sag bound.\n\n- **Bug Fixes**\n- Guard CDT constrained-crossing split against welded intersection\nvertices to avoid bad splits.\n\n- **Performance**\n- Use an exact sag bound for display sphere tessellation for fewer\ntriangles and smoother rendering.\n\n<sup>Written for commit 24345d90a72b96e912405438592e6f43a60bddc2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1392?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-06T23:01:24Z",
+          "tree_id": "27747d4d727c743707ec2fcaa0383f7b2441a990",
+          "url": "https://github.com/andymai/brepkit/commit/a60bd8eb1ad11f633923f9858782f65824405117"
+        },
+        "date": 1786058184510,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1001284,
+            "range": "± 22056",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1079452,
+            "range": "± 1007",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12958,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707466,
+            "range": "± 872",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26202615,
+            "range": "± 34590",
             "unit": "ns/iter"
           }
         ]
