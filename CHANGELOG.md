@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.6](https://github.com/andymai/brepkit/compare/v2.129.5...v2.129.6) (2026-08-06)
+
+
+### Bug Fixes
+
+* **math:** extend plane-cone section chains to the v_max boundary ([#1379](https://github.com/andymai/brepkit/issues/1379)) ([c6dbc14](https://github.com/andymai/brepkit/commit/c6dbc14af736f9493acd81edd21798fad5cbaf47))
+
 ## [2.129.5](https://github.com/andymai/brepkit/compare/v2.129.4...v2.129.5) (2026-08-06)
 
 
