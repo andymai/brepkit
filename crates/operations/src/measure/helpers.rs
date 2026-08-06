@@ -163,10 +163,16 @@ fn sample_edge_curve(
     tol: f64,
     positions: &mut Vec<Point3>,
 ) {
+    // Endpoint-INCLUSIVE: the final sample is a polygon corner where the
+    // next boundary edge attaches, and skipping it shortcuts the corner
+    // with a chord whose area bite scales with the NEIGHBOUR edge's
+    // length, not the sample pitch (a 256-sample quarter arc lost 0.064
+    // of a notched cap's area this way). The dedup guard below absorbs
+    // the coincidence with the next edge's start vertex.
     let indices: Box<dyn Iterator<Item = usize>> = if forward {
-        Box::new(0..n_samples)
+        Box::new(0..=n_samples)
     } else {
-        Box::new((0..n_samples).rev())
+        Box::new((0..=n_samples).rev())
     };
     for i in indices {
         let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);

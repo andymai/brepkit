@@ -272,7 +272,15 @@ pub(super) fn tessellate_planar(
         let indices: Box<dyn Iterator<Item = usize>> = if forward {
             Box::new(0..n_samples)
         } else {
-            Box::new((0..n_samples).rev())
+            // Reversed traversal walks t_end -> t_start; the [traversal
+            // start, traversal end) convention therefore needs indices
+            // n..=1, not (0..n).rev(): excluding t_end here dropped the
+            // junction vertex with the PREVIOUS edge (nobody else supplies
+            // it), and the CDT outline then shortcut the polygon corner
+            // with a chord whose area bite scales with the neighbour
+            // edge's length. t_start is excluded instead - the next edge
+            // supplies it, same as the forward case.
+            Box::new((1..=n_samples).rev())
         };
         for i in indices {
             #[allow(clippy::cast_precision_loss)]

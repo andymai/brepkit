@@ -7197,12 +7197,14 @@ fn bench_equiv_intersect_box_corner_sphere_is_the_octant() {
 }
 
 #[test]
-#[ignore = "ready repro: cut(corner box, corner cylinder) removes 72.342 instead of the exact \
-            quarter-cylinder 70.686 (result 927.658 vs 929.314, deflection-invariant, so not a \
-            tessellation artifact; the primitive cylinder measures exactly 565.4867 through the \
-            same path). Face census is correct (6 planes + 1 cylinder) — the trimmed geometry \
-            itself deviates"]
 fn bench_equiv_cut_box_corner_cylinder_volume_is_exact() {
+    // Closed by the reversed-traversal junction-vertex fix in the boundary
+    // samplers (tessellate_planar / sample_wire_positions): a reversed
+    // edge's [start, end) iteration excluded its traversal-start vertex,
+    // nobody else supplied that polygon corner, and the per-face CDT
+    // outline shortcut it with a chord — the volume ran through the
+    // direct-face-tessellation arm (the cut's reversed cylinder wall
+    // routes it there) and lost the corner sliver at any deflection.
     let mut topo = Topology::new();
     let b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
     let c = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
