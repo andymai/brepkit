@@ -1,0 +1,27 @@
+crates/math/proptest-regressions/cdt/tests.txt
+  s_638644fdff411b::t_0ea0e23d98ce1a 1-4
+crates/math/src/cdt/constraints.rs
+  s_638644fdff411b::t_a2adbdba71f6e9 62-68,70-82
+  s_638644fdff411b::t_3968b81c0c3aa5 35-37
+crates/math/src/cdt/tests.rs
+  s_638644fdff411b::t_6e0ace9bfa0742 769-773,776-792,798-802
+  s_638644fdff411b::t_0c21fc609d2a43 793-797
+  s_638644fdff411b::t_02e8e40c2bdda7 774
+  s_638644fdff411b::t_ae7ac61dc7e870 775
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0a8c3bfe842f3f8f5b4767a5140a07f7e1316f03",
+  "prompts": {},
+  "sessions": {
+    "s_638644fdff411b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0e007429-ee5b-4225-8328-687d3a33df55",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
