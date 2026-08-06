@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.7](https://github.com/andymai/brepkit/compare/v2.129.6...v2.129.7) (2026-08-06)
+
+
+### Bug Fixes
+
+* **operations:** reversed-traversal boundary samplers no longer drop polygon corners ([#1383](https://github.com/andymai/brepkit/issues/1383)) ([7866b9e](https://github.com/andymai/brepkit/commit/7866b9e7a02a29e5fca659b6ccef5e0dc09e77d6))
+
 ## [2.129.6](https://github.com/andymai/brepkit/compare/v2.129.5...v2.129.6) (2026-08-06)
 
 
