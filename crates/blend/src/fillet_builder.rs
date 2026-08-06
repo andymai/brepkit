@@ -537,9 +537,11 @@ fn assemble_closed_rim(
     let mut rebuilt: std::collections::HashMap<EdgeId, EdgeId> = std::collections::HashMap::new();
     let mut new_wall_edges: Vec<OrientedEdge> = Vec::with_capacity(wall_oriented.len());
     let mut replaced = false;
+    let mut wall_forward = true;
     for oe in &wall_oriented {
         if oe.edge() == rim.rim_edge {
             new_wall_edges.push(OrientedEdge::new(wall_edge, oe.is_forward()));
+            wall_forward = oe.is_forward();
             replaced = true;
             continue;
         }
@@ -596,17 +598,6 @@ fn assemble_closed_rim(
             });
         }
     };
-    let band_wire = Wire::new(
-        vec![
-            OrientedEdge::new(plate_edge, true),
-            OrientedEdge::new(seam_edge, true),
-            OrientedEdge::new(wall_edge, false),
-            OrientedEdge::new(seam_edge, false),
-        ],
-        true,
-    )?;
-    let band_wire_id = topo.add_wire(band_wire);
-    let mut band_face = Face::new(band_wire_id, Vec::new(), stripe.surface.clone());
     // Orient the band so its outward normal points away from the solid. The
     // solid tessellator orients a torus band's triangles from the surface's
     // intrinsic (u, v) frame, then applies the face `reversed` flag; pick the
@@ -615,7 +606,30 @@ fn assemble_closed_rim(
     // radial) and away from the material along the axis; the torus geometric
     // normal at the mid-arc already has the correct radial sign, so we compare
     // its axial component against the material side.
-    if torus_band_needs_reversal(&torus, rim) {
+    //
+    // The band must traverse each shared contact circle in the EFFECTIVE
+    // sense (is_forward XOR is_reversed) OPPOSITE its other user: the cap
+    // holds `plate_edge` at `cap_forward` under `plane_reversed`, the wall
+    // holds `wall_edge` at `wall_forward` under `wall_reversed`. Both
+    // circles are degenerate (start == end vertex), so the chain closes
+    // for any sense choice and the two senses are picked independently. A
+    // fixed wire order cannot serve both rims of a cylinder — their caps
+    // traverse the shared circles in opposite directions.
+    let band_reversed = torus_band_needs_reversal(&torus, rim);
+    let plate_sense = (cap_forward == plane_reversed) != band_reversed;
+    let wall_sense = (wall_forward == wall_reversed) != band_reversed;
+    let band_wire = Wire::new(
+        vec![
+            OrientedEdge::new(plate_edge, plate_sense),
+            OrientedEdge::new(seam_edge, true),
+            OrientedEdge::new(wall_edge, wall_sense),
+            OrientedEdge::new(seam_edge, false),
+        ],
+        true,
+    )?;
+    let band_wire_id = topo.add_wire(band_wire);
+    let mut band_face = Face::new(band_wire_id, Vec::new(), stripe.surface.clone());
+    if band_reversed {
         band_face.set_reversed(true);
     }
     let band_face_id = topo.add_face(band_face);

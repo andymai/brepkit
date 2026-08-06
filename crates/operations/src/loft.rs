@@ -693,16 +693,27 @@ fn try_loft_matching_curved_profiles(
                         // winding, so no reversal is needed.
                         (surface, false)
                     } else {
-                        let Some(surf) =
-                            ruled_arc_surface(c0, p0s, p0e, c1, p1s, profs[s + 1][i].end)
-                        else {
+                        let p1e = profs[s + 1][i].end;
+                        let Some(surf) = ruled_arc_surface(c0, p0s, p0e, c1, p1s, p1e) else {
                             return Ok(None);
                         };
-                        let reversed = surf
+                        let inward = surf
                             .normal(0.5, 0.5)
                             .map(|nrm| nrm.dot(outward) < 0.0)
                             .unwrap_or(false);
-                        (FaceSurface::Nurbs(surf), reversed)
+                        if inward {
+                            // Swapping the rails negates ∂S/∂u and flips the
+                            // normal outward, so the face needs no reversal
+                            // flag (and downstream consumers never see a
+                            // reversed-wound loft wall). Fall back to the
+                            // reversal flag if the swapped build fails.
+                            match ruled_arc_surface(c1, p1s, p1e, c0, p0s, p0e) {
+                                Some(flipped) => (FaceSurface::Nurbs(flipped), false),
+                                None => (FaceSurface::Nurbs(surf), true),
+                            }
+                        } else {
+                            (FaceSurface::Nurbs(surf), false)
+                        }
                     }
                 }
                 _ => return Ok(None),
@@ -774,19 +785,27 @@ fn try_loft_matching_curved_profiles(
     for s in 0..num_profiles - 1 {
         for i in 0..n {
             let next_i = (i + 1) % n;
-            let side_wire_id = topo.add_wire(
-                Wire::new(
-                    vec![
-                        OrientedEdge::new(ring_eids[s][i], true),
-                        OrientedEdge::new(conn_eids[s][next_i], true),
-                        OrientedEdge::new(ring_eids[s + 1][i], false),
-                        OrientedEdge::new(conn_eids[s][i], false),
-                    ],
-                    true,
-                )
-                .map_err(crate::OperationsError::Topology)?,
-            );
             let (surface, reversed) = side_surfaces[s * n + i].clone();
+            // A reversed face must carry the reversed-winding wire so the
+            // effective edge senses (is_forward XOR is_reversed) still
+            // oppose its neighbours'.
+            let edges = if reversed {
+                vec![
+                    OrientedEdge::new(conn_eids[s][i], true),
+                    OrientedEdge::new(ring_eids[s + 1][i], true),
+                    OrientedEdge::new(conn_eids[s][next_i], false),
+                    OrientedEdge::new(ring_eids[s][i], false),
+                ]
+            } else {
+                vec![
+                    OrientedEdge::new(ring_eids[s][i], true),
+                    OrientedEdge::new(conn_eids[s][next_i], true),
+                    OrientedEdge::new(ring_eids[s + 1][i], false),
+                    OrientedEdge::new(conn_eids[s][i], false),
+                ]
+            };
+            let side_wire_id =
+                topo.add_wire(Wire::new(edges, true).map_err(crate::OperationsError::Topology)?);
             let mut face = Face::new(side_wire_id, vec![], surface);
             if reversed {
                 face.set_reversed(true);

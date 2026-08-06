@@ -73,11 +73,9 @@ pub struct ValidationOptions {
     pub tolerance_scale: f64,
     /// Check shell orientation consistency: adjacent faces must traverse
     /// each shared edge in opposite effective senses (is_forward XOR
-    /// is_reversed). Every construction op emits consistent shells (the
-    /// orientation-emission campaign: revolve, extrude, sweep sides, shared
-    /// end caps), but GFA BOOLEAN outputs can still carry same-sense pairs
-    /// (the gridfinity D1 lip-ring loft cut measures one), so the default
-    /// stays `false` until the boolean assembler is closed too.
+    /// is_reversed). Defaults to `true`: construction ops (revolve,
+    /// extrude, sweep, loft, pipe), GFA boolean outputs, and blend bands
+    /// all emit consistent shells (the orientation-emission campaign).
     pub check_orientation: bool,
 }
 
@@ -85,7 +83,7 @@ impl Default for ValidationOptions {
     fn default() -> Self {
         Self {
             tolerance_scale: 1.0,
-            check_orientation: false,
+            check_orientation: true,
         }
     }
 }
