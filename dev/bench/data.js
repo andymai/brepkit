@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1785976072202,
+  "lastUpdate": 1785978755804,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -20627,6 +20627,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17351631,
             "range": "± 125625",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c6dbc14af736f9493acd81edd21798fad5cbaf47",
+          "message": "fix(math): extend plane-cone section chains to the v_max boundary (#1379)\n\n## Summary\n\nCloses the **mitsukude panel cut** ready-repro\n(`crates/io/tests/mitsukude_panel_cut_inmem.rs`, now ACTIVE and\nvolume-pinned) — the real root of the kumiko-dividers scenario spending\n82 of its 86 seconds in the mesh fallback.\n\n## Root\n\n`sample_plane_cone` sweeps 512 uniform-u samples of the cone; in the\nhyperbola/parabola regime v(u) = e/(n·g) diverges near the asymptote, so\nv leaps far past the v_max cap between two adjacent samples. Any finite\nface-overlap window inside that leap is silently lost. In the repro, the\nlip-taper cone × the lattice prism's grazing x=38.05 end plane lost its\n**entire 0.5-tall section** (last kept sample v=2.88, cap v_max=4.07,\nthe needed window v ∈ [2.90, 3.61]); the tool face under-split into two\nvoid-sampled pieces, classification dropped them, and the 8-edge free\nloop sent the whole cut to the mesh fallback. Measured twice: the new\n`BK_F2_TRACE` probe (min sample distance to each face AABB, 1.26e-2\nshort) and a direct chain probe (cutoff z=34.8126, matching the pitch\narithmetic exactly).\n\nThis is the recurring sampled-proxy trap class, in u-space against a\n1/cos divergence.\n\n## Fix\n\nExtend each chain run's ends to the exact v_max boundary: bisect u on\nthe monotone n·g within the single dropped pitch, then fill the tail\nwith uniform-u samples. Ellipse (closed-loop) behavior unchanged.\n\n## Result\n\n- Raw GFA cut: 8 free edges → **0 free, 0 over, fully analytic** (12\ncones + 24 cylinders preserved, 173 ms)\n- Fixture un-ignored with a volume pin (27045.9; the leak measured\n27095.9 with the pinch band left uncut)\n- Full workspace `--no-fail-fast` sweep green (including all calibrated\nsplitter foils, the tangent-wall family, oshape/slotted socket-fuse\npins, honeycomb ceilings)\n\n## Probes shipped\n\n- `BK_F2_TRACE`: per-dropped-curve min distance to each face AABB inside\nthe FF in-both filter\n- `FREE_EDGES=2`: owner-face bbox dump per free edge in `replay_pair`\n\n## Follow-ups (tracked in the roadmap)\n\n- Re-measure the 8-panel compound cut's separate abort (4-face 0.57 mm³\nopen hole-shell fragment)\n- Tool-side kumiko-dividers duration re-measure (166.6 s at last\noverlay; the 82 s fallback path is closed)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes missing plane–cone sections near the asymptote by extending\nsampled chains to the exact `v_max` boundary. Mitsukude panel cut is\nanalytic and watertight, removing the 82 s fallback; kumiko‑dividers now\nruns in 25.5 s, and the 8‑panel compound cut is export‑level clean.\n\n- **Bug Fixes**\n- In `sample_plane_cone`, extend each run’s ends to `v_max`: bisect `u`\nwhere `n·g = e/v_max`, then add an 8‑sample uniform‑u tail; ellipse\nbehavior unchanged.\n- Result: Mitsukude panel cut is analytic (free=0, over=0) and\nvolume‑pinned at 27045.9; roadmap notes the export‑level closure of the\n8‑panel compound cut and the broken JS fallback instrumentation.\n\n- **New Features**\n- `BK_F2_TRACE`: logs min distance of dropped curves to each face AABB\nin the FF filter.\n- `FREE_EDGES=2`: prints owner‑face bbox for each free edge in\n`replay_pair`.\n\n<sup>Written for commit ce1aa087916230949d891bc44d40948ec5db6f0c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1379?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-05T18:09:57-07:00",
+          "tree_id": "46aa1b1230f4513e597d8da97b30df1ebaef63f8",
+          "url": "https://github.com/andymai/brepkit/commit/c6dbc14af736f9493acd81edd21798fad5cbaf47"
+        },
+        "date": 1785978754185,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 899768,
+            "range": "± 1222",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 977273,
+            "range": "± 4879",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11135,
+            "range": "± 126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 654288,
+            "range": "± 991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23713603,
+            "range": "± 57165",
             "unit": "ns/iter"
           }
         ]
