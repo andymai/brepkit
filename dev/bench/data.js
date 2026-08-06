@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786029414115,
+  "lastUpdate": 1786055126468,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21167,6 +21167,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24842613,
             "range": "± 42836",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4c72b0742d10f0b78950598678df2c52cbc51359",
+          "message": "fix(math): guard CDT constrained-crossing split against welded intersection vertices (#1391)\n\n## Summary\n\nCI on #1389 hit a random-seed proptest failure:\n`cdt_random_constraints_no_panic` seed 23358, `ConvergenceFailure {\niterations: 288 }`. Replayed deterministically: on a 20-point,\n5-constraint arrangement, the constrained-crossing split inside\n`recover_edge` computed an intersection that `insert_point` welded onto\nan existing vertex, and the recursive `recover_edge(v0, mid)` ran with\n`v0 == mid`. A degenerate self-recovery finds no edge and no crossing,\nfalls to the bisection backstop, whose midpoint snaps straight back onto\nthe vertex — guaranteed ConvergenceFailure.\n\n## Fix\n\nGuards on the split path (the bisect path already had them):\n- `mid == e0 || mid == e1` (crossed constraint's own endpoint): skip the\nconstraint replacement — a degenerate `(e0, e0)` pair must never enter\nthe constraint set.\n- `mid == v0 || mid == v1` (our own endpoint): retry the flip loop — the\ncrossed constraint was split at that vertex, so it no longer properly\ncrosses this segment.\n- `recover_edge_depth` returns early on identical endpoints as a safety\nnet.\n\n## Pins\n\n- The CI seed committed to `proptest-regressions/cdt/tests.txt`\n(proptest replays it before generating new cases).\n- A deterministic replay unit test\n(`cdt_seed_23358_constraints_converge`) with the exact failing\narrangement.\n\nmath + operations + io suites green (1,740 tests), gridfinity wasm\ncanary 27/27.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPrevents CDT convergence failures by guarding constrained-crossing\nsplits when intersections snap to existing vertices. Adds endpoint\nguards and an early return, and pins the failing `proptest` seed with a\ndeterministic replay test.\n\n- **Bug Fixes**\n- Skip constraint replacement when `mid` equals crossed-constraint\nendpoints (`e0` or `e1`).\n- Retry the flip loop when `mid` equals our own endpoints (`v0` or\n`v1`).\n  - Early return in `recover_edge_depth` when `v0 == v1`.\n- Pin the failing seed in `proptest-regressions/cdt/tests.txt` and add\n`cdt_seed_23358_constraints_converge` to replay the case.\n\n<sup>Written for commit 0a8c3bfe842f3f8f5b4767a5140a07f7e1316f03.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1391?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-06T14:52:41-07:00",
+          "tree_id": "bcabfdd1ff8c6c5774cf5aa3b58b88c398944eff",
+          "url": "https://github.com/andymai/brepkit/commit/4c72b0742d10f0b78950598678df2c52cbc51359"
+        },
+        "date": 1786055124036,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 988215,
+            "range": "± 1361",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1074341,
+            "range": "± 11462",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13161,
+            "range": "± 216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710070,
+            "range": "± 2124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26140169,
+            "range": "± 27252",
             "unit": "ns/iter"
           }
         ]
