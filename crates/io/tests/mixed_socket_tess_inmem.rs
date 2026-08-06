@@ -32,19 +32,29 @@
 //! present, hidden inside the original 511 count (395 missing-face edges
 //! plus 116 winding).
 //!
-//! WINDING ROOT IS UPSTREAM (measured): every face's triangles agree with
-//! its OWN stored orientation (surface normal x is_reversed), so the
-//! tessellator is faithful — the B-Rep itself is inconsistent. The
-//! reversal-corrected traversal check (edge sense = is_forward XOR
-//! is_reversed; a consistent closed shell uses every edge twice with
-//! opposite senses) counts 20 same-sense pairs in the CAPTURED BODY
-//! operand (cylinder/nurbs/plane around the quarter-socket geometry,
-//! e.g. Id(82) cylinder vs Id(94) nurbs), zero in the assembly, and 40
-//! in the fuse output (inherited and grown). The defect therefore arrives
-//! with the body from an EARLIER op of the export chain (only this final
-//! pair was captured). Next: re-capture the full mixed-detail chain and
-//! bisect which op first emits same-sense pairs; the traversal check is
-//! the discriminant, and it belongs in validate as a shell check.
+//! WINDING ROOT WAS FIRST BLAMED UPSTREAM (capture-era measurement): the
+//! captured body operand carried 20 same-sense pairs, the assembly zero,
+//! and the fuse output 40 — so the defect looked inherited from an earlier
+//! op of the export chain.
+//!
+//! RE-CAPTURE OVERTURNS THAT (2026-08-06, post-orientation-campaign
+//! kernel): the full 9-op chain was re-captured with every operand AND
+//! intermediate result serialized. ALL are orientation-clean under the
+//! strict check — the campaign fixed the construction ops (the fresh body
+//! differs from the capture-era one; the assembly is BYTE-IDENTICAL) —
+//! yet the final fuse of the two clean operands still emits exactly
+//! "20 shared edges have inconsistent face orientations", and the
+//! export-tolerance mesh still counts 116 unmatched half-edges (112
+//! survive vertex welding into the exported STL; the export tests stay
+//! green only because their oracle is UNDIRECTED edge pairing). The
+//! winding defect is therefore born INSIDE the GFA fuse for this
+//! configuration: the boolean assembler's face-orientation emission on
+//! the NURBS-quarter-socket x cylinder-band geometry. Owner faces of the
+//! unmatched half-edges (fresh fuse, z 19.7-25.3): cylinder bands
+//! Id(603)/Id(563)/Id(451)/Id(391) against NURBS quarter-sockets
+//! Id(589)/Id(511)/Id(615). Probes: `crates/io/examples/orient_scan.rs`
+//! (per-.bin strict validation) and `fuse_orient.rs` (fuse + per-face
+//! half-edge attribution, ~58 ms).
 //!
 //! The per-cell dispatch geometry (three full sockets + three quarter
 //! sockets, one 1u block mixed) is what distinguishes this from the sibling
@@ -190,12 +200,81 @@ fn mixed_socket_tessellation_covers_every_face() {
 }
 
 #[test]
-#[ignore = "residual: 116 half-edge boundary edges from inverted triangle winding on the \
-            NURBS-quarter-socket vs cylinder rims (the CDT recovery fix closed the other \
-            395; see the header's WINDING RESIDUAL note)"]
+fn mixed_socket_fresh_operands_are_orientation_clean() {
+    // The 2026-08-06 re-capture: the post-campaign kernel's export chain
+    // feeds the final fuse two orientation-CLEAN operands (the capture-era
+    // body's 20 same-sense pairs are gone; the assembly is byte-identical
+    // to the old capture). Guards the construction-op orientation campaign
+    // at this chain's altitude.
+    let mut topo = Topology::new();
+    let opts = brepkit_operations::validate::ValidationOptions {
+        check_orientation: true,
+        ..Default::default()
+    };
+    let body = load("mixed_socket_body_fresh.bin", &mut topo);
+    let report =
+        brepkit_operations::validate::validate_solid_with_options(&topo, body, &opts).unwrap();
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inconsistent face orientations")),
+        "fresh body must be orientation-clean, got {:?}",
+        report.issues
+    );
+    let assembly = load("mixed_socket_assembly.bin", &mut topo);
+    let report =
+        brepkit_operations::validate::validate_solid_with_options(&topo, assembly, &opts).unwrap();
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inconsistent face orientations")),
+        "assembly operand must be orientation-clean, got {:?}",
+        report.issues
+    );
+}
+
+#[test]
+fn mixed_socket_fresh_fuse_emits_orientation_defect() {
+    // ACTIVE pin of the live defect: fusing the two CLEAN fresh operands
+    // still reports exactly 20 same-sense pairs, so the inconsistency is
+    // born inside the GFA fuse (assembler face-orientation emission), not
+    // inherited. A fuse-side fix must flip this pin to assert cleanliness
+    // and un-ignore the watertight repro below.
+    let mut topo = Topology::new();
+    let body = load("mixed_socket_body_fresh.bin", &mut topo);
+    let assembly = load("mixed_socket_assembly.bin", &mut topo);
+    let result = brepkit_algo::gfa::boolean(
+        &mut topo,
+        brepkit_algo::bop::BooleanOp::Fuse,
+        body,
+        assembly,
+    )
+    .expect("analytic fuse must succeed");
+    let opts = brepkit_operations::validate::ValidationOptions {
+        check_orientation: true,
+        ..Default::default()
+    };
+    let report =
+        brepkit_operations::validate::validate_solid_with_options(&topo, result, &opts).unwrap();
+    assert!(
+        report.issues.iter().any(|i| i
+            .description
+            .contains("20 shared edges have inconsistent face orientations")),
+        "fuse output must report its documented 20 same-sense pairs, got {:?}",
+        report.issues
+    );
+}
+
+#[test]
+#[ignore = "residual: 116 unmatched half-edges from inverted triangle winding on the \
+            NURBS-quarter-socket vs cylinder rims. Re-captured 2026-08-06: the operands \
+            are orientation-clean and the GFA fuse itself emits the 20 same-sense pairs \
+            (see the header's re-capture note)"]
 fn mixed_socket_tessellation_is_watertight() {
     let mut topo = Topology::new();
-    let body = load("mixed_socket_body.bin", &mut topo);
+    let body = load("mixed_socket_body_fresh.bin", &mut topo);
     let assembly = load("mixed_socket_assembly.bin", &mut topo);
     let result = brepkit_algo::gfa::boolean(
         &mut topo,
