@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.5](https://github.com/andymai/brepkit/compare/v2.129.4...v2.129.5) (2026-08-06)
+
+
+### Bug Fixes
+
+* **operations:** close the orientation-emission campaign; check_orientation defaults on ([#1377](https://github.com/andymai/brepkit/issues/1377)) ([15fadd5](https://github.com/andymai/brepkit/commit/15fadd58d8812b4051e3282cc3678e6451960494))
+
 ## [2.129.4](https://github.com/andymai/brepkit/compare/v2.129.3...v2.129.4) (2026-08-05)
 
 
