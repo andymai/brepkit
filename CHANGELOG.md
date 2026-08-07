@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.12](https://github.com/andymai/brepkit/compare/v2.129.11...v2.129.12) (2026-08-07)
+
+
+### Bug Fixes
+
+* **io:** re-ground the mixed-socket attribution on the directed half-edge oracle ([#1402](https://github.com/andymai/brepkit/issues/1402)) ([e7e1ff1](https://github.com/andymai/brepkit/commit/e7e1ff115dfbd6d96587c79f69b06c175beb07c0))
+
 ## [2.129.11](https://github.com/andymai/brepkit/compare/v2.129.10...v2.129.11) (2026-08-07)
 
 
