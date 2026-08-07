@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786095680280,
+  "lastUpdate": 1786096214248,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21923,6 +21923,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24932974,
             "range": "± 69797",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ed4921ec4cb346122cb673e600ebfd32a65a1ccc",
+          "message": "chore(main): release 2.129.13 (#1405)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.13](https://github.com/andymai/brepkit/compare/v2.129.12...v2.129.13)\n(2026-08-07)\n\n\n### Bug Fixes\n\n* **operations:** reverse concave coaxial corner walls in\ncurve-preserving lofts\n([#1404](https://github.com/andymai/brepkit/issues/1404))\n([5a3e405](https://github.com/andymai/brepkit/commit/5a3e40533622e3c910b515e6f52da777cbdf68af))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.129.13 for `brepkit-wasm`, addressing incorrect corner wall\norientation in curve-preserving lofts that could invert geometry.\n\n- **Bug Fixes**\n- Reverse concave, coaxial corner walls in curve-preserving lofts to\nmaintain correct orientation and prevent artifacts (refs #1404).\n\n<sup>Written for commit 97d315a0724503467ddb54f78f2aa42daba7f8c4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1405?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-07T09:47:43Z",
+          "tree_id": "92267e7b778d239fb19c1a4c5442befe7b11916c",
+          "url": "https://github.com/andymai/brepkit/commit/ed4921ec4cb346122cb673e600ebfd32a65a1ccc"
+        },
+        "date": 1786096212535,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 947538,
+            "range": "± 23671",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1025446,
+            "range": "± 4170",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11940,
+            "range": "± 72",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700790,
+            "range": "± 1057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24918590,
+            "range": "± 754242",
             "unit": "ns/iter"
           }
         ]
