@@ -63,12 +63,30 @@
 //! The export-tolerance mesh still counts 116 unmatched half-edges (112
 //! survive vertex welding into the exported STL; the export tests stay
 //! green only because their oracle is UNDIRECTED edge pairing) on a
-//! B-Rep that is now orientation-CLEAN — so that residual is a
-//! TESSELLATION-level triangle-winding defect on the NURBS-quarter-socket
-//! vs cylinder-band rims (z 19.7-25.3), separate from the closed fuse
-//! defect. Probes: `crates/io/examples/orient_scan.rs` (per-.bin strict
-//! validation) and `fuse_orient.rs` (fuse + per-face half-edge
-//! attribution, ~58 ms).
+//! B-Rep that is now combinatorially orientation-CLEAN.
+//!
+//! RESIDUAL ROOT MEASURED (2026-08-07): NOT a tessellator defect. Every
+//! owner face's mesh matches its own effective surface normal exactly
+//! (mesh_orient=1.000) — the faces themselves are COHERENTLY
+//! DOUBLE-FLIPPED: effective surface normal pointing INTO the material
+//! with the wire winding flipped to match, so edge-sense pairing (the
+//! check_shell_orientation oracle) passes while the face is geometrically
+//! inside-out. The outwardness oracle (classify a point offset along the
+//! effective normal: plus-side Inside = inverted) finds the body operand
+//! ALREADY carries 3 unanimously-inverted corner cylinder bands
+//! (Id(32) rev=false, Id(56) rev=true, Id(82) rev=true; majority-vote
+//! stable across runs), the assembly operand clean, and the fuse result 9
+//! inverted faces (the inherited cylinders' split products plus cone
+//! readings that need a careful pass — offsets near thin webs can cross
+//! legitimately-close material). So the winding root is UPSTREAM in the
+//! body's construction chain (per-cell quarter-socket dispatch), in a
+//! class NO existing validation detects. Next altitudes: (a) find the
+//! construction op minting double-flipped faces (per-stage outwardness
+//! audit of a fresh chain capture, or a native socket-construction
+//! repro); (b) add a geometric outwardness check beside the combinatorial
+//! one in validate. Probes: `crates/io/examples/orient_scan.rs` and
+//! `fuse_orient.rs` (fuse + per-face half-edge attribution + the
+//! majority-vote outwardness audit of both operands and the result).
 //!
 //! The per-cell dispatch geometry (three full sockets + three quarter
 //! sockets, one 1u block mixed) is what distinguishes this from the sibling
@@ -283,10 +301,11 @@ fn mixed_socket_fresh_fuse_is_orientation_clean() {
 }
 
 #[test]
-#[ignore = "residual: 116 unmatched half-edges from inverted triangle winding on the \
-            NURBS-quarter-socket vs cylinder rims (z 19.7-25.3). The B-Rep is now \
-            orientation-clean (fuse-side root fixed 2026-08-06), so this is a \
-            TESSELLATION-level winding defect on those faces (see the header)"]
+#[ignore = "residual: 116 unmatched half-edges from coherently DOUBLE-FLIPPED faces \
+            (effective normal into the material, winding flipped to match — invisible \
+            to edge-sense pairing). The body operand already carries 3 inverted corner \
+            cylinders; root is upstream in the socket construction chain (see the \
+            header's 2026-08-07 measurement)"]
 fn mixed_socket_tessellation_is_watertight() {
     let mut topo = Topology::new();
     let body = load("mixed_socket_body_fresh.bin", &mut topo);
