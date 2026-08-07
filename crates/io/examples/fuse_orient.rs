@@ -162,8 +162,9 @@ fn main() {
                         }
                     }
                 }
+                // Vertex-based extents: arcs can bulge past their endpoints.
                 println!(
-                    "  inverted {fid:?} {} rev={} votes={votes_in}-{votes_out} x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}]",
+                    "  inverted {fid:?} {} rev={} votes={votes_in}-{votes_out} vbox x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}]",
                     face.surface().type_tag(),
                     face.is_reversed(),
                     lo[0],
