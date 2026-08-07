@@ -259,6 +259,27 @@ jobs:
       # tarball. Publishes nothing.
       - run: cargo publish --workspace --dry-run
 
+  # Advisory, not a gate: deliberately absent from `ci-pass`. brepkit's crates
+  # are published at 2.x but the kernel's internals still move, and adding a
+  # `FaceSurface` or `EdgeCurve` variant is a semver-major change that is also
+  # on the roadmap. Making this blocking would force a major bump across all
+  # 13 crates on a routine change. It runs to make breakage visible; the
+  # policy for acting on it lives in STABILITY.md.
+  semver:
+    name: SemVer Check (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.62.30
+        with:
+          tool: cargo-semver-checks
+      # Baselines against the newest version of each crate on crates.io.
+      - run: cargo semver-checks --workspace
+
   machete:
     name: Unused Dependencies
     runs-on: ubuntu-latest

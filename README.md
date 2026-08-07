@@ -12,7 +12,7 @@ Solid modeling kernel for Rust and WebAssembly.
 [![License: AGPL-3.0-only or commercial](https://img.shields.io/badge/License-AGPL--3.0%20%2F%20Commercial-blue.svg)](#license)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/) [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](#why-a-cad-kernel)
 
-**[Architecture](#architecture)** · **[Performance](#performance)** · **[Getting Started](#getting-started)** · **[Known Limitations](#known-limitations)** · **[Contributing](./CONTRIBUTING.md)**
+**[Architecture](#architecture)** · **[Performance](#performance)** · **[Getting Started](#getting-started)** · **[Known Limitations](#known-limitations)** · **[Stability](./STABILITY.md)** · **[Contributing](./CONTRIBUTING.md)**
 
 </div>
 
@@ -65,6 +65,8 @@ The geometry is exact. Booleans run on analytic and NURBS surfaces and keep thos
 ## Status
 
 brepkit is in active development. Core modeling is solid. Each feature below is marked stable, beta, planned, or experimental, and [Known Limitations](#known-limitations) covers the gaps.
+
+The table below rates *features*. For *API* stability per crate, and what the shared `2.x` version does and does not promise, see [STABILITY.md](./STABILITY.md).
 
 | Category                | Feature                                                                      | Status       |
 | ----------------------- | ---------------------------------------------------------------------------- | ------------ |
@@ -213,30 +215,13 @@ cargo add brepkit-io       # optional: STEP, STL, 3MF, OBJ, PLY, glTF
 
 `brepkit-operations` is the entry point for modeling. It pulls in the geometry,
 topology, and algorithm crates it needs, so most projects want it plus
-`brepkit-topology` for the `Topology` arena that every operation takes:
+`brepkit-topology`, which owns the `Topology` arena that every operation takes.
+Add `brepkit-io` for import and export.
 
-```toml
-[dependencies]
-brepkit-topology = "2.129"
-brepkit-operations = "2.129"
-brepkit-io = "2.129"       # optional
-```
-
-Every crate publishes at the same version from the same commit, so pinning one
-minor line across all of them is always consistent. The individual crates are
-useful on their own when you need less than the whole kernel:
-
-| Crate | Add it directly when you need |
-| --------------------- | ----------------------------------------------------------- |
-| `brepkit-math` | NURBS, predicates, CDT, or convex hull without any B-Rep |
-| `brepkit-geometry` | Curve sampling, extrema, or analytic-to-NURBS conversion |
-| `brepkit-topology` | The `Topology` arena and B-Rep types (required in practice) |
-| `brepkit-operations` | Booleans, sweeps, blends, measurement, tessellation |
-| `brepkit-io` | Import and export |
-| `brepkit-check` | Validation, mass properties, or distance without operations |
-| `brepkit-heal` | Repairing imported geometry |
-| `brepkit-sketch` | The 2D constraint solver on its own (no workspace deps) |
-| `brepkit-render` | Offscreen GPU rendering. Pulls in wgpu, so it is opt-in |
+Every crate publishes at the same version from the same commit, so a single
+minor line works across all of them. To depend on something more specific, the
+[Architecture](#architecture) table lists what each crate does, and
+[STABILITY.md](./STABILITY.md) says which are meant to be depended on directly.
 
 ### Building from source
 
