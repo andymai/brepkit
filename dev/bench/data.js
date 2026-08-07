@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786084788800,
+  "lastUpdate": 1786085865355,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21437,6 +21437,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24915830,
             "range": "± 77837",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "19330793a84219c662471f71a3466fb38e43d63a",
+          "message": "perf(operations): exact divergence-theorem volume for all-planar solids (#1396)\n\n## Summary\n\n`solid_volume` on a plain box fell through every fast path (the\nprimitive recognizer has no box arm; the analytic-faces integrator\nrequires a bored quadric) and went to tessellation: **25.6 µs per call**\non `make_box(10,10,10)`. On a planar face the divergence integrand `x·n`\nis the constant plane offset, so the integral collapses to `d·A` with\n`A` the exact polygon area — no tessellation, no quadrature.\n\nThe new path covers any solid bounded entirely by planar faces with\nstraight (`Line`) edges: boxes, box booleans, extruded polygons.\n\n## Numbers\n\n| bench | before | after |\n|---|---|---|\n| `volume x100` (box) | 2.56 ms | 58.4 µs (**44x**, 0.58 µs/call, exact)\n|\n\n## Design notes\n\n- Orientation comes from the face's **effective normal** alone (`|outer|\n− Σ|holes|` per face), matching the tessellation path's tolerance of\nmis-wound wires (the `make_unit_cube_non_manifold` fixture's back face\nis deliberately mis-wound and stays correct).\n- A planarity residual guard (`|p·n − d| ≤ 1e-6·(1+|d|)`) bails skewed\nquads stored as planes — the L-miter sweep's elbow quad — back to the\ntessellation pipeline; caught by `sweep_miter_l_shaped_volume_correct`\nduring development.\n- New pins: `box_fuse_volume_exact_via_planar_path` (overlapping fuse =\n1875 exact), `box_through_hole_volume_exact_via_planar_path` (inner-wire\nsubtraction = 960 exact).\n\n## Verification\n\n- operations 1019 passed (incl. all existing volume pins now routing\nthrough the exact path), io 244, wasm gridfinity canary 27, clippy clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd an exact volume path in `solid_volume` for solids with all-planar\nfaces and line edges. It skips tessellation and makes box volume 44×\nfaster (0.58 µs/call), with exact results.\n\n- **New Features**\n- Uses divergence theorem on planes (per-face d·A) with effective\nnormals; subtracts inner wires.\n  - Applies to boxes, box booleans, and extruded polygons.\n- Guards: bails to tessellation on planarity residuals and when hole\narea exceeds the outer ring.\n  - Added tests for overlapping fuse (1875) and through-hole cut (960).\n\n<sup>Written for commit 0dea2bfcb4fe9246b590b92fd760f1a59a718e40.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1396?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T06:55:19Z",
+          "tree_id": "1a9212516e5eba44c60b8737a70ff466486a9af6",
+          "url": "https://github.com/andymai/brepkit/commit/19330793a84219c662471f71a3466fb38e43d63a"
+        },
+        "date": 1786085862917,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 944628,
+            "range": "± 4248",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1020559,
+            "range": "± 1390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11801,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697315,
+            "range": "± 2134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24845802,
+            "range": "± 15172",
             "unit": "ns/iter"
           }
         ]
