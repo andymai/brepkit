@@ -128,6 +128,7 @@ fn main() {
                     face.inner_wires().len()
                 );
             }
+            continue;
         }
         audit_one(&topo, solid, &path);
     }
