@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786092649842,
+  "lastUpdate": 1786093107305,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21815,6 +21815,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26209021,
             "range": "± 45816",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3e4330c502c86e11c72a116b87c78c21570ae8cb",
+          "message": "chore(main): release 2.129.12 (#1403)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.12](https://github.com/andymai/brepkit/compare/v2.129.11...v2.129.12)\n(2026-08-07)\n\n\n### Bug Fixes\n\n* **io:** re-ground the mixed-socket attribution on the directed\nhalf-edge oracle\n([#1402](https://github.com/andymai/brepkit/issues/1402))\n([e7e1ff1](https://github.com/andymai/brepkit/commit/e7e1ff115dfbd6d96587c79f69b06c175beb07c0))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release for `brepkit-wasm` fixing IO attribution in the directed\nhalf-edge oracle for mixed sockets. Improves topology accuracy in models\nthat combine socket types.\n\n- **Bug Fixes**\n- Ensures edges bind to the correct socket during IO, preventing\nmis-attributed connections in mixed-socket meshes and imports.\n\n<sup>Written for commit 7a51bd29736f61f64d40f710c3f6b9b65e239d46.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1403?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-07T08:55:53Z",
+          "tree_id": "1e6b1cb8570649e1fb01755636540ca8251cb4df",
+          "url": "https://github.com/andymai/brepkit/commit/3e4330c502c86e11c72a116b87c78c21570ae8cb"
+        },
+        "date": 1786093105670,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 946585,
+            "range": "± 1070",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1023231,
+            "range": "± 1787",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12009,
+            "range": "± 143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699778,
+            "range": "± 2239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25086536,
+            "range": "± 147370",
             "unit": "ns/iter"
           }
         ]
