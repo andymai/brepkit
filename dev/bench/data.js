@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786096214248,
+  "lastUpdate": 1786097529768,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21977,6 +21977,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24918590,
             "range": "± 754242",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a6d9f28e389e7f1a93ba23d5e338d0110e2c097",
+          "message": "test(io): close the mixed-socket watertight pin on the 2.129.13 chain (#1406)\n\n## Summary\n\nCloses the mixed-detail per-cell half-sockets residual **end to end**:\n\n- Tool-side re-capture of the full export chain on the released\n**2.129.13** (with the loft fix #1404): **all 793 stage captures measure\n0 unmatched directed half-edges** — the lofts that minted 38/78 now emit\nclean, and the final fused body is directed-watertight.\n- The fresh body fixture is refreshed from that chain;\n`mixed_socket_tessellation_is_watertight` is **un-ignored and green**\n(all 6 pins in the file pass).\n- The historical arc, now fully pinned: the original 511 mesh boundary\nedges = 395 (CDT recovery, fixed earlier) + 20 same-sense pairs\n(splitter classification, #1394) + 116 directed winding (loft coaxial\nconcave arm, #1404).\n- `chain001`/`topsocket` fixtures keep their defective-era counts as\nhistorical pins; roadmap updated.\n\nFixtures-and-docs only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRefreshes `mixed_socket_body_fresh.bin` from the released 2.129.13 chain\nand re-enables `mixed_socket_tessellation_is_watertight`; with loft fix\n#1404, all 793 stage captures report 0 unmatched directed half-edges and\nthe body is watertight.\nHistorical fixtures `chain001` and `topsocket` are kept with their\noriginal defect counts as pins.\n\n<sup>Written for commit 677d9d337aadf57e2b7c1f79a894ed219ce02e98.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1406?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T10:09:19Z",
+          "tree_id": "9ba30a9cd989ea728c292f13b13ae2e9250fca34",
+          "url": "https://github.com/andymai/brepkit/commit/6a6d9f28e389e7f1a93ba23d5e338d0110e2c097"
+        },
+        "date": 1786097527022,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 996611,
+            "range": "± 19110",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1079556,
+            "range": "± 131033",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13237,
+            "range": "± 108",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 705802,
+            "range": "± 1669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26130938,
+            "range": "± 36110",
             "unit": "ns/iter"
           }
         ]
