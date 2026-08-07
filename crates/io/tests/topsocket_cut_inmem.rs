@@ -113,14 +113,16 @@ fn topsocket_cut_operands_are_outward_clean() {
     // the result is minted by the cut itself.
     let mut topo = Topology::new();
     let base = load("topsocket_cut_base.bin", &mut topo);
+    let inv = inverted_faces(&topo, base);
     assert!(
-        inverted_faces(&topo, base).is_empty(),
-        "base operand must be outward-clean"
+        inv.is_empty(),
+        "base operand must be outward-clean, got {inv:?}"
     );
     let tool = load("topsocket_cut_tool.bin", &mut topo);
+    let inv = inverted_faces(&topo, tool);
     assert!(
-        inverted_faces(&topo, tool).is_empty(),
-        "tool operand must be outward-clean"
+        inv.is_empty(),
+        "tool operand must be outward-clean, got {inv:?}"
     );
 }
 

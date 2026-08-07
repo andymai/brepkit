@@ -22,10 +22,19 @@ fn main() {
             _ => brepkit_algo::bop::BooleanOp::Cut,
         };
         let mut topo = Topology::new();
-        let a = deserialize_solid(&std::fs::read(&pa).unwrap(), &mut topo).unwrap();
-        let b = deserialize_solid(&std::fs::read(&pb).unwrap(), &mut topo).unwrap();
-        let result = brepkit_algo::gfa::boolean(&mut topo, op, a, b).unwrap();
-        audit_one(&topo, result, "native boolean result");
+        let load = |path: &str, topo: &mut Topology| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| deserialize_solid(&bytes, topo).ok())
+        };
+        let (Some(a), Some(b)) = (load(&pa, &mut topo), load(&pb, &mut topo)) else {
+            println!("BOOL mode: could not load {pa} / {pb} as solids");
+            return;
+        };
+        match brepkit_algo::gfa::boolean(&mut topo, op, a, b) {
+            Ok(result) => audit_one(&topo, result, "native boolean result"),
+            Err(e) => println!("BOOL mode: boolean failed: {e}"),
+        }
         return;
     }
     for path in std::env::args().skip(1) {
