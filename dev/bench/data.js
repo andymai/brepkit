@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786089463380,
+  "lastUpdate": 1786090870166,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21707,6 +21707,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24132323,
             "range": "± 27039",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bf21d118735416aa9528170f0d91878919deaedf",
+          "message": "test(io): minimal repro for the double-flip-minting top-socket cut (#1401)\n\n## Summary\n\nCloses the attribution phase of the mixed-socket half-edge campaign\n(#1399, #1400):\n\n- A stage capture of the mixed-detail export chain (9 boolean calls,\ntool-side monkey-patch) attributes the double-flip mint to **call 000 —\nthe mixed cell's top half-socket cut**: both operands audit\noutward-clean (F=14 base, F=17 tool), the result emits **3\nunanimously-inverted cylinder bands**, and those bands survive the chain\ninto the final fuse's body operand, owning all 116 unmatched half-edges.\n- **Minimal in-repo repro** (~20 ms):\n`crates/io/tests/topsocket_cut_inmem.rs` on the captured\n`topsocket_cut_{base,tool}.bin` — active pins (operands clean; cut emits\ninverted cylinder bands) plus an ignored ready-repro asserting a clean\nresult.\n- Reusable tooling: `crates/io/examples/audit_bin.rs` — per-.bin\noutwardness audit and a `BOOL_A`/`BOOL_B` native-boolean mode.\n- Secondary open signal recorded: stage 001's args carry inverted faces\nfrom uncaptured non-boolean constructions.\n\nNext: dig the GFA cut's kept-tool-face emission on this repro (the Cut-B\nflip family), then add a geometric outwardness check beside the\ncombinatorial one in validate.\n\nFixtures-and-probes only; no engine behavior changes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a minimal in-repo repro for the top half-socket cut minting\ndouble‑flipped cylinder bands, plus an outwardness audit tool. This\nisolates the defect to the chain’s first boolean and pins it with active\ntests; no engine behavior changes.\n\n- New Features\n- Test `crates/io/tests/topsocket_cut_inmem.rs`: verifies both operands\nare outward‑clean and that the cut emits inverted cylinder bands; prints\nthe inverted faces on failure; includes an ignored clean ready‑repro.\n- Fixtures `crates/io/tests/data/topsocket_cut_{base,tool}.bin`:\ncaptured operands for the repro.\n- Example `crates/io/examples/audit_bin.rs`: audits `.bin` solids for\ninward‑oriented faces; supports native boolean via `BOOL_A`, `BOOL_B`,\n`BOOL_OP=cut|fuse`; degrades gracefully when load/boolean fails.\n\n<sup>Written for commit 196bd3bffb131b42a4a425edf1d0d73742eb1f9e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1401?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T08:18:56Z",
+          "tree_id": "6dcceea7daec7b216ccf47cea19dcfe15e2334e1",
+          "url": "https://github.com/andymai/brepkit/commit/bf21d118735416aa9528170f0d91878919deaedf"
+        },
+        "date": 1786090868052,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 793049,
+            "range": "± 2569",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 831652,
+            "range": "± 2649",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10235,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 542553,
+            "range": "± 1706",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20296536,
+            "range": "± 16333",
             "unit": "ns/iter"
           }
         ]
