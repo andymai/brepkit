@@ -7171,13 +7171,12 @@ fn lip_ring_loft_cut_is_orientation_consistent() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "ready repro: intersect(corner box, center sphere) keeps the wrong sphere region — \
-            vol 1304.8 vs the exact octant 268.083, every probe point classifies Outside \
-            (including inside the true octant), and oriented volume (1148.8) disagrees with \
-            the magnitude (1304.8). Three coordinate planes through the sphere center = the \
-            chord-discretized-equator sphere-split family (roadmap TERMINAL-adjacent: the \
-            general UV-space sphere arrangement splitter is the named missing primitive)"]
 fn bench_equiv_intersect_box_corner_sphere_is_the_octant() {
+    // CLOSED 2026-08-07: the analytic octant shortcut built its three cut
+    // arcs on circles with the OUTWARD plane normals, storing the 270-degree
+    // complements (mid-points on the far side of the sphere) — the whole
+    // wrong-region volume. Inward normals make them the intended quarters.
+    // The GFA path was already correct; only the shortcut was wrong.
     let mut topo = Topology::new();
     let b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
     let s = crate::primitives::make_sphere(&mut topo, 8.0, 32).unwrap();

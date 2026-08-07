@@ -84,6 +84,131 @@ fn main() {
         }
         return;
     }
+    // PRIM=octant: build box(10) corner + sphere(8) center natively, run the
+    // requested boolean, and report faces + volume — the box-sphere intersect
+    // wrong-region repro without fixture files.
+    if std::env::var("PRIM").as_deref() == Ok("octant") {
+        let mut topo = Topology::new();
+        let b = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let s = brepkit_operations::primitives::make_sphere(&mut topo, 8.0, 32).unwrap();
+        let op = match std::env::var("BOOL_OP").as_deref() {
+            Ok("cut") => brepkit_algo::bop::BooleanOp::Cut,
+            Ok("fuse") => brepkit_algo::bop::BooleanOp::Fuse,
+            _ => brepkit_algo::bop::BooleanOp::Intersect,
+        };
+        let r = if std::env::var("VIA").as_deref() == Ok("ops") {
+            let op2 = match op {
+                brepkit_algo::bop::BooleanOp::Cut => brepkit_operations::boolean::BooleanOp::Cut,
+                brepkit_algo::bop::BooleanOp::Fuse => brepkit_operations::boolean::BooleanOp::Fuse,
+                brepkit_algo::bop::BooleanOp::Intersect => {
+                    brepkit_operations::boolean::BooleanOp::Intersect
+                }
+            };
+            brepkit_operations::boolean::boolean(&mut topo, op2, b, s).unwrap()
+        } else {
+            brepkit_algo::gfa::boolean(&mut topo, op, b, s).unwrap()
+        };
+        let vol = brepkit_operations::measure::solid_volume(&topo, r, 0.01).unwrap();
+        let ovol = brepkit_operations::measure::oriented_solid_volume(&topo, r, 0.01).unwrap();
+        println!("result vol={vol:.3} oriented={ovol:.3}");
+        let opts = brepkit_operations::validate::ValidationOptions {
+            check_orientation: true,
+            ..Default::default()
+        };
+        let report =
+            brepkit_operations::validate::validate_solid_with_options(&topo, r, &opts).unwrap();
+        println!(
+            "validate issues: {:?}",
+            report
+                .issues
+                .iter()
+                .map(|i| i.description.clone())
+                .collect::<Vec<_>>()
+        );
+        if let Ok(mesh) = brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+            &topo,
+            r,
+            0.01,
+            5.0_f64.to_radians(),
+        ) {
+            let mut half = std::collections::HashMap::new();
+            for t in mesh.indices.chunks(3) {
+                for k in 0..3 {
+                    *half.entry((t[k], t[(k + 1) % 3])).or_insert(0usize) += 1;
+                }
+            }
+            let unmatched = half
+                .keys()
+                .filter(|&&(x, y)| !half.contains_key(&(y, x)))
+                .count();
+            println!("mesh: {unmatched} unmatched half-edges");
+        }
+        let c = brepkit_operations::classify::classify_point(
+            &topo,
+            r,
+            brepkit_math::vec::Point3::new(1.0, 1.0, 1.0),
+            0.01,
+            1e-7,
+        );
+        println!("classify(1,1,1) = {c:?}");
+        for fid in solid_faces(&topo, r).unwrap() {
+            let face = topo.face(fid).unwrap();
+            let mut lo = [f64::MAX; 3];
+            let mut hi = [f64::MIN; 3];
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid).unwrap().edges() {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    for vid in [e.start(), e.end()] {
+                        let pt = topo.vertex(vid).unwrap().point();
+                        let c = [pt.x(), pt.y(), pt.z()];
+                        for k in 0..3 {
+                            lo[k] = lo[k].min(c[k]);
+                            hi[k] = hi[k].max(c[k]);
+                        }
+                    }
+                }
+            }
+            if std::env::var("ARCS").is_ok() {
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    for oe in topo.wire(wid).unwrap().edges() {
+                        let e = topo.edge(oe.edge()).unwrap();
+                        if let brepkit_topology::edge::EdgeCurve::Circle(_) = e.curve() {
+                            let ps = topo.vertex(e.start()).unwrap().point();
+                            let pe = topo.vertex(e.end()).unwrap().point();
+                            let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+                            let mid =
+                                e.curve()
+                                    .evaluate_with_endpoints(f64::midpoint(t0, t1), ps, pe);
+                            println!(
+                                "    arc {:?} span={:.2}deg mid=({:.2},{:.2},{:.2})",
+                                oe.edge(),
+                                (t1 - t0).to_degrees(),
+                                mid.x(),
+                                mid.y(),
+                                mid.z()
+                            );
+                        }
+                    }
+                }
+            }
+            println!(
+                "  {fid:?} {} rev={} inner={} vbox x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}]",
+                face.surface().type_tag(),
+                face.is_reversed(),
+                face.inner_wires().len(),
+                lo[0],
+                hi[0],
+                lo[1],
+                hi[1],
+                lo[2],
+                hi[2]
+            );
+        }
+        return;
+    }
     // LOFT_A/LOFT_B: thin profile extrusions (capture artifacts). Extract
     // each one's TOP cap (the extrude top carries the input profile
     // faithfully), loft them natively, validate + count directed
