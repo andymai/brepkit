@@ -20,6 +20,9 @@ ignore = [
 # tree; BSD-2-Clause / BSD-3-Clause enter via the winit dependency tree (the
 # interactive viewer's `window` feature). All are permissive.
 allow = [
+  # AGPL-3.0-only covers the brepkit workspace crates themselves (dual-licensed,
+  # commercial option in COMMERCIAL-LICENSE.md). No external dependency is AGPL.
+  "AGPL-3.0-only",
   "Apache-2.0",
   "MIT",
   "Zlib",
