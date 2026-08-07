@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786086388585,
+  "lastUpdate": 1786087286622,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21545,6 +21545,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24887942,
             "range": "± 60024",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e630061491c94ba10f1b54e880ad22daa406f371",
+          "message": "docs(roadmap): wall-pattern roots found tool-side, fix in tool #3294 (#1398)\n\nRoadmap maintenance: both user-reported wall-pattern defects (honeycomb\ncorner scallops, triangle arrangement) root-caused in the tool's pattern\nlayout math; fix is gridfinity-layout-tool #3294. Kernel exonerated.\nMethod and verification recorded in the row.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to record that both wall‑pattern issues (honeycomb\ncorner scallops and triangle arrangement) were tool-side and are fixed\nin `gridfinity-layout-tool` #3294. Notes the clamped honeycomb span and\ninterlocked triangle bands, includes verification, and marks the kernel\nas exonerated.\n\n<sup>Written for commit 1049aa92c35e5eab0a621838ae7eb3a84ddb85f9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1398?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T00:18:50-07:00",
+          "tree_id": "3142d194064bb7f1044eddaa5e41d50187012cd8",
+          "url": "https://github.com/andymai/brepkit/commit/e630061491c94ba10f1b54e880ad22daa406f371"
+        },
+        "date": 1786087284613,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 948496,
+            "range": "± 2470",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1027593,
+            "range": "± 24205",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11985,
+            "range": "± 149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701285,
+            "range": "± 1772",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24804991,
+            "range": "± 37031",
             "unit": "ns/iter"
           }
         ]
