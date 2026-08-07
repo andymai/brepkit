@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786124175709,
+  "lastUpdate": 1786125045406,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22355,6 +22355,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24864943,
             "range": "± 36877",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e7c71677426d1072a006215cb53edd8acffa3413",
+          "message": "docs: add intersect and volume rows to the head-to-head table (#1413)\n\nREADME benchmark table refresh on the released kernels:\n\n- **intersect(box, sphere) (×10): 0.6 ms vs 69.6 ms — 117x** (returns\nafter the octant fix #1408/#1410; output pinned to the closed-form\noctant volume)\n- **volume (box) (×100): 0.18 ms vs 8.3 ms — 47x** (the exact all-planar\npath #1396), native 56 µs per 100 calls\n- Exclusion paragraph replaced with the closed-form verification note;\nfootnote records the measurement basis\n\nEvery row in the table now leads.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRefresh the README benchmark table by adding `intersect(box, sphere)`\nand `volume(box)` rows and updating the verification note and footnote.\nThe intersect row returns after the spherical‑octant fix (0.6 ms vs 69.6\nms — 117x) with output pinned to the closed-form octant; `volume(box)`\nlands at 0.18 ms vs 8.3 ms — 47x, and the footnote now records the\nmeasurement basis and package versions.\n\n<sup>Written for commit 8a0c548372830cb5b410e4577932ade73997fca1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1413?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T17:48:06Z",
+          "tree_id": "22db806f1d856a0dd56bc23fe99633d905f38a95",
+          "url": "https://github.com/andymai/brepkit/commit/e7c71677426d1072a006215cb53edd8acffa3413"
+        },
+        "date": 1786125042867,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 952885,
+            "range": "± 3986",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1031908,
+            "range": "± 3426",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11920,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702761,
+            "range": "± 9092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25031884,
+            "range": "± 70639",
             "unit": "ns/iter"
           }
         ]
