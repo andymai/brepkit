@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/andymai/brepkit/compare/v2.129.15...v3.0.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* brepkit 3.0.0 and later are licensed AGPL-3.0-only with a commercial option; versions through 2.129.x remain MIT OR Apache-2.0.
+
+### Features
+
+* relicense under AGPL-3.0-only with commercial licensing option ([#1416](https://github.com/andymai/brepkit/issues/1416)) ([bd7d1ba](https://github.com/andymai/brepkit/commit/bd7d1ba7de6b88a5e997e5281e00a96be30f597f))
+
 ## [2.129.15](https://github.com/andymai/brepkit/compare/v2.129.14...v2.129.15) (2026-08-07)
 
 
