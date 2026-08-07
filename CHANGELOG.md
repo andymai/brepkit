@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.15](https://github.com/andymai/brepkit/compare/v2.129.14...v2.129.15) (2026-08-07)
+
+
+### Bug Fixes
+
+* **operations:** centralize the sphere-patch plane thresholds on kernel tolerance ([#1410](https://github.com/andymai/brepkit/issues/1410)) ([43e597f](https://github.com/andymai/brepkit/commit/43e597f74d98c894bb1bd23f1cf2ed972484c5dd))
+
 ## [2.129.14](https://github.com/andymai/brepkit/compare/v2.129.13...v2.129.14) (2026-08-07)
 
 
