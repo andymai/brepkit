@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786128806014,
+  "lastUpdate": 1786129340782,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22571,6 +22571,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24571669,
             "range": "± 489388",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "33f32f0bb3a9d63ee07d3b6f2f58713b11eec0bb",
+          "message": "chore(main): release 3.0.0 (#1417)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.0.0](https://github.com/andymai/brepkit/compare/v2.129.15...v3.0.0)\n(2026-08-07)\n\n\n### ⚠ BREAKING CHANGES\n\n* brepkit 3.0.0 and later are licensed AGPL-3.0-only with a commercial\noption; versions through 2.129.x remain MIT OR Apache-2.0.\n\n### Features\n\n* relicense under AGPL-3.0-only with commercial licensing option\n([#1416](https://github.com/andymai/brepkit/issues/1416))\n([bd7d1ba](https://github.com/andymai/brepkit/commit/bd7d1ba7de6b88a5e997e5281e00a96be30f597f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-07T18:59:48Z",
+          "tree_id": "e1a1cfc052dedf9e872c7c20807607f03255b337",
+          "url": "https://github.com/andymai/brepkit/commit/33f32f0bb3a9d63ee07d3b6f2f58713b11eec0bb"
+        },
+        "date": 1786129338059,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 983779,
+            "range": "± 3526",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1067941,
+            "range": "± 26798",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12825,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709775,
+            "range": "± 1827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26231571,
+            "range": "± 625668",
             "unit": "ns/iter"
           }
         ]
