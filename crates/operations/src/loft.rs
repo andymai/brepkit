@@ -707,10 +707,19 @@ fn try_loft_matching_curved_profiles(
                         let t_mid = f64::midpoint(t0, t1);
                         let mid = curve.evaluate_with_endpoints(t_mid, p0s, p0e);
                         let tan = curve.tangent_with_endpoints(t_mid, p0s, p0e);
-                        let inward = (p1s - p0s)
+                        // The connect direction along a COAXIAL band is the
+                        // shared axis (the radial-difference part is
+                        // orthogonal to the tested radial normal), so use
+                        // the axis oriented from this profile to the next —
+                        // exact at every arc parameter, no per-vertex
+                        // connect vector needed.
+                        let inward = c0
+                            .normal()
                             .normalize()
                             .ok()
-                            .and_then(|up| {
+                            .and_then(|axis| {
+                                let height = (c1.center() - c0.center()).dot(axis);
+                                let up = axis * height.signum();
                                 let outward_true = tan.cross(up);
                                 surface
                                     .project_point(mid)
