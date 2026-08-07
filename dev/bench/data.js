@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786085865355,
+  "lastUpdate": 1786086388585,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21491,6 +21491,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24845802,
             "range": "± 15172",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7398c634dafec3fa4655ef3fcbf03c77c9251b6",
+          "message": "chore(main): release 2.129.11 (#1397)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.11](https://github.com/andymai/brepkit/compare/v2.129.10...v2.129.11)\n(2026-08-07)\n\n\n### Performance\n\n* **operations:** exact divergence-theorem volume for all-planar solids\n([#1396](https://github.com/andymai/brepkit/issues/1396))\n([1933079](https://github.com/andymai/brepkit/commit/19330793a84219c662471f71a3466fb38e43d63a))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 2.129.11 for `brepkit-wasm`, introducing exact\ndivergence-theorem volume computation for all-planar solids to improve\naccuracy and performance. Updates crate and manifest versions; no API\nchanges or migration needed.\n\n<sup>Written for commit f654fadebe4d7dd66b75d21454488bd4f5fe1d58.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1397?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-07T07:03:54Z",
+          "tree_id": "c00bce0bf6ef2091d22de00268000ffd8b8a1e31",
+          "url": "https://github.com/andymai/brepkit/commit/c7398c634dafec3fa4655ef3fcbf03c77c9251b6"
+        },
+        "date": 1786086386416,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 941085,
+            "range": "± 3520",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1019919,
+            "range": "± 1585",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11802,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697709,
+            "range": "± 11805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24887942,
+            "range": "± 60024",
             "unit": "ns/iter"
           }
         ]
