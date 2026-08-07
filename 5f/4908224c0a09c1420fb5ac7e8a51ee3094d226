@@ -1,0 +1,30 @@
+crates/io/tests/data/topsocket_cut_base.bin
+  s_c50459ee60c4b2::t_d370c16d23a2f1 1
+crates/io/examples/audit_bin.rs
+  s_c50459ee60c4b2::t_7869ed06c06e8e 41-46,49,55-56,58,95-96,117
+  s_c50459ee60c4b2::t_9f803fb652265e 1-16,31-40,47-48,50-54,57,59-94,97-116,118-123
+  s_c50459ee60c4b2::t_9a07743a13cb98 17-30
+.claude/skills/roadmap/SKILL.md
+  s_c50459ee60c4b2::t_6d50dee97db734 130
+crates/io/tests/topsocket_cut_inmem.rs
+  s_c50459ee60c4b2::t_ae9dd50bdd345e 1-158
+  s_c50459ee60c4b2::t_bc783fc8290820 159-160
+crates/io/tests/data/topsocket_cut_tool.bin
+  s_c50459ee60c4b2::t_d370c16d23a2f1 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "5f4908224c0a09c1420fb5ac7e8a51ee3094d226",
+  "prompts": {},
+  "sessions": {
+    "s_c50459ee60c4b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9b3031a2-edb8-4ab0-8da9-38e0a72c2580",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
