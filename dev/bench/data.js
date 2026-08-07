@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786128471330,
+  "lastUpdate": 1786128806014,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22517,6 +22517,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24664725,
             "range": "± 398835",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "679ccff03881326cc478315b0a69345849bd805f",
+          "message": "build(release): retry rate limits, add a semver check and a stability policy (#1415)\n\nFollow-ups from the crates.io bootstrap, which hit crates.io's new-crate\nrate limit (a burst of 5, then one per 10 minutes) partway through\npublishing and needed an out-of-repo wrapper script to finish.\n\n## Retry on 429\n\n`publish-crates.sh` now handles the rate limit itself. The retry is\nbounded (`PUBLISH_MAX_RETRIES`, default 3): a run that adds more crate\nnames than the cap should be finished by re-running the script rather\nthan holding a CI runner idle for an hour, and the skip-if-published\ncheck makes resuming free. A non-429 failure still aborts immediately\nwith no retries.\n\nVerified against a stubbed `cargo` for all three paths:\n\n| Path | Result |\n|---|---|\n| Two 429s then success | exits 0, publishes everything |\n| Retries exhausted | exits 1 with a resume message |\n| Non-429 error | exits immediately, zero retries |\n\nOne subtlety worth noting for future edits: the `out=$(cargo publish\n...) \\|\\| status=$?` form is load bearing. A bare assignment from a\nfailing command substitution trips `set -e` before the status can be\ninspected, which silently defeats the retry.\n\n## SemVer check (advisory)\n\n`cargo semver-checks` runs on every PR but is **deliberately absent from\n`CI Pass`**.\n\nThe crates publish at 2.x while the kernel's internals still move, and\nadding a `FaceSurface` or `EdgeCurve` variant is both semver-major and\non the roadmap (surface-of-revolution and surface-of-linear-extrusion\nare needed for STEP files that currently fail to import). A blocking\ngate would force a major bump across all crates on routine work, before\nthere is a deprecation process to justify it. The check makes breakage\nvisible and deliberate; the policy for acting on it is in STABILITY.md.\n\n## STABILITY.md\n\nSays what the shared 2.x version does and does not promise. The number\ncame from the npm release line, not from the Rust APIs having settled,\nand nothing said so until now.\n\nWritten specifically to resist going stale:\n\n- Stability is stated **per layer**, deferring to the boundary table\nthat `scripts/check-boundaries.sh` already enforces in CI, rather than\nas a hand-maintained per-crate list that nobody would update.\n- Variant counts and delegate-method names are **referenced, not\ncopied**. An earlier draft hardcoded \"six variants and four\", which\nCLAUDE.md already tells you to derive with `rg`.\n- Feature maturity defers to the README status table rather than\nrepeating it.\n- No version numbers; `cargo add` resolves them.\n\nFor the same reason this drops the README's per-crate dependency table,\nwhich duplicated the Architecture table a few sections above it.\n\n## Verification\n\nScripts shellcheck clean. Boundaries, doc-paths, version check, and\ntaplo all green. Both new CLAUDE.md anchors resolve.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nHardens the release process: retries crates.io 429 rate limits during\npublish, adds an advisory `cargo semver-checks` job in CI, and documents\nour API stability policy. This reduces failed publishes and clarifies\nwhat `2.x` guarantees.\n\n- New Features\n- Release: `scripts/publish-crates.sh` now retries 429s with bounded\nattempts (`PUBLISH_MAX_RETRIES`, `PUBLISH_RETRY_WAIT`), resumes safely\non re-run, and still fails fast on non-429 errors.\n- CI: Adds an advisory `SemVer Check` job using `cargo semver-checks`\nagainst the latest crates.io baselines; it runs on PRs but is not part\nof `CI Pass`.\n- Docs: Adds `STABILITY.md` describing per-layer stability, the shared\n`2.x` policy, and the upcoming `FaceSurface`/`EdgeCurve` variant\naddition risk; updates README to link it and removes a duplicate\nper-crate table; notes policy in `CLAUDE.md`.\n\n<sup>Written for commit ed7f0a70ad8117d4186b6b0af839a2037398d764.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1415?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T11:51:00-07:00",
+          "tree_id": "36a9de149e51f5c65b46b10beda68b2914b11f42",
+          "url": "https://github.com/andymai/brepkit/commit/679ccff03881326cc478315b0a69345849bd805f"
+        },
+        "date": 1786128804237,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 919625,
+            "range": "± 3443",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1004519,
+            "range": "± 908",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11977,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 656993,
+            "range": "± 1281",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24571669,
+            "range": "± 489388",
             "unit": "ns/iter"
           }
         ]
