@@ -392,6 +392,37 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         );
 
         if std::env::var("BK_SPLITW").is_ok_and(|v| v == format!("{}", face_id.index())) {
+            if let Ok(face) = topo.face(face_id)
+                && let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface()
+            {
+                for (ri, r) in split_results.iter().enumerate() {
+                    if r.outer_wire.len() < 3 {
+                        continue;
+                    }
+                    let uvs: Vec<brepkit_math::vec::Point2> =
+                        r.outer_wire.iter().map(|e| e.start_uv).collect();
+                    let mut uv_area = 0.0;
+                    for k in 0..uvs.len() {
+                        let a = uvs[k];
+                        let b = uvs[(k + 1) % uvs.len()];
+                        uv_area += a.x() * b.y() - b.x() * a.y();
+                    }
+                    let pts: Vec<brepkit_math::vec::Point3> =
+                        r.outer_wire.iter().map(|e| e.start_3d).collect();
+                    let mut acc = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
+                    for k in 1..pts.len().saturating_sub(1) {
+                        let u = pts[k] - pts[0];
+                        let v = pts[k + 1] - pts[0];
+                        acc += u.cross(v);
+                    }
+                    log::debug!(
+                        "SPLITW piece[{ri}] rev={} uv_area={:.4} n_area={:.4}",
+                        r.reversed,
+                        uv_area * 0.5,
+                        acc.dot(*normal) * 0.5
+                    );
+                }
+            }
             for (si, sec) in sections.iter().enumerate() {
                 log::debug!(
                     "SPLITW sec[{si}] {} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
