@@ -9,7 +9,7 @@ Solid modeling kernel for Rust and WebAssembly.
 [![npm](https://img.shields.io/npm/v/brepkit-wasm)](https://www.npmjs.com/package/brepkit-wasm)
 [![Last release](https://img.shields.io/github/release-date/andymai/brepkit?label=last%20release)](https://github.com/andymai/brepkit/releases)
 [![Commit activity](https://img.shields.io/github/commit-activity/m/andymai/brepkit?label=commits%2Fmonth)](https://github.com/andymai/brepkit/commits/main)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![License: AGPL-3.0-only or commercial](https://img.shields.io/badge/License-AGPL--3.0%20%2F%20Commercial-blue.svg)](#license)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/) [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](#why-a-cad-kernel)
 
 **[Architecture](#architecture)** · **[Performance](#performance)** · **[Getting Started](#getting-started)** · **[Known Limitations](#known-limitations)** · **[Contributing](./CONTRIBUTING.md)**
@@ -278,9 +278,11 @@ Broad directions, no dates.
 
 ## License
 
-Licensed under either of
+brepkit is dual-licensed:
 
-- [Apache License, Version 2.0](./LICENSE-APACHE)
-- [MIT License](./LICENSE-MIT)
+- **[AGPL-3.0-only](./LICENSE)**: free for open-source use. You may use, modify, and redistribute brepkit, provided applications and network services built on it also make their source available under the AGPL.
+- **[Commercial license](./COMMERCIAL-LICENSE.md)**: for embedding brepkit in proprietary products, sold by Collective Context, LLC. Contact [hi@andymai.com](mailto:hi@andymai.com).
 
-at your option.
+Versions through 2.129.x were published under MIT OR Apache-2.0 and remain available under those terms. Versions 3.0.0 and later are AGPL-3.0-only with a commercial option.
+
+Contributions require a signed [CLA](./.github/CLA.md); see [CONTRIBUTING](./CONTRIBUTING.md).

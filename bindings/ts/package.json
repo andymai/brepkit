@@ -5,7 +5,10 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "pkg"],
+  "files": [
+    "dist",
+    "pkg"
+  ],
   "scripts": {
     "build:wasm": "cd ../.. && cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release && wasm-bindgen target/wasm32-unknown-unknown/release/brepkit_wasm.wasm --out-dir bindings/ts/pkg --typescript",
     "build:ts": "tsc",
@@ -22,5 +25,5 @@
     "typescript": "^5.7.0",
     "vitest": "^4.1.8"
   },
-  "license": "MIT OR Apache-2.0"
+  "license": "AGPL-3.0-only"
 }
