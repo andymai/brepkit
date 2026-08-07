@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786058186531,
+  "lastUpdate": 1786081076903,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21275,6 +21275,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26202615,
             "range": "± 34590",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2dc9b94cf5b405332b5aff2bbac4c13375e3132b",
+          "message": "build(deps-dev): bump js-yaml from 4.3.0 to 4.3.1 (#1393)\n\nBumps [js-yaml](https://github.com/nodeca/js-yaml) from 4.3.0 to 4.3.1.\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/nodeca/js-yaml/blob/4.3.1/CHANGELOG.md\">js-yaml's\nchangelog</a>.</em></p>\n<blockquote>\n<h2>4.3.1 - 2026-07-31</h2>\n<h3>Security</h3>\n<ul>\n<li>[backport] Remove quadratic complexity from <code>!!omap</code>\nduplicate key detection.</li>\n</ul>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/nodeca/js-yaml/commit/86e91b815b8794c3c73a179c1770871e37ec2df8\"><code>86e91b8</code></a>\n4.3.1 released</li>\n<li><a\nhref=\"https://github.com/nodeca/js-yaml/commit/c3cc4b0bb9ddb9af2dd9b61e0d56f5ce7983cd4a\"><code>c3cc4b0</code></a>\nBackport quadratic complexity fix for !!omap</li>\n<li>See full diff in <a\nhref=\"https://github.com/nodeca/js-yaml/compare/4.3.0...4.3.1\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\n[![Dependabot compatibility\nscore](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=js-yaml&package-manager=npm_and_yarn&previous-version=4.3.0&new-version=4.3.1)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore this major version` will close this PR and stop\nDependabot creating any more for this major version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this minor version` will close this PR and stop\nDependabot creating any more for this minor version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this dependency` will close this PR and stop\nDependabot creating any more for this dependency (unless you reopen the\nPR or upgrade to it yourself)\nYou can disable automated security fix PRs for this repo from the\n[Security Alerts\npage](https://github.com/andymai/brepkit/network/alerts).\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate dev dependency `js-yaml` from 4.3.0 to 4.3.1 to pick up a\nsecurity fix that removes quadratic complexity in omap duplicate key\ndetection. Dev-only change with no runtime impact.\n\n<sup>Written for commit 7d18a7d25d053fe9cdc98f14adfab0500dbbd159.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1393?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-06T22:35:26-07:00",
+          "tree_id": "ef12a818da28b1af3c376b2387e05a3730fead95",
+          "url": "https://github.com/andymai/brepkit/commit/2dc9b94cf5b405332b5aff2bbac4c13375e3132b"
+        },
+        "date": 1786081075165,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 949954,
+            "range": "± 1712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1025324,
+            "range": "± 893",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12292,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 696845,
+            "range": "± 23164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24917759,
+            "range": "± 319746",
             "unit": "ns/iter"
           }
         ]
