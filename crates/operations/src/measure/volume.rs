@@ -161,6 +161,78 @@ fn mesh_boundary_edge_count(mesh: &tessellate::TriangleMesh) -> usize {
     counts.values().filter(|&&c| c != 2).count()
 }
 
+/// Exact volume for a solid bounded entirely by planar faces with straight
+/// (`Line`) edges — boxes, box booleans, extruded polygons. On a plane the
+/// divergence integrand `x·n` is the constant plane offset, so the integral
+/// collapses to `d·A` per face with `A` the exact polygon area: no
+/// tessellation, no quadrature. Orientation comes from the face's effective
+/// normal alone (`|outer| − Σ|holes|` per face), matching the tessellation
+/// path's tolerance of mis-wound wires.
+fn all_planar_line_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::explorer::solid_faces;
+
+    let faces = solid_faces(topo, solid).ok()?;
+    if faces.is_empty() {
+        return None;
+    }
+    let mut vol6 = 0.0;
+    for &fid in &faces {
+        let face = topo.face(fid).ok()?;
+        let FaceSurface::Plane { normal, d } = face.surface() else {
+            return None;
+        };
+        let n_unit = normal.normalize().ok()?;
+        let d_unit = d / normal.length();
+        let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+        // A skewed quad stored as a Plane (miter-sweep elbows) has vertices
+        // off the stored plane; x·n is then not constant and d·A is wrong.
+        // Bail to the tessellation pipeline on any planarity residual.
+        let planar_eps = 1e-6 * (1.0 + d_unit.abs());
+        let ring_area2 = |wid| -> Option<f64> {
+            let wire = topo.wire(wid).ok()?;
+            let edges = wire.edges();
+            if edges.len() < 3 {
+                return None;
+            }
+            let mut area2 = Vec3::new(0.0, 0.0, 0.0);
+            let mut first: Option<Vec3> = None;
+            let mut prev: Option<Vec3> = None;
+            for oe in edges {
+                let e = topo.edge(oe.edge()).ok()?;
+                if !matches!(e.curve(), EdgeCurve::Line) {
+                    return None;
+                }
+                let vid = if oe.is_forward() { e.start() } else { e.end() };
+                let p = topo.vertex(vid).ok()?.point();
+                let p = Vec3::new(p.x(), p.y(), p.z());
+                if (p.dot(n_unit) - d_unit).abs() > planar_eps {
+                    return None;
+                }
+                if let Some(q) = prev {
+                    area2 += q.cross(p);
+                } else {
+                    first = Some(p);
+                }
+                prev = Some(p);
+            }
+            if let (Some(last), Some(first)) = (prev, first) {
+                area2 += last.cross(first);
+            }
+            Some(area2.dot(n_unit).abs())
+        };
+        let mut face_area2 = ring_area2(face.outer_wire())?;
+        for &iw in face.inner_wires() {
+            face_area2 -= ring_area2(iw)?;
+        }
+        if face_area2 < 0.0 {
+            return None;
+        }
+        vol6 += sign * d_unit * face_area2;
+    }
+    Some((vol6 / 6.0).abs())
+}
+
 fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     use brepkit_topology::explorer::solid_faces;
 
@@ -1109,6 +1181,15 @@ pub fn solid_volume(
     if let Some(v) = try_analytic_solid_volume(topo, solid) {
         if std::env::var("BK_VOL_TRACE").is_ok() {
             log::debug!("VOL_TRACE try_analytic -> {v}");
+        }
+        return Ok(v);
+    }
+
+    // Fast path: all faces planar with straight edges — exact polygon
+    // divergence integral, no tessellation.
+    if let Some(v) = all_planar_line_solid_volume(topo, solid) {
+        if std::env::var("BK_VOL_TRACE").is_ok() {
+            log::debug!("VOL_TRACE all_planar_line -> {v}");
         }
         return Ok(v);
     }
