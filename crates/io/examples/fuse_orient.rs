@@ -145,6 +145,35 @@ fn main() {
                 }
             }
             if votes_in > votes_out && votes_in >= 2 {
+                let mut lo = [f64::MAX; 3];
+                let mut hi = [f64::MIN; 3];
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    for oe in topo.wire(wid).unwrap().edges() {
+                        let e = topo.edge(oe.edge()).unwrap();
+                        for vid in [e.start(), e.end()] {
+                            let p = topo.vertex(vid).unwrap().point();
+                            let c = [p.x(), p.y(), p.z()];
+                            for k in 0..3 {
+                                lo[k] = lo[k].min(c[k]);
+                                hi[k] = hi[k].max(c[k]);
+                            }
+                        }
+                    }
+                }
+                // Vertex-based extents: arcs can bulge past their endpoints.
+                println!(
+                    "  inverted {fid:?} {} rev={} votes={votes_in}-{votes_out} vbox x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}]",
+                    face.surface().type_tag(),
+                    face.is_reversed(),
+                    lo[0],
+                    hi[0],
+                    lo[1],
+                    hi[1],
+                    lo[2],
+                    hi[2]
+                );
                 inverted.push((
                     fid,
                     face.surface().type_tag(),

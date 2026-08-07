@@ -80,10 +80,21 @@
 //! readings that need a careful pass — offsets near thin webs can cross
 //! legitimately-close material). So the winding root is UPSTREAM in the
 //! body's construction chain (per-cell quarter-socket dispatch), in a
-//! class NO existing validation detects. Next altitudes: (a) find the
-//! construction op minting double-flipped faces (per-stage outwardness
-//! audit of a fresh chain capture, or a native socket-construction
-//! repro); (b) add a geometric outwardness check beside the combinatorial
+//! class NO existing validation detects.
+//!
+//! GEOMETRIC LOCALIZATION (2026-08-07, bbox audit): the body's 3 inverted
+//! cylinders are the three stacked profile bands of ONE feature — the 1u
+//! mixed cell's TOP half-socket at its interior corner (x 18-24.5,
+//! y -24.5..-18, z 19.7-25.3; radii ~3.75/1.85/1.15) — so the emitting op
+//! is the chain's top-socket boolean, not the base. SECOND SUB-ROOT
+//! suspected in the fuse itself: the result adds unanimously-inverted
+//! cones/cylinders at z 0-5 in the region where A and B COINCIDE (the
+//! socket nest, e.g. z breaks 0.8/2.6/4.75) though both operands audit
+//! clean standalone — the same-domain kept-face orientation choice.
+//! Next altitudes: (a) find the construction op minting double-flipped
+//! faces (per-stage outwardness audit of a fresh chain capture, or a
+//! native top-socket-cut repro); (b) audit the fuse's SD-kept coincident
+//! faces; (c) add a geometric outwardness check beside the combinatorial
 //! one in validate. Probes: `crates/io/examples/orient_scan.rs` and
 //! `fuse_orient.rs` (fuse + per-face half-edge attribution + the
 //! majority-vote outwardness audit of both operands and the result).
