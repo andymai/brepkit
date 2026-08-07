@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.14](https://github.com/andymai/brepkit/compare/v2.129.13...v2.129.14) (2026-08-07)
+
+
+### Bug Fixes
+
+* **operations:** correct the box-sphere octant shortcut and sphere-patch classification ([#1408](https://github.com/andymai/brepkit/issues/1408)) ([3159636](https://github.com/andymai/brepkit/commit/31596366768a20043498fd985459a5dd82617c1d))
+
 ## [2.129.13](https://github.com/andymai/brepkit/compare/v2.129.12...v2.129.13) (2026-08-07)
 
 
