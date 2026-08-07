@@ -1,7 +1,17 @@
-//! Outwardness audit over captured arena `.bin` solids: report faces whose
-//! effective surface normal points INTO the material (majority vote of
-//! classified points offset along the normal). Finds coherently
-//! double-flipped faces that edge-sense pairing cannot see.
+//! Oracles over captured arena `.bin` solids.
+//!
+//! `HALFEDGE=1`: directed half-edge count at export tolerance — the
+//! AUTHORITATIVE oracle for orientation mismatches (a mesh edge traversed
+//! the same way by two triangles has no opposite twin).
+//!
+//! Default mode: the offset-classification "outwardness" audit. CAUTION:
+//! it returns unanimous false positives near concave cylinder corners
+//! (a directed-watertight cut result audited "3 inverted, 10-0") — never
+//! trust it without the HALFEDGE cross-check.
+//!
+//! `LIST=1`: dump each face's type and reversal flag.
+//! `BOOL_A`/`BOOL_B`/`BOOL_OP`: run a native boolean on two captures and
+//! validate + audit the result.
 //!
 //! ```sh
 //! cargo run --release -p brepkit-io --example audit_bin -- /tmp/stages/*.bin
@@ -32,7 +42,44 @@ fn main() {
             return;
         };
         match brepkit_algo::gfa::boolean(&mut topo, op, a, b) {
-            Ok(result) => audit_one(&topo, result, "native boolean result"),
+            Ok(result) => {
+                let opts = brepkit_operations::validate::ValidationOptions {
+                    check_orientation: true,
+                    ..Default::default()
+                };
+                match brepkit_operations::validate::validate_solid_with_options(
+                    &topo, result, &opts,
+                ) {
+                    Ok(report) => {
+                        for i in &report.issues {
+                            println!("validate: {}", i.description);
+                        }
+                        if report.issues.is_empty() {
+                            println!("validate: clean");
+                        }
+                    }
+                    Err(e) => println!("validate failed: {e}"),
+                }
+                if let Ok(mesh) = brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+                    &topo,
+                    result,
+                    0.01,
+                    5.0_f64.to_radians(),
+                ) {
+                    let mut half = std::collections::HashMap::new();
+                    for t in mesh.indices.chunks(3) {
+                        for k in 0..3 {
+                            *half.entry((t[k], t[(k + 1) % 3])).or_insert(0usize) += 1;
+                        }
+                    }
+                    let unmatched = half
+                        .keys()
+                        .filter(|&&(x, y)| !half.contains_key(&(y, x)))
+                        .count();
+                    println!("mesh: {unmatched} unmatched half-edges");
+                }
+                audit_one(&topo, result, "native boolean result");
+            }
             Err(e) => println!("BOOL mode: boolean failed: {e}"),
         }
         return;
@@ -47,6 +94,41 @@ fn main() {
             println!("{path}: not a solid");
             continue;
         };
+        if std::env::var("HALFEDGE").is_ok() {
+            match brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+                &topo,
+                solid,
+                0.01,
+                5.0_f64.to_radians(),
+            ) {
+                Ok(mesh) => {
+                    let mut half = std::collections::HashMap::new();
+                    for t in mesh.indices.chunks(3) {
+                        for k in 0..3 {
+                            *half.entry((t[k], t[(k + 1) % 3])).or_insert(0usize) += 1;
+                        }
+                    }
+                    let unmatched = half
+                        .keys()
+                        .filter(|&&(x, y)| !half.contains_key(&(y, x)))
+                        .count();
+                    println!("{path}: directed unmatched half-edges = {unmatched}");
+                }
+                Err(e) => println!("{path}: tessellation failed: {e}"),
+            }
+            continue;
+        }
+        if std::env::var("LIST").is_ok() {
+            for fid in solid_faces(&topo, solid).unwrap() {
+                let face = topo.face(fid).unwrap();
+                println!(
+                    "  {fid:?} {} rev={} inner_wires={}",
+                    face.surface().type_tag(),
+                    face.is_reversed(),
+                    face.inner_wires().len()
+                );
+            }
+        }
         audit_one(&topo, solid, &path);
     }
 }
@@ -115,10 +197,34 @@ fn audit_one(topo: &Topology, solid: brepkit_topology::solid::SolidId, label: &s
                 }
             }
             if votes_in > votes_out && votes_in >= 2 {
+                // Vertex-based extents: arcs can bulge past their endpoints.
+                let mut lo = [f64::MAX; 3];
+                let mut hi = [f64::MIN; 3];
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    for oe in topo.wire(wid).unwrap().edges() {
+                        let e = topo.edge(oe.edge()).unwrap();
+                        for vid in [e.start(), e.end()] {
+                            let p = topo.vertex(vid).unwrap().point();
+                            let c = [p.x(), p.y(), p.z()];
+                            for k in 0..3 {
+                                lo[k] = lo[k].min(c[k]);
+                                hi[k] = hi[k].max(c[k]);
+                            }
+                        }
+                    }
+                }
                 inverted.push(format!(
-                    "{fid:?} {} rev={} votes={votes_in}-{votes_out}",
+                    "{fid:?} {} rev={} votes={votes_in}-{votes_out} vbox x[{:.2},{:.2}] y[{:.2},{:.2}] z[{:.2},{:.2}]",
                     face.surface().type_tag(),
-                    face.is_reversed()
+                    face.is_reversed(),
+                    lo[0],
+                    hi[0],
+                    lo[1],
+                    hi[1],
+                    lo[2],
+                    hi[2]
                 ));
             }
         }

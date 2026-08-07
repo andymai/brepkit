@@ -1,31 +1,39 @@
-//! The mixed-cell top half-socket cut: the FIRST boolean of the
-//! mixed-detail export chain (stage-capture call 000). Both operands are
-//! orientation-clean by every oracle, yet the cut result carries 3
-//! COHERENTLY DOUBLE-FLIPPED cylinder bands — effective surface normal
-//! pointing INTO the material with the wire winding flipped to match, so
-//! edge-sense pairing (check_shell_orientation) passes while the face is
-//! geometrically inside-out. These bands survive the rest of the chain
-//! into the body operand of `mixed_socket_tess_inmem.rs` and own all 116
-//! unmatched half-edges of that fixture's export-tolerance mesh.
+//! Stage fixtures from the mixed-detail per-cell half-sockets chain, pinned
+//! with the DIRECTED half-edge oracle (tessellate at export tolerance, count
+//! half-edges with no opposite twin). That oracle is authoritative for the
+//! orientation-mismatch class; the offset-classification "outwardness" audit
+//! is NOT — it returns unanimous false positives near concave cylinder
+//! corners (call 000's cut result audits "3 inverted faces, 10-0 votes" yet
+//! meshes directed-watertight), the classification-probe trap in a new form.
+//! Always cross-check any outwardness claim against the directed mesh.
 //!
-//! Only an OUTWARDNESS oracle sees the class: classify points offset
-//! along the effective normal; plus-side Inside with minus-side Outside
-//! marks an inverted face (majority vote over spread samples — a single
-//! centroid near thin material flips verdicts).
+//! Attribution by the directed oracle (2026-08-07 stage capture):
+//! - call 000 (cut, this file's `topsocket_cut_*` operands): args 0/0,
+//!   result 0 — HEALTHY. The #1401 claim that this cut mints inverted
+//!   faces was the false-positive audit; retracted here.
+//! - call 001 (cut, `topsocket_chain001_*`): its args ALREADY carry 38 and
+//!   78 unmatched half-edges (sum 116); the result carries all 116. The
+//!   boolean faithfully preserves the defect, it does not mint it.
+//! - calls 002-008: the 116 ride into the body operand of
+//!   `mixed_socket_tess_inmem.rs`; the socket-assembly side stays 0.
 //!
-//! Probes: `crates/io/examples/audit_bin.rs` (per-.bin audit and the
-//! BOOL_A/BOOL_B native-boolean mode), `fuse_orient.rs`. Captured
-//! 2026-08-07 via the kernel-test boolean monkey-patch
-//! (mixedSocketStageCapture, tool-side, untracked).
+//! So the mint happens BEFORE call 001, in ops the fuse/cut monkey-patch
+//! did not see — the export drives some ops through executeBatch (the known
+//! capture gap). The next capture must hook the batch dispatcher too.
+//!
+//! What is proven about the defective faces: each meshes true to its own
+//! effective normal (mesh_orient=1.0 in `fuse_orient`) while DIRECTED
+//! pairing fails against neighbours at the quarter-socket rims — adjacent
+//! faces' effective orientations genuinely disagree. Which side is wrong
+//! needs a sound oracle before any fix.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use brepkit_io::arena_io::deserialize_solid;
-use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_topology::Topology;
-use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::solid::SolidId;
 
 fn fixture(name: &str) -> PathBuf {
@@ -38,125 +46,62 @@ fn load(name: &str, topo: &mut Topology) -> SolidId {
     deserialize_solid(&std::fs::read(fixture(name)).unwrap(), topo).unwrap()
 }
 
-fn inverted_faces(topo: &Topology, solid: SolidId) -> Vec<String> {
-    let (mesh, offsets) = brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
+fn directed_unmatched(topo: &Topology, solid: SolidId) -> usize {
+    let mesh = brepkit_operations::tessellate::tessellate_solid_with_tolerance(
         topo,
         solid,
-        0.05,
-        10.0_f64.to_radians(),
+        0.01,
+        5.0_f64.to_radians(),
     )
     .unwrap();
-    let faces = solid_faces(topo, solid).unwrap();
-    let mut inverted = Vec::new();
-    for (fi, &fid) in faces.iter().enumerate() {
-        let face = topo.face(fid).unwrap();
-        let start = offsets[fi] as usize;
-        let end = offsets[fi + 1] as usize;
-        if end <= start {
-            continue;
-        }
-        let tris = (end - start) / 3;
-        let mut votes_in = 0usize;
-        let mut votes_out = 0usize;
-        for k in 0..5usize {
-            let mid = start + ((tris * (2 * k + 1) / 10).min(tris.saturating_sub(1))) * 3;
-            let Some(t) = mesh.indices.get(mid..mid + 3) else {
-                continue;
-            };
-            let (pa, pb, pc) = (
-                mesh.positions[t[0] as usize],
-                mesh.positions[t[1] as usize],
-                mesh.positions[t[2] as usize],
-            );
-            let centroid = brepkit_math::vec::Point3::new(
-                (pa.x() + pb.x() + pc.x()) / 3.0,
-                (pa.y() + pb.y() + pc.y()) / 3.0,
-                (pa.z() + pb.z() + pc.z()) / 3.0,
-            );
-            let Some((u, v)) = face.surface().project_point(centroid) else {
-                continue;
-            };
-            let sn = face.surface().normal(u, v);
-            let eff = if face.is_reversed() { -1.0 } else { 1.0 };
-            let Ok(n_eff) = (sn * eff).normalize() else {
-                continue;
-            };
-            for off in [0.02, 0.05] {
-                match (
-                    classify_point(topo, solid, centroid + n_eff * off, 0.01, 1e-6),
-                    classify_point(topo, solid, centroid - n_eff * off, 0.01, 1e-6),
-                ) {
-                    (Ok(PointClassification::Inside), Ok(PointClassification::Outside)) => {
-                        votes_in += 1;
-                    }
-                    (Ok(PointClassification::Outside), Ok(PointClassification::Inside)) => {
-                        votes_out += 1;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if votes_in > votes_out && votes_in >= 2 {
-            inverted.push(format!(
-                "{fid:?} {} rev={} votes={votes_in}-{votes_out}",
-                face.surface().type_tag(),
-                face.is_reversed()
-            ));
+    let mut half: HashMap<(u32, u32), usize> = HashMap::new();
+    for t in mesh.indices.chunks(3) {
+        for k in 0..3 {
+            *half.entry((t[k], t[(k + 1) % 3])).or_default() += 1;
         }
     }
-    inverted
+    half.keys()
+        .filter(|&&(x, y)| !half.contains_key(&(y, x)))
+        .count()
 }
 
 #[test]
-fn topsocket_cut_operands_are_outward_clean() {
-    // Both operands pass the outwardness oracle, so any inverted face in
-    // the result is minted by the cut itself.
-    let mut topo = Topology::new();
-    let base = load("topsocket_cut_base.bin", &mut topo);
-    let inv = inverted_faces(&topo, base);
-    assert!(
-        inv.is_empty(),
-        "base operand must be outward-clean, got {inv:?}"
-    );
-    let tool = load("topsocket_cut_tool.bin", &mut topo);
-    let inv = inverted_faces(&topo, tool);
-    assert!(
-        inv.is_empty(),
-        "tool operand must be outward-clean, got {inv:?}"
-    );
-}
-
-#[test]
-fn topsocket_cut_emits_double_flipped_bands() {
-    // ACTIVE pin of the live defect: the cut of two outward-clean operands
-    // emits inverted cylinder bands (3 at capture). A fix must flip this
-    // pin to assert zero and un-ignore the clean pin below.
+fn topsocket_cut_is_directed_watertight() {
+    // The chain's first cut is healthy end to end: clean operands, clean
+    // result under the directed oracle. Guards the boolean against ever
+    // minting orientation mismatches on this configuration.
     let mut topo = Topology::new();
     let base = load("topsocket_cut_base.bin", &mut topo);
     let tool = load("topsocket_cut_tool.bin", &mut topo);
+    assert_eq!(directed_unmatched(&topo, base), 0, "base operand");
+    assert_eq!(directed_unmatched(&topo, tool), 0, "tool operand");
     let result =
         brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, base, tool)
             .expect("cut must succeed");
-    let inv = inverted_faces(&topo, result);
-    assert!(
-        !inv.is_empty(),
-        "documented defect vanished — flip this pin and un-ignore the clean pin"
-    );
-    assert!(
-        inv.iter().all(|s| s.contains("cylinder")),
-        "documented inverted faces are cylinder bands, got {inv:?}"
-    );
+    assert_eq!(directed_unmatched(&topo, result), 0, "cut result");
 }
 
 #[test]
-#[ignore = "ready-repro: the cut of two outward-clean operands must emit zero inverted \
-            faces; currently 3 double-flipped cylinder bands (see the header)"]
-fn topsocket_cut_result_is_outward_clean() {
+fn topsocket_chain001_args_carry_the_directed_mismatches() {
+    // ACTIVE pin of the true carriers: call 001's args arrive with 38 and
+    // 78 unmatched half-edges minted by earlier, uncaptured (batch-driven)
+    // ops. A construction-side fix upstream changes these captures' role:
+    // re-capture and update or retire this pin when that lands.
     let mut topo = Topology::new();
-    let base = load("topsocket_cut_base.bin", &mut topo);
-    let tool = load("topsocket_cut_tool.bin", &mut topo);
-    let result =
-        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, base, tool)
-            .expect("cut must succeed");
-    assert_eq!(inverted_faces(&topo, result), Vec::<String>::new());
+    let a = load("topsocket_chain001_a.bin", &mut topo);
+    assert_eq!(directed_unmatched(&topo, a), 38, "chain001 arg0");
+    let b = load("topsocket_chain001_b.bin", &mut topo);
+    assert_eq!(directed_unmatched(&topo, b), 78, "chain001 arg1");
+}
+
+#[test]
+fn topsocket_chain001_cut_preserves_not_mints() {
+    // The cut of the two defective args carries exactly the inherited sum:
+    // the boolean preserves the mismatches, it does not mint or heal them.
+    let mut topo = Topology::new();
+    let a = load("topsocket_chain001_a.bin", &mut topo);
+    let b = load("topsocket_chain001_b.bin", &mut topo);
+    let result = brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, a, b)
+        .expect("cut must succeed");
+    assert_eq!(directed_unmatched(&topo, result), 116, "cut result");
 }
