@@ -396,6 +396,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 && let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface()
             {
                 for (ri, r) in split_results.iter().enumerate() {
+                    if r.outer_wire.len() < 3 {
+                        continue;
+                    }
                     let uvs: Vec<brepkit_math::vec::Point2> =
                         r.outer_wire.iter().map(|e| e.start_uv).collect();
                     let mut uv_area = 0.0;

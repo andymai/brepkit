@@ -53,6 +53,10 @@ fn main() {
                 if face.is_reversed() {
                     pts.reverse();
                 }
+                if pts.len() < 3 {
+                    println!(" degenerate outer wire ({} points)", pts.len());
+                    continue;
+                }
                 let mut area2 = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
                 for w in 1..pts.len().saturating_sub(1) {
                     let u = pts[w] - pts[0];
@@ -165,6 +169,9 @@ fn main() {
         }
         if face.is_reversed() {
             pts.reverse();
+        }
+        if pts.len() < 3 {
+            continue;
         }
         let n = *normal;
         let origin = pts[0];
