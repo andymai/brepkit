@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786126192077,
+  "lastUpdate": 1786128471330,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22463,6 +22463,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20368748,
             "range": "± 58361",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd7d1ba7de6b88a5e997e5281e00a96be30f597f",
+          "message": "feat!: relicense under AGPL-3.0-only with commercial licensing option (#1416)\n\nRelicenses brepkit from MIT OR Apache-2.0 to AGPL-3.0-only with a\ncommercial licensing option from Collective Context, LLC. Ships as 3.0.0\nso the license boundary sits on a major version: 2.x remains available\nunder the permissive terms as published, 3.x is AGPL + commercial.\n\nChanges:\n- `LICENSE` is now the AGPL-3.0 text; `LICENSE-MIT` and `LICENSE-APACHE`\nare removed\n- Workspace `license` field and `bindings/ts/package.json` set to\n`AGPL-3.0-only`\n- `COMMERCIAL-LICENSE.md` states when a commercial license is needed and\nhow to get one\n- `.github/CLA.md` adds the individual CLA that `CONTRIBUTING.md`\nalready references, granting Collective Context, LLC relicensing rights\nover contributions\n- `.github/workflows/cla.yml` enforces CLA signature on PRs via\ncontributor-assistant (sign-by-comment, signatures stored on a\n`cla-signatures` branch, bots allowlisted)\n- `deny.toml` allows `AGPL-3.0-only` for the workspace crates; `cargo\ndeny check licenses` passes\n- README badge and License section updated with the dual-license terms\nand the 2.x/3.x boundary\n\nBREAKING CHANGE: brepkit 3.0.0 and later are licensed AGPL-3.0-only with\na commercial option; versions through 2.129.x remain MIT OR Apache-2.0.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelicenses brepkit to AGPL-3.0-only with a commercial option in v3.0.0.\nBreaking change: 2.x stays MIT/Apache-2.0; licensing docs, badges, and\npackage metadata updated, and a CLA is now enforced for contributions.\n\n- **Migration**\n- For proprietary use of `brepkit`, `brepkit-wasm`, or `@brepkit/wasm`,\nobtain a commercial license (contact hi@andymai.com).\n- For open-source use, comply with AGPL-3.0 (apps and services must\npublish their source).\n  - To keep permissive terms, remain on 2.129.x or earlier.\n  - Contributors must sign the CLA; PRs are blocked until signed.\n\n<sup>Written for commit 469216480e4f64319be55d94c90b1765c512c7c5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1416?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T11:45:21-07:00",
+          "tree_id": "169d0a495b0831439cbcc1be71fa7977696145c0",
+          "url": "https://github.com/andymai/brepkit/commit/bd7d1ba7de6b88a5e997e5281e00a96be30f597f"
+        },
+        "date": 1786128469174,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 924355,
+            "range": "± 1156",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1008323,
+            "range": "± 1014",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11814,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 659738,
+            "range": "± 1416",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24664725,
+            "range": "± 398835",
             "unit": "ns/iter"
           }
         ]
