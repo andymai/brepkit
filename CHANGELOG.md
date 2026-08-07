@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.11](https://github.com/andymai/brepkit/compare/v2.129.10...v2.129.11) (2026-08-07)
+
+
+### Performance
+
+* **operations:** exact divergence-theorem volume for all-planar solids ([#1396](https://github.com/andymai/brepkit/issues/1396)) ([1933079](https://github.com/andymai/brepkit/commit/19330793a84219c662471f71a3466fb38e43d63a))
+
 ## [2.129.10](https://github.com/andymai/brepkit/compare/v2.129.9...v2.129.10) (2026-08-07)
 
 
