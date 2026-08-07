@@ -688,10 +688,45 @@ fn try_loft_matching_curved_profiles(
                 }
                 (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
                     if let Some(surface) = coaxial_corner_surface(c0, c1, tol) {
-                        // Cylinder/Cone share `build_coaxial_band_stack`'s
-                        // radial-outward normal convention with this wire
-                        // winding, so no reversal is needed.
-                        (surface, false)
+                        // Radial-outward equals solid-outward only for a
+                        // CONVEX corner arc (material inside the arc). A
+                        // concave rounding puts the material outside the
+                        // cylinder: the stored normal points into the solid
+                        // and the face must be reversed (with the
+                        // reversed-winding wire below), or every neighbour
+                        // disagrees with it in the directed mesh while edge
+                        // senses still pair. The chord-cross `outward` used
+                        // by the other arms cannot discriminate here (a
+                        // concave traversal flips the chord AND the radial
+                        // normal together): profiles are CCW about the
+                        // stacking direction, so material-outward is the
+                        // TRAVERSAL TANGENT crossed with the connect
+                        // direction, sampled at the arc midpoint.
+                        let curve = EdgeCurve::Circle(c0.clone());
+                        let (t0, t1) = curve.domain_with_endpoints(p0s, p0e);
+                        let t_mid = f64::midpoint(t0, t1);
+                        let mid = curve.evaluate_with_endpoints(t_mid, p0s, p0e);
+                        let tan = curve.tangent_with_endpoints(t_mid, p0s, p0e);
+                        // The connect direction along a COAXIAL band is the
+                        // shared axis (the radial-difference part is
+                        // orthogonal to the tested radial normal), so use
+                        // the axis oriented from this profile to the next —
+                        // exact at every arc parameter, no per-vertex
+                        // connect vector needed.
+                        let inward = c0
+                            .normal()
+                            .normalize()
+                            .ok()
+                            .and_then(|axis| {
+                                let height = (c1.center() - c0.center()).dot(axis);
+                                let up = axis * height.signum();
+                                let outward_true = tan.cross(up);
+                                surface
+                                    .project_point(mid)
+                                    .map(|(u, v)| surface.normal(u, v).dot(outward_true) < 0.0)
+                            })
+                            .unwrap_or(false);
+                        (surface, inward)
                     } else {
                         let p1e = profs[s + 1][i].end;
                         let Some(surf) = ruled_arc_surface(c0, p0s, p0e, c1, p1s, p1e) else {
