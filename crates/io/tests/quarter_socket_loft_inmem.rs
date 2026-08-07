@@ -10,10 +10,17 @@
 //! (call 207) mints 78 the same way; the chain's cut merges them into
 //! the 116 of `mixed_socket_tess_inmem.rs`.
 //!
-//! The orientation-emission campaign fixed the loft's ruled-NURBS side
-//! walls (flip the SURFACE by swapping rails); the CYLINDER side-wall
-//! path (arc profile segments recognized as analytic cylinder bands) is
-//! the remaining emission site. Fix altitude: `operations/src/loft.rs`.
+//! ROOT FIXED: the loft's coaxial Cylinder/Cone arm emitted
+//! `(surface, false)` unconditionally — radial-outward equals
+//! solid-outward only for a CONVEX corner arc, and a CONCAVE rounding
+//! (material outside the cylinder) needs the reversal. The chord-cross
+//! `outward` cannot discriminate (a concave traversal flips chord and
+//! radial normal together), so the check uses material-outward =
+//! traversal tangent x connect direction at the arc midpoint. Verified
+//! against the captured REAL profiles (`quarter_socket_loft_profile_
+//! {a,b}.bin`, thin extrusions whose top caps carry the inputs): without
+//! the fix the native loft reproduces exactly 38 mismatches; with it,
+//! both the 38- and 78-loft configurations mesh directed-watertight.
 //!
 //! Oracle note: use DIRECTED half-edge pairing (authoritative). The
 //! offset-classification outwardness audit false-positives near concave
@@ -81,12 +88,51 @@ fn quarter_socket_loft_is_combinatorially_clean() {
 }
 
 #[test]
-fn quarter_socket_loft_mints_directed_mismatches() {
-    // ACTIVE pin of the live defect: the captured loft output carries 38
-    // unmatched directed half-edges, all bordering one cylinder side wall.
-    // A loft-side fix changes what a fresh capture produces, not this
-    // static solid — when the emission is fixed, re-capture and flip this
-    // fixture to a clean pin.
+fn quarter_socket_loft_regenerates_directed_watertight() {
+    // The fix pin: loft the REAL captured profiles (top caps of the thin
+    // extrusions) and require a directed-watertight mesh (was 38
+    // mismatches on one cylinder side wall).
+    let mut topo = Topology::new();
+    let ea = load("quarter_socket_loft_profile_a.bin", &mut topo);
+    let eb = load("quarter_socket_loft_profile_b.bin", &mut topo);
+    let top_face = |topo: &Topology, sid: SolidId| {
+        let faces = solid_faces(topo, sid).unwrap();
+        let mut best: Option<(brepkit_topology::face::FaceId, f64)> = None;
+        for &fid in &faces {
+            let face = topo.face(fid).unwrap();
+            if !matches!(
+                face.surface(),
+                brepkit_topology::face::FaceSurface::Plane { .. }
+            ) {
+                continue;
+            }
+            let mut z_min = f64::MAX;
+            for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+                let e = topo.edge(oe.edge()).unwrap();
+                for vid in [e.start(), e.end()] {
+                    z_min = z_min.min(topo.vertex(vid).unwrap().point().z());
+                }
+            }
+            if best.is_none_or(|(_, bz)| z_min > bz) {
+                best = Some((fid, z_min));
+            }
+        }
+        best.map(|(fid, _)| fid).unwrap()
+    };
+    let fa = top_face(&topo, ea);
+    let fb = top_face(&topo, eb);
+    let solid = brepkit_operations::loft::loft(&mut topo, &[fa, fb]).unwrap();
+    assert_eq!(
+        directed_unmatched(&topo, solid),
+        0,
+        "loft of the real quarter-socket profiles must be directed-watertight"
+    );
+}
+
+#[test]
+fn quarter_socket_loft_capture_documents_the_defective_era() {
+    // The CAPTURED (pre-fix) loft output stays as minted: 38 unmatched
+    // directed half-edges, all bordering one cylinder side wall.
     let mut topo = Topology::new();
     let solid = load("quarter_socket_loft38.bin", &mut topo);
     assert_eq!(directed_unmatched(&topo, solid), 38);

@@ -84,6 +84,74 @@ fn main() {
         }
         return;
     }
+    // LOFT_A/LOFT_B: thin profile extrusions (capture artifacts). Extract
+    // each one's TOP cap (the extrude top carries the input profile
+    // faithfully), loft them natively, validate + count directed
+    // mismatches on the result.
+    if let (Ok(pa), Ok(pb)) = (std::env::var("LOFT_A"), std::env::var("LOFT_B")) {
+        let mut topo = Topology::new();
+        let load = |path: &str, topo: &mut Topology| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| deserialize_solid(&bytes, topo).ok())
+        };
+        let (Some(a), Some(b)) = (load(&pa, &mut topo), load(&pb, &mut topo)) else {
+            println!("LOFT mode: could not load {pa} / {pb} as solids");
+            return;
+        };
+        let top_face = |topo: &Topology, sid: brepkit_topology::solid::SolidId| {
+            let faces = solid_faces(topo, sid).unwrap();
+            let mut best: Option<(brepkit_topology::face::FaceId, f64)> = None;
+            for &fid in &faces {
+                let face = topo.face(fid).unwrap();
+                if !matches!(
+                    face.surface(),
+                    brepkit_topology::face::FaceSurface::Plane { .. }
+                ) {
+                    continue;
+                }
+                let mut z_min = f64::MAX;
+                for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    for vid in [e.start(), e.end()] {
+                        z_min = z_min.min(topo.vertex(vid).unwrap().point().z());
+                    }
+                }
+                if best.is_none_or(|(_, bz)| z_min > bz) {
+                    best = Some((fid, z_min));
+                }
+            }
+            best.map(|(fid, _)| fid)
+        };
+        let (Some(fa), Some(fb)) = (top_face(&topo, a), top_face(&topo, b)) else {
+            println!("LOFT mode: could not find top caps");
+            return;
+        };
+        match brepkit_operations::loft::loft(&mut topo, &[fa, fb]) {
+            Ok(result) => {
+                let mesh = brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+                    &topo,
+                    result,
+                    0.01,
+                    5.0_f64.to_radians(),
+                )
+                .unwrap();
+                let mut half = std::collections::HashMap::new();
+                for t in mesh.indices.chunks(3) {
+                    for k in 0..3 {
+                        *half.entry((t[k], t[(k + 1) % 3])).or_insert(0usize) += 1;
+                    }
+                }
+                let unmatched = half
+                    .keys()
+                    .filter(|&&(x, y)| !half.contains_key(&(y, x)))
+                    .count();
+                println!("native loft: directed unmatched half-edges = {unmatched}");
+            }
+            Err(e) => println!("LOFT mode: loft failed: {e}"),
+        }
+        return;
+    }
     for path in std::env::args().skip(1) {
         let mut topo = Topology::new();
         let Ok(bytes) = std::fs::read(&path) else {
