@@ -1,6 +1,10 @@
 # Taplo — TOML formatter and linter
 # https://taplo.tamasfe.dev/configuration/
 
+# `cargo package` writes rewritten manifests under target/package/. They are
+# cargo's output, not sources, and are not formatted to this config.
+exclude = ["target/**"]
+
 [formatting]
 align_entries = false
 array_trailing_comma = true

@@ -1,11 +1,18 @@
 [package]
+categories.workspace = true
 description = "B-Rep topological data structures for brepkit"
 edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
 license.workspace = true
 name = "brepkit-topology"
+readme = "../../README.md"
 repository.workspace = true
 rust-version.workspace = true
-version = "0.1.0"
+version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 brepkit-math.workspace = true

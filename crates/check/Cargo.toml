@@ -1,11 +1,15 @@
 [package]
+categories.workspace = true
 description = "Topology algorithms: classification, validation, properties, distance"
 edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
 license.workspace = true
 name = "brepkit-check"
+readme = "../../README.md"
 repository.workspace = true
 rust-version.workspace = true
-version = "0.1.0"
+version.workspace = true
 
 [dependencies]
 brepkit-geometry.workspace = true

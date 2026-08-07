@@ -2,12 +2,14 @@
 categories = ["wasm", "mathematics", "science"]
 description = "WebAssembly bindings for brepkit — browser-native B-Rep solid modeling"
 edition.workspace = true
+homepage.workspace = true
 keywords = ["cad", "brep", "wasm", "geometry", "solid-modeling"]
 license.workspace = true
 name = "brepkit-wasm"
+readme = "../../README.md"
 repository.workspace = true
 rust-version.workspace = true
-version = "2.129.15"
+version.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]

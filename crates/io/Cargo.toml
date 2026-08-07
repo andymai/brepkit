@@ -1,11 +1,18 @@
 [package]
+categories.workspace = true
 description = "Multi-format B-Rep data exchange for brepkit (STEP, IGES, STL, 3MF, OBJ, PLY, glTF)"
 edition.workspace = true
+# `tests/data` holds 11 MB of captured STEP and arena fixtures, over the 10 MiB
+# crates.io package limit. They are regression inputs, not consumer-facing.
+exclude = ["tests/data/"]
+homepage.workspace = true
+keywords.workspace = true
 license.workspace = true
 name = "brepkit-io"
+readme = "../../README.md"
 repository.workspace = true
 rust-version.workspace = true
-version = "0.1.0"
+version.workspace = true
 
 [dependencies]
 brepkit-math = {workspace = true, features = ["serde"]}

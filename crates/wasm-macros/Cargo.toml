@@ -3,9 +3,11 @@ description = "Proc macros for brepkit-wasm binding generation"
 edition.workspace = true
 license.workspace = true
 name = "brepkit-wasm-macros"
+# Not wired into brepkit-wasm yet; keep it off crates.io until it is.
+publish = false
 repository.workspace = true
 rust-version.workspace = true
-version = "0.1.0"
+version.workspace = true
 
 [lib]
 proc-macro = true
