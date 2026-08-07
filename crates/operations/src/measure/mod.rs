@@ -173,6 +173,37 @@ mod tests {
         assert_rel(vol, 1000.0, 1e-8, "10x10x10 box volume");
     }
 
+    /// Fuse of two overlapping boxes: all faces planar with Line edges, so
+    /// the exact polygon path applies. V = 2*1000 - 125 (5x5x5 overlap).
+    #[test]
+    fn box_fuse_volume_exact_via_planar_path() {
+        use crate::boolean::{BooleanOp, boolean};
+        use brepkit_math::mat::Mat4;
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(5.0, 5.0, 5.0)).unwrap();
+        let fused = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let vol = solid_volume(&topo, fused, 0.1).unwrap();
+        assert_rel(vol, 1875.0, 1e-9, "overlapping box fuse volume");
+    }
+
+    /// A through-hole cut leaves top/bottom faces with inner wires; the
+    /// planar polygon path must subtract them. V = 1000 - 2*2*10.
+    #[test]
+    fn box_through_hole_volume_exact_via_planar_path() {
+        use crate::boolean::{BooleanOp, boolean};
+        use brepkit_math::mat::Mat4;
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let tool = crate::primitives::make_box(&mut topo, 2.0, 2.0, 12.0).unwrap();
+        crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(4.0, 4.0, -1.0))
+            .unwrap();
+        let cut = boolean(&mut topo, BooleanOp::Cut, a, tool).unwrap();
+        let vol = solid_volume(&topo, cut, 0.1).unwrap();
+        assert_rel(vol, 960.0, 1e-9, "box through-hole volume");
+    }
+
     /// Non-cube rectangular box: volume = dx * dy * dz.
     #[test]
     fn rectangular_box_volume_exact() {
