@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786123679214,
+  "lastUpdate": 1786124175709,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22301,6 +22301,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20284240,
             "range": "± 19659",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "599a39c70be9985d9221794a6d83e9a8f327f834",
+          "message": "docs(roadmap): intersect head-to-head row re-qualified at 117x on 2.129.14 (#1412)\n\nThe intersect(box,sphere) row was disqualified for producing the wrong\nregion. With #1408/#1410 shipped in 2.129.14 the output is correct\n(pinned by `bench_equiv_intersect_box_corner_sphere_is_the_octant`) and\nthe re-measure on the released kernel (hash-verified overlay,\nBENCH_KERNELS=both) gives brepkit **0.597 ms** vs reference **69.6 ms**\nper intersect — **117x**. Every head-to-head row now leads.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap to re-qualify the intersect(box,sphere) benchmark on\nkernel 2.129.14 (#1408/#1410). Records 117x speedup (0.597 ms vs 69.6\nms) and pins correctness via\n`bench_equiv_intersect_box_corner_sphere_is_the_octant`; notes that\nevery head-to-head row now leads.\n\n<sup>Written for commit 8636844d1d469acadcca35cc3c34dc2fe55081d4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1412?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T17:33:39Z",
+          "tree_id": "28b63d655b5c8402115b118ce2eb051203f63ac1",
+          "url": "https://github.com/andymai/brepkit/commit/599a39c70be9985d9221794a6d83e9a8f327f834"
+        },
+        "date": 1786124172565,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 944924,
+            "range": "± 2606",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1024866,
+            "range": "± 2232",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12055,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697418,
+            "range": "± 1694",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24864943,
+            "range": "± 36877",
             "unit": "ns/iter"
           }
         ]
