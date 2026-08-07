@@ -7,11 +7,18 @@
       "include-component-in-tag": false,
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        {
-          "type": "toml",
-          "path": "crates/wasm/Cargo.toml",
-          "jsonpath": "$.package.version"
-        }
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.package.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-algo.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-blend.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-check.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-geometry.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-heal.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-io.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-math.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-offset.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-operations.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-sketch.version" },
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.dependencies.brepkit-topology.version" }
       ],
       "bump-patch-for-minor-pre-major": true,
       "changelog-sections": [

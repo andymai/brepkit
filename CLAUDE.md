@@ -592,7 +592,23 @@ cargo fmt --all                            # Format
 cargo build -p brepkit-wasm --target wasm32-unknown-unknown  # WASM
 ./scripts/check-boundaries.sh              # Verify layer deps
 ./scripts/check-doc-paths.sh               # Verify doc file paths still resolve
+./scripts/check-versions.sh                # Verify all crates share one version
+cargo publish --workspace --dry-run        # Verify the workspace is publishable
 ```
+
+### Publishing
+
+All crates share one version, inherited from `[workspace.package] version` and
+bumped by release-please. Adding a crate means: `version.workspace = true` plus
+the inherited metadata keys, a `readme = "../../README.md"` line (a
+workspace-inherited relative readme path does not resolve), an entry in
+`[workspace.dependencies]` **with a version**, a matching jsonpath in
+`release-please-config.json`, and its name in `scripts/publish-crates.sh`.
+
+A brand-new crate name must be published manually once
+(`CARGO_REGISTRY_TOKEN=<token> ./scripts/publish-crates.sh`) before crates.io
+will accept a trusted-publisher config for it. Releases after that are
+automatic.
 
 ### Profiling
 

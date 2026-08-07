@@ -1,11 +1,15 @@
 [package]
+categories.workspace = true
 description = "Solid offset engine for brepkit"
 edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
 license.workspace = true
 name = "brepkit-offset"
+readme = "../../README.md"
 repository.workspace = true
 rust-version.workspace = true
-version = "0.1.0"
+version.workspace = true
 
 [dependencies]
 brepkit-geometry.workspace = true
@@ -16,7 +20,10 @@ log.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-brepkit-operations.workspace = true
+# Path-only on purpose: brepkit-operations depends on this crate, so a
+# versioned dev-dep would deadlock `cargo publish` (each waiting for the
+# other). Cargo drops version-less dev-deps when packaging.
+brepkit-operations = {path = "../operations"}
 brepkit-topology = {workspace = true, features = ["test-utils"]}
 
 [lints]

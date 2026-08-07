@@ -1,11 +1,15 @@
 [package]
+categories.workspace = true
 description = "Geometry algorithms: sampling, extrema, conversion"
 edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
 license.workspace = true
 name = "brepkit-geometry"
+readme = "../../README.md"
 repository.workspace = true
 rust-version.workspace = true
-version = "0.1.0"
+version.workspace = true
 
 [dependencies]
 brepkit-math.workspace = true

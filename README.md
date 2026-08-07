@@ -5,6 +5,7 @@
 Solid modeling kernel for Rust and WebAssembly.
 
 [![CI](https://github.com/andymai/brepkit/actions/workflows/ci.yml/badge.svg)](https://github.com/andymai/brepkit/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/brepkit-operations?label=crates.io)](https://crates.io/crates/brepkit-operations)
 [![npm](https://img.shields.io/npm/v/brepkit-wasm)](https://www.npmjs.com/package/brepkit-wasm)
 [![Last release](https://img.shields.io/github/release-date/andymai/brepkit?label=last%20release)](https://github.com/andymai/brepkit/releases)
 [![Commit activity](https://img.shields.io/github/commit-activity/m/andymai/brepkit?label=commits%2Fmonth)](https://github.com/andymai/brepkit/commits/main)
@@ -184,6 +185,8 @@ Mesh formats export tessellated triangles. glTF is binary `.glb`, with no materi
 
 ## Getting Started
 
+The Rust crates require Rust 1.88 or newer. The WASM package has no toolchain requirement.
+
 ### As a WASM package
 
 ```bash
@@ -201,15 +204,39 @@ For a higher-level TypeScript API, see [brepjs](https://github.com/andymai/brepj
 
 ### As a Rust dependency
 
-Not yet published to crates.io. Use git dependencies for now:
+Requires Rust 1.88 or newer.
+
+```bash
+cargo add brepkit-topology brepkit-operations
+cargo add brepkit-io       # optional: STEP, STL, 3MF, OBJ, PLY, glTF
+```
+
+`brepkit-operations` is the entry point for modeling. It pulls in the geometry,
+topology, and algorithm crates it needs, so most projects want it plus
+`brepkit-topology` for the `Topology` arena that every operation takes:
 
 ```toml
 [dependencies]
-brepkit-math = { git = "https://github.com/andymai/brepkit" }
-brepkit-topology = { git = "https://github.com/andymai/brepkit" }
-brepkit-operations = { git = "https://github.com/andymai/brepkit" }
-brepkit-io = { git = "https://github.com/andymai/brepkit" }        # optional
+brepkit-topology = "2.129"
+brepkit-operations = "2.129"
+brepkit-io = "2.129"       # optional
 ```
+
+Every crate publishes at the same version from the same commit, so pinning one
+minor line across all of them is always consistent. The individual crates are
+useful on their own when you need less than the whole kernel:
+
+| Crate | Add it directly when you need |
+| --------------------- | ----------------------------------------------------------- |
+| `brepkit-math` | NURBS, predicates, CDT, or convex hull without any B-Rep |
+| `brepkit-geometry` | Curve sampling, extrema, or analytic-to-NURBS conversion |
+| `brepkit-topology` | The `Topology` arena and B-Rep types (required in practice) |
+| `brepkit-operations` | Booleans, sweeps, blends, measurement, tessellation |
+| `brepkit-io` | Import and export |
+| `brepkit-check` | Validation, mass properties, or distance without operations |
+| `brepkit-heal` | Repairing imported geometry |
+| `brepkit-sketch` | The 2D constraint solver on its own (no workspace deps) |
+| `brepkit-render` | Offscreen GPU rendering. Pulls in wgpu, so it is opt-in |
 
 ### Building from source
 

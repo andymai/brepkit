@@ -242,6 +242,23 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  publish-dry-run:
+    name: Publish Dry Run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Fails fast on version drift between the workspace and the inter-crate
+      # dep requirements before spending the dry-run's build time.
+      - run: ./scripts/check-versions.sh
+      # Catches manifest faults that would otherwise only surface at release
+      # time: a path dep missing its version, a package over the 10 MiB limit,
+      # a dependency cycle, or a crate that fails to build from its packaged
+      # tarball. Publishes nothing.
+      - run: cargo publish --workspace --dry-run
+
   machete:
     name: Unused Dependencies
     runs-on: ubuntu-latest
@@ -268,7 +285,8 @@ jobs:
   ci-pass:
     name: CI Pass
     if: always()
-    needs: [fmt, clippy, test, coverage, msrv, wasm, boundaries, deny, audit, docs, machete, taplo]
+    needs:
+      [fmt, clippy, test, coverage, msrv, wasm, boundaries, deny, audit, docs, publish-dry-run, machete, taplo]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs

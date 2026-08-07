@@ -3,10 +3,16 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
+categories = ["graphics", "mathematics", "science"]
 edition = "2024"
+homepage = "https://github.com/andymai/brepkit"
+keywords = ["cad", "brep", "geometry", "solid-modeling", "nurbs"]
 license = "MIT OR Apache-2.0"
-repository = "git+https://github.com/andymai/brepkit.git"
+repository = "https://github.com/andymai/brepkit"
 rust-version = "1.88"
+# Every crate inherits this via `version.workspace = true`. release-please
+# rewrites it, and the `[workspace.dependencies]` versions below, in lockstep.
+version = "2.129.15"
 
 [workspace.dependencies]
 # Math
@@ -45,18 +51,19 @@ criterion = {version = "0.8", features = ["html_reports"]}
 quick-xml = "0.41"
 zip = {version = "8", default-features = false, features = ["deflate"]}
 
-# Workspace crates
-brepkit-algo = {path = "crates/algo"}
-brepkit-blend = {path = "crates/blend"}
-brepkit-check = {path = "crates/check"}
-brepkit-geometry = {path = "crates/geometry"}
-brepkit-heal = {path = "crates/heal"}
-brepkit-io = {path = "crates/io"}
-brepkit-math = {path = "crates/math"}
-brepkit-offset = {path = "crates/offset"}
-brepkit-operations = {path = "crates/operations"}
-brepkit-sketch = {path = "crates/sketch"}
-brepkit-topology = {path = "crates/topology"}
+# Workspace crates. The `version` is what consumers resolve from crates.io;
+# `path` only overrides it for in-workspace builds and is stripped on publish.
+brepkit-algo = {path = "crates/algo", version = "2.129.15"}
+brepkit-blend = {path = "crates/blend", version = "2.129.15"}
+brepkit-check = {path = "crates/check", version = "2.129.15"}
+brepkit-geometry = {path = "crates/geometry", version = "2.129.15"}
+brepkit-heal = {path = "crates/heal", version = "2.129.15"}
+brepkit-io = {path = "crates/io", version = "2.129.15"}
+brepkit-math = {path = "crates/math", version = "2.129.15"}
+brepkit-offset = {path = "crates/offset", version = "2.129.15"}
+brepkit-operations = {path = "crates/operations", version = "2.129.15"}
+brepkit-sketch = {path = "crates/sketch", version = "2.129.15"}
+brepkit-topology = {path = "crates/topology", version = "2.129.15"}
 
 [workspace.lints.rust]
 missing_docs = "warn"

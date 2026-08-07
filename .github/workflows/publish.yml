@@ -163,3 +163,58 @@ jobs:
           }
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Publishes the Rust crates. Separate from the WASM job so a crates.io outage
+  # cannot block the npm release (brepjs pins the npm package, not the crates).
+  publish-crates:
+    name: Publish to crates.io
+    needs: [release-please]
+    if: >-
+      always() && (
+        github.event_name == 'release' ||
+        github.event_name == 'workflow_dispatch' ||
+        needs.release-please.outputs.release_created == 'true'
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: crates-io
+    env:
+      TAG_NAME: ${{ github.event.release.tag_name || needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
+    steps:
+      # Pinned to the tag rather than the default branch: a delayed
+      # `release:created` event or a manual dispatch would otherwise publish
+      # whatever main has advanced to instead of what was tagged.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG_NAME }}
+
+      # rust-toolchain.toml provides the pinned Rust version
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      # Belt and braces now that the checkout is tag-pinned: catches a tag whose
+      # Cargo.toml somehow disagrees with the tag name.
+      - name: Verify workspace version matches the tag
+        run: |
+          WS_VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "brepkit-math") | .version')
+          if [ "$WS_VERSION" != "${TAG_NAME#v}" ]; then
+            echo "::error::Version mismatch: workspace=$WS_VERSION tag=${TAG_NAME#v}"
+            exit 1
+          fi
+          echo "Publishing brepkit crates at $WS_VERSION"
+
+      # Trusted publishing: mints a short-lived crates.io token from the
+      # workflow's OIDC identity, so there is no long-lived registry secret to
+      # rotate or leak. Configured on crates.io per crate under Settings ->
+      # Trusted Publishing.
+      - uses: rust-lang/crates-io-auth-action@e919bc7605cde86df457cf5b93c5e103838bd879 # v1.0.1
+        id: auth
+
+      # Same script a human runs to bootstrap a new crate name, so the release
+      # path and the manual path cannot drift.
+      - name: Publish crates (skip any already published)
+        run: ./scripts/publish-crates.sh
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
