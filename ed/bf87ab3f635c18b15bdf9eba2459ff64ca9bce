@@ -1,0 +1,19 @@
+crates/io/examples/fuse_orient.rs
+  s_c50459ee60c4b2::t_ed21828e87bbb2 165,167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "edbf87ab3f635c18b15bdf9eba2459ff64ca9bce",
+  "prompts": {},
+  "sessions": {
+    "s_c50459ee60c4b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9b3031a2-edb8-4ab0-8da9-38e0a72c2580",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
