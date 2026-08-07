@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786129340782,
+  "lastUpdate": 1786132430344,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22625,6 +22625,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26231571,
             "range": "± 625668",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e4db5f4edbe977a007d4ea7eff73c1e08929c66e",
+          "message": "ci: allowlist web-flow and bot committers in the CLA check (#1418)\n\nThe CLA check failed on release PR #1417: release-please commits carry\nGitHub's web-UI identity (web-flow) as the committer, and the\ncontributor-assistant action requires signatures from committers as well\nas authors. Allowlists web-flow and adds a *[bot] wildcard so\nbot-authored PRs (release-please, dependabot) never trip the CLA gate.\nAlso covered by this PR's own run, which exercises the changed workflow\nfrom the base branch.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAllowlisted GitHub `web-flow` and any `*[bot]` committers in the CLA\nworkflow to prevent release-please and other bot PRs from failing the\nCLA check.\n\n<sup>Written for commit 10d512cfa592ed8078396e72f599199765c2f694.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1418?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T12:51:29-07:00",
+          "tree_id": "1ed9bb0bafbbc4e944a5626920c72907bd90996c",
+          "url": "https://github.com/andymai/brepkit/commit/e4db5f4edbe977a007d4ea7eff73c1e08929c66e"
+        },
+        "date": 1786132428585,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 781188,
+            "range": "± 16402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 857607,
+            "range": "± 16125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9884,
+            "range": "± 348",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 588241,
+            "range": "± 19853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20868143,
+            "range": "± 480125",
             "unit": "ns/iter"
           }
         ]
