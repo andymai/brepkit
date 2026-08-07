@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786090870166,
+  "lastUpdate": 1786092649842,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21761,6 +21761,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20296536,
             "range": "± 16333",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e7e1ff115dfbd6d96587c79f69b06c175beb07c0",
+          "message": "fix(io): re-ground the mixed-socket attribution on the directed half-edge oracle (#1402)\n\n## Summary\n\n**Correction of #1401's narrative** (verify-or-revert): the\noffset-classification outwardness audit produces **unanimous false\npositives near concave cylinder corners** — call 000's cut result\naudited \"3 inverted faces, 10-0 votes\" yet tessellates\n**directed-watertight (0 unmatched half-edges)**. The \"top-socket cut\nmints coherently double-flipped faces\" claim is retracted in the fixture\nheaders and roadmap.\n\n**Directed-oracle truth** (authoritative: half-edges with no opposite\ntwin at export tolerance):\n\n| solid | directed mismatches |\n|---|---|\n| assembly operand | 0 |\n| body operand | 116 |\n| call 000 args / result | 0 / 0 / 0 (healthy) |\n| call 001 args | **38 + 78 = 116** |\n| call 001 result | 116 (preserves, does not mint) |\n| calls 002-008 | carry the 116 unchanged into the body |\n\nSo the mint happens **before any captured boolean**, in\n`executeBatch`-driven ops the fuse/cut monkey-patch missed (the known\ncapture gap). Next: a batch-level capture hook, then a sound oracle for\nwhich side of each rim is wrong.\n\n## Changes\n\n- `topsocket_cut_inmem.rs` rewritten on the directed oracle: healthy-cut\nguard (000), chain001 carrier pins (38/78), preserve-not-mint pin (116);\nnew `topsocket_chain001_{a,b}.bin` fixtures\n- `audit_bin`: documents the oracle hierarchy (HALFEDGE authoritative,\naudit mode carries the false-positive caveat), gains HALFEDGE/LIST\nmodes, result validation, vbox output\n- `mixed_socket_tess_inmem.rs` header and roadmap corrected\n- SUBFACE probe prints the reversal flag\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRe-grounded mixed-socket orientation attribution on the directed\nhalf-edge oracle and retracted the outwardness audit claims. Also pinned\nthe mint source to `loftWithOptions` (38 + 78 → 116) with new\nfixtures/tests and `audit_bin` updates.\n\n- **Bug Fixes**\n- Corrected fixture headers/roadmap: no “double-flipped” faces; call 000\nis healthy; call 001 args carry 38+78=116 minted pre-boolean; booleans\npreserve counts.\n- Rewrote `topsocket_cut_inmem.rs` to assert healthy cut and\npreserve-not-mint; pinned carrier counts.\n  - Logged subface reversal flag in `log_subfaces_in_box`.\n\n- **New Features**\n- Pinned mint origin to `loftWithOptions`; added\n`quarter_socket_loft38.bin` and `quarter_socket_loft_inmem.rs` (38\nmismatches; sibling 78; merged to 116).\n- Enhanced `audit_bin`: documented oracle hierarchy; added `HALFEDGE=1`,\nexclusive `LIST=1`, `OWNERS=1`; result validation; vbox output.\n- Added fixtures `topsocket_chain001_a.bin` and\n`topsocket_chain001_b.bin`.\n\n<sup>Written for commit 59fc0356d2205c5c57bc8bffcc2d0a6fc456a09a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1402?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T08:48:19Z",
+          "tree_id": "a0023b5b0aef9fd6b8b33dea98ebf6f554ef87c5",
+          "url": "https://github.com/andymai/brepkit/commit/e7e1ff115dfbd6d96587c79f69b06c175beb07c0"
+        },
+        "date": 1786092648200,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1032293,
+            "range": "± 29041",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1081927,
+            "range": "± 14278",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13374,
+            "range": "± 209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 712360,
+            "range": "± 1476",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26209021,
+            "range": "± 45816",
             "unit": "ns/iter"
           }
         ]
