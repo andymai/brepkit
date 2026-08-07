@@ -343,7 +343,7 @@ fn nonplanar_sphere_arc_halfspaces(
     // Non-planar means the arcs span at least two DISTINCT planes. The
     // sampled polygon cannot decide this (a three-arc patch samples only
     // its three coplanar corners).
-    let tol = brepkit_math::tolerance::Tolerance::new();
+    let tol = Tolerance::new();
     let (c0, n0) = planes[0];
     let coplanar = planes
         .iter()
