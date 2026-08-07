@@ -1,0 +1,22 @@
+crates/io/examples/audit_bin.rs
+  s_c50459ee60c4b2::t_402476f4fd7fef 25-37
+crates/io/tests/topsocket_cut_inmem.rs
+  s_c50459ee60c4b2::t_402476f4fd7fef 116,118
+  s_c50459ee60c4b2::t_2e790868d7e1aa 119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "196bd3bffb131b42a4a425edf1d0d73742eb1f9e",
+  "prompts": {},
+  "sessions": {
+    "s_c50459ee60c4b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9b3031a2-edb8-4ab0-8da9-38e0a72c2580",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
