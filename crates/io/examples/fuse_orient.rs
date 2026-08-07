@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use brepkit_io::arena_io::deserialize_solid;
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::validate::{ValidationOptions, validate_solid_with_options};
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
@@ -77,8 +78,90 @@ fn main() {
         }
     }
 
+    // Outwardness audit: faces whose effective surface normal points INTO the
+    // material (plus-side classifies Inside). Invisible to the combinatorial
+    // same-sense check when the wire winding is coherently double-flipped.
+    let audit = |topo: &Topology, solid: brepkit_topology::solid::SolidId, label: &str| {
+        let (mesh, offsets) =
+            brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
+                topo,
+                solid,
+                0.05,
+                10.0_f64.to_radians(),
+            )
+            .unwrap();
+        let faces = solid_faces(topo, solid).unwrap();
+        let mut inverted = Vec::new();
+        for (fi, &fid) in faces.iter().enumerate() {
+            let face = topo.face(fid).unwrap();
+            let start = offsets[fi] as usize;
+            let end = offsets[fi + 1] as usize;
+            if end <= start {
+                continue;
+            }
+            // Majority vote over spread samples; a single centroid near thin
+            // material or a boundary flips verdicts between runs.
+            let tris = (end - start) / 3;
+            let mut votes_in = 0usize;
+            let mut votes_out = 0usize;
+            for k in 0..5usize {
+                let mid = start + ((tris * (2 * k + 1) / 10).min(tris.saturating_sub(1))) * 3;
+                let Some(t) = mesh.indices.get(mid..mid + 3) else {
+                    continue;
+                };
+                let (pa, pb, pc) = (
+                    mesh.positions[t[0] as usize],
+                    mesh.positions[t[1] as usize],
+                    mesh.positions[t[2] as usize],
+                );
+                let centroid = brepkit_math::vec::Point3::new(
+                    (pa.x() + pb.x() + pc.x()) / 3.0,
+                    (pa.y() + pb.y() + pc.y()) / 3.0,
+                    (pa.z() + pb.z() + pc.z()) / 3.0,
+                );
+                let Some((u, v)) = face.surface().project_point(centroid) else {
+                    continue;
+                };
+                let sn = face.surface().normal(u, v);
+                let eff = if face.is_reversed() { -1.0 } else { 1.0 };
+                let Ok(n_eff) = (sn * eff).normalize() else {
+                    continue;
+                };
+                for off in [0.02, 0.05] {
+                    let plus = centroid + n_eff * off;
+                    let minus = centroid - n_eff * off;
+                    match (
+                        classify_point(topo, solid, plus, 0.01, 1e-6),
+                        classify_point(topo, solid, minus, 0.01, 1e-6),
+                    ) {
+                        (Ok(PointClassification::Inside), Ok(PointClassification::Outside)) => {
+                            votes_in += 1;
+                        }
+                        (Ok(PointClassification::Outside), Ok(PointClassification::Inside)) => {
+                            votes_out += 1;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if votes_in > votes_out && votes_in >= 2 {
+                inverted.push((
+                    fid,
+                    face.surface().type_tag(),
+                    face.is_reversed(),
+                    votes_in,
+                    votes_out,
+                ));
+            }
+        }
+        println!("{label}: {} inverted faces {:?}", inverted.len(), inverted);
+    };
+    audit(&topo, a, "operand A");
+    audit(&topo, b, "operand B");
+
     let result =
         brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, a, b).unwrap();
+    audit(&topo, result, "fuse result");
 
     let opts = ValidationOptions {
         check_orientation: true,
@@ -234,10 +317,76 @@ fn main() {
     for &(fi, n) in rows.iter().take(16) {
         let fid = faces[fi];
         let face = topo.face(fid).unwrap();
+        // Mesh-orientation check: average (triangle normal . effective face
+        // normal at the triangle centroid). Negative = the face's mesh is
+        // wound against its own effective orientation.
+        let start = face_offsets[fi] as usize;
+        let end = face_offsets[fi + 1] as usize;
+        let mut dot_sum = 0.0;
+        let mut tri_n = 0usize;
+        for t in mesh.indices[start..end].chunks(3) {
+            let (a, b, c) = (
+                mesh.positions[t[0] as usize],
+                mesh.positions[t[1] as usize],
+                mesh.positions[t[2] as usize],
+            );
+            let tn = (b - a).cross(c - a);
+            if tn.length() < 1e-12 {
+                continue;
+            }
+            let centroid = brepkit_math::vec::Point3::new(
+                (a.x() + b.x() + c.x()) / 3.0,
+                (a.y() + b.y() + c.y()) / 3.0,
+                (a.z() + b.z() + c.z()) / 3.0,
+            );
+            if let Some((u, v)) = face.surface().project_point(centroid) {
+                let sn = face.surface().normal(u, v);
+                let eff = if face.is_reversed() { -1.0 } else { 1.0 };
+                dot_sum += tn.normalize().map(|t| t.dot(sn) * eff).unwrap_or(0.0);
+                tri_n += 1;
+            }
+        }
+        // Geometric outwardness: classify points offset along the effective
+        // normal from a mid-face triangle centroid. plus=Inside means the
+        // effective normal points INTO the material (inverted face).
+        let mut outward = String::from("n/a");
+        let mid = start + ((end - start) / 6) * 3;
+        if let Some(t) = mesh.indices.get(mid..mid + 3) {
+            let (a, b, c) = (
+                mesh.positions[t[0] as usize],
+                mesh.positions[t[1] as usize],
+                mesh.positions[t[2] as usize],
+            );
+            let centroid = brepkit_math::vec::Point3::new(
+                (a.x() + b.x() + c.x()) / 3.0,
+                (a.y() + b.y() + c.y()) / 3.0,
+                (a.z() + b.z() + c.z()) / 3.0,
+            );
+            if let Some((u, v)) = face.surface().project_point(centroid) {
+                let sn = face.surface().normal(u, v);
+                let eff = if face.is_reversed() { -1.0 } else { 1.0 };
+                if let Ok(n_eff) = (sn * eff).normalize() {
+                    let plus = centroid + n_eff * 0.05;
+                    let minus = centroid - n_eff * 0.05;
+                    let cp = brepkit_operations::classify::classify_point(
+                        &topo, result, plus, 0.01, 1e-6,
+                    );
+                    let cm = brepkit_operations::classify::classify_point(
+                        &topo, result, minus, 0.01, 1e-6,
+                    );
+                    outward = format!("plus={cp:?} minus={cm:?}");
+                }
+            }
+        }
         println!(
-            "  {fid:?} {} reversed={} : {n} unmatched half-edges",
+            "  {fid:?} {} reversed={} : {n} unmatched half-edges, mesh_orient={:.3} over {tri_n} tris, {outward}",
             face.surface().type_tag(),
-            face.is_reversed()
+            face.is_reversed(),
+            if tri_n > 0 {
+                dot_sum / tri_n as f64
+            } else {
+                f64::NAN
+            }
         );
     }
     for (x, y) in unmatched_set.iter().take(6) {
