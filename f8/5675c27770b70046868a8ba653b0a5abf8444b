@@ -1,0 +1,27 @@
+crates/io/tests/data/quarter_socket_loft_profile_a.bin
+  s_c50459ee60c4b2::t_29903afcadf03a 1
+crates/io/examples/audit_bin.rs
+  s_c50459ee60c4b2::t_d43a8da73b5227 87-154
+crates/io/tests/data/quarter_socket_loft_profile_b.bin
+  s_c50459ee60c4b2::t_29903afcadf03a 1
+crates/io/tests/quarter_socket_loft_inmem.rs
+  s_c50459ee60c4b2::t_29903afcadf03a 13-23,91-135
+.claude/skills/roadmap/SKILL.md
+  s_c50459ee60c4b2::t_915b3655f0b375 130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f85675c27770b70046868a8ba653b0a5abf8444b",
+  "prompts": {},
+  "sessions": {
+    "s_c50459ee60c4b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9b3031a2-edb8-4ab0-8da9-38e0a72c2580",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
