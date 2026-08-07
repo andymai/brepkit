@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786136306280,
+  "lastUpdate": 1786142340531,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22733,6 +22733,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26111593,
             "range": "± 112150",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3c29a4423834b46c3d0b8d3a246ad76c1f319b01",
+          "message": "docs(readme): refresh head-to-head numbers from the public bench harness (#1420)\n\nRe-measures the WASM head-to-head table via brepkit-bench\n(https://github.com/andymai/brepkit-bench), the new public repro\nharness, on the released packages (brepkit-wasm 3.0.0, occt-wasm 3.8.3,\nbrepjs 18.120.0, exact-pinned in its lockfile), and links the harness\nwith a clone-and-run snippet in the Performance section.\n\nRow changes from the previous table: fuse 87x -> 103x, cut 2.3x -> 3.4x,\nchamfer 27x -> 55x, fillet 21x -> 18x, intersect 117x -> 252x,\nmulti-boolean 6.4x -> 6.6x, mesh sphere 7.3x -> 7.9x, volume 47x -> 54x,\nexportSTEP 16x -> 17x. Native column unchanged (same kernel code as\n2.129.15; criterion figures still current).\n\nVerification is now enforced structurally: the harness refuses to time\nany row whose output check fails (closed-form volumes, cross-kernel\nagreement, STEP round-trip). Its verification pass independently\nreproduced the published claims, including the 0.004% fillet agreement\nand the exact 9,800 vs 10,176 sphere mesh densities. The three local\nruns agreed within normal variance; the quoted run is results.json from\nthe canonical measurement.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRefreshes the README performance table using the public `brepkit-bench`\nharness on current released packages, updating WASM vs native/OCCT\nnumbers.\nAdds a clone-and-run snippet (`npm ci && npm run bench`), clarifies\nharness-enforced result checks and equal adapter overhead, and notes\nspeedups are computed from unrounded medians with two-decimal displays.\n\n<sup>Written for commit f6ff087f420efbb33a72dbc5ac22102ace53d17f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1420?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T22:36:40Z",
+          "tree_id": "a56102e9544a961111a1f3bc0764608c9a395420",
+          "url": "https://github.com/andymai/brepkit/commit/3c29a4423834b46c3d0b8d3a246ad76c1f319b01"
+        },
+        "date": 1786142338448,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 955802,
+            "range": "± 3068",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1038697,
+            "range": "± 4904",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11895,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701099,
+            "range": "± 17969",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25033715,
+            "range": "± 323257",
             "unit": "ns/iter"
           }
         ]
