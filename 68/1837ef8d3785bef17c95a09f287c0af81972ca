@@ -1,0 +1,26 @@
+scripts/publish-crates.sh
+  s_84262e790821c7::t_d9ec099a67da5f 38-44,48-55
+  s_84262e790821c7::t_6e4bad7ba131aa 56
+.github/workflows/publish.yml
+  s_84262e790821c7::t_a99041a8cfab93 190-191
+  s_84262e790821c7::t_b92dd5f3fe8f80 183-184,186-188,196-197
+scripts/check-versions.sh
+  s_84262e790821c7::t_cf3e9434bce0c3 13-19,23-26
+  s_84262e790821c7::t_bf7c0c5aded486 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "681837ef8d3785bef17c95a09f287c0af81972ca",
+  "prompts": {},
+  "sessions": {
+    "s_84262e790821c7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bd39625f-a0d1-43ce-86e9-a2c753ea51fe",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
