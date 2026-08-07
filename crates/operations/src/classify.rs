@@ -315,6 +315,69 @@ fn ray_plane_crossings(
 /// The polygon normal (from Newell's method) indicates which side of the boundary
 /// plane the face extends into. A hit point must be on that side AND project
 /// inside the boundary polygon.
+/// Half-space representation of a plane-convex sphere patch with a
+/// NON-planar boundary: one (circle center, unit normal, interior sign) per
+/// boundary arc. Returns `None` for planar boundaries (the calibrated
+/// single-plane path handles those), holed faces, or non-circle edges.
+fn nonplanar_sphere_arc_halfspaces(
+    topo: &Topology,
+    face_id: FaceId,
+    verts: &[Point3],
+) -> Option<Vec<(Point3, Vec3, f64)>> {
+    let face = topo.face(face_id).ok()?;
+    if !face.inner_wires().is_empty() {
+        return None;
+    }
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut planes: Vec<(Point3, Vec3)> = Vec::new();
+    for oe in wire.edges() {
+        let e = topo.edge(oe.edge()).ok()?;
+        let brepkit_topology::edge::EdgeCurve::Circle(c) = e.curve() else {
+            return None;
+        };
+        planes.push((c.center(), c.normal().normalize().ok()?));
+    }
+    if planes.len() < 2 {
+        return None;
+    }
+    // Non-planar means the arcs span at least two DISTINCT planes. The
+    // sampled polygon cannot decide this (a three-arc patch samples only
+    // its three coplanar corners).
+    let (c0, n0) = planes[0];
+    let coplanar = planes
+        .iter()
+        .all(|&(c, n)| n.cross(n0).length() <= 1e-9 && (c - c0).dot(n0).abs() <= 1e-9);
+    if coplanar {
+        return None;
+    }
+    // Interior reference: the boundary centroid pushed onto the sphere.
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    let mut cz = 0.0;
+    #[allow(clippy::cast_precision_loss)]
+    let inv = 1.0 / verts.len() as f64;
+    for v in verts {
+        cx += v.x() * inv;
+        cy += v.y() * inv;
+        cz += v.z() * inv;
+    }
+    let centroid = Point3::new(cx, cy, cz);
+    let FaceSurface::Sphere(sph) = face.surface() else {
+        return None;
+    };
+    let dir = (centroid - sph.center()).normalize().ok()?;
+    let p_ref = sph.center() + dir * sph.radius();
+    let mut out = Vec::with_capacity(planes.len());
+    for (c, n) in planes {
+        let side = (p_ref - c).dot(n);
+        if side.abs() <= 1e-9 {
+            return None;
+        }
+        out.push((c, n, side.signum()));
+    }
+    Some(out)
+}
+
 fn count_3d_polygon_crossings(
     topo: &Topology,
     face_id: FaceId,
@@ -329,6 +392,29 @@ fn count_3d_polygon_crossings(
     let verts = face_polygon(topo, face_id)?;
     if verts.len() < 3 {
         return Ok(0);
+    }
+    // A sphere patch whose boundary arcs lie in DIFFERENT planes (an octant
+    // patch: three quarter-arcs in three orthogonal planes) has a non-planar
+    // boundary polygon, and the single-plane containment below discards
+    // genuine hits — the whole face read as never-crossed. Such a patch is
+    // plane-convex: exactly the sphere points on the interior side of every
+    // boundary arc's plane, with the side calibrated from the boundary
+    // centroid pushed onto the sphere.
+    if let Some(halfspaces) = nonplanar_sphere_arc_halfspaces(topo, face_id, &verts) {
+        let mut crossings = 0u32;
+        for &t in roots {
+            if t <= RAY_T_MIN {
+                continue;
+            }
+            let hit = origin + direction * t;
+            if halfspaces
+                .iter()
+                .all(|&(c, n, sign)| (hit - c).dot(n) * sign >= -HALF_SPACE_EPS)
+            {
+                crossings += 1;
+            }
+        }
+        return Ok(crossings);
     }
     let mut normal = polygon_normal(&verts);
     // If the face is reversed, the surface normal is flipped — the face

@@ -1699,8 +1699,14 @@ fn build_box_sphere_octant(
                 });
             }
             let u_ref = Vec3::new(dx / len, dy / len, dz / len);
+            // The circle's CCW direction must take start -> end the SHORT
+            // way (the quarter arc bounding the octant). About the cutting
+            // plane's OUTWARD normal that span is the 270-degree
+            // complement (the wrong-region 1304.8 volume); the INWARD
+            // normal makes it the intended quarter.
+            let inward = Vec3::new(-n.x(), -n.y(), -n.z());
             let circle =
-                Circle3D::new_with_ref(circle_center, n, circle_r, u_ref).map_err(|e| {
+                Circle3D::new_with_ref(circle_center, inward, circle_r, u_ref).map_err(|e| {
                     crate::OperationsError::InvalidInput {
                         reason: format!("box-sphere octant: circle construction failed: {e}"),
                     }
@@ -1779,11 +1785,13 @@ fn build_box_sphere_octant(
     // Wind so the sphere's outward normal matches the resulting volume
     // (outside the octant). With arcs going X→Y→Z→X around the patch,
     // the right-hand rule gives an outward normal pointing AWAY from O.
+    // Each arc is traversed forward by its quarter-disc, so the patch must
+    // traverse all three reversed for consistent edge senses: X → Z → Y → X.
     let sph_wire = Wire::new(
         vec![
-            OrientedEdge::new(arc_xy, true), // X → Y
-            OrientedEdge::new(arc_yz, true), // Y → Z
-            OrientedEdge::new(arc_zx, true), // Z → X
+            OrientedEdge::new(arc_zx, false), // X → Z
+            OrientedEdge::new(arc_yz, false), // Z → Y
+            OrientedEdge::new(arc_xy, false), // Y → X
         ],
         true,
     )
