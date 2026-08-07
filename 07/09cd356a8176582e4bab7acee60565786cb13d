@@ -1,0 +1,39 @@
+crates/algo/src/builder/mod.rs
+  s_c50459ee60c4b2::t_d56146c31d67d6 240,243
+crates/io/tests/topsocket_cut_inmem.rs
+  s_c50459ee60c4b2::t_2c45d3482833f3 1-8,10-18,20-28,32,49-50,53-54,57-60,63-65,69-72,76-81,85-89,91-94,98-100,102-106
+crates/io/tests/mixed_socket_tess_inmem.rs
+  s_c50459ee60c4b2::t_b9a1113f1bf034 68-75,77-88
+crates/io/examples/audit_bin.rs
+  s_c50459ee60c4b2::t_3820caa1f2e3fa 97-119
+  s_c50459ee60c4b2::t_a615287084a374 120-130
+  s_c50459ee60c4b2::t_6fb9481657170a 200-216,221-226
+  s_c50459ee60c4b2::t_a7fea6e58c5eff 217,219,227
+  s_c50459ee60c4b2::t_b9a1113f1bf034 1-14
+  s_c50459ee60c4b2::t_0c504011ad37a2 62-79
+  s_c50459ee60c4b2::t_6b2a5a0580b77d 45-61,80-81
+  s_c50459ee60c4b2::t_a6384fb10b9034 82
+  s_c50459ee60c4b2::t_60a80c39c5ed22 131
+.claude/skills/roadmap/SKILL.md
+  s_c50459ee60c4b2::t_b9a1113f1bf034 130
+crates/io/tests/data/topsocket_chain001_a.bin
+  s_c50459ee60c4b2::t_5e1942c18287ed 1
+crates/io/tests/data/topsocket_chain001_b.bin
+  s_c50459ee60c4b2::t_827222139eeca4 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0709cd356a8176582e4bab7acee60565786cb13d",
+  "prompts": {},
+  "sessions": {
+    "s_c50459ee60c4b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9b3031a2-edb8-4ab0-8da9-38e0a72c2580",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
