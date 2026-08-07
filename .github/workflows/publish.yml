@@ -180,12 +180,21 @@ jobs:
       contents: read
       id-token: write
     environment: crates-io
+    env:
+      TAG_NAME: ${{ github.event.release.tag_name || needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
     steps:
+      # Pinned to the tag rather than the default branch: a delayed
+      # `release:created` event or a manual dispatch would otherwise publish
+      # whatever main has advanced to instead of what was tagged.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG_NAME }}
 
       # rust-toolchain.toml provides the pinned Rust version
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
+      # Belt and braces now that the checkout is tag-pinned: catches a tag whose
+      # Cargo.toml somehow disagrees with the tag name.
       - name: Verify workspace version matches the tag
         run: |
           WS_VERSION=$(cargo metadata --no-deps --format-version 1 \
@@ -195,8 +204,6 @@ jobs:
             exit 1
           fi
           echo "Publishing brepkit crates at $WS_VERSION"
-        env:
-          TAG_NAME: ${{ github.event.release.tag_name || needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
 
       # Trusted publishing: mints a short-lived crates.io token from the
       # workflow's OIDC identity, so there is no long-lived registry secret to

@@ -35,8 +35,24 @@ CRATES=(
   brepkit-wasm
 )
 
+for tool in cargo jq curl; do
+  command -v "$tool" >/dev/null || {
+    echo "❌ $tool is required but not installed."
+    exit 1
+  }
+done
+
 VERSION=$(cargo metadata --no-deps --format-version 1 \
   | jq -r '.packages[] | select(.name == "brepkit-math") | .version')
+
+# An empty VERSION is not cosmetic: it would turn the existence check below
+# into a request for the crate's base endpoint, which answers 200 for any
+# published crate. Every crate would then "already exist", the loop would skip
+# all of them, and the script would exit 0 having published nothing.
+if [ -z "$VERSION" ]; then
+  echo "❌ Could not read the workspace version from cargo metadata."
+  exit 1
+fi
 
 echo "Publishing brepkit crates at $VERSION"
 

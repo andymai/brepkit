@@ -10,8 +10,20 @@ set -euo pipefail
 # older crate from crates.io instead of the sibling in this workspace. This
 # check makes that drift fail on the release PR rather than at publish time.
 
+for tool in cargo jq; do
+  command -v "$tool" >/dev/null || {
+    echo "❌ $tool is required but not installed."
+    exit 1
+  }
+done
+
 WS_VERSION=$(cargo metadata --no-deps --format-version 1 \
   | jq -r '.packages[] | select(.name == "brepkit-math") | .version')
+
+if [ -z "$WS_VERSION" ]; then
+  echo "❌ Could not read the workspace version from cargo metadata."
+  exit 1
+fi
 
 FAIL=0
 
