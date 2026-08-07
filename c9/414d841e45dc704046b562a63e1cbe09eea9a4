@@ -1,0 +1,20 @@
+README.md
+  s_b95dcdcfb35c91::t_445bcf89777e56 150-155,159-169
+  s_b95dcdcfb35c91::t_88e51b27ed3441 173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "c9414d841e45dc704046b562a63e1cbe09eea9a4",
+  "prompts": {},
+  "sessions": {
+    "s_b95dcdcfb35c91": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "22be951d-2383-4b4c-86b4-a2ffe5c6ed18",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
