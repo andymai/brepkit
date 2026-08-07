@@ -65,51 +65,27 @@
 //! green only because their oracle is UNDIRECTED edge pairing) on a
 //! B-Rep that is now combinatorially orientation-CLEAN.
 //!
-//! RESIDUAL ROOT MEASURED (2026-08-07): NOT a tessellator defect. Every
-//! owner face's mesh matches its own effective surface normal exactly
-//! (mesh_orient=1.000) — the faces themselves are COHERENTLY
-//! DOUBLE-FLIPPED: effective surface normal pointing INTO the material
-//! with the wire winding flipped to match, so edge-sense pairing (the
-//! check_shell_orientation oracle) passes while the face is geometrically
-//! inside-out. The outwardness oracle (classify a point offset along the
-//! effective normal: plus-side Inside = inverted) finds the body operand
-//! ALREADY carries 3 unanimously-inverted corner cylinder bands
-//! (Id(32) rev=false, Id(56) rev=true, Id(82) rev=true; majority-vote
-//! stable across runs), the assembly operand clean, and the fuse result 9
-//! inverted faces (the inherited cylinders' split products plus cone
-//! readings that need a careful pass — offsets near thin webs can cross
-//! legitimately-close material). So the winding root is UPSTREAM in the
-//! body's construction chain (per-cell quarter-socket dispatch), in a
-//! class NO existing validation detects.
+//! RESIDUAL ATTRIBUTION (2026-08-07, corrected same day): the DIRECTED
+//! half-edge oracle (tessellate at export tolerance, count half-edges
+//! with no opposite twin) is authoritative here. By it: the body operand
+//! carries all 116 mismatches, the assembly 0, and the stage capture of
+//! the chain (topsocket_cut_inmem.rs) shows call 001's ARGS already
+//! carrying 38+78=116 — minted BEFORE any captured boolean, by
+//! executeBatch-driven ops the fuse/cut capture hook did not see. Every
+//! captured boolean preserves the counts exactly; none mints or heals.
 //!
-//! GEOMETRIC LOCALIZATION (2026-08-07, bbox audit): the body's 3 inverted
-//! cylinders are the three stacked profile bands of ONE feature — the 1u
-//! mixed cell's TOP half-socket at its interior corner (x 18-24.5,
-//! y -24.5..-18, z 19.7-25.3; radii ~3.75/1.85/1.15) — so the emitting op
-//! is the chain's top-socket boolean, not the base. SECOND SUB-ROOT
-//! suspected in the fuse itself: the result adds unanimously-inverted
-//! cones/cylinders at z 0-5 in the region where A and B COINCIDE (the
-//! socket nest, e.g. z breaks 0.8/2.6/4.75) though both operands audit
-//! clean standalone — the same-domain kept-face orientation choice.
-//! Next altitudes: (a) find the construction op minting double-flipped
-//! faces (per-stage outwardness audit of a fresh chain capture, or a
-//! native top-socket-cut repro); (b) audit the fuse's SD-kept coincident
-//! faces; (c) add a geometric outwardness check beside the combinatorial
-//! one in validate. Probes: `crates/io/examples/orient_scan.rs` and
-//! `fuse_orient.rs` (fuse + per-face half-edge attribution + the
-//! majority-vote outwardness audit of both operands and the result).
-//!
-//! The per-cell dispatch geometry (three full sockets + three quarter
-//! sockets, one 1u block mixed) is what distinguishes this from the sibling
-//! socket bins that tessellate clean.
-//!
-//! Operands captured 2026-08-05 via the kernel-test boolean monkey-patch
-//! (call 008, the final fuse of the export chain).
-//!
-//! EXPORT-LEVEL NOTE: the export test already passed on the conflict
-//! re-cast kernel because the chain's booleans classified differently;
-//! this captured B-Rep kept reproducing the 511-edge leak until the CDT
-//! recovery fix closed the root itself.
+//! ORACLE CAUTION (the correction): the offset-classification
+//! "outwardness" audit returns unanimous false positives near concave
+//! cylinder corners (a directed-watertight cut result audited "3
+//! inverted, 10-0 votes"). The earlier "coherently double-flipped faces
+//! minted by the top-socket cut" narrative (#1399-#1401) was built on
+//! that artifact and is RETRACTED. What remains proven: each defective
+//! face meshes true to its own effective normal (mesh_orient=1.0) while
+//! directed pairing fails against its neighbours at the quarter-socket
+//! rims — adjacent faces' effective orientations genuinely disagree;
+//! deciding WHICH side is wrong needs a sound oracle. Probes:
+//! `crates/io/examples/audit_bin.rs` (HALFEDGE mode is authoritative;
+//! the audit mode carries the caveat), `fuse_orient.rs`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
