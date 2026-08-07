@@ -288,12 +288,12 @@ fn mixed_socket_fresh_fuse_is_orientation_clean() {
 }
 
 #[test]
-#[ignore = "residual: 116 unmatched half-edges from coherently DOUBLE-FLIPPED faces \
-            (effective normal into the material, winding flipped to match — invisible \
-            to edge-sense pairing). The body operand already carries 3 inverted corner \
-            cylinders; root is upstream in the socket construction chain (see the \
-            header's 2026-08-07 measurement)"]
 fn mixed_socket_tessellation_is_watertight() {
+    // CLOSED 2026-08-07: the mint was the curve-preserving loft's coaxial
+    // arm never reversing concave corner walls (#1404). The fresh body
+    // fixture is re-captured from the 2.129.13 chain (all 793 stage
+    // captures measure 0 unmatched directed half-edges); this pin now
+    // guards the whole story end to end.
     let mut topo = Topology::new();
     let body = load("mixed_socket_body_fresh.bin", &mut topo);
     let assembly = load("mixed_socket_assembly.bin", &mut topo);
