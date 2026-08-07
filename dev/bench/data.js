@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786088299138,
+  "lastUpdate": 1786089463380,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21653,6 +21653,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26196269,
             "range": "± 51619",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80f346145f20cc1bf9f63c48e55c8cc7b5c4f548",
+          "message": "test(io): localize the double-flipped faces to the 1u top half-socket (#1400)\n\nFollow-up to #1399: the outwardness audit now prints each inverted\nface's bbox.\n\n- The body's 3 inverted cylinders are the three stacked profile bands of\nONE feature — the mixed 1u cell's **top half-socket** at its interior\ncorner (z 19.7-25.3, radii ~3.75/1.85/1.15). The emitting op is the\nchain's top-socket boolean, not the base.\n- The fuse result additionally shows unanimously-inverted\ncones/cylinders at z 0-5 exactly where the operands **coincide** (the\nsocket nest, profile breaks 0.8/2.6/4.75) though both operands audit\nclean standalone — pointing at the **same-domain kept-face orientation\nchoice** in the fuse as a second sub-root.\n\nFixture header records both; probe-and-docs only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdd vertex-based bbox logging to `fuse_orient.rs`’s outwardness audit,\nprinting each inverted face’s bounds. Update test notes to localize the\nthree inverted cylinders to the mixed 1u cell’s top half-socket and to\nflag a suspected same-domain kept-face orientation issue in the fuse\nwhere operands coincide.\n\n<sup>Written for commit edbf87ab3f635c18b15bdf9eba2459ff64ca9bce.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1400?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T07:55:14Z",
+          "tree_id": "293e3a12bff2c308298143e7d2483c3bf1bc6e2d",
+          "url": "https://github.com/andymai/brepkit/commit/80f346145f20cc1bf9f63c48e55c8cc7b5c4f548"
+        },
+        "date": 1786089461333,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 915795,
+            "range": "± 1686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 997672,
+            "range": "± 19622",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12011,
+            "range": "± 102",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661564,
+            "range": "± 1757",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24132323,
+            "range": "± 27039",
             "unit": "ns/iter"
           }
         ]
