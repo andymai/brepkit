@@ -605,6 +605,9 @@ workspace-inherited relative readme path does not resolve), an entry in
 `[workspace.dependencies]` **with a version**, a matching jsonpath in
 `release-please-config.json`, and its name in `scripts/publish-crates.sh`.
 
+Per-crate API stability and the semver policy live in `STABILITY.md`; the
+`SemVer Check` CI job is advisory and deliberately not part of `CI Pass`.
+
 A brand-new crate name must be published manually once
 (`CARGO_REGISTRY_TOKEN=<token> ./scripts/publish-crates.sh`) before crates.io
 will accept a trusted-publisher config for it. Releases after that are
