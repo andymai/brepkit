@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.10](https://github.com/andymai/brepkit/compare/v2.129.9...v2.129.10) (2026-08-07)
+
+
+### Bug Fixes
+
+* **algo:** classify plane split loops on arc-true via-frame polygons ([#1394](https://github.com/andymai/brepkit/issues/1394)) ([f530e58](https://github.com/andymai/brepkit/commit/f530e58f187f7c9720c37910b52c44a95ca2e4bc))
+
 ## [2.129.9](https://github.com/andymai/brepkit/compare/v2.129.8...v2.129.9) (2026-08-06)
 
 
