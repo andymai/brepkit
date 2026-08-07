@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786098128643,
+  "lastUpdate": 1786121807784,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22085,6 +22085,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26251288,
             "range": "± 119999",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "31596366768a20043498fd985459a5dd82617c1d",
+          "message": "fix(operations): correct the box-sphere octant shortcut and sphere-patch classification (#1408)\n\n## Summary\n\nCloses the last open ready-repro: intersect(corner box, center sphere)\nkept vol **1304.8** instead of the exact octant **268.08**. Three\nstacked roots:\n\n1. **Complement arcs**: the analytic octant shortcut built its cut arcs\non circles with the OUTWARD plane normals — the CCW start→end span is\nthen the 270° complement (probe: all three arc midpoints on the far side\nof the sphere). Inward normals give the intended quarters; volume is now\n268.07.\n2. **Same-sense patch wire** (pre-existing): the sphere patch traversed\nall three arcs with the same sense as the quarter-discs (3 same-sense\nshared edges under `check_orientation`). The patch now traverses them\nreversed; the solid validates clean.\n3. **Classifier planar assumption**: classify's sphere arm tests hits\nagainst a planar boundary polygon, but an octant patch's arcs span three\nplanes and `face_polygon` samples only the three coplanar corners —\nevery genuine hit was discarded, and probe points read Outside even on\nthe GFA-built octant. Sphere faces whose boundary arcs span ≥2 distinct\nplanes now use per-arc plane **half-space containment** (plane-convex\npatches: octants, caps, lens corners), side calibrated from the boundary\ncentroid pushed onto the sphere.\n\nThe GFA engine needed no change — its path already produces the correct\noctant (collateral of #1394).\n\n## Verification\n\n- `bench_equiv_intersect_box_corner_sphere_is_the_octant` un-ignored and\ngreen (volume + Inside classification)\n- Foils: operations 1020, io 251, algo 209, gridfinity canary 27, clippy\nclean\n- Health probes on both construction paths: validate clean, mesh\ndirected-watertight, oriented volume agrees with magnitude\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes box∩sphere at a box corner to return the exact sphere octant and\ncorrect point classification. The shortcut now builds the right arcs and\nthe solid validates; volume is ~268.08 instead of 1304.8.\n\n- **Bug Fixes**\n- Octant shortcut: build cut arcs with inward plane normals so CCW spans\nthe intended 90° quarters.\n- Sphere patch: traverse the three arcs reversed to avoid same-sense\nshared edges; orientation validates clean.\n- Classifier: for sphere faces with boundary arcs in 2+ planes, use\nper-arc plane half-space containment (interior side from boundary\ncentroid projected to the sphere); planar faces keep the existing path.\n\n<sup>Written for commit 6e891ba85e9d23aed0f80774f165320db6d3ba0d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1408?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T16:54:03Z",
+          "tree_id": "b8adb58a38c1b9aa85eb7a63f36e23000fd34326",
+          "url": "https://github.com/andymai/brepkit/commit/31596366768a20043498fd985459a5dd82617c1d"
+        },
+        "date": 1786121805204,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 951178,
+            "range": "± 1453",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1030757,
+            "range": "± 6829",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11968,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701054,
+            "range": "± 649",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25317510,
+            "range": "± 138156",
             "unit": "ns/iter"
           }
         ]
