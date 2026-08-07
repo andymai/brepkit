@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786122285843,
+  "lastUpdate": 1786123180901,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22193,6 +22193,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26344604,
             "range": "± 87743",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "43e597f74d98c894bb1bd23f1cf2ed972484c5dd",
+          "message": "fix(operations): centralize the sphere-patch plane thresholds on kernel tolerance (#1410)\n\nFollow-up to #1408's review finding (it auto-merged before this landed):\nthe non-planar sphere-patch containment's plane-offset checks now use\n`Tolerance::new().linear` instead of a hard-coded 1e-9, so\nnearly-coplanar arc planes stay on the calibrated planar path. The\ndirection-parallelism cross check keeps 1e-9 (sin-angle scale). Repro\nand classify tests green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReplaced hard-coded 1e-9 plane-offset checks in non-planar sphere-patch\nclassification with `Tolerance::linear` to keep nearly coplanar arc\nplanes on the planar path and improve robustness. Also switched to the\nmodule-level `Tolerance` import; the direction-parallelism cross-check\nstill uses 1e-9 (sin-angle scale).\n\n<sup>Written for commit 5151ad2416dddf1bdd22a3f9b26504454ab3baa8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1410?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T17:17:01Z",
+          "tree_id": "4d6eec8d76a0bcbb94bf0a78424dc033606189d4",
+          "url": "https://github.com/andymai/brepkit/commit/43e597f74d98c894bb1bd23f1cf2ed972484c5dd"
+        },
+        "date": 1786123179190,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 992098,
+            "range": "± 18181",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1074200,
+            "range": "± 20829",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13426,
+            "range": "± 312",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710883,
+            "range": "± 10151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26193512,
+            "range": "± 28049",
             "unit": "ns/iter"
           }
         ]
