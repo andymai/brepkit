@@ -343,10 +343,11 @@ fn nonplanar_sphere_arc_halfspaces(
     // Non-planar means the arcs span at least two DISTINCT planes. The
     // sampled polygon cannot decide this (a three-arc patch samples only
     // its three coplanar corners).
+    let tol = Tolerance::new();
     let (c0, n0) = planes[0];
     let coplanar = planes
         .iter()
-        .all(|&(c, n)| n.cross(n0).length() <= 1e-9 && (c - c0).dot(n0).abs() <= 1e-9);
+        .all(|&(c, n)| n.cross(n0).length() <= 1e-9 && (c - c0).dot(n0).abs() <= tol.linear);
     if coplanar {
         return None;
     }
@@ -370,7 +371,7 @@ fn nonplanar_sphere_arc_halfspaces(
     let mut out = Vec::with_capacity(planes.len());
     for (c, n) in planes {
         let side = (p_ref - c).dot(n);
-        if side.abs() <= 1e-9 {
+        if side.abs() <= tol.linear {
             return None;
         }
         out.push((c, n, side.signum()));
