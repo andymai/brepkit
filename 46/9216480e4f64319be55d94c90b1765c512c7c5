@@ -1,0 +1,34 @@
+LICENSE
+  s_b95dcdcfb35c91::t_7fa367d84a34b7 1-661
+Cargo.toml
+  s_b95dcdcfb35c91::t_a3ee51820c58ea 10
+deny.toml
+  s_b95dcdcfb35c91::t_97a95255e21b6b 23-25
+.github/workflows/cla.yml
+  s_b95dcdcfb35c91::t_2f3fbc9ff1ab4a 1-27
+bindings/ts/package.json
+  s_b95dcdcfb35c91::t_1edd9d05eb6076 8-11,28
+.github/CLA.md
+  s_b95dcdcfb35c91::t_27fc05f0eb63b4 1-73
+README.md
+  s_b95dcdcfb35c91::t_ac106da1057dab 12
+  s_b95dcdcfb35c91::t_580e6457448466 281,283-284,286-288
+COMMERCIAL-LICENSE.md
+  s_b95dcdcfb35c91::t_8b16913ee9e22a 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "469216480e4f64319be55d94c90b1765c512c7c5",
+  "prompts": {},
+  "sessions": {
+    "s_b95dcdcfb35c91": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "22be951d-2383-4b4c-86b4-a2ffe5c6ed18",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
