@@ -113,6 +113,54 @@ fn main() {
                         .filter(|&&(x, y)| !half.contains_key(&(y, x)))
                         .count();
                     println!("{path}: directed unmatched half-edges = {unmatched}");
+                    if unmatched > 0 && std::env::var("OWNERS").is_ok() {
+                        let unmatched_set: std::collections::HashSet<(u32, u32)> = half
+                            .keys()
+                            .filter(|&&(x, y)| !half.contains_key(&(y, x)))
+                            .copied()
+                            .collect();
+                        let (gmesh, offsets) =
+                            brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
+                                &topo,
+                                solid,
+                                0.01,
+                                5.0_f64.to_radians(),
+                            )
+                            .unwrap();
+                        let mut ghalf = std::collections::HashMap::new();
+                        for t in gmesh.indices.chunks(3) {
+                            for k in 0..3 {
+                                *ghalf.entry((t[k], t[(k + 1) % 3])).or_insert(0usize) += 1;
+                            }
+                        }
+                        let gset: std::collections::HashSet<(u32, u32)> = ghalf
+                            .keys()
+                            .filter(|&&(x, y)| !ghalf.contains_key(&(y, x)))
+                            .copied()
+                            .collect();
+                        let faces = solid_faces(&topo, solid).unwrap();
+                        for (fi, &fid) in faces.iter().enumerate() {
+                            let mut n = 0;
+                            for t in gmesh.indices[offsets[fi] as usize..offsets[fi + 1] as usize]
+                                .chunks(3)
+                            {
+                                for k in 0..3 {
+                                    if gset.contains(&(t[k], t[(k + 1) % 3])) {
+                                        n += 1;
+                                    }
+                                }
+                            }
+                            if n > 0 {
+                                let face = topo.face(fid).unwrap();
+                                println!(
+                                    "  owner {fid:?} {} rev={} : {n}",
+                                    face.surface().type_tag(),
+                                    face.is_reversed()
+                                );
+                            }
+                        }
+                        let _ = unmatched_set;
+                    }
                 }
                 Err(e) => println!("{path}: tessellation failed: {e}"),
             }
