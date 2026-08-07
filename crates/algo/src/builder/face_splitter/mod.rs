@@ -6386,7 +6386,19 @@ fn split_face_2d_impl(
                 holes.push(wire_loop);
             }
         } else {
-            let pts = sample_wire_loop_uv_periodic(&wire_loop, u_per_opt, v_per_opt);
+            // Plane faces: classify on the arc-true via-frame polygon. The
+            // pcurve sampler chords Circle2D arcs and can fold
+            // reversed-boundary arcs, flipping the SIGN for a thin band
+            // between two near-parallel arcs (the crescent between a bin
+            // bottom's corner arc and a base socket outline): the correctly
+            // wound band then classifies as a hole and the adjacent-region
+            // promotion below inverts it — a same-sense shell defect. Same
+            // rationale as the via-frame switch in the nesting test.
+            let pts = if is_plane {
+                sampling::sample_wire_loop_uv_via_frame(&wire_loop, frame)
+            } else {
+                sample_wire_loop_uv_periodic(&wire_loop, u_per_opt, v_per_opt)
+            };
             let area = if cw_loops {
                 -signed_area_2d(&pts)
             } else {

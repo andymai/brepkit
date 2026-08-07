@@ -42,19 +42,33 @@
 //! intermediate result serialized. ALL are orientation-clean under the
 //! strict check — the campaign fixed the construction ops (the fresh body
 //! differs from the capture-era one; the assembly is BYTE-IDENTICAL) —
-//! yet the final fuse of the two clean operands still emits exactly
-//! "20 shared edges have inconsistent face orientations", and the
-//! export-tolerance mesh still counts 116 unmatched half-edges (112
+//! yet the final fuse of the two clean operands still emitted exactly
+//! "20 shared edges have inconsistent face orientations".
+//!
+//! FUSE-SIDE ROOT FOUND AND FIXED (2026-08-06): the 20 same-sense pairs
+//! were NOT the quarter-socket rims — they were 5 thin corner crescents
+//! of the body's z=5 underside (between the bin outline corner arc,
+//! r=3.75, and the socket footprint arc, r=4, 0.07-0.25 wide), each
+//! same-sense against all 4 neighbours. The greedy wire trace produced
+//! them CORRECTLY wound (arc-true UV area +0.43), but the splitter's
+//! outer/hole classification sampled the loop via PCURVES, which fold
+//! reversed boundary arcs on a thin two-arc band and returned -6.69 —
+//! wrong sign — so each correctly-wound crescent classified as a hole
+//! and the adjacent-not-nested promotion "fixed" it by reversing: a
+//! correct wire inverted into a same-sense defect. Fix: plane faces
+//! classify loops on the arc-true via-frame polygon (the same switch the
+//! nesting test already made). The fuse result now validates clean with
+//! check_orientation on.
+//!
+//! The export-tolerance mesh still counts 116 unmatched half-edges (112
 //! survive vertex welding into the exported STL; the export tests stay
-//! green only because their oracle is UNDIRECTED edge pairing). The
-//! winding defect is therefore born INSIDE the GFA fuse for this
-//! configuration: the boolean assembler's face-orientation emission on
-//! the NURBS-quarter-socket x cylinder-band geometry. Owner faces of the
-//! unmatched half-edges (fresh fuse, z 19.7-25.3): cylinder bands
-//! Id(603)/Id(563)/Id(451)/Id(391) against NURBS quarter-sockets
-//! Id(589)/Id(511)/Id(615). Probes: `crates/io/examples/orient_scan.rs`
-//! (per-.bin strict validation) and `fuse_orient.rs` (fuse + per-face
-//! half-edge attribution, ~58 ms).
+//! green only because their oracle is UNDIRECTED edge pairing) on a
+//! B-Rep that is now orientation-CLEAN — so that residual is a
+//! TESSELLATION-level triangle-winding defect on the NURBS-quarter-socket
+//! vs cylinder-band rims (z 19.7-25.3), separate from the closed fuse
+//! defect. Probes: `crates/io/examples/orient_scan.rs` (per-.bin strict
+//! validation) and `fuse_orient.rs` (fuse + per-face half-edge
+//! attribution, ~58 ms).
 //!
 //! The per-cell dispatch geometry (three full sockets + three quarter
 //! sockets, one 1u block mixed) is what distinguishes this from the sibling
@@ -236,12 +250,12 @@ fn mixed_socket_fresh_operands_are_orientation_clean() {
 }
 
 #[test]
-fn mixed_socket_fresh_fuse_emits_orientation_defect() {
-    // ACTIVE pin of the live defect: fusing the two CLEAN fresh operands
-    // still reports exactly 20 same-sense pairs, so the inconsistency is
-    // born inside the GFA fuse (assembler face-orientation emission), not
-    // inherited. A fuse-side fix must flip this pin to assert cleanliness
-    // and un-ignore the watertight repro below.
+fn mixed_socket_fresh_fuse_is_orientation_clean() {
+    // Guards the fuse-side fix: the splitter's plane-loop classification
+    // now uses the arc-true via-frame polygon, so the z=5 corner crescents
+    // keep their correct winding and the fuse of the two clean operands
+    // validates clean (was 20 same-sense pairs from the hole-promotion
+    // inversion; see the header).
     let mut topo = Topology::new();
     let body = load("mixed_socket_body_fresh.bin", &mut topo);
     let assembly = load("mixed_socket_assembly.bin", &mut topo);
@@ -259,19 +273,20 @@ fn mixed_socket_fresh_fuse_emits_orientation_defect() {
     let report =
         brepkit_operations::validate::validate_solid_with_options(&topo, result, &opts).unwrap();
     assert!(
-        report.issues.iter().any(|i| i
-            .description
-            .contains("20 shared edges have inconsistent face orientations")),
-        "fuse output must report its documented 20 same-sense pairs, got {:?}",
+        !report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inconsistent face orientations")),
+        "fuse output must be orientation-clean, got {:?}",
         report.issues
     );
 }
 
 #[test]
 #[ignore = "residual: 116 unmatched half-edges from inverted triangle winding on the \
-            NURBS-quarter-socket vs cylinder rims. Re-captured 2026-08-06: the operands \
-            are orientation-clean and the GFA fuse itself emits the 20 same-sense pairs \
-            (see the header's re-capture note)"]
+            NURBS-quarter-socket vs cylinder rims (z 19.7-25.3). The B-Rep is now \
+            orientation-clean (fuse-side root fixed 2026-08-06), so this is a \
+            TESSELLATION-level winding defect on those faces (see the header)"]
 fn mixed_socket_tessellation_is_watertight() {
     let mut topo = Topology::new();
     let body = load("mixed_socket_body_fresh.bin", &mut topo);
