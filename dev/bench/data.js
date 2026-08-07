@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786081076903,
+  "lastUpdate": 1786084314080,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21329,6 +21329,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24917759,
             "range": "± 319746",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f530e58f187f7c9720c37910b52c44a95ca2e4bc",
+          "message": "fix(algo): classify plane split loops on arc-true via-frame polygons (#1394)\n\n## Summary\n\nThe GFA fuse of the fresh mixed-socket operands (two orientation-clean\nsolids) emitted exactly 20 same-sense shared edges. Attribution showed\nthe pairs were not the NURBS quarter-socket rims: they were 5 thin\ncorner crescents of the body's z=5 underside (bin outline corner arc\nr=3.75 vs socket footprint arc r=4, 0.07-0.25 mm wide), each same-sense\nagainst all 4 of its neighbours, i.e. wound backwards.\n\n**Root:** the greedy wire trace produced those crescents correctly wound\n(arc-true UV area +0.43, verified by exact boundary integral), but\n`split_face_2d_impl`'s outer/hole classification samples each loop via\npcurves, which fold reversed boundary arcs on a thin two-arc band and\nreturned -6.69: the wrong sign. The correctly wound crescent classified\nas a hole, and the adjacent-not-nested promotion pass then \"fixed\" it by\nreversing it, inverting a correct wire into a same-sense shell defect.\n\n**Fix:** plane faces classify loops on the arc-true via-frame polygon\n(`sample_wire_loop_uv_via_frame`), the same switch the nesting test in\nthis block already made for the same reason (its comment documents the\npcurve sampler folding arcs).\n\n## Verification\n\n- `mixed_socket_fresh_fuse_is_orientation_clean` (flipped pin, ACTIVE):\nthe fuse validates clean with `check_orientation` on; was 20 same-sense\npairs\n- Fuse volume 42454.965, F=324, free=0, over=0: unchanged from before\nthe fix (winding-only change)\n- Foils: algo 209, operations 1017, io 244 (honeycomb pins, kumiko,\ndovetail, snapclip, thickwall all green), wasm gridfinity canary 27,\nclippy clean\n- The 116 unmatched mesh half-edges at the quarter-socket rims persist\non the now-clean B-Rep: re-scoped in the fixture header as a\ntessellation-level triangle-winding defect (separate open item; the\nstrict watertight pin stays ignored with that reason)\n\n## Also in this PR\n\n- `fuse_orient` probe: same-sense B-Rep edge attribution, planar winding\noracle, operand `FACES=` dump\n- `BK_SPLITW`: per-piece UV/3D winding areas\n- Roadmap: fuse-side root closed, two user-reported wall-pattern\ninvestigation rows added (honeycomb corners, triangle arrangement)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes plane-face loop classification by using arc‑true via-frame\npolygons instead of pcurve samples. This removes the mixed‑socket fuse’s\n20 same‑sense edges with volume and face counts unchanged.\n\n- **Bug Fixes**\n- Plane faces in `split_face_2d_impl` classify outer/holes from\n`sample_wire_loop_uv_via_frame` (arc‑true), not pcurves, fixing sign\nflips on thin two‑arc crescents.\n- Fresh mixed‑socket fuse is now orientation‑clean (no “20 shared edges\nhave inconsistent face orientations”); geometry is unchanged.\n- Probes guard winding dumps against degenerate wires; the 116 unmatched\nmesh half‑edges at quarter‑socket rims persist and are tracked as a\ntessellation‑level issue.\n\n- **New Features**\n- `crates/io/examples/fuse_orient.rs`: operand `FACES=` dump, same‑sense\nB‑Rep edge attribution, and planar effective winding.\n- `BK_SPLITW` logging in `fill_images_faces.rs`: per‑piece UV and 3D\nsigned areas.\n- Roadmap adds two user‑reported items (honeycomb corners, triangle\narrangement).\n\n<sup>Written for commit 5d3c60c15f77f7b93ece8bbbdca3aead61014478.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1394?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T06:29:32Z",
+          "tree_id": "a9a8e78c648621155230daf8cca653182880f8ef",
+          "url": "https://github.com/andymai/brepkit/commit/f530e58f187f7c9720c37910b52c44a95ca2e4bc"
+        },
+        "date": 1786084312151,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 805867,
+            "range": "± 12858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 886236,
+            "range": "± 26257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9649,
+            "range": "± 451",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 583281,
+            "range": "± 11369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21091719,
+            "range": "± 363543",
             "unit": "ns/iter"
           }
         ]
