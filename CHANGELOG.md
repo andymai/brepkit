@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.129.13](https://github.com/andymai/brepkit/compare/v2.129.12...v2.129.13) (2026-08-07)
+
+
+### Bug Fixes
+
+* **operations:** reverse concave coaxial corner walls in curve-preserving lofts ([#1404](https://github.com/andymai/brepkit/issues/1404)) ([5a3e405](https://github.com/andymai/brepkit/commit/5a3e40533622e3c910b515e6f52da777cbdf68af))
+
 ## [2.129.12](https://github.com/andymai/brepkit/compare/v2.129.11...v2.129.12) (2026-08-07)
 
 
