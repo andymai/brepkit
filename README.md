@@ -151,26 +151,26 @@ Median times from [brepkit-bench](https://github.com/andymai/brepkit-bench), the
 
 ```bash
 git clone https://github.com/andymai/brepkit-bench && cd brepkit-bench
-npm install && npm run bench
+npm ci && npm run bench
 ```
 
 | Operation                | brepkit (WASM) | OCCT (WASM) | Speedup | brepkit (native) |
 | ------------------------ | -------------- | ----------- | ------- | ---------------- |
-| fuse(box, box) (×10)     | 0.4 ms         | 44.9 ms     | 103x    | 122 µs           |
+| fuse(box, box) (×10)     | 0.43 ms        | 44.9 ms     | 103x    | 122 µs           |
 | cut(box, cylinder) (×10) | 19.2 ms        | 64.9 ms     | 3.4x    | 9.3 ms           |
-| box + chamfer            | 0.1 ms         | 5.6 ms      | 55x     | 46 µs            |
-| box + fillet             | 0.3 ms         | 6.1 ms      | 18x     | 127 µs           |
-| intersect(box, sphere) (×10) | 0.2 ms     | 59.1 ms     | 252x    | 98 µs            |
+| box + chamfer            | 0.10 ms        | 5.6 ms      | 55x     | 46 µs            |
+| box + fillet             | 0.33 ms        | 6.1 ms      | 18x     | 127 µs           |
+| intersect(box, sphere) (×10) | 0.23 ms    | 59.1 ms     | 252x    | 98 µs            |
 | multi-boolean (16 holes) | 4.6 ms         | 30.3 ms     | 6.6x    | 2.8 ms           |
 | mesh sphere (tol=0.01)   | 6.2 ms         | 49.4 ms     | 7.9x    | 6.0 ms           |
 | volume (box) (×100)      | 0.18 ms        | 9.8 ms      | 54x     | 56 µs            |
-| exportSTEP (×10)         | 0.9 ms         | 14.3 ms     | 17x     | n/a              |
+| exportSTEP (×10)         | 0.85 ms        | 14.3 ms     | 17x     | n/a              |
 
 Every row is output-verified before timing, enforced by the harness itself: it refuses to time a row whose result is wrong. Fuse, chamfer, and box volumes must match exactly; cut, fillet, and multi-boolean volumes are checked against closed-form or cross-kernel values (measured fillet agreement: 0.004%); the intersect result must match the closed-form spherical-octant volume (also pinned by a regression test); exported STEP must re-import to the correct volume. The sphere mesh densities are comparable at equal tolerance (9,800 triangles vs 10,176).
 
 Booleans preserve analytic surfaces, so face counts stay low across chained operations. A nine-step compound boolean settles at 72 faces while a mesh-based approach would reach roughly 7,000. The same holds for blends: a straight edge filleted between two planar faces keeps an exact cylindrical wall rather than a NURBS approximation of one.
 
-> The OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js through the same [brepjs](https://github.com/andymai/brepjs) adapter layer, so adapter overhead is identical on both sides. Boolean and `exportSTEP` rows are timed as batches of ten operations. WASM figures measured 2026-08-07 via [brepkit-bench](https://github.com/andymai/brepkit-bench) on the released npm packages, exact-pinned in its lockfile: `brepkit-wasm` 3.0.0, `occt-wasm` 3.8.3, `brepjs` 18.120.0. Native figures: `cargo bench -p brepkit-operations --bench cad_operations`, except the mesh-sphere row, which is measured at the same parameters as the WASM row (`tessellate_solid_with_tolerance`, deflection 0.01, angular 0.1 rad) via `crates/operations/examples/perf_probe.rs` — the criterion suite's sphere case meshes per-face and is not comparable.
+> The OCCT comparison uses [occt-wasm](https://www.npmjs.com/package/occt-wasm), an OpenCASCADE build compiled to WebAssembly. Both kernels run single-threaded in Node.js through the same [brepjs](https://github.com/andymai/brepjs) adapter layer, so adapter overhead is identical on both sides. Boolean and `exportSTEP` rows are timed as batches of ten operations. Speedups are computed from unrounded medians. WASM figures measured 2026-08-07 via [brepkit-bench](https://github.com/andymai/brepkit-bench) on the released npm packages, exact-pinned in its lockfile: `brepkit-wasm` 3.0.0, `occt-wasm` 3.8.3, `brepjs` 18.120.0. Native figures: `cargo bench -p brepkit-operations --bench cad_operations`, except the mesh-sphere row, which is measured at the same parameters as the WASM row (`tessellate_solid_with_tolerance`, deflection 0.01, angular 0.1 rad) via `crates/operations/examples/perf_probe.rs` — the criterion suite's sphere case meshes per-face and is not comparable.
 
 ## Data Exchange
 
