@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786093107305,
+  "lastUpdate": 1786095680280,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21869,6 +21869,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25086536,
             "range": "± 147370",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5a3e40533622e3c910b515e6f52da777cbdf68af",
+          "message": "fix(operations): reverse concave coaxial corner walls in curve-preserving lofts (#1404)\n\n## Summary\n\nCloses the mint behind the mixed-socket chain's 116 unmatched half-edges\n(#1402's attribution): the curve-preserving loft's **coaxial\nCylinder/Cone arm** emitted `(surface, false)` unconditionally.\nRadial-outward equals solid-outward only for **convex** corner arcs — a\n**concave** rounding puts the material outside the cylinder, so the\nwall's effective orientation disagrees geometrically with every\nneighbour while edge senses still pair (combinatorially clean,\ndirected-mesh broken).\n\n**Why the obvious check can't work:** the chord-cross `outward` used by\nthe plane and ruled-NURBS arms cannot discriminate here — a concave\ntraversal flips the chord and the radial normal together. The fix\ncompares the surface normal against **material-outward = traversal\ntangent × connect direction** at the arc midpoint (profiles are CCW\nabout the stacking direction, so material lies left of traversal).\nReversed walls get the reversed-winding wire via the existing step-6\nmachinery.\n\n## Verification\n\n- **Faithful repro from real inputs**: the capture hook extrudes each\nloft profile face into a thin solid (the top cap carries the input\nexactly); shipped as `quarter_socket_loft_profile_{a,b}.bin`. Without\nthe fix, the native loft of these profiles reproduces **exactly the\ncaptured 38 mismatches**; with it, both the 38- and 78-mismatch\nconfigurations mesh **directed-watertight**.\n- New pin: `quarter_socket_loft_regenerates_directed_watertight` (plus\nthe defective-era capture pin).\n- Foils: gridfinity canary 27, operations 1019 (incl. all loft tests),\nio 250, algo 209 — all green. The reversal-flag concern from the\nruled-NURBS campaign doesn't apply here: an analytic cylinder's radial\nnormal cannot be flipped by construction, so the flag + reversed-winding\nwire is the only correct emission.\n\nThe static chain fixtures (body 116 etc.) document the defective era and\nkeep their counts; the strict watertight pin closes after a tool-side\nre-capture.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes loft side-wall orientation for coaxial cylinder/cone corners.\nConcave corners now reverse as needed, eliminating the 38/78 directed\nhalf-edge mismatches and producing watertight meshes on the real\ncaptured profiles.\n\n- **Bug Fixes**\n- In `loft`’s coaxial Cylinder/Cone arm, decide reversal by comparing\nthe surface normal to material‑outward = traversal tangent × connect\ndirection at the arc midpoint; the connect direction is derived from the\nshared axis, oriented from the first profile to the next.\n  - Reversed walls use the existing reversed‑winding wire path.\n- Added a test that lofts the real captured profiles\n(`quarter_socket_loft_profile_{a,b}.bin`) and requires a\ndirected‑watertight mesh; kept the pre‑fix capture to document the old\n38‑mismatch output.\n- Added `audit_bin` LOFT_A/LOFT_B mode to loft two captured profile\nextrusions and report directed unmatched half‑edges.\n  - All suites green.\n\n<sup>Written for commit 682d42b76cc2de33c220ddf66f31f63b405e3fe7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1404?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T09:38:54Z",
+          "tree_id": "f5fb37e9781b8a81c0a449b6755aa0ae25a519ad",
+          "url": "https://github.com/andymai/brepkit/commit/5a3e40533622e3c910b515e6f52da777cbdf68af"
+        },
+        "date": 1786095678005,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 948544,
+            "range": "± 33406",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1029286,
+            "range": "± 2482",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12087,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697263,
+            "range": "± 1310",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24932974,
+            "range": "± 69797",
             "unit": "ns/iter"
           }
         ]
