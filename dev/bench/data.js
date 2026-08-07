@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786087286622,
+  "lastUpdate": 1786088299138,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21599,6 +21599,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24804991,
             "range": "± 37031",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "52c2ad6ff9c5760249daa9675fba0def39ea8f00",
+          "message": "test(io): outwardness audit finds double-flipped faces behind the mixed-socket half-edges (#1399)\n\n## Summary\n\nContinues the mixed-socket residual from #1394. The 116 unmatched\nhalf-edges are **not** a tessellator defect and **not** a fuse emission\ndefect:\n\n- Every owner face's mesh matches its own effective surface normal\nexactly (`mesh_orient=1.000`).\n- The faces are **coherently double-flipped**: effective surface normal\npointing into the material with the wire winding flipped to match.\nEdge-sense pairing (`check_shell_orientation`) passes; the face is\ngeometrically inside-out. Only an outwardness oracle can see this class.\n- A majority-vote outwardness audit (classify points offset ±along the\neffective normal, 5 spread samples x 2 offsets) added to `fuse_orient`\nshows: **the body operand already carries 3 unanimously-inverted corner\ncylinder bands** (Id 32/56/82), the assembly operand is clean, and the\nfuse result carries their split products (plus cone readings needing a\ncareful pass near thin webs).\n\nSo the root sits upstream in the per-cell quarter-socket construction\nchain, in a class no current validation detects.\n\n## Next altitudes (recorded in the fixture header and roadmap)\n\n1. Find the construction op minting double-flipped faces: per-stage\noutwardness audit of a fresh chain capture, or a native\nsocket-construction repro.\n2. Add a geometric outwardness check beside the combinatorial one in\n`validate`.\n\nProbe-and-docs only: no engine behavior changes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an outwardness audit to the fuse probe that explains the 116\nunmatched half-edges: they come from coherently double-flipped faces\n(effective normals pointing into the material), not a tessellator\ndefect. The audit shows the body operand already carries three inverted\ncorner cylinder bands; tests and docs updated to record the finding,\nwith no engine behavior changes.\n\n- **New Features**\n- `crates/io/examples/fuse_orient.rs`: add majority-vote outwardness\naudit using `classify_point` offsets on operands and fuse result;\ninclude per-face mesh-orient check and concise logging.\n- `crates/io/tests/mixed_socket_tess_inmem.rs`: update header and ignore\nreason to reflect the double-flipped diagnosis and upstream root.\n- `.claude/skills/roadmap/SKILL.md`: note the measurement and revised\nroot cause.\n\n<sup>Written for commit 2bf1dce688cfb145132f1ad473b731c9cea7b11d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1399?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T07:35:52Z",
+          "tree_id": "a260e0d065bb5c3c118cba179bfc8b6fea0aae73",
+          "url": "https://github.com/andymai/brepkit/commit/52c2ad6ff9c5760249daa9675fba0def39ea8f00"
+        },
+        "date": 1786088297326,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 992107,
+            "range": "± 3948",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1072286,
+            "range": "± 49604",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13226,
+            "range": "± 393",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704163,
+            "range": "± 1603",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26196269,
+            "range": "± 51619",
             "unit": "ns/iter"
           }
         ]
