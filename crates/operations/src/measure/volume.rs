@@ -225,6 +225,9 @@ fn all_planar_line_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> 
         for &iw in face.inner_wires() {
             face_area2 -= ring_area2(iw)?;
         }
+        if face_area2 < 0.0 {
+            return None;
+        }
         vol6 += sign * d_unit * face_area2;
     }
     Some((vol6 / 6.0).abs())
