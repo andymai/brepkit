@@ -39,6 +39,17 @@ done < <(cargo metadata --no-deps --format-version 1 \
            | select(.kind != "dev")
            | "\(.name) \(.req)"' | sort -u)
 
+# Every publishable member must be listed in the publish script. Without this,
+# adding a crate and forgetting the script means it silently never reaches
+# crates.io while everything else keeps releasing.
+while read -r name; do
+  if ! grep -qx "  $name" scripts/publish-crates.sh; then
+    echo "❌ $name is publishable but missing from scripts/publish-crates.sh"
+    FAIL=1
+  fi
+done < <(cargo metadata --no-deps --format-version 1 \
+  | jq -r '.packages[] | select(.publish != []) | .name')
+
 if [ $FAIL -ne 0 ]; then
   echo "❌ Version check failed. Reconcile Cargo.toml with release-please-config.json."
   exit 1
