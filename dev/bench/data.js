@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786132430344,
+  "lastUpdate": 1786136306280,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22679,6 +22679,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20868143,
             "range": "± 480125",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b21fb2764f551e41a830a100d6d62dd7c035ce69",
+          "message": "ci: pin contributor-assistant to its release commit and state per-repo signing (#1419)\n\nMirrors two review findings from the brepjs CLA PR: pins\ncontributor-assistant to the immutable commit for v2.6.1 (this\npull_request_target workflow holds four write scopes, so a repointed tag\nwould run attacker code with them; SHA verified against the upstream tag\nref), and clarifies in CONTRIBUTING that signing is per repository since\nbrepkit and brepjs keep separate signature stores.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins `contributor-assistant/github-action` to its v2.6.1 commit to\nharden the `pull_request_target` CLA workflow. Updates `CONTRIBUTING.md`\nto state CLA signing is per repository (brepkit and brepjs keep separate\nstores) and removes the “one-time” wording.\n\n- **Dependencies**\n- Pin `contributor-assistant/github-action` to\n`ca4a40a7d1004f18d9960b404b97e5f30a505a08` (v2.6.1) in\n`.github/workflows/cla.yml`.\n\n<sup>Written for commit bca321a67dcabb0469dc78a376bdfc73de0341b5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1419?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T20:55:49Z",
+          "tree_id": "6ffa0ecbb798a3a1079242e088c869bf53165408",
+          "url": "https://github.com/andymai/brepkit/commit/b21fb2764f551e41a830a100d6d62dd7c035ce69"
+        },
+        "date": 1786136303748,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 982216,
+            "range": "± 1823",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1063636,
+            "range": "± 2397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12970,
+            "range": "± 142",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707736,
+            "range": "± 3095",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26111593,
+            "range": "± 112150",
             "unit": "ns/iter"
           }
         ]
