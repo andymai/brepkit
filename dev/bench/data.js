@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786084314080,
+  "lastUpdate": 1786084788800,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -21383,6 +21383,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21091719,
             "range": "± 363543",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "57314d3549a5f6c4d99046a9fab73230970fe6ee",
+          "message": "chore(main): release 2.129.10 (#1395)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[2.129.10](https://github.com/andymai/brepkit/compare/v2.129.9...v2.129.10)\n(2026-08-07)\n\n\n### Bug Fixes\n\n* **algo:** classify plane split loops on arc-true via-frame polygons\n([#1394](https://github.com/andymai/brepkit/issues/1394))\n([f530e58](https://github.com/andymai/brepkit/commit/f530e58f187f7c9720c37910b52c44a95ca2e4bc))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes loop classification during plane splits for arc-true via-frame\npolygons, preventing wrong results in those cases. Improves reliability\nof geometry operations in `brepkit-wasm`.\n\n<sup>Written for commit bf0fc7e62f4bd1ebc10ddaf0bd71db012f145907.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1395?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-07T06:37:16Z",
+          "tree_id": "93f61f923868e05292e19533a0e02ac2c8cc1b9c",
+          "url": "https://github.com/andymai/brepkit/commit/57314d3549a5f6c4d99046a9fab73230970fe6ee"
+        },
+        "date": 1786084786596,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 945398,
+            "range": "± 2956",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1027398,
+            "range": "± 1129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11997,
+            "range": "± 134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701824,
+            "range": "± 6082",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24915830,
+            "range": "± 77837",
             "unit": "ns/iter"
           }
         ]
