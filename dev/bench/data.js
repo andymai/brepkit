@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786097529768,
+  "lastUpdate": 1786098128643,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22031,6 +22031,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26130938,
             "range": "± 36110",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9b45ee361883ba9c7385a9896b3d1f195051c8f6",
+          "message": "docs(roadmap): volume head-to-head row re-measured at 47x on 2.129.13 (#1407)\n\nHead-to-head re-measure of the volume row on the released 2.129.13\n(hash-verified overlay in a brepjs bench worktree, BENCH_KERNELS=both):\nbrepkit 0.176 ms vs reference 8.31 ms per 100 calls — **47x**, up from\n2.3x, via the exact all-planar divergence-theorem path (#1396).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdated the roadmap to reflect the re-measured volume benchmark: now 47x\nfaster on released 2.129.13 (was 2.3x).\nMeasured wasm-vs-wasm with a hash-verified overlay in a `brepjs` bench\nworktree: 0.176 ms vs 8.31 ms per 100 calls via the all‑planar\ndivergence path (#1396).\n\n<sup>Written for commit 4dde8972c2ce194c2c5f09420989a8c7eb509dbd.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1407?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-07T10:19:33Z",
+          "tree_id": "b1cb673b11e064386d9dc23427d9e81005a1e115",
+          "url": "https://github.com/andymai/brepkit/commit/9b45ee361883ba9c7385a9896b3d1f195051c8f6"
+        },
+        "date": 1786098126951,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 992021,
+            "range": "± 1217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1078080,
+            "range": "± 8393",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13324,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706126,
+            "range": "± 1209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26251288,
+            "range": "± 119999",
             "unit": "ns/iter"
           }
         ]
