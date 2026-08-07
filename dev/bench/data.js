@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786125045406,
+  "lastUpdate": 1786126192077,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22409,6 +22409,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25031884,
             "range": "± 70639",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "87bca8bb73a6c6cbd981d4e421a5f0029814558b",
+          "message": "build(release): publish the workspace to crates.io (#1414)\n\nMakes every crate publishable and wires crates.io into the existing\nrelease flow. All 14 names are currently free on crates.io.\n\n## What was blocking `cargo publish`\n\n| Blocker | Fix |\n|---|---|\n| Workspace path deps carried no `version`, which crates.io rejects |\n`version` added alongside each `path` in `[workspace.dependencies]` |\n| `repository = \"git+https://...\"` is not a valid Cargo repository URL |\nPlain `https://github.com/andymai/brepkit` |\n| `crates/io/tests/data` is 11 MB, over the 10 MiB package limit |\n`exclude`, taking the package from 11 MB to 721 KB |\n| `brepkit-offset` dev-depends on `brepkit-operations`, which depends\nback on it | That dev-dep is path-only; cargo drops version-less\ndev-deps when packaging |\n\n## Versioning\n\nAll crates share one version via `version.workspace = true`, bumped by\nrelease-please through 12 jsonpath entries on `Cargo.toml` (the\nworkspace version plus 11 inter-crate dependency versions). The\nlibraries move from `0.1.0` to the current `2.129.15` line so there is a\nsingle number across the workspace and the npm package.\n\nThat jsonpath list is the one soft spot: if an entry stops matching, a\ndependency version freezes while the crate version advances and `cargo\npublish` would resolve an older sibling from crates.io instead of the\none in the workspace. `scripts/check-versions.sh` asserts every crate\nand every inter-crate requirement sits at one version, and that every\npublishable member is listed in the publish script, so neither kind of\ndrift can reach a release. It runs in CI.\n\n## Publishing\n\n`scripts/publish-crates.sh` publishes in dependency order and skips\nversions already on crates.io, which is what makes a re-run after a\npartial failure safe. This is why it does not just call `cargo publish\n--workspace`, which aborts the batch on the first crate that already\nexists. The release workflow and the manual bootstrap both call it, so\nthe two paths cannot drift.\n\nAuthentication is OIDC trusted publishing via\n`rust-lang/crates-io-auth-action`, so there is no long-lived registry\ntoken. The checkout is pinned to the release tag rather than the default\nbranch, so a delayed `release:created` event or a manual dispatch\npublishes what was tagged. The job is separate from the WASM job so a\ncrates.io outage cannot block the npm release.\n\n## Also\n\n- `publish-dry-run` CI job runs the version check then `cargo publish\n--workspace --dry-run`, catching manifest faults on the PR instead of at\nrelease time.\n- Per-crate `readme = \"../../README.md\"` so each crates.io page renders.\nA workspace-inherited relative readme path gets re-resolved against the\ncrate dir and fails, so it is spelled out per crate.\n- `[package.metadata.docs.rs] all-features = true` on `brepkit-math` and\n`brepkit-topology`, whose public API is feature-gated.\n- `brepkit-wasm-macros` is `publish = false`; no crate references it\nyet.\n- `taplo.toml` excludes `target/**`. `cargo package` writes rewritten\nmanifests there and `taplo fmt --check` was failing on them.\n- README: crates.io badge, `cargo add` instructions, and a per-crate\ntable for picking less than the whole kernel.\n\n## Verification\n\n`cargo publish --workspace --dry-run` passes: all 13 publishable crates\nbuild from their packaged tarballs. `cargo nextest run -p\nbrepkit-offset` passes (38/38), covering the dev-dependency change.\nBoundaries, doc-paths, taplo, and the new version check are all green.\n\n## Follow-up needed before the first release\n\ncrates.io only accepts a trusted-publisher config for a crate that\nalready exists, so the first version of each has to be pushed manually\nwith an API token. A `crates-io` GitHub environment also needs creating.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPublish all Rust crates in the workspace to crates.io and integrate\npublishing into the release workflow. Adds CI checks and scripts to keep\none shared version and make releases safe to re-run.\n\n- **New Features**\n- Fixed publish blockers: added `version` to workspace path deps,\ncorrected `repository` URL, excluded `crates/io/tests/data`, and made\n`brepkit-offset`’s dev-dep on `brepkit-operations` path-only to avoid a\ncycle.\n- Unified versioning via `[workspace.package] version`, with\nrelease-please updating both the workspace version and inter-crate\nrequirements. `scripts/check-versions.sh` enforces no drift and fails if\nany publishable crate is missing from `scripts/publish-crates.sh`.\n- Added `publish-dry-run` CI job to run the version check and `cargo\npublish --workspace --dry-run`.\n- Release workflow now tag-pins the checkout and verifies the tag\nmatches the workspace version; publishes via OIDC trusted publishing\nusing `scripts/publish-crates.sh` (dependency order, skips\nalready-published versions).\n- Hardened scripts: preflight required tools and guard an empty version\nto avoid silently skipping all publishes.\n- Per-crate `readme` paths and docs.rs `all-features` for `brepkit-math`\nand `brepkit-topology`; `brepkit-wasm-macros` remains `publish = false`.\nREADME adds a crates.io badge and `cargo add` examples.\n\n- **Migration**\n- First release requires a one-time manual bootstrap: publish the\ninitial version of each crate with a crates.io API token and create the\n`crates-io` GitHub environment.\n  - After bootstrap, releases are automatic via the workflow.\n\n<sup>Written for commit 681837ef8d3785bef17c95a09f287c0af81972ca.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1414?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n## Review fixes\n\nCopilot raised three findings; one was a real defect. An empty `VERSION`\nin the publish script would have turned the existence check into a\nrequest for the crate's base endpoint, which answers 200 for any\npublished crate: every crate would read as already published, the loop\nwould skip all of them, and the script would exit 0 having published\nnothing. Now guarded, along with tag-pinned checkout and tool preflights\nin both scripts.\n\ncubic did not substantively review this PR (it reported \"AI review line\nlimit reached\" on the first push and skipped the rest), so the diff was\nself-reviewed. That pass is what found the missing-crate hole the\npublish-list guard now covers.",
+          "timestamp": "2026-08-07T11:07:32-07:00",
+          "tree_id": "ee58e211c69c5128d2fc4fdf6d3d8a4dc3d3c0b5",
+          "url": "https://github.com/andymai/brepkit/commit/87bca8bb73a6c6cbd981d4e421a5f0029814558b"
+        },
+        "date": 1786126190253,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 765111,
+            "range": "± 3947",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 834649,
+            "range": "± 970",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10237,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 549493,
+            "range": "± 1312",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20368748,
+            "range": "± 58361",
             "unit": "ns/iter"
           }
         ]
