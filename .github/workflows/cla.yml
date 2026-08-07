@@ -24,4 +24,7 @@ jobs:
           path-to-signatures: 'signatures/cla.json'
           path-to-document: 'https://github.com/andymai/brepkit/blob/main/.github/CLA.md'
           branch: 'cla-signatures'
-          allowlist: 'andymai,dependabot[bot],github-actions[bot],brepkit[bot]'
+          # web-flow is GitHub's web-UI committer identity; release-please PR
+          # commits carry it as the committer, so it must be allowlisted or
+          # every release PR fails the CLA check.
+          allowlist: 'andymai,web-flow,dependabot[bot],github-actions[bot],brepkit[bot],*[bot]'
