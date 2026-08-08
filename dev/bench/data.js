@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786210258244,
+  "lastUpdate": 1786210753203,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24353,6 +24353,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26492971,
             "range": "± 67064",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a004b2e207565d6410e305500ba5c802dbd2af86",
+          "message": "chore(main): release 3.2.1 (#1455)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.2.1](https://github.com/andymai/brepkit/compare/v3.2.0...v3.2.1)\n(2026-08-08)\n\n\n### Bug Fixes\n\n* **algo:** DCEL rescue for non-periodic band grand tours\n([#1453](https://github.com/andymai/brepkit/issues/1453))\n([53536cc](https://github.com/andymai/brepkit/commit/53536cc61751b378e454fde67d131ef86e550b89))\n\n\n### Performance\n\n* **algo:** materialize deduped sections only when a duplicate exists\n([#1454](https://github.com/andymai/brepkit/issues/1454))\n([b94429e](https://github.com/andymai/brepkit/commit/b94429e727c73f50e2d62e2c71ce3718ecb1cb3d))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.1 with a DCEL rescue fix for non-periodic band grand tours\nand a small performance win by materializing deduped sections only when\na duplicate exists. Also bumps all `brepkit-*` workspace crates to\n3.2.1.\n\n- **Bug Fixes**\n  - Fix DCEL rescue for non-periodic band grand tours in `brepkit-algo`.\n\n- **Performance**\n- Materialize deduped sections only when a duplicate exists in\n`brepkit-algo`.\n\n<sup>Written for commit 611795559aff4b9b13870a212089e7f2092cdfd4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1455?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T17:36:50Z",
+          "tree_id": "b75368eaa0edcc575e264904d27d09a596d719a0",
+          "url": "https://github.com/andymai/brepkit/commit/a004b2e207565d6410e305500ba5c802dbd2af86"
+        },
+        "date": 1786210751317,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 946074,
+            "range": "± 4887",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1024439,
+            "range": "± 1097",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11927,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698727,
+            "range": "± 1660",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25173040,
+            "range": "± 24766",
             "unit": "ns/iter"
           }
         ]
