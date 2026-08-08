@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.0](https://github.com/andymai/brepkit/compare/v3.0.2...v3.1.0) (2026-08-08)
+
+
+### Features
+
+* **operations:** analytic sweep along closed planar line/arc spines ([#1427](https://github.com/andymai/brepkit/issues/1427)) ([1d8c4ad](https://github.com/andymai/brepkit/commit/1d8c4adb0d7d5042c827d6d77de16a237c1fda66))
+
 ## [3.0.2](https://github.com/andymai/brepkit/compare/v3.0.1...v3.0.2) (2026-08-08)
 
 
