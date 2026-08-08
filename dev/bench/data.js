@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786215792353,
+  "lastUpdate": 1786218133181,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24569,6 +24569,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25387049,
             "range": "± 89057",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eaea8c8de0ff5f4498a734407a2f3bb55f5d6cd0",
+          "message": "docs(roadmap): GH-issues campaign shipping state and fillet park point (#1459)\n\nRecords: brepjs #1966 merged (simplify wiring; closes #1447 at the next\nbrepjs release), tool #3345 armed (kernel 3.2.1 — wallPatterns export\n8/8, the arm that carried the slots signature), and the fillet\ncampaign's round-7 park point with its two remaining characterized\nroots.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdated the roadmap to record what shipped for the #1445/#1446/#1447\ncampaign and to mark the fillet work as parked at round 7 with its two\nremaining roots.\n\nThe entry now notes `brepjs` simplify wiring and `meshFallbackCount`\nshipped, tool export on kernel 3.2.1, and that #1447 will close on the\nnext `brepjs` release.\n\n<sup>Written for commit 3a01c7c7aaaa32376f1899d652f26d893e142602.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1459?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T19:39:51Z",
+          "tree_id": "e0e0a1ceb3478eacd67a00231123460a896757d8",
+          "url": "https://github.com/andymai/brepkit/commit/eaea8c8de0ff5f4498a734407a2f3bb55f5d6cd0"
+        },
+        "date": 1786218130687,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 952581,
+            "range": "± 782",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1034877,
+            "range": "± 43409",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11955,
+            "range": "± 261",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702174,
+            "range": "± 773",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25735603,
+            "range": "± 1593307",
             "unit": "ns/iter"
           }
         ]
