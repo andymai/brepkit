@@ -27,6 +27,8 @@ crates/io/examples/replay_fillet_variable.rs
   s_8b449c7ef64a35::t_91cbfa1bde8f09 178-182,186,190-197,201-204,206
 crates/blend/src/fillet_builder.rs
   s_8b449c7ef64a35::t_c63333216027c6 297-298
+.claude/skills/roadmap/SKILL.md
+  s_8b449c7ef64a35::t_d767bb54909059 128
 ---
 {
   "schema_version": "authorship/3.0.0",
