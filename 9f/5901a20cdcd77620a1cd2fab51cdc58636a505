@@ -1,0 +1,22 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_8b449c7ef64a35::t_6ce360c1d6c033 1948-1949,1954-1955,1959-1964,1976,1980
+  s_8b449c7ef64a35::t_8dca9c30155057 1941-1947,1950-1953,1956-1958,1965-1967,1972-1975,1977-1979
+crates/operations/src/tessellate/solid.rs
+  s_8b449c7ef64a35::t_5fa40a45d35cf5 1112-1117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "9f5901a20cdcd77620a1cd2fab51cdc58636a505",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
