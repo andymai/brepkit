@@ -102,6 +102,28 @@ fn load_case(topo: &mut Topology) -> (SolidId, Vec<(brepkit_topology::edge::Edge
     load_named_case(topo, "gscoop_fillet_input.bin", "gscoop_fillet_spec.json")
 }
 
+fn same_sense_pair_count(topo: &Topology, solid: SolidId) -> usize {
+    let mut senses: HashMap<usize, Vec<bool>> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let rev = face.is_reversed();
+        let mut wires = vec![face.outer_wire()];
+        wires.extend_from_slice(face.inner_wires());
+        for wid in wires {
+            for oe in topo.wire(wid).unwrap().edges() {
+                senses
+                    .entry(oe.edge().index())
+                    .or_default()
+                    .push(oe.is_forward() ^ rev);
+            }
+        }
+    }
+    senses
+        .values()
+        .filter(|u| u.len() == 2 && u[0] == u[1])
+        .count()
+}
+
 fn assert_watertight(input: &str, spec: &str) {
     let mut topo = Topology::new();
     let (solid, picks) = load_named_case(&mut topo, input, spec);
@@ -115,6 +137,11 @@ fn assert_watertight(input: &str, spec: &str) {
     assert_eq!(
         free, 0,
         "fillet must produce a watertight solid, got {free} free edges"
+    );
+    let ss = same_sense_pair_count(&topo, result);
+    assert_eq!(
+        ss, 0,
+        "fillet must emit orientation-consistent faces, got {ss} same-sense edge pairs"
     );
 }
 
@@ -150,16 +177,5 @@ fn operand_is_clean() {
 
 #[test]
 fn scoop_fillet_variable_is_watertight() {
-    let mut topo = Topology::new();
-    let (solid, picks) = load_case(&mut topo);
-    let edge_laws: Vec<_> = picks
-        .into_iter()
-        .map(|(e, r)| (e, FilletRadiusLaw::Constant(r)))
-        .collect();
-    let result = fillet_variable(&mut topo, solid, &edge_laws).unwrap();
-    let free = free_edge_count(&topo, result);
-    assert_eq!(
-        free, 0,
-        "scoop fillet must produce a watertight solid, got {free} free edges"
-    );
+    assert_watertight("gscoop_fillet_input.bin", "gscoop_fillet_spec.json");
 }
