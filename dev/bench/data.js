@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786228965976,
+  "lastUpdate": 1786229122050,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24893,6 +24893,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25669326,
             "range": "± 41244",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b74c9ac8b168bdc5eedf03d428755e19aa05eda8",
+          "message": "fix(blend): close the fillet junction lens and pinch classes (grouped-scoop cases 2+3) (#1465)\n\n## Root (GH #1445 residual: the last 2 leaking fillet configs)\n\nThe \"adjacent walls each fit their own junction curve, share at build\ntime\" framing dissolved under a curve-detail dump of the free edges. The\nlenses were three mechanical defects:\n\n1. **Chord-hypotenuse corner triangles.** `build_two_edge_patch` built a\nflat triangle even when two of its three points are a stripe's\nterminal-section contacts. The triangle's straight hypotenuse and the\nblend wall's circular cross edge share endpoints but are genuinely\ndistinct curves, so the weld correctly refused to merge them (the\nchord+arc merge-key lesson) and both stayed use-1. The new\n`build_arc_apex_patch` is a rational ruled arc-to-apex patch (degree\n2x1) whose boundary carries the SAME circle the wall's cross edge does;\nthe weld pairs them.\n\n2. **Zero-length cross edges at pinched stripe ends.** A variable-radius\nstripe whose contacts converge to a point minted a degenerate\nzero-length cross edge no weld can ever pair.\n`create_blend_face_with_contacts` now skips minting it and the wire\ncloses positionally; `cross_end`/`cross_start` become `Option`.\n\n3. **2-edge lenses unfillable.** `close_residual_free_loops` required\n3-4 edge chains, so the planar arc/chord lens between a mixed-radius\nband's straight rail and the rebuilt floor's bridge arc never filled.\n2-edge fills now take their plane from the arc's own circle.\n\n## Measured\n\n- Case 2 (depth-step group): free 7 -> 0 (including the depth-step rim\nring). Case 3 (aggressive near-max radius): free 6 -> 0.\n- All 6 captured grouped-scoop cases plus the original capture replay\nfree=0, over=0.\n- Fixtures: `depthstep_` and\n`aggressive_radius_fillet_variable_is_watertight` run the production\n`fillet_variable` path (v1 -> v2 retry adopts the closed v2 result).\n- Foils: blend + io 354 passed / 0 failed, operations 1033 passed / 0\nfailed, clippy clean.\n\nPart of #1445.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCloses the remaining grouped-scoop fillet leaks by fixing junction lens\nand pinch cases; cases 2 and 3 go free 7/6 → 0, and all 6 captured cases\n(plus the replay) are now watertight. Addresses #1445.\n\n- **Bug Fixes**\n- Corner patch: replace flat chord triangles with a ruled arc-to-apex\nNURBS patch so the boundary uses the same circle as the blend wall;\nwelds now pair.\n- Pinched stripe ends: skip zero-length cross edges so wires still\nclose.\n- 2-edge lens fill: allow 2-edge loops and take the plane from the arc’s\ncircle to close arc/chord lenses.\n\n- **Migration**\n- `BlendFaceInfo.cross_end` and `BlendFaceInfo.cross_start` are now\n`Option`; callers must handle `None` when a stripe end pinches to a\npoint.\n\n<sup>Written for commit db88dd1f8a470b908e9d01c5c561bb6ef1a55e76.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1465?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T22:42:00Z",
+          "tree_id": "8e0893b7a2e6ac97d4fba71202248b0c4281c4ac",
+          "url": "https://github.com/andymai/brepkit/commit/b74c9ac8b168bdc5eedf03d428755e19aa05eda8"
+        },
+        "date": 1786229119488,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 969588,
+            "range": "± 11631",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1049785,
+            "range": "± 25915",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11913,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 725992,
+            "range": "± 13009",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25566999,
+            "range": "± 60898",
             "unit": "ns/iter"
           }
         ]
