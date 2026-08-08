@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786190466722,
+  "lastUpdate": 1786192981994,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23651,6 +23651,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25178624,
             "range": "± 53954",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "621d4a8129c73787d0f47821e9f45b131ccfc759",
+          "message": "fix(operations): sweep pipes and option sweeps as positioned (#1438)\n\n## What\n\nExtends the #1421 as-positioned placement contract to the remaining\nfamily members:\n\n- **`pipe()`**: offsets are measured from the path start instead of the\nprofile centroid when the profile is perpendicular to the path start\ntangent (guide scaling still applies about the spine point).\nEdge-on/oblique profiles keep the legacy centroid translation.\n- **`sweep_with_options()`**: the same `resolve_placement` pattern as\n`sweep()` — frame-0 basis + origin make ring 0 the identity for\nperpendicular profiles; the straight-prism fast path now uses the same\nplacement so straight and curved option-sweeps agree.\n- **`sweep_miter`** deliberately keeps re-centering: its per-sub-path\nring reconstruction and miter joint machinery are calibrated together,\nso the as-positioned semantic there needs its own verification pass (doc\nnote at the site, tracked in the roadmap).\n\n## Pins\n\n`pipe_keeps_offset_profile_position` (foil-verified — fails without the\npipe change) and `sweep_with_options_keeps_offset_profile_position`.\n\n## Verification\n\nFull workspace green (117 suites, render excluded), operations lib\n817/817, wasm gridfinity canary 27/27, clippy `-D warnings`, fmt.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMake `pipe()` and `sweep_with_options()` sweep profiles as positioned\nwhen the profile is perpendicular to the path start. Reuses the\nprecomputed start tangent in `pipe()` placement to keep offsets stable\nand match `sweep()` behavior.\n\n- **Bug Fixes**\n- `pipe()`: measure offsets from the path start; ring 0 is identity for\nperpendicular profiles; edge‑on/oblique profiles keep centroid\nplacement. Guide scaling unchanged. Reuses the computed start tangent\nfor placement.\n- `sweep_with_options()`: same placement logic as `sweep()`. Frame‑0\nbasis+origin make ring 0 identity; straight‑prism fast path now uses\n`AsPositioned`. `sweep_miter()` still re‑centers (follow‑up needed).\n\n- **Refactors**\n- Exposed `resolve_placement` as `pub(crate)` and reused it across sweep\nfamilies. Added pins: `pipe_keeps_offset_profile_position`,\n`sweep_with_options_keeps_offset_profile_position`.\n\n<sup>Written for commit 396269630ab1c23d790d65e472ae43cfda5f8e51.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1438?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T12:40:35Z",
+          "tree_id": "5acdd08dcff06030382339557f610b1cb57fed42",
+          "url": "https://github.com/andymai/brepkit/commit/621d4a8129c73787d0f47821e9f45b131ccfc759"
+        },
+        "date": 1786192979819,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 952955,
+            "range": "± 3151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1034016,
+            "range": "± 3712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11889,
+            "range": "± 78",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704632,
+            "range": "± 932",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25087930,
+            "range": "± 110080",
             "unit": "ns/iter"
           }
         ]
