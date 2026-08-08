@@ -788,6 +788,32 @@ pub fn perform(
         }
     }
 
+    // `BK_FF_DUMP=1`: print every stored FF section (face pair + curve
+    // bounding box), sorted, for run-to-run determinism diffs.
+    if std::env::var("BK_FF_DUMP").is_ok() {
+        let mut rows: Vec<String> = arena
+            .curves
+            .iter()
+            .map(|c| {
+                format!(
+                    "FFDUMP a={:?} b={:?} bb=({:.6},{:.6},{:.6})..({:.6},{:.6},{:.6})",
+                    c.face_a,
+                    c.face_b,
+                    c.bbox.min.x(),
+                    c.bbox.min.y(),
+                    c.bbox.min.z(),
+                    c.bbox.max.x(),
+                    c.bbox.max.y(),
+                    c.bbox.max.z()
+                )
+            })
+            .collect();
+        rows.sort();
+        for r in rows {
+            log::debug!("{r}");
+        }
+    }
+
     Ok(())
 }
 

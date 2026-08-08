@@ -480,6 +480,9 @@ pub fn remove_pendant_sections(
             }
         }
 
+        // Peel the lowest-indexed pendant source each round: `vmap` is a
+        // HashMap, so taking the first hit in iteration order made the peel
+        // order (and with it sub-face edge sets downstream) vary run to run.
         let mut pendant_src: Option<usize> = None;
         for incident in vmap.values() {
             let mut srcs = incident.iter().map(|&i| edges[i].source_edge_idx);
@@ -489,8 +492,7 @@ pub fn remove_pendant_sections(
                     .iter()
                     .all(|&i| edges[i].source_edge_idx == Some(src))
             {
-                pendant_src = Some(src);
-                break;
+                pendant_src = Some(pendant_src.map_or(src, |cur| cur.min(src)));
             }
         }
 
@@ -1080,5 +1082,44 @@ mod tests {
             10,
             "band uses all eight rim pieces + the section twice"
         );
+    }
+
+    #[test]
+    fn multi_pendant_peel_is_deterministic() {
+        // A closed square boundary with THREE independent dangling sections
+        // (sources deliberately out of order). Every repetition must peel the
+        // same set the same way: the peel picks the lowest source index per
+        // round, so the kept set is invariant regardless of the hash order the
+        // candidate scan encounters.
+        let p = Point2::new;
+        let build = || {
+            vec![
+                make_line_edge(p(0.0, 0.0), p(10.0, 0.0)),
+                make_line_edge(p(10.0, 0.0), p(10.0, 10.0)),
+                make_line_edge(p(10.0, 10.0), p(0.0, 10.0)),
+                make_line_edge(p(0.0, 10.0), p(0.0, 0.0)),
+                make_section_edge(p(5.0, 0.0), p(5.0, 4.0), 7),
+                make_section_edge(p(5.0, 4.0), p(5.0, 0.0), 7),
+                make_section_edge(p(0.0, 5.0), p(3.0, 5.0), 2),
+                make_section_edge(p(3.0, 5.0), p(0.0, 5.0), 2),
+                make_section_edge(p(10.0, 5.0), p(7.0, 5.0), 5),
+                make_section_edge(p(7.0, 5.0), p(10.0, 5.0), 5),
+            ]
+        };
+        let reference = remove_pendant_sections(&build(), 1e-7, false, false);
+        assert_eq!(
+            reference.len(),
+            4,
+            "all three dangling sections must be peeled, keeping the boundary"
+        );
+        for _ in 0..50 {
+            let again = remove_pendant_sections(&build(), 1e-7, false, false);
+            let key = |es: &[OrientedPCurveEdge]| -> Vec<(String, String)> {
+                es.iter()
+                    .map(|e| (format!("{:?}", e.start_uv), format!("{:?}", e.end_uv)))
+                    .collect()
+            };
+            assert_eq!(key(&again), key(&reference), "peel result must not vary");
+        }
     }
 }

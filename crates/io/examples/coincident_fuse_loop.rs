@@ -227,13 +227,20 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(20);
     let mut fallbacks = 0;
+    let mut bad = 0;
     for i in 0..n {
         let (f, curved) = run_once(i);
         let tag = if curved == 0 { "FALLBACK" } else { "analytic" };
         if curved == 0 {
             fallbacks += 1;
         }
+        // The bad ANALYTIC outcome keeps both coincident contact faces (F=64
+        // with 14 defective edges); the good analytic result is F=58. Mesh
+        // fallbacks are counted separately above.
+        if curved > 0 && f != 58 {
+            bad += 1;
+        }
         println!("iter {i}: F={f} curved={curved} {tag}");
     }
-    println!("== {fallbacks}/{n} fallbacks");
+    println!("== {fallbacks}/{n} fallbacks, {bad}/{n} bad (F!=58)");
 }
