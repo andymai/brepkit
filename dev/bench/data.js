@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786194461682,
+  "lastUpdate": 1786197207178,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23813,6 +23813,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25182722,
             "range": "± 129036",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2e895096345462aeb4e66961b39a0f701b6bd14f",
+          "message": "docs(roadmap): record the retreated miter as-positioned attempt with its map (#1442)\n\nPR #1441 was closed unmerged: the review surfaced that a bare reference\nswap decomposes later sub-path offsets in the wrong basis; the\nglobal-basis fix requires cross-sub-path frame chaining; and chaining\nalone regresses the calibrated miter joint (measured). The roadmap row\nnow carries the full map (frame chaining + joint recalibration together,\nvolume-pinned oracle) so the next attempt starts from measured ground.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to capture the retreated `sweep_miter` as‑positioned\nattempt and document the correct path forward. Records the map: chain\nframes across sub‑paths and recalibrate the miter joint together,\nvalidated with a volume‑pinned oracle, so the next attempt starts from\nmeasured ground.\n\n<sup>Written for commit b38ccc672e12bc084659044ec48b307436e21749.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1442?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T13:50:58Z",
+          "tree_id": "e8f063f256559797839cd454a7440322d271a2c1",
+          "url": "https://github.com/andymai/brepkit/commit/2e895096345462aeb4e66961b39a0f701b6bd14f"
+        },
+        "date": 1786197204590,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 948289,
+            "range": "± 16795",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1030786,
+            "range": "± 2402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11873,
+            "range": "± 54",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703009,
+            "range": "± 2856",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24853105,
+            "range": "± 42442",
             "unit": "ns/iter"
           }
         ]
