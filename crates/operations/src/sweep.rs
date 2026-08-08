@@ -2294,5 +2294,108 @@ pub fn sweep_guided(
     )
 }
 
+mod spine;
+
+/// Sweep a face profile along a path defined by a chain of edges.
+///
+/// A closed planar G1 chain of lines and tangent circular arcs (a rounded
+/// rectangle) with an all-line perpendicular profile is swept analytically:
+/// one exact plane / cylinder / cone face per profile edge per spine segment
+/// (the `spine` submodule). Anything else falls back to sampling the chain, fitting an
+/// interpolating NURBS curve, and sweeping along that.
+///
+/// # Errors
+///
+/// Returns an error if the chain has no edges, too few distinct points to fit
+/// a path, or the underlying sweep fails.
+pub fn sweep_along_edges(
+    topo: &mut Topology,
+    profile: FaceId,
+    edges: &[brepkit_topology::edge::EdgeId],
+) -> Result<SolidId, crate::OperationsError> {
+    if edges.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep_along_edges requires at least one edge".into(),
+        });
+    }
+
+    if let Some(solid) = spine::try_analytic_spine_sweep(topo, profile, edges)? {
+        return Ok(solid);
+    }
+
+    let tol = Tolerance::new();
+
+    // Collect ordered points from the edge chain, sampling curved edges.
+    let mut points: Vec<Point3> = Vec::new();
+    for &eid in edges {
+        let edge_data = topo.edge(eid)?;
+        let start = topo.vertex(edge_data.start())?.point();
+        if points
+            .last()
+            .is_none_or(|p: &Point3| (*p - start).length() > tol.linear)
+        {
+            points.push(start);
+        }
+
+        match edge_data.curve() {
+            EdgeCurve::NurbsCurve(curve) => {
+                let (u0, u1) = curve.domain();
+                let n_samples = 4;
+                for i in 1..n_samples {
+                    #[allow(clippy::cast_precision_loss)]
+                    let frac = i as f64 / n_samples as f64;
+                    points.push(curve.evaluate(u0 + frac * (u1 - u0)));
+                }
+            }
+            EdgeCurve::Circle(circle) => {
+                let t_start = circle.project(start);
+                let end_pt = topo.vertex(edge_data.end())?.point();
+                let mut t_end = circle.project(end_pt);
+                if t_end <= t_start {
+                    t_end += std::f64::consts::TAU;
+                }
+                let n_samples = 8;
+                for i in 1..n_samples {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
+                    points.push(circle.evaluate(t));
+                }
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let t_start = ellipse.project(start);
+                let end_pt = topo.vertex(edge_data.end())?.point();
+                let mut t_end = ellipse.project(end_pt);
+                if t_end <= t_start {
+                    t_end += std::f64::consts::TAU;
+                }
+                let n_samples = 8;
+                for i in 1..n_samples {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
+                    points.push(ellipse.evaluate(t));
+                }
+            }
+            EdgeCurve::Line => {}
+        }
+
+        let end = topo.vertex(edge_data.end())?.point();
+        points.push(end);
+    }
+
+    if points.len() < 2 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep_along_edges: need at least 2 distinct points".into(),
+        });
+    }
+
+    // Densify long, sparsely-sampled spans so the global interpolating fit
+    // does not overshoot at adjacent high-curvature corners.
+    let points = densify_path_points(&points);
+    let degree = std::cmp::min(3, points.len() - 1);
+    let path_curve = brepkit_math::nurbs::fitting::interpolate(&points, degree)?;
+
+    sweep(topo, profile, &path_curve)
+}
+
 #[cfg(test)]
 mod tests;

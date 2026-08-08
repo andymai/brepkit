@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
-use brepkit_topology::edge::{Edge, EdgeCurve};
+use brepkit_topology::edge::Edge;
 use brepkit_topology::face::{Face, FaceSurface};
 
 use crate::error::{WasmError, validate_finite, validate_positive};
@@ -18,7 +18,7 @@ use crate::handles::{edge_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to
 use brepkit_geometry::extrema::point_to_nurbs_surface;
 
 use crate::helpers::{
-    TOL, classify_to_string, create_apex_face, panic_message, parse_points, try_fillet,
+    classify_to_string, create_apex_face, panic_message, parse_points, try_fillet,
 };
 use crate::kernel::BrepKernel;
 
@@ -872,8 +872,10 @@ impl BrepKernel {
 
     /// Sweep a face along a path defined by a chain of edges.
     ///
-    /// Collects points from the edges, fits an interpolating NURBS curve,
-    /// then sweeps the profile along that curve.
+    /// A closed planar chain of lines and tangent arcs with an all-line
+    /// perpendicular profile is swept analytically (exact plane / cylinder /
+    /// cone faces); anything else falls back to fitting an interpolating
+    /// NURBS curve through sampled chain points and sweeping along that.
     ///
     /// Returns a solid handle (`u32`).
     ///
@@ -889,89 +891,13 @@ impl BrepKernel {
             }
             .into());
         }
-
-        // Collect ordered points from the edge chain.
-        let mut points = Vec::new();
-        for &eh in &edge_handles {
-            let eid = self.resolve_edge(eh)?;
-            let edge_data = self.topo.edge(eid)?;
-            let start = self.topo.vertex(edge_data.start())?.point();
-
-            // Only push start if it's not a duplicate of the last point.
-            if points
-                .last()
-                .is_none_or(|p: &Point3| (*p - start).length() > TOL)
-            {
-                points.push(start);
-            }
-
-            // For non-line edges, sample interior points for better fidelity.
-            match edge_data.curve() {
-                EdgeCurve::NurbsCurve(curve) => {
-                    let (u0, u1) = curve.domain();
-                    let n_samples = 4;
-                    for i in 1..n_samples {
-                        #[allow(clippy::cast_precision_loss)]
-                        let frac = i as f64 / n_samples as f64;
-                        let u = u0 + frac * (u1 - u0);
-                        points.push(curve.evaluate(u));
-                    }
-                }
-                EdgeCurve::Circle(circle) => {
-                    let t_start = circle.project(start);
-                    let end_pt = self.topo.vertex(edge_data.end())?.point();
-                    let mut t_end = circle.project(end_pt);
-                    // Ensure forward traversal (handle wrap-around)
-                    if t_end <= t_start {
-                        t_end += std::f64::consts::TAU;
-                    }
-                    let n_samples = 8;
-                    for i in 1..n_samples {
-                        #[allow(clippy::cast_precision_loss)]
-                        let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
-                        points.push(circle.evaluate(t));
-                    }
-                }
-                EdgeCurve::Ellipse(ellipse) => {
-                    let t_start = ellipse.project(start);
-                    let end_pt = self.topo.vertex(edge_data.end())?.point();
-                    let mut t_end = ellipse.project(end_pt);
-                    if t_end <= t_start {
-                        t_end += std::f64::consts::TAU;
-                    }
-                    let n_samples = 8;
-                    for i in 1..n_samples {
-                        #[allow(clippy::cast_precision_loss)]
-                        let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
-                        points.push(ellipse.evaluate(t));
-                    }
-                }
-                EdgeCurve::Line => {}
-            }
-
-            let end = self.topo.vertex(edge_data.end())?.point();
-            points.push(end);
-        }
-
-        if points.len() < 2 {
-            return Err(WasmError::InvalidInput {
-                reason: "sweepAlongEdges: need at least 2 distinct points".into(),
-            }
-            .into());
-        }
-
-        // Densify long, sparsely-sampled spans (e.g. long straight spine edges
-        // sampled only at endpoints) so the global interpolating fit below does
-        // not overshoot at adjacent high-curvature corners (e.g. non-square
-        // rounded-rect spines).
-        let points = brepkit_operations::sweep::densify_path_points(&points);
-
-        // Fit an interpolating NURBS curve through the points.
-        let degree = std::cmp::min(3, points.len() - 1);
-        let path_curve = brepkit_math::nurbs::fitting::interpolate(&points, degree)?;
-
+        let edge_ids: Vec<brepkit_topology::edge::EdgeId> = edge_handles
+            .iter()
+            .map(|&eh| self.resolve_edge(eh))
+            .collect::<Result<_, _>>()?;
         let face_id = self.resolve_face(face)?;
-        let solid_id = sweep(self.topo_mut(), face_id, &path_curve)?;
+        let solid_id =
+            brepkit_operations::sweep::sweep_along_edges(self.topo_mut(), face_id, &edge_ids)?;
         Ok(solid_id_to_u32(solid_id))
     }
 

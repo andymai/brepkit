@@ -1549,3 +1549,405 @@ fn sweep_closed_path_keeps_profile_position() {
         "lip ring volume should be ~1735, got {vol}"
     );
 }
+
+/// Helper: rounded-rectangle spine edges (width x depth, corner radius r) in
+/// the XY plane, CCW, starting mid-right-edge like brepjs's rounded rect.
+/// Returns the ordered edge ids (4 lines + 4 arcs).
+fn make_rounded_rect_spine(
+    topo: &mut Topology,
+    w: f64,
+    d: f64,
+    r: f64,
+) -> Vec<brepkit_topology::edge::EdgeId> {
+    use brepkit_math::curves::Circle3D;
+    let hw = w / 2.0;
+    let hd = d / 2.0;
+    let cx = hw - r;
+    let cy = hd - r;
+    let t = 1e-7;
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let v = |topo: &mut Topology, x: f64, y: f64| {
+        topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), t))
+    };
+    let v0 = v(topo, hw, -cy);
+    let v1 = v(topo, hw, cy);
+    let v2 = v(topo, cx, hd);
+    let v3 = v(topo, -cx, hd);
+    let v4 = v(topo, -hw, cy);
+    let v5 = v(topo, -hw, -cy);
+    let v6 = v(topo, -cx, -hd);
+    let v7 = v(topo, cx, -hd);
+    let arc = |topo: &mut Topology, a, b, ccx: f64, ccy: f64| {
+        let circle = Circle3D::new(Point3::new(ccx, ccy, 0.0), z, r).unwrap();
+        topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)))
+    };
+    vec![
+        topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line)),
+        arc(topo, v1, v2, cx, cy),
+        topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line)),
+        arc(topo, v3, v4, -cx, cy),
+        topo.add_edge(Edge::new(v4, v5, EdgeCurve::Line)),
+        arc(topo, v5, v6, -cx, -cy),
+        topo.add_edge(Edge::new(v6, v7, EdgeCurve::Line)),
+        arc(topo, v7, v0, cx, -cy),
+    ]
+}
+
+#[test]
+fn analytic_spine_sweep_lip_ring_is_exact() {
+    // The gridfinity stacking-lip: rounded-rect spine, all-line profile at the
+    // spine start. The analytic path emits one exact face per profile edge per
+    // segment: 5 edges x 8 segments = 40 faces (24 planes from the straight
+    // runs and horizontal corner annuli, 8 cylinders, 8 cones), instead of the
+    // fitted path's thousands of facet quads.
+    let mut topo = Topology::new();
+    let spine = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
+    let profile = make_positioned_lip_profile(
+        &mut topo,
+        Point3::new(42.0, -38.25, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    );
+
+    let solid = crate::sweep::sweep_along_edges(&mut topo, profile, &spine).unwrap();
+
+    let solid_data = topo.solid(solid).unwrap();
+    let shell = topo.shell(solid_data.outer_shell()).unwrap();
+    assert_eq!(
+        shell.faces().len(),
+        40,
+        "5 profile edges x 8 spine segments"
+    );
+
+    let mut planes = 0;
+    let mut cylinders = 0;
+    let mut cones = 0;
+    let mut other = 0;
+    for &fid in shell.faces() {
+        match topo.face(fid).unwrap().surface() {
+            FaceSurface::Plane { .. } => planes += 1,
+            FaceSurface::Cylinder(_) => cylinders += 1,
+            FaceSurface::Cone(_) => cones += 1,
+            _ => other += 1,
+        }
+    }
+    assert_eq!(
+        (planes, cylinders, cones, other),
+        (24, 8, 8, 0),
+        "surface mix must be exact analytic"
+    );
+
+    // Watertight: every edge used by exactly two faces.
+    let mut edge_uses: HashMap<usize, usize> = HashMap::new();
+    for &fid in shell.faces() {
+        let f = topo.face(fid).unwrap();
+        for oe in topo.wire(f.outer_wire()).unwrap().edges() {
+            *edge_uses.entry(oe.edge().index()).or_insert(0) += 1;
+        }
+    }
+    for (&e, &c) in &edge_uses {
+        assert_eq!(c, 2, "edge {e} used {c} times");
+    }
+
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "lip ring must be a valid solid"
+    );
+
+    // Pappus: straights contribute area x run length; each 90-degree corner
+    // contributes area x arc length of the centroid path about its center.
+    let uv = [
+        (-2.6, 0.0),
+        (-1.9, 0.7),
+        (-1.9, 2.5),
+        (0.0, 4.4),
+        (0.0, 0.0),
+    ];
+    let n = uv.len();
+    let mut a2: f64 = 0.0;
+    let mut cx6: f64 = 0.0;
+    for i in 0..n {
+        let (x0, y0) = uv[i];
+        let (x1, y1) = uv[(i + 1) % n];
+        let cross = x0 * y1 - x1 * y0;
+        a2 += cross;
+        cx6 += (x0 + x1) * cross;
+    }
+    let area = (a2 / 2.0).abs();
+    let centroid_u = cx6 / (3.0 * a2);
+    let run = 84.0 - 2.0 * 3.75;
+    let corner_radius_of_centroid = 3.75 + centroid_u;
+    let expected =
+        4.0 * area * run + 4.0 * area * (std::f64::consts::FRAC_PI_2 * corner_radius_of_centroid);
+
+    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "lip ring volume: expected ~{expected}, got {vol}"
+    );
+}
+
+#[test]
+fn analytic_spine_sweep_handles_flipped_chain_edges() {
+    // Edges stored end-to-start must be re-oriented by the chain extraction;
+    // an unflipped line direction transports the ring backwards and silently
+    // loses the analytic path.
+    let mut topo = Topology::new();
+    let spine = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
+    // Flip the third segment (a line edge) in place: rebuild it end-to-start.
+    let flipped = {
+        let e = topo.edge(spine[2]).unwrap();
+        let (a, b) = (e.start(), e.end());
+        topo.add_edge(Edge::new(b, a, EdgeCurve::Line))
+    };
+    let mut edges = spine;
+    edges[2] = flipped;
+    let profile = make_positioned_lip_profile(
+        &mut topo,
+        Point3::new(42.0, -38.25, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    );
+    let solid = crate::sweep::sweep_along_edges(&mut topo, profile, &edges).unwrap();
+    let solid_data = topo.solid(solid).unwrap();
+    let shell = topo.shell(solid_data.outer_shell()).unwrap();
+    assert_eq!(
+        shell.faces().len(),
+        40,
+        "the analytic path must still fire with a flipped chain edge"
+    );
+}
+
+#[test]
+fn sweep_along_edges_open_chain_falls_back() {
+    // An open chain is outside the analytic gate and must still sweep via the
+    // fitted path.
+    let mut topo = Topology::new();
+    let t = 1e-7;
+    let a = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), t));
+    let b = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 10.0), t));
+    let c = topo.add_vertex(Vertex::new(Point3::new(5.0, 0.0, 20.0), t));
+    let e0 = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+    let profile = make_unit_square_face(&mut topo);
+    let solid = crate::sweep::sweep_along_edges(&mut topo, profile, &[e0, e1]).unwrap();
+    let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+    assert!(vol > 0.0, "fallback sweep must produce volume, got {vol}");
+}
+
+#[test]
+fn analytic_lip_ring_fuses_onto_hollow_box() {
+    // The full gridfinity-smoke chain, native: hollow rounded box + analytic
+    // swept lip sitting on the rim (coincident-plane contact). With the
+    // analytic sweep the fuse sees ~40 typed faces instead of ~2730 facet
+    // quads. Volume must be the exact sum (contact, no overlap).
+    let mut topo = Topology::new();
+
+    // Hollow box: extrude the rounded rect, shell open at the top.
+    let spine_for_face = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
+    let base_wire = Wire::new(
+        spine_for_face
+            .iter()
+            .map(|&e| OrientedEdge::new(e, true))
+            .collect(),
+        true,
+    )
+    .unwrap();
+    let base_wid = topo.add_wire(base_wire);
+    let base_face = topo.add_face(Face::new(
+        base_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let box_solid =
+        crate::extrude::extrude(&mut topo, base_face, Vec3::new(0.0, 0.0, 1.0), 21.0).unwrap();
+    let top_faces: Vec<FaceId> = {
+        let s = topo.solid(box_solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        sh.faces()
+            .iter()
+            .copied()
+            .filter(|&fid| {
+                matches!(
+                    topo.face(fid).unwrap().surface(),
+                    FaceSurface::Plane { normal, d }
+                        if normal.z() > 0.99 && (*d - 21.0).abs() < 1e-6
+                )
+            })
+            .collect()
+    };
+    assert_eq!(top_faces.len(), 1, "one top cap expected");
+    let hollow = crate::shell_op::shell(&mut topo, box_solid, 1.2, &top_faces).unwrap();
+    let hollow_vol = crate::measure::solid_volume(&topo, hollow, 0.01).unwrap();
+
+    // Analytic lip on the rim: spine at z=0, profile sketched at z=21. The
+    // profile is inset 0.25 from the outer wall so the fuse's coincidences are
+    // limited to the coplanar bottom-on-rim contact: the EXACT configuration
+    // (outer walls and corner cylinders coincident too) nondeterministically
+    // falls to the mesh fallback and is pinned as an ignored ready-repro
+    // below.
+    let spine = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
+    let profile = make_positioned_lip_profile(
+        &mut topo,
+        Point3::new(41.75, -38.25, 21.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    );
+    let lip = crate::sweep::sweep_along_edges(&mut topo, profile, &spine).unwrap();
+    {
+        let s = topo.solid(lip).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        assert_eq!(sh.faces().len(), 40, "lip must be the analytic ring");
+    }
+    let lip_vol = crate::measure::solid_volume(&topo, lip, 0.01).unwrap();
+
+    let fused =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, hollow, lip).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
+    let mut planar = 0;
+    let mut curved = 0;
+    for &fid in &faces {
+        match topo.face(fid).unwrap().surface() {
+            FaceSurface::Plane { .. } => planar += 1,
+            _ => curved += 1,
+        }
+    }
+    assert!(
+        faces.len() < 200,
+        "analytic fuse expected (tens of faces), got {} ({planar} planar, {curved} curved) — a \
+         hundreds-planar result is the mesh-fallback tell",
+        faces.len()
+    );
+    assert!(curved > 0, "corner cylinders/cones must survive the fuse");
+
+    let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+    let expected = hollow_vol + lip_vol;
+    assert!(
+        (fused_vol - expected).abs() / expected < 1e-3,
+        "contact fuse volume must be the sum: expected ~{expected}, got {fused_vol}"
+    );
+
+    // Watertightness: every edge used by exactly two faces. Full orientation
+    // validity is pinned separately below: shell_op's cavity corner cylinders
+    // carry a pre-existing sense inversion the fuse preserves.
+    let mut edge_uses: HashMap<usize, usize> = HashMap::new();
+    for &fid in &faces {
+        let f = topo.face(fid).unwrap();
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *edge_uses.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    for (&e, &c) in &edge_uses {
+        assert_eq!(c, 2, "fused solid edge {e} used {c} times");
+    }
+}
+
+#[test]
+#[ignore = "ready-repro: the maximal-coincidence lip fuse (lip outer wall and corner cylinders             exactly coincident with the box's, bottom coplanar with the rim) NONDETERMINISTICALLY             falls to the mesh fallback (~1 in 5 runs of the same build; HashMap-order class, see             perf_64cut_determinism). Un-ignore when the coincident-fuse determinism dig closes."]
+fn exact_coincident_lip_fuse_stays_analytic() {
+    let mut topo = Topology::new();
+    let spine_for_face = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
+    let base_wire = Wire::new(
+        spine_for_face
+            .iter()
+            .map(|&e| OrientedEdge::new(e, true))
+            .collect(),
+        true,
+    )
+    .unwrap();
+    let base_wid = topo.add_wire(base_wire);
+    let base_face = topo.add_face(Face::new(
+        base_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let box_solid =
+        crate::extrude::extrude(&mut topo, base_face, Vec3::new(0.0, 0.0, 1.0), 21.0).unwrap();
+    let top_faces: Vec<FaceId> = {
+        let s = topo.solid(box_solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        sh.faces()
+            .iter()
+            .copied()
+            .filter(|&fid| {
+                matches!(
+                    topo.face(fid).unwrap().surface(),
+                    FaceSurface::Plane { normal, d }
+                        if normal.z() > 0.99 && (*d - 21.0).abs() < 1e-6
+                )
+            })
+            .collect()
+    };
+    let hollow = crate::shell_op::shell(&mut topo, box_solid, 1.2, &top_faces).unwrap();
+    let spine = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
+    let profile = make_positioned_lip_profile(
+        &mut topo,
+        Point3::new(42.0, -38.25, 21.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    );
+    let lip = crate::sweep::sweep_along_edges(&mut topo, profile, &spine).unwrap();
+    let fused =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, hollow, lip).unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
+    let curved = faces
+        .iter()
+        .filter(|&&fid| !matches!(topo.face(fid).unwrap().surface(), FaceSurface::Plane { .. }))
+        .count();
+    assert!(
+        faces.len() < 200 && curved > 0,
+        "exact-coincidence fuse must stay analytic, got {} faces ({curved} curved)",
+        faces.len()
+    );
+}
+
+#[test]
+#[ignore = "ready-repro: shell_op cavity corner cylinders emit 16 same-sense edges (4 corner             cylinders x 4 edges, r = corner radius - thickness, vs cavity walls/floor/rim); a             naive winding flip breaks the spec assembler's CylindricalFace arc pairing — needs             the emission-vs-assembly sense contract dug at the shell_op/assemble_solid_mixed             boundary. Un-ignore when that fix ships."]
+fn shelled_rounded_box_is_orientation_clean() {
+    let mut topo = Topology::new();
+    let spine_for_face = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
+    let base_wire = Wire::new(
+        spine_for_face
+            .iter()
+            .map(|&e| OrientedEdge::new(e, true))
+            .collect(),
+        true,
+    )
+    .unwrap();
+    let base_wid = topo.add_wire(base_wire);
+    let base_face = topo.add_face(Face::new(
+        base_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let box_solid =
+        crate::extrude::extrude(&mut topo, base_face, Vec3::new(0.0, 0.0, 1.0), 21.0).unwrap();
+    let top_faces: Vec<FaceId> = {
+        let s = topo.solid(box_solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        sh.faces()
+            .iter()
+            .copied()
+            .filter(|&fid| {
+                matches!(
+                    topo.face(fid).unwrap().surface(),
+                    FaceSurface::Plane { normal, d }
+                        if normal.z() > 0.99 && (*d - 21.0).abs() < 1e-6
+                )
+            })
+            .collect()
+    };
+    let hollow = crate::shell_op::shell(&mut topo, box_solid, 1.2, &top_faces).unwrap();
+    let report = crate::validate::validate_solid(&topo, hollow).unwrap();
+    assert!(report.is_valid(), "shelled rounded box: {report:?}");
+}
