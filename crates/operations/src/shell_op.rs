@@ -701,6 +701,7 @@ fn sort_edges_into_loops(
         let chain_start = endpoints[start_idx].0.index();
         let mut at = endpoints[start_idx].1.index();
 
+        let mut closed = at == chain_start;
         while at != chain_start {
             let mut next: Option<(usize, bool)> = None;
             if let Some(candidates) = incident.get(&at) {
@@ -732,10 +733,18 @@ fn sort_edges_into_loops(
             current_loop.push(oriented);
             let (sv, ev) = endpoints[idx];
             at = if as_given { ev.index() } else { sv.index() };
+            closed = at == chain_start;
         }
 
-        if !current_loop.is_empty() {
+        // A partial (unclosed) chain would make the rim face carry an open
+        // wire; drop it and leave the boundary open for validation to flag.
+        if closed && !current_loop.is_empty() {
             loops.push(current_loop);
+        } else if !current_loop.is_empty() {
+            log::warn!(
+                "shell rim: dropping an unclosed boundary chain of {} edge(s)",
+                current_loop.len()
+            );
         }
     }
 
