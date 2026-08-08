@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786199134263,
+  "lastUpdate": 1786200322501,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23921,6 +23921,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24863865,
             "range": "± 39950",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "798305f23933d8c461be215d0eb8f9482707cf96",
+          "message": "docs(roadmap): offset-elbow probe verdict — the geometry is wrong, not the oracle (#1444)\n\nRecords the dissection probe's verdict on the parked miter branch: the\nas-positioned offset elbow is watertight and valid but its face\ninventory is a full-height prism plus leg fragments (volume 8.67 stable\nat every deflection), so the rigid-transport volume oracle stands and\nthe leg-2 ring reconstruction is the defect. The probe is committed as\nan ignored diagnostic on the parked branch; the next instrument is\nrecorded.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap with the offset‑elbow miter probe verdict: the\nas‑positioned offset elbow is watertight but geometrically wrong (volume\n8.67 at all deflections), confirming the rigid‑transport oracle (~10.39)\nand pointing to leg‑2 ring reconstruction under global‑basis placement\nas the defect. Notes the face inventory (full‑height prism), commits the\n`#[ignore]` `miter_offset_elbow_dissect` diagnostic on the parked\nbranch, and sets the next step to instrument per‑sub‑path ring positions\nto localize whether `curve_split`, the frame chain, or ring\nreconstruction is wrong.\n\n<sup>Written for commit b4f436c4bdb52f377e20d2c3aa615f65e81962b0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1444?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T14:43:12Z",
+          "tree_id": "ad5529dc5e11310e9e28b1865aab29a44be7a7e5",
+          "url": "https://github.com/andymai/brepkit/commit/798305f23933d8c461be215d0eb8f9482707cf96"
+        },
+        "date": 1786200320447,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 764620,
+            "range": "± 924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 835959,
+            "range": "± 2299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10211,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 551245,
+            "range": "± 1453",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20252574,
+            "range": "± 34814",
             "unit": "ns/iter"
           }
         ]
