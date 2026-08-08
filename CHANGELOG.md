@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.4](https://github.com/andymai/brepkit/compare/v3.2.3...v3.2.4) (2026-08-08)
+
+
+### Bug Fixes
+
+* **algo:** keep pinch-shim faces through within-rank same-domain dedup ([#1463](https://github.com/andymai/brepkit/issues/1463)) ([2d50f28](https://github.com/andymai/brepkit/commit/2d50f281cb6e12a2eb22cb8eef4bc5bf79e017d7))
+
 ## [3.2.3](https://github.com/andymai/brepkit/compare/v3.2.2...v3.2.3) (2026-08-08)
 
 
