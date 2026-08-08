@@ -65,7 +65,6 @@ fn operands_are_clean() {
 }
 
 #[test]
-#[ignore = "ready-repro: single slot cut drops a lip-cone piece (GFA free=6, then mesh fallback); un-ignore with the fix"]
 fn single_slot_cut_is_watertight_and_analytic() {
     // The pin requires BOTH watertightness and analytic survival: the mesh
     // fallback also produces a watertight solid, but an all-planar one, so
