@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.0](https://github.com/andymai/brepkit/compare/v3.1.4...v3.2.0) (2026-08-08)
+
+
+### Features
+
+* **operations:** mesh-fallback counter and simplify-honoring boolean bindings ([#1450](https://github.com/andymai/brepkit/issues/1450)) ([62b4719](https://github.com/andymai/brepkit/commit/62b471918280eff4206e1f886e11cef4e0d8fef3))
+
 ## [3.1.4](https://github.com/andymai/brepkit/compare/v3.1.3...v3.1.4) (2026-08-08)
 
 
