@@ -517,14 +517,14 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
             }
         }
     }
-    let entangled_outside_group = |i: usize, members: &[usize]| -> bool {
+    let entangled_outside_group = |i: usize, members: &HashSet<usize>| -> bool {
         let Ok(face) = topo.face(sub_faces[i].face_id) else {
             return false;
         };
-        let wires: Vec<_> = std::iter::once(face.outer_wire())
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
             .chain(face.inner_wires().iter().copied())
             .collect();
-        for wid in wires {
+        for wid in wire_ids {
             let Ok(wire) = topo.wire(wid) else { continue };
             for oe in wire.edges() {
                 if edge_users
@@ -537,7 +537,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
         }
         false
     };
-    let is_residue = |i: usize, j: usize, members: &[usize]| -> bool {
+    let is_residue = |i: usize, j: usize, members: &HashSet<usize>| -> bool {
         let cross_shell = face_shells.is_some_and(|fs| {
             match (
                 fs.get(&sub_faces[i].source_face),
@@ -568,6 +568,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
         if members.len() < 2 {
             continue;
         }
+        let member_set: HashSet<usize> = members.iter().copied().collect();
 
         let repr_a = members
             .iter()
@@ -633,7 +634,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                     } else {
                         idx_b
                     };
-                    if !is_residue(idx, rep, members) {
+                    if !is_residue(idx, rep, &member_set) {
                         continue;
                     }
                     within_rank_dups.push(WithinRankDuplicate {
@@ -648,7 +649,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
             // classification (issue #696).
             (Some(rep), None) | (None, Some(rep)) => {
                 for &idx in members {
-                    if idx != rep && is_residue(idx, rep, members) {
+                    if idx != rep && is_residue(idx, rep, &member_set) {
                         within_rank_dups.push(WithinRankDuplicate {
                             representative: rep,
                             duplicate: idx,
