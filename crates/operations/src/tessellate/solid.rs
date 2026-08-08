@@ -1109,6 +1109,12 @@ pub(super) fn tessellate_face_with_shared_edges(
                 point_to_global,
             );
             let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
+            if std::env::var("BK_TESS_TRACE").is_ok() {
+                log::debug!(
+                    "tess dispatch {face_id:?} {} rev={is_reversed} cdt_ok={cdt_produced_tris}",
+                    face_data.surface().type_tag()
+                );
+            }
             if !cdt_produced_tris {
                 merged.positions.truncate(pos_save);
                 merged.normals.truncate(nrm_save);
