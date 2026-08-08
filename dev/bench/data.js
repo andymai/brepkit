@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786210753203,
+  "lastUpdate": 1786213388261,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24407,6 +24407,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25173040,
             "range": "± 24766",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8fb2837271be03ffd101bd2809b1c17711c7640c",
+          "message": "test(io): pin the grouped-scoop filletVariable open-sliver mint (GH #1445 root repro) (#1456)\n\nReduces #1445's grouped-scoop watertightness failure to a byte-exact 0\nms repro, and exonerates the boolean engine.\n\n## Chain anatomy (captured via raw-kernel hooks on the circle+rectangle\ncase)\n\nEvery fuse/cut in the export chain replays clean — but the scoop tool\narrives at the first boolean already carrying **44 free edges**. The\nmint is `filletVariable` (the tool's adaptive scoop): filleting the\nfused rect+circle tool's 9 bottom-outline edges (radii 2 / 0.6 / 0.39 /\n0.26) emits **6 NURBS fillet walls without stitching them to the\nadjacent faces**. Cut/Fuse tolerate open inputs by design, so the\nboundary rides through to the exported mesh (the issue's 25-63\nboundary-edge measurements). The tool's own code comments already work\naround this class (\"later scoop fillet corrupts into open sliver faces\nat the flared rim\").\n\n## Fixture\n\n- `operand_is_clean` (active): the captured input is free=0 and all 9\nspec edges match.\n- `scoop_fillet_variable_is_watertight` (ignored ready-repro): currently\nfails with exactly 44 free edges.\n- `crates/io/examples/replay_fillet_variable.rs`: standalone replay;\nspec edges are matched by captured **endpoint pairs** (tool-side\nmidpoint parameterization is not portable across arenas — measured, the\nmidpoint match missed by 2.5).\n\nAlso verified this iteration, recorded in the roadmap: the slots fix\n(#1453) on released 3.2.1 measures **53.7 s → 3.07 s (17.5x)** tool-side\nwith 546 analytic faces, wallPatterns scenario 7/7; the remaining 2x\ntriangle delta vs occt is tessellation density on the cylinder faces,\nnot geometry.\n\nNext: the fillet-blend engine dig on this repro.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a byte‑exact repro for GH #1445 showing the grouped‑scoop openness\nis minted by `filletVariable` on the fused tool, not by the booleans.\nThe fillet emits six unstitched NURBS walls (44 free edges) that\npropagate through the chain.\n\n- **New Features**\n- `crates/io/examples/replay_fillet_variable.rs`: replays captured\n`filletVariable` using endpoint‑pair edge matching with linear edge\ndedup; reports face mix and free/over edges. Docstring clarifies\nmidpoint params aren’t portable across arenas.\n- `crates/io/tests/scoop_fillet_variable_inmem.rs`: ignored test that\ndocuments the failure (expects watertight; current result has 44 free\nedges). Uses fixtures `gscoop_fillet_input.bin` and\n`gscoop_fillet_spec.json`.\n- Roadmap entry updated to record the grouped‑scoop root cause and\nreproduction details.\n\n<sup>Written for commit 079f709762118bed85897e7c698afd2e3e2802a6.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1456?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T18:20:39Z",
+          "tree_id": "6d878e2479b3ffecfbb228f0a3400a88bf64b27c",
+          "url": "https://github.com/andymai/brepkit/commit/8fb2837271be03ffd101bd2809b1c17711c7640c"
+        },
+        "date": 1786213385631,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 949463,
+            "range": "± 1312",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1027415,
+            "range": "± 2098",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11901,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704001,
+            "range": "± 8096",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25256691,
+            "range": "± 38768",
             "unit": "ns/iter"
           }
         ]
