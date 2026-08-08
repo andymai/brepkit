@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786179887554,
+  "lastUpdate": 1786181323816,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23273,6 +23273,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24962203,
             "range": "± 2563882",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d8a9c3743252caed0a5550fb57f5cc3d5bbecf8f",
+          "message": "docs(roadmap): coincident-fuse dig second pass — splitter emission is the root (#1431)\n\nRecords the second differential pass on the coincident-fuse\nnondeterminism: the within-rank SD dedup (6 residue-gate calls vs 0) is\ndecided by whether the 7-member coincident edge-set group forms, and it\nfails to form when the splitter emits run-varying quantized edge sets\nfor the z=21 contact faces. The root is the coplanar-section emission\norder in the face splitter; SD is only a flaky rescue. Next probe\nrecorded in the row.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap with second-pass findings on the coincident‑fuse\nnondeterminism: the face splitter’s coplanar‑section emission order\nproduces run‑varying edge sets on the z=21 contact faces, so SD\nwithin‑rank dedup only hides the issue. Next step: instrument emission\norder and sort keys to make it deterministic.\n\n<sup>Written for commit 4cba19565f4a68ee961ef9258d1e4fea9fb3922a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1431?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T09:26:16Z",
+          "tree_id": "99f7d6eb0624b1055a2070f2b40ec4c24155eaae",
+          "url": "https://github.com/andymai/brepkit/commit/d8a9c3743252caed0a5550fb57f5cc3d5bbecf8f"
+        },
+        "date": 1786181321278,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 819279,
+            "range": "± 22092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 878146,
+            "range": "± 26961",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9733,
+            "range": "± 150",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 572824,
+            "range": "± 16052",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21083614,
+            "range": "± 422145",
             "unit": "ns/iter"
           }
         ]
