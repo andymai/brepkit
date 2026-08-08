@@ -45,15 +45,14 @@ fn free_edge_count(topo: &Topology, solid: SolidId) -> usize {
     counts.values().filter(|&&c| c == 1).count()
 }
 
-fn load_case(topo: &mut Topology) -> (SolidId, Vec<(brepkit_topology::edge::EdgeId, f64)>) {
-    let solid = deserialize_solid(
-        &std::fs::read(fixture("gscoop_fillet_input.bin")).unwrap(),
-        topo,
-    )
-    .unwrap();
+fn load_named_case(
+    topo: &mut Topology,
+    input: &str,
+    spec: &str,
+) -> (SolidId, Vec<(brepkit_topology::edge::EdgeId, f64)>) {
+    let solid = deserialize_solid(&std::fs::read(fixture(input)).unwrap(), topo).unwrap();
     let specs: Vec<serde_json::Value> =
-        serde_json::from_str(&std::fs::read_to_string(fixture("gscoop_fillet_spec.json")).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(fixture(spec)).unwrap()).unwrap();
 
     let mut seen: std::collections::HashSet<brepkit_topology::edge::EdgeId> =
         std::collections::HashSet::new();
@@ -97,6 +96,48 @@ fn load_case(topo: &mut Topology) -> (SolidId, Vec<(brepkit_topology::edge::Edge
         picks.push((best, r));
     }
     (solid, picks)
+}
+
+fn load_case(topo: &mut Topology) -> (SolidId, Vec<(brepkit_topology::edge::EdgeId, f64)>) {
+    load_named_case(topo, "gscoop_fillet_input.bin", "gscoop_fillet_spec.json")
+}
+
+fn assert_watertight(input: &str, spec: &str) {
+    let mut topo = Topology::new();
+    let (solid, picks) = load_named_case(&mut topo, input, spec);
+    assert_eq!(free_edge_count(&topo, solid), 0, "operand must be clean");
+    let edge_laws: Vec<_> = picks
+        .into_iter()
+        .map(|(e, r)| (e, FilletRadiusLaw::Constant(r)))
+        .collect();
+    let result = fillet_variable(&mut topo, solid, &edge_laws).unwrap();
+    let free = free_edge_count(&topo, result);
+    assert_eq!(
+        free, 0,
+        "fillet must produce a watertight solid, got {free} free edges"
+    );
+}
+
+/// Depth-step scoop group (captured case 2): members with different cut
+/// depths meet at a step, and the junction needs the arc-hypotenuse corner
+/// patch plus the 2-edge arc/chord lens fill.
+#[test]
+fn depthstep_fillet_variable_is_watertight() {
+    assert_watertight(
+        "gscoop_fillet_depthstep_input.bin",
+        "gscoop_fillet_depthstep_spec.json",
+    );
+}
+
+/// Aggressive near-max radius scoop (captured case 3): stripes pinch to a
+/// point at their ends (zero-length cross edges must not be minted) and the
+/// corner triangles must carry the terminal-section arc, not its chord.
+#[test]
+fn aggressive_radius_fillet_variable_is_watertight() {
+    assert_watertight(
+        "gscoop_fillet_aggressive_input.bin",
+        "gscoop_fillet_aggressive_spec.json",
+    );
 }
 
 #[test]

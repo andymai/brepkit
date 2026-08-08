@@ -294,8 +294,8 @@ impl<'a> FilletBuilder<'a> {
                 .unwrap_or((None, None));
             let info = crate::builder_utils::create_blend_face_with_contacts(topo, stripe, c1, c2)?;
             blend_face_ids.push(info.face);
-            blend_cross_edges.push(info.cross_end);
-            blend_cross_edges.push(info.cross_start);
+            blend_cross_edges.extend(info.cross_end);
+            blend_cross_edges.extend(info.cross_start);
         }
 
         // Faces using each vertex, over the ORIGINAL shell: a stripe end

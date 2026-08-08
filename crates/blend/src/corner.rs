@@ -183,6 +183,49 @@ fn contact_section_at_vertex<'a>(
     }
 }
 
+type PatchParts = (FaceSurface, Vec<VertexId>, Vec<EdgeId>);
+
+/// Ruled patch from a terminal-section arc `a -> b` (about `sec.center`)
+/// to the corner apex. Degree 2x1 rational: the u-direction carries the
+/// exact arc so the boundary edge is the same circle the adjacent blend
+/// wall's cross edge carries, and the weld pass can unify them.
+fn build_arc_apex_patch(
+    sec: &crate::section::CircSection,
+    a: Point3,
+    b: Point3,
+    apex: Point3,
+    topo: &mut Topology,
+) -> Option<PatchParts> {
+    let (cps, w) = rational_arc_cps(sec.center, a, b)?;
+    let control_points = vec![vec![cps[0], apex], vec![cps[1], apex], vec![cps[2], apex]];
+    let weights = vec![vec![1.0, 1.0], vec![w, w], vec![1.0, 1.0]];
+    let nurbs = brepkit_math::nurbs::surface::NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        control_points,
+        weights,
+    )
+    .ok()?;
+
+    let nrm = (a - sec.center).cross(b - sec.center).normalize().ok()?;
+    let circle = brepkit_math::curves::Circle3D::new(sec.center, nrm, sec.radius).ok()?;
+
+    let va = topo.add_vertex(Vertex::new(a, TOL));
+    let vb = topo.add_vertex(Vertex::new(b, TOL));
+    let vx = topo.add_vertex(Vertex::new(apex, TOL));
+    let e0 = topo.add_edge(Edge::new(va, vb, EdgeCurve::Circle(circle)));
+    let e1 = topo.add_edge(Edge::new(vb, vx, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(vx, va, EdgeCurve::Line));
+
+    Some((
+        FaceSurface::Nurbs(nurbs),
+        vec![va, vb, vx],
+        vec![e0, e1, e2],
+    ))
+}
+
 /// Build a triangular NURBS face from 3 boundary points.
 ///
 /// Creates a degenerate bilinear patch where one edge collapses to a point,
@@ -664,7 +707,33 @@ fn build_two_edge_patch(
         return Err(BlendError::CornerFailure { vertex: vertex_id });
     };
 
-    let (surface, new_vertices, new_edges) = build_triangular_patch(pts, topo)?;
+    // When two of the three points are one stripe's terminal-section
+    // contacts, the edge between them is the fillet's end profile — a
+    // circular arc, not a chord. A flat chord triangle both misrepresents
+    // the patch and can never weld with the blend wall's circular cross
+    // edge (chord and arc share endpoints but are genuinely distinct, so
+    // the weld correctly refuses). Build the ruled arc-to-apex patch so
+    // the boundary matches the wall exactly.
+    let arc_patch = indices.iter().find_map(|&i| {
+        let sec = contact_section_at_vertex(vertex_id, &stripes[i], topo)?;
+        let m = |q: Point3| pts.iter().position(|p| (*p - q).length() < 1e-6);
+        let (ia, ib) = (m(sec.p1)?, m(sec.p2)?);
+        if ia == ib {
+            return Option::None;
+        }
+        let apex = *pts
+            .iter()
+            .enumerate()
+            .find(|(k, _)| *k != ia && *k != ib)?
+            .1;
+        Some((sec.clone(), pts[ia], pts[ib], apex))
+    });
+    let (surface, new_vertices, new_edges) = match arc_patch
+        .and_then(|(sec, a, b, apex)| build_arc_apex_patch(&sec, a, b, apex, topo))
+    {
+        Some(built) => built,
+        _ => build_triangular_patch(pts, topo)?,
+    };
 
     let oriented_edges: Vec<OrientedEdge> = new_edges
         .iter()

@@ -112,7 +112,10 @@ fn main() {
             println!("-- fillet_variable {}ms --", t.elapsed().as_millis());
             census(&topo, result, "RESULT");
             if std::env::var("FREE_DETAIL").is_ok() {
-                let mut users: HashMap<usize, (Vec<String>, Point3, Point3)> = HashMap::new();
+                let mut users: HashMap<
+                    usize,
+                    (Vec<String>, Point3, Point3, brepkit_topology::edge::EdgeId),
+                > = HashMap::new();
                 for fid in brepkit_topology::explorer::solid_faces(&topo, result).unwrap() {
                     let face = topo.face(fid).unwrap();
                     let tag = face.surface().type_tag();
@@ -127,19 +130,80 @@ fn main() {
                             );
                             users
                                 .entry(oe.edge().index())
-                                .or_insert_with(|| (Vec::new(), a, b))
+                                .or_insert_with(|| (Vec::new(), a, b, oe.edge()))
                                 .0
                                 .push(format!("{fid:?}:{tag}"));
                         }
                     }
                 }
-                for (eidx, (owners, a, b)) in &users {
+                if std::env::var("FREE_DETAIL").is_ok_and(|v| v == "2") {
+                    let free_owner_faces: std::collections::HashSet<String> = users
+                        .values()
+                        .filter(|(o, ..)| o.len() == 1)
+                        .map(|(o, ..)| o[0].clone())
+                        .collect();
+                    for fid in brepkit_topology::explorer::solid_faces(&topo, result).unwrap() {
+                        let face = topo.face(fid).unwrap();
+                        let tag = face.surface().type_tag();
+                        if !free_owner_faces.contains(&format!("{fid:?}:{tag}")) {
+                            continue;
+                        }
+                        println!("  owner {fid:?} {tag} rev={}", face.is_reversed());
+                        for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+                            let e = topo.edge(oe.edge()).unwrap();
+                            let (a, b) = (
+                                topo.vertex(e.start()).unwrap().point(),
+                                topo.vertex(e.end()).unwrap().point(),
+                            );
+                            println!(
+                                "    e{} {} fwd={} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                                oe.edge().index(),
+                                e.curve().type_tag(),
+                                oe.is_forward(),
+                                a.x(),
+                                a.y(),
+                                a.z(),
+                                b.x(),
+                                b.y(),
+                                b.z()
+                            );
+                        }
+                    }
+                }
+                for (eidx, (owners, a, b, eid)) in &users {
                     if owners.len() != 1 {
                         continue;
                     }
+                    let desc = topo.edge(*eid).map_or_else(
+                        |_| "?".to_string(),
+                        |e| match e.curve() {
+                            brepkit_topology::edge::EdgeCurve::Line => "line".to_string(),
+                            brepkit_topology::edge::EdgeCurve::Circle(c) => format!(
+                                "circle c=({:.4},{:.4},{:.4}) r={:.5} n=({:.3},{:.3},{:.3})",
+                                c.center().x(),
+                                c.center().y(),
+                                c.center().z(),
+                                c.radius(),
+                                c.normal().x(),
+                                c.normal().y(),
+                                c.normal().z()
+                            ),
+                            brepkit_topology::edge::EdgeCurve::Ellipse(_) => "ellipse".to_string(),
+                            brepkit_topology::edge::EdgeCurve::NurbsCurve(n) => {
+                                let (t0, t1) = n.domain();
+                                let m = n.evaluate(f64::midpoint(t0, t1));
+                                format!(
+                                    "nurbs cp={} mid=({:.4},{:.4},{:.4})",
+                                    n.control_points().len(),
+                                    m.x(),
+                                    m.y(),
+                                    m.z()
+                                )
+                            }
+                        },
+                    );
                     println!(
-                        "  FREE e{} ({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2}) owner={:?}",
-                        eidx,
+                        "  FREE e{eidx} {desc} ({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2}) owner={:?}",
                         a.x(),
                         a.y(),
                         a.z(),

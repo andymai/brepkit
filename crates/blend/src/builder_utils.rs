@@ -132,14 +132,44 @@ pub fn create_blend_face_with_contacts(
     let end_curve = stripe
         .sections
         .last()
-        .and_then(|sec| arc_curve(sec, p1_end, p2_end))
+        .and_then(|sec| {
+            let r = arc_curve(sec, p1_end, p2_end);
+            if r.is_none() {
+                log::debug!(
+                    "cross END line fallback: sec c={:?} r={:.5} a={p1_end:?} b={p2_end:?}",
+                    sec.center,
+                    sec.radius
+                );
+            }
+            r
+        })
         .unwrap_or(EdgeCurve::Line);
     let start_curve = stripe
         .sections
         .first()
-        .and_then(|sec| arc_curve(sec, p2_start, p1_start))
+        .and_then(|sec| {
+            let r = arc_curve(sec, p2_start, p1_start);
+            if r.is_none() {
+                log::debug!(
+                    "cross START line fallback: sec c={:?} r={:.5} a={p2_start:?} b={p1_start:?}",
+                    sec.center,
+                    sec.radius
+                );
+            }
+            r
+        })
         .unwrap_or(EdgeCurve::Line);
-    let e1 = topo.add_edge(Edge::new(v1e, v2e, end_curve));
+    // A variable-radius stripe can pinch to a point at an end: both contact
+    // curves land on the same position and the cross edge would be
+    // zero-length. Minting it leaves a degenerate use-1 edge no weld can
+    // pair; skip it and let the wire close positionally.
+    let end_degenerate = (p1_end - p2_end).length() < WELD;
+    let start_degenerate = (p2_start - p1_start).length() < WELD;
+    let e1 = if end_degenerate {
+        Option::None
+    } else {
+        Some(topo.add_edge(Edge::new(v1e, v2e, end_curve)))
+    };
     let (e2, e2_fwd) = adopt2.map_or_else(
         || {
             (
@@ -153,17 +183,21 @@ pub fn create_blend_face_with_contacts(
         },
         |(eid, fwd, _, _)| (eid, fwd),
     );
-    let e3 = topo.add_edge(Edge::new(v2s, v1s, start_curve));
+    let e3 = if start_degenerate {
+        Option::None
+    } else {
+        Some(topo.add_edge(Edge::new(v2s, v1s, start_curve)))
+    };
 
-    let wire = Wire::new(
-        vec![
-            OrientedEdge::new(e0, e0_fwd),
-            OrientedEdge::new(e1, true),
-            OrientedEdge::new(e2, e2_fwd),
-            OrientedEdge::new(e3, true),
-        ],
-        true,
-    )?;
+    let mut wire_edges = vec![OrientedEdge::new(e0, e0_fwd)];
+    if let Some(e1) = e1 {
+        wire_edges.push(OrientedEdge::new(e1, true));
+    }
+    wire_edges.push(OrientedEdge::new(e2, e2_fwd));
+    if let Some(e3) = e3 {
+        wire_edges.push(OrientedEdge::new(e3, true));
+    }
+    let wire = Wire::new(wire_edges, true)?;
     let wire_id = topo.add_wire(wire);
 
     let face = Face::new(wire_id, Vec::new(), stripe.surface.clone());
@@ -171,8 +205,8 @@ pub fn create_blend_face_with_contacts(
 
     Ok(BlendFaceInfo {
         face: face_id,
-        cross_end: (e1, v1e, v2e),
-        cross_start: (e3, v2s, v1s),
+        cross_end: e1.map(|e| (e, v1e, v2e)),
+        cross_start: e3.map(|e| (e, v2s, v1s)),
     })
 }
 
@@ -184,9 +218,10 @@ pub struct BlendFaceInfo {
     /// The blend face.
     pub face: FaceId,
     /// Cross edge at the spine end: `(edge, from, to)`.
-    pub cross_end: (brepkit_topology::edge::EdgeId, VertexId, VertexId),
-    /// Cross edge at the spine start: `(edge, from, to)`.
-    pub cross_start: (brepkit_topology::edge::EdgeId, VertexId, VertexId),
+    pub cross_end: Option<(brepkit_topology::edge::EdgeId, VertexId, VertexId)>,
+    /// Cross edge at the spine start: `(edge, from, to)`. `None` when the
+    /// stripe pinches to a point at that end and no cross edge exists.
+    pub cross_start: Option<(brepkit_topology::edge::EdgeId, VertexId, VertexId)>,
 }
 
 /// Replace a face's two-edge corner path `from -> corner -> to` with the
@@ -567,7 +602,7 @@ pub(crate) fn close_residual_free_loops(
                 break;
             }
         }
-        if (cursor - s0).length() > 1e-6 || chain.len() < 3 || chain.len() > 4 {
+        if (cursor - s0).length() > 1e-6 || chain.len() < 2 || chain.len() > 4 {
             continue;
         }
         // Loop corner positions in order, and coplanarity.
@@ -576,8 +611,28 @@ pub(crate) fn close_residual_free_loops(
             let (a, b) = ends_p(topo, eid)?;
             pts.push(if fwd { a } else { b });
         }
-        let n_raw = (pts[1] - pts[0]).cross(pts[2] - pts[0]);
-        let Ok(nrm) = n_raw.normalize() else { continue };
+        // A 2-edge loop (arc + chord lens: a band's straight rail against a
+        // rebuilt face's bridge arc) has too few corners to span a plane;
+        // take the plane from an arc's own circle instead.
+        let nrm = if chain.len() == 2 {
+            let mut circle_nrm = Option::None;
+            for &(eid, _) in &chain {
+                if let EdgeCurve::Circle(c) = topo.edge(eid)?.curve() {
+                    let n = c.normal();
+                    if circle_nrm.is_some_and(|prev: Vec3| prev.cross(n).length() > 1e-6) {
+                        circle_nrm = Option::None;
+                        break;
+                    }
+                    circle_nrm = Some(n);
+                }
+            }
+            let Some(nrm) = circle_nrm else { continue };
+            nrm
+        } else {
+            let n_raw = (pts[1] - pts[0]).cross(pts[2] - pts[0]);
+            let Ok(nrm) = n_raw.normalize() else { continue };
+            nrm
+        };
         if pts.iter().any(|p| ((*p - pts[0]).dot(nrm)).abs() > 1e-6) {
             continue;
         }
