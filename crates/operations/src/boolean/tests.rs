@@ -1155,6 +1155,101 @@ fn assemble_mixed_planar_only() {
 }
 
 #[test]
+fn assemble_mixed_drops_sub_resolution_polygon() {
+    // A polygon whose vertices all quantize to one merged vertex loses every
+    // edge to the degenerate/duplicate skips; it must be dropped, not error
+    // the whole assembly with an empty wire (seen in the mesh-fallback fuse of
+    // a heavily faceted sweep operand).
+    let mut topo = Topology::new();
+    let unit_cube_faces = [
+        (
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, -1.0],
+            0.0,
+        ),
+        (
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0],
+            1.0,
+        ),
+        (
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, -1.0, 0.0],
+            0.0,
+        ),
+        (
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 1.0, 0.0],
+            1.0,
+        ),
+        (
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            0.0,
+        ),
+        (
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            1.0,
+        ),
+    ];
+    let mut specs: Vec<FaceSpec> = unit_cube_faces
+        .iter()
+        .map(|&(a, b, c, d, n, dist)| FaceSpec::Planar {
+            vertices: vec![
+                Point3::new(a[0], a[1], a[2]),
+                Point3::new(b[0], b[1], b[2]),
+                Point3::new(c[0], c[1], c[2]),
+                Point3::new(d[0], d[1], d[2]),
+            ],
+            normal: Vec3::new(n[0], n[1], n[2]),
+            d: dist,
+            inner_wires: vec![],
+        })
+        .collect();
+    // Sub-resolution sliver: all three vertices within 1e-9 on a unit-scale
+    // model (merge cell ~1.7e-7), so they collapse to one vertex id.
+    specs.push(FaceSpec::Planar {
+        vertices: vec![
+            Point3::new(0.5, 0.5, 1.0),
+            Point3::new(0.5 + 1e-9, 0.5, 1.0),
+            Point3::new(0.5, 0.5 + 1e-9, 1.0),
+        ],
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 1.0,
+        inner_wires: vec![],
+    });
+
+    let solid = assemble_solid_mixed(&mut topo, &specs, Tolerance::new())
+        .expect("sub-resolution polygon must be dropped, not error the assembly");
+    let s = topo.solid(solid).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    assert_eq!(
+        sh.faces().len(),
+        6,
+        "the degenerate polygon must not appear as a face"
+    );
+}
+
+#[test]
 fn assemble_mixed_with_nurbs() {
     use brepkit_math::nurbs::surface::NurbsSurface;
 
