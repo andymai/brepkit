@@ -116,7 +116,12 @@ pub fn trim_face(
     let oriented_edges: Vec<OrientedEdge> = outer_wire.edges().to_vec();
 
     if contact_uv.len() < 2 {
-        return Err(BlendError::TrimmingFailure { face: face_id });
+        {
+            if std::env::var("BK_TRIM_TRACE").is_ok() {
+                log::warn!("TRIM-FAIL site1 face={face_id:?}");
+            }
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
     }
 
     let uv_start = contact_uv[0];
@@ -176,8 +181,36 @@ pub fn trim_face(
         }
     }
 
+    // A contact endpoint landing exactly on an existing boundary VERTEX
+    // (a previous stripe's propagated split) registers on both incident
+    // chords — one geometric crossing counted twice. Merge
+    // position-coincident hits before judging the count.
+    hits.sort_by(|a, b| {
+        (a.edge_idx, a.t)
+            .partial_cmp(&(b.edge_idx, b.t))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    hits.dedup_by(|b, a| (b.point_3d - a.point_3d).length() < 1e-6);
+    if hits.len() > 1 && (hits[0].point_3d - hits[hits.len() - 1].point_3d).length() < 1e-6 {
+        hits.pop();
+    }
+
     // We expect exactly 2 hits for a convex planar face.
     if hits.len() != 2 {
+        if std::env::var("BK_TRIM_TRACE").is_ok() {
+            log::warn!(
+                "TRIM-FAIL site2 face={face_id:?} hits={} contact ({line_a:?})->({line_b:?})",
+                hits.len()
+            );
+            for h in &hits {
+                log::warn!(
+                    "TRIM-FAIL   hit edge_idx={} t={:.4} p={:?}",
+                    h.edge_idx,
+                    h.t,
+                    h.point_3d
+                );
+            }
+        }
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
 
@@ -203,18 +236,23 @@ pub fn trim_face(
     if hit_a.edge_idx == hit_b.edge_idx
         || edge_data[hit_a.edge_idx].0.edge() == edge_data[hit_b.edge_idx].0.edge()
     {
-        return Err(BlendError::TrimmingFailure { face: face_id });
+        {
+            if std::env::var("BK_TRIM_TRACE").is_ok() {
+                log::warn!("TRIM-FAIL site3 face={face_id:?}");
+            }
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
     }
 
-    let va_id = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
-    let vb_id = topo.add_vertex(Vertex::new(hit_b.point_3d, VERTEX_TOL));
-
-    // Each hit splits one oriented edge into two sub-edges:
-    //   original: oriented from S→E
-    //   sub-edge 1: S → V_hit  (forward w.r.t. original orientation)
-    //   sub-edge 2: V_hit → E
-    let (sub_a1, sub_a2) = split_edge_at(topo, &edge_data[hit_a.edge_idx].0, va_id)?;
-    let (sub_b1, sub_b2) = split_edge_at(topo, &edge_data[hit_b.edge_idx].0, vb_id)?;
+    // Each hit either splits its oriented edge into two sub-edges, or —
+    // when it lands on an existing boundary vertex (a previous stripe's
+    // propagated split) — reuses that vertex outright: splitting at t=0/1
+    // would mint a duplicate vertex and a zero-length sub-edge.
+    let ends_a = resolve_hit_ends(topo, edge_data[hit_a.edge_idx].0, hit_a)?;
+    let ends_b = resolve_hit_ends(topo, edge_data[hit_b.edge_idx].0, hit_b)?;
+    let (va_id, vb_id) = (ends_a.vertex, ends_b.vertex);
+    let (sub_a1, sub_a2) = (ends_a.pre, ends_a.post);
+    let (sub_b1, sub_b2) = (ends_b.pre, ends_b.post);
 
     // The contact edge connects the two intersection vertices.
     // Its direction determines which side is "left" vs "right".
@@ -231,20 +269,28 @@ pub fn trim_face(
     let mut chain1: Vec<OrientedEdge> = Vec::new();
     let mut chain2: Vec<OrientedEdge> = Vec::new();
 
-    chain1.push(sub_a2);
+    if let Some(oe) = sub_a2 {
+        chain1.push(oe);
+    }
     for i in (hit_a.edge_idx + 1)..hit_b.edge_idx {
         chain1.push(oriented_edges[i]);
     }
-    chain1.push(sub_b1);
+    if let Some(oe) = sub_b1 {
+        chain1.push(oe);
+    }
 
-    chain2.push(sub_b2);
+    if let Some(oe) = sub_b2 {
+        chain2.push(oe);
+    }
     for i in (hit_b.edge_idx + 1)..n_edges {
         chain2.push(oriented_edges[i]);
     }
     for i in 0..hit_a.edge_idx {
         chain2.push(oriented_edges[i]);
     }
-    chain2.push(sub_a1);
+    if let Some(oe) = sub_a1 {
+        chain2.push(oe);
+    }
 
     // Use the face plane normal and contact direction to determine left/right.
     let face_normal = match &surface {
@@ -322,13 +368,66 @@ pub fn trim_face(
     }
     let trimmed_face_id = topo.add_face(trimmed_face);
 
-    let new_edges = vec![sub_a1.edge(), sub_a2.edge(), sub_b1.edge(), sub_b2.edge()];
+    let mut new_edges = ends_a.minted_edges;
+    new_edges.extend(ends_b.minted_edges);
+    let mut new_vertices = Vec::new();
+    new_vertices.extend(ends_a.minted_vertex);
+    new_vertices.extend(ends_b.minted_vertex);
 
     Ok(TrimResult {
         trimmed_face: trimmed_face_id,
         new_edges,
-        new_vertices: vec![va_id, vb_id],
+        new_vertices,
         contact_edge: Some(contact_edge_id),
+    })
+}
+
+/// How one boundary hit resolves: the vertex at the crossing plus the
+/// boundary pieces before/after it in wire order (`None` when the hit sits
+/// on the edge's own endpoint and no split is needed).
+struct HitEnds {
+    vertex: VertexId,
+    pre: Option<OrientedEdge>,
+    post: Option<OrientedEdge>,
+    minted_vertex: Option<VertexId>,
+    minted_edges: Vec<EdgeId>,
+}
+
+fn resolve_hit_ends(
+    topo: &mut Topology,
+    oe: OrientedEdge,
+    hit: &BoundaryHit,
+) -> Result<HitEnds, BlendError> {
+    let edge = topo.edge(oe.edge())?;
+    let (sv, ev) = (oe.oriented_start(edge), oe.oriented_end(edge));
+    let sp = topo.vertex(sv)?.point();
+    let ep = topo.vertex(ev)?.point();
+    if (hit.point_3d - sp).length() < 1e-6 {
+        return Ok(HitEnds {
+            vertex: sv,
+            pre: None,
+            post: Some(oe),
+            minted_vertex: None,
+            minted_edges: Vec::new(),
+        });
+    }
+    if (hit.point_3d - ep).length() < 1e-6 {
+        return Ok(HitEnds {
+            vertex: ev,
+            pre: Some(oe),
+            post: None,
+            minted_vertex: None,
+            minted_edges: Vec::new(),
+        });
+    }
+    let v = topo.add_vertex(Vertex::new(hit.point_3d, VERTEX_TOL));
+    let (s1, s2) = split_edge_at(topo, &oe, v)?;
+    Ok(HitEnds {
+        vertex: v,
+        pre: Some(s1),
+        post: Some(s2),
+        minted_vertex: Some(v),
+        minted_edges: vec![s1.edge(), s2.edge()],
     })
 }
 
@@ -560,7 +659,12 @@ pub fn trim_face_general(
     keep: TrimKeep,
 ) -> Result<TrimResult, BlendError> {
     if contact_3d.len() < 2 {
-        return Err(BlendError::TrimmingFailure { face: face_id });
+        {
+            if std::env::var("BK_TRIM_TRACE").is_ok() {
+                log::warn!("TRIM-FAIL site4 face={face_id:?}");
+            }
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
     }
 
     let face = topo.face(face_id)?;
@@ -603,7 +707,7 @@ pub fn trim_face_general(
     let uv_start = surface.project_point(contact_3d[0]);
     let uv_end = surface.project_point(contact_3d[contact_3d.len() - 1]);
 
-    let (Some(uv_s), Some(uv_e)) = (uv_start, uv_end) else {
+    let (Some(mut uv_s), Some(mut uv_e)) = (uv_start, uv_end) else {
         log::warn!(
             "trim_face_general: UV projection failed for non-planar face {face_id:?}, returning untrimmed"
         );
@@ -643,6 +747,33 @@ pub fn trim_face_general(
         edge_data_uv.push((oe, s3, e3, s_uv, e_uv));
     }
 
+    // Periodic surfaces project u into [0, TAU), so a face crossing the
+    // parametric seam gets boundary chords that jump a full period and
+    // sweep spuriously across the contact line (3 hits instead of 2, and
+    // the trim bails). Unwrap u sequentially along the wire so consecutive
+    // chords stay continuous, then align the contact endpoints to the same
+    // branch.
+    if matches!(
+        &surface,
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_)
+    ) {
+        let period = std::f64::consts::TAU;
+        let align = |u: f64, reference: f64| u - period * ((u - reference) / period).round();
+        let mut prev_u = edge_data_uv[0].3.0;
+        for (_, _, _, s_uv, e_uv) in &mut edge_data_uv {
+            s_uv.0 = align(s_uv.0, prev_u);
+            e_uv.0 = align(e_uv.0, s_uv.0);
+            prev_u = e_uv.0;
+        }
+        let mid_u = edge_data_uv
+            .iter()
+            .map(|(_, _, _, s_uv, _)| s_uv.0)
+            .sum::<f64>()
+            / edge_data_uv.len() as f64;
+        uv_s.0 = align(uv_s.0, mid_u);
+        uv_e.0 = align(uv_e.0, uv_s.0);
+    }
+
     let mut hits: Vec<BoundaryHit> = Vec::new();
     for (edge_idx, (_oe, s3, e3, s_uv, e_uv)) in edge_data_uv.iter().enumerate() {
         if let Some(t) = line_segment_intersect_2d(*s_uv, *e_uv, uv_s, uv_e) {
@@ -655,7 +786,28 @@ pub fn trim_face_general(
         }
     }
 
+    // A contact endpoint landing exactly on an existing boundary VERTEX
+    // (a previous stripe's propagated split) registers on both incident
+    // chords — one geometric crossing counted twice. Merge
+    // position-coincident hits before judging the count.
+    hits.sort_by(|a, b| {
+        (a.edge_idx, a.t)
+            .partial_cmp(&(b.edge_idx, b.t))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    hits.dedup_by(|b, a| (b.point_3d - a.point_3d).length() < 1e-6);
+    if hits.len() > 1 && (hits[0].point_3d - hits[hits.len() - 1].point_3d).length() < 1e-6 {
+        hits.pop();
+    }
+
     if hits.len() != 2 {
+        if std::env::var("BK_TRIM_TRACE").is_ok() {
+            log::warn!("TRIM-TRACE face={face_id:?} contact ({uv_s:?})->({uv_e:?})");
+            for (i, (_, _, _, s_uv, e_uv)) in edge_data_uv.iter().enumerate() {
+                let hit = hits.iter().find(|h| h.edge_idx == i).map(|h| h.t);
+                log::warn!("TRIM-TRACE   chord[{i}] ({s_uv:?})->({e_uv:?}) hit={hit:?}");
+            }
+        }
         log::warn!(
             "trim_face_general: expected 2 boundary hits, got {} for face {face_id:?}, returning untrimmed",
             hits.len()
@@ -681,7 +833,12 @@ pub fn trim_face_general(
     // the second split would re-split the edge the first propagate_split
     // already rewrote out of every wire. Bail before any mutation.
     if idx_a == idx_b || oe_a.edge() == oe_b.edge() {
-        return Err(BlendError::TrimmingFailure { face: face_id });
+        {
+            if std::env::var("BK_TRIM_TRACE").is_ok() {
+                log::warn!("TRIM-FAIL site5 face={face_id:?}");
+            }
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
     }
 
     let va = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
@@ -738,7 +895,12 @@ pub fn trim_face_general(
                 (side.abs() > 1e-12).then_some(side > 0.0)
             });
             let Some(left_chain_is_left) = left_sample else {
-                return Err(BlendError::TrimmingFailure { face: face_id });
+                {
+                    if std::env::var("BK_TRIM_TRACE").is_ok() {
+                        log::warn!("TRIM-FAIL site6 face={face_id:?}");
+                    }
+                    return Err(BlendError::TrimmingFailure { face: face_id });
+                }
             };
             let p_is_left = face_normal.dot(contact_dir.cross(p - hit_a.point_3d)) > 0.0;
             if p_is_left == left_chain_is_left {
@@ -834,6 +996,59 @@ mod tests {
         let face_id = topo.add_face(face);
 
         (face_id, [v0, v1, v2, v3], [e0, e1, e2, e3])
+    }
+
+    #[test]
+    fn trim_through_a_presplit_boundary_vertex_succeeds() {
+        // A previous stripe's propagated split leaves the boundary already
+        // split exactly where this stripe's contact line meets it. The hit
+        // registers on BOTH incident chords (t=1 on one, t=0 on the next)
+        // — one geometric crossing counted twice — and the 2-hit gate used
+        // to bail the whole trim.
+        let mut topo = Topology::new();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), VERTEX_TOL));
+        let vm = topo.add_vertex(Vertex::new(Point3::new(0.5, 0.0, 0.0), VERTEX_TOL));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), VERTEX_TOL));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), VERTEX_TOL));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), VERTEX_TOL));
+        let e0a = topo.add_edge(Edge::new(v0, vm, EdgeCurve::Line));
+        let e0b = topo.add_edge(Edge::new(vm, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0a, true),
+                OrientedEdge::new(e0b, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.add_wire(wire);
+        let face_id = topo.add_face(Face::new(
+            wire_id,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let contact_3d = vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
+        let contact_uv = vec![(0.5, 0.0), (0.5, 1.0)];
+        let result = trim_face(
+            &mut topo,
+            face_id,
+            &contact_3d,
+            &contact_uv,
+            TrimKeep::Side(TrimSide::Left),
+        )
+        .expect("trim through a pre-split vertex should succeed");
+        assert_ne!(result.trimmed_face, face_id, "face must actually trim");
+        assert!(result.contact_edge.is_some());
     }
 
     #[test]
