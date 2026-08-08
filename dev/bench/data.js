@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786186275809,
+  "lastUpdate": 1786188971818,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23489,6 +23489,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20666337,
             "range": "± 311111",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ea8204fab9144bf046fb23190fbc3ec024c54394",
+          "message": "fix(operations): correct the shell cavity face senses end to end (#1435)\n\n## What (closes the shell_op orientation ready-repro)\n\nEvery shelled rounded box carried 16 same-sense edges on its cavity\ncorner cylinders — pre-existing on every gridfinity bin, discovered\nwhile pinning the analytic lip fuse (#1427). Three coordinated fixes,\nmeasured 16 → 8 → 0:\n\n1. **`assemble_solid_mixed`'s cylindrical arm** builds the wire with\nreversed winding for `reversed: true` specs (a reversed face flips its\nwire's effective traversal). The arc-edge geometry still derives from\nthe given vertex order — which is exactly why the earlier attempt to\nflip the vertex order instead broke arc pairing (that refutation stands,\nrecorded in the roadmap).\n2. **Shell's rim chaining** (`sort_edges_into_loops`) now chains\nundirected and assigns each edge's orientation from the chain direction.\nThe old strict-orientation chaining was silently calibrated to the\ninverted cavity senses and dead-ended into open wires on the corrected\nones.\n3. **The rim's per-edge seed orientation** accounts for the owner face's\nreversal flag (`is_forward XOR is_reversed`), not just its stored\ndirection.\n\n## Verification\n\n- `shelled_rounded_box_is_orientation_clean` un-ignored and green (0\nsame-sense edges, full validity).\n- `analytic_lip_ring_fuses_onto_hollow_box` upgraded to assert **full\nvalidity** (the operand is now clean).\n- Coincident-fuse determinism loop: 0/50 bad.\n- io fixture suites (62), wasm gridfinity canary 27/27, full workspace\n(117 suites), clippy `-D warnings`, fmt.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes inverted cavity face senses in `shell_op`, removing the 16\nsame‑sense edges on shelled rounded boxes and hardening rim assembly to\navoid open wires. Results in clean topology and stable coincident fuses.\n\n- **Bug Fixes**\n- `assemble_solid_mixed`: reverse cylindrical-face wire winding when\n`reversed: true`; arc geometry still follows the given vertex order.\n- Rim assembly in `shell_op`: chain edges undirected and assign\ndirection from the chain; drop unclosed boundary chains to avoid open\nrim wires.\n- Rim seed orientation: derive from the owner face’s effective sense\n(stored direction XOR `is_reversed`) instead of stored direction only.\n- Verification: `shelled_rounded_box_is_orientation_clean` un-ignored\nand passing; lip fuse asserts full validity; determinism loop 0/50 bad;\nall suites green.\n\n<sup>Written for commit afc9d3aea507e2cda8469b0b7878411ee7548bd2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1435?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T11:33:43Z",
+          "tree_id": "0fe62ff588931f408c81e1f13267879015bf8cb2",
+          "url": "https://github.com/andymai/brepkit/commit/ea8204fab9144bf046fb23190fbc3ec024c54394"
+        },
+        "date": 1786188969990,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 946720,
+            "range": "± 2502",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1023145,
+            "range": "± 2497",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11874,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697776,
+            "range": "± 1989",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24919845,
+            "range": "± 602104",
             "unit": "ns/iter"
           }
         ]
