@@ -1,0 +1,22 @@
+crates/blend/src/builder_utils.rs
+  s_8b449c7ef64a35::t_d9766bac78200b 1035-1041,1043,1049,1052-1053,1056-1058,1080-1083,1094-1098,1101-1103
+crates/io/examples/replay_fillet_variable.rs
+  s_8b449c7ef64a35::t_8e905ff4e84ebb 34-62,65-66
+  s_8b449c7ef64a35::t_bacc9cbfe59349 63-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2a6f8e5857418d20c0c474c7342ed83580c86749",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
