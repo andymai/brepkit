@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786200322501,
+  "lastUpdate": 1786203226987,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23975,6 +23975,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20252574,
             "range": "± 34814",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6cc0ab09e147c16ca55f1240e9b70df37fbc8261",
+          "message": "fix(operations): exact miter sweep via domain-correct frames and a shared bisector ring (#1448)\n\nCloses the parked miter as-positioned question (roadmap: second attempt\nparked on this branch with an unresolved volume discrepancy, 8.67\nmeasured vs ~10.39 oracle). The answer: both numbers were wrong.\n\n## Roots\n\n1. **The oracle was mis-modeled.** Area x path length only holds for a\ncentered profile. A true miter cuts each leg prism at the bisector\nplane, so a profile offset toward the inside of the bend shortens both\nlegs by (centroid . n)/(n . t) per kink. The offset elbow's exact volume\nis 8.2668, not 10.39.\n2. **`compute_frames` sampled raw [0,1] regardless of the curve's\ndomain.** The kink-split sub-curves keep their parent's sub-range\n(domains [0,0.5]/[0.5,1]), and a clamped NURBS evaluated outside its\ndomain extrapolates the end spans linearly, so every miter leg swept the\nfull path length: two overlapping full-length tubes glued by transition\nquads. This sat under both prior attempts and under main's centered-L\nvolume (9.84 where the exact answer is 9.0).\n\n## Fix\n\n- `compute_frames` maps samples into the curve's domain (identity for\n[0,1] curves, so smooth sweeps are unchanged; 818/818 operations tests\ngreen).\n- `sweep_miter` joins legs on **one shared kink ring on the bisector\nplane**: each exit-ring vertex slides along its own leg tangent onto the\nplane. For a perpendicular profile, reflection through the bisector\nplane equals the tangent-to-tangent rotation, so both legs land on\nidentical points — no transition faces, and every wall quad stays in its\nprism side plane. Degenerate kinks (near-reversal, or a slide that would\ncross the first interior ring) fall back to the existing bridge.\n- Miter placement joins the as-positioned contract (frame-0 basis +\nup-transport chaining from the earlier parked commits).\n\n## Verification\n\n- `sweep_miter_l_shaped_volume_correct`: exact 9.0 at 1e-6 (was a 5..15\nrange check measuring 9.84).\n- `miter_sweep_keeps_offset_profile_position`: exact 8.2668 at 1e-6,\nwith the closed-form derivation in the test.\n- Elbow dissect probe: watertight, valid, 34 faces (8 wall bands + 2\ncaps, zero transition faces), volume deflection-invariant.\n- U-path (two kinks) chains shared rings through both joints.\n- operations lib 818/818, io suite green, algo green, wasm gridfinity\n27/27, clippy/fmt clean.\n\nLatent sibling noted in the roadmap: `pipe.rs` still samples raw [0,1]\n(no kink split there; only bites shifted-domain paths).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes miter sweep geometry with domain-correct frame sampling and an\nexact bisector-plane join. Perpendicular profiles now sweep\nas-positioned, share one kink ring, and drop transition faces for\ncorrect volumes.\n\n- **Bug Fixes**\n- `compute_frames` now samples within the curve’s domain, fixing\nover-swept legs on kink-split sub-curves (helps all sweep modes).\n- `sweep_miter` slides the exit ring along its tangent onto the bisector\nplane and reuses a single shared kink ring; guarded fallback for\nnear-degenerate kinks or over-slides.\n- As-positioned placement for perpendicular profiles using the global\nframe-0 basis; up-vector is transported across kinks via\ntangent-to-tangent rotation using `revolve::rotate_vec` (edge-on/oblique\nremain centroid-placed).\n- Tests pin exact results: `sweep_miter_l_shaped_volume_correct` = 9.0,\n`miter_sweep_keeps_offset_profile_position` = 8.2668 (1e-6).\n\n<sup>Written for commit 85f049e81ea39a4e206c11bd0b6e3bd36af92423.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1448?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T15:31:27Z",
+          "tree_id": "48a8fa5566390e480ac2ef05e689751a07392d15",
+          "url": "https://github.com/andymai/brepkit/commit/6cc0ab09e147c16ca55f1240e9b70df37fbc8261"
+        },
+        "date": 1786203225076,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 948983,
+            "range": "± 968",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1025236,
+            "range": "± 24452",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11819,
+            "range": "± 94",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 705527,
+            "range": "± 983",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24787606,
+            "range": "± 64700",
             "unit": "ns/iter"
           }
         ]
