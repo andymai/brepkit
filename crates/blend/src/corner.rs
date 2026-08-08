@@ -248,6 +248,20 @@ fn build_multi_edge_corner(
     let contact_pts = collect_contact_points(vertex_id, stripes, &indices, topo);
 
     if contact_pts.len() < 3 {
+        if std::env::var("BK_CORNER_TRACE").is_ok() {
+            for &i in &indices {
+                let cp = contact_points_at_vertex(vertex_id, &stripes[i], topo);
+                let sec = contact_section_at_vertex(vertex_id, &stripes[i], topo)
+                    .map(|s| (s.center, s.radius, s.p1, s.p2));
+                log::warn!(
+                    "CORNER-TRACE multi {vertex_id:?} stripe {i}: contacts={cp:?} sec={sec:?}"
+                );
+            }
+            log::warn!(
+                "CORNER-TRACE multi {vertex_id:?}: unique_pts={} {contact_pts:?}",
+                contact_pts.len()
+            );
+        }
         return Err(BlendError::CornerFailure { vertex: vertex_id });
     }
 
