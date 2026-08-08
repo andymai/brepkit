@@ -148,22 +148,59 @@ fn orthogonalize(v: Vec3, tangent: Vec3) -> Vec3 {
     })
 }
 
+/// How the profile is positioned relative to the path before sweeping.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProfilePlacement {
+    /// Sweep the profile from where it lies: the first ring reproduces the
+    /// profile exactly, and later rings are its rotation-minimizing-frame
+    /// transports along the path (the reference-kernel pipe semantic).
+    AsPositioned,
+    /// Translate the profile so its centroid lands on the path start and its
+    /// plane is re-oriented perpendicular to the path. Used by operations
+    /// whose API positions the profile itself (e.g. helical sweep).
+    CentroidOnPath,
+}
+
+/// Minimum |cos| between the profile normal and the path start tangent for the
+/// profile to count as deliberately placed perpendicular to the path.
+///
+/// An edge-on or oblique profile has no meaningful as-positioned sweep (its
+/// plane contains the path direction and the result collapses), so those fall
+/// back to the auto-orienting centroid placement.
+const PROFILE_PERP_MIN_COS: f64 = 0.99;
+
+/// Resolve `AsPositioned` to `CentroidOnPath` when the profile is not
+/// perpendicular to the path start tangent (see [`PROFILE_PERP_MIN_COS`]).
+fn resolve_placement(
+    placement: ProfilePlacement,
+    input_normal: Vec3,
+    path_tangent_0: Vec3,
+) -> ProfilePlacement {
+    match placement {
+        ProfilePlacement::AsPositioned
+            if input_normal.dot(path_tangent_0).abs() < PROFILE_PERP_MIN_COS =>
+        {
+            ProfilePlacement::CentroidOnPath
+        }
+        other => other,
+    }
+}
+
 /// Transform a profile vertex from its original position to a frame location.
 ///
-/// The vertex's offset from the profile centroid is decomposed into the
-/// initial frame's coordinate system (right, up, tangent), then
-/// reconstructed in the target frame. Including the tangent component
-/// ensures correct geometry even when the profile plane is not
-/// perpendicular to the initial path tangent.
+/// The vertex's offset from `reference` is decomposed into the initial
+/// coordinate system (right, up, tangent), then reconstructed in the target
+/// frame. Including the tangent component ensures correct geometry even when
+/// the profile plane is not perpendicular to the initial path tangent.
 fn transform_point(
     point: Point3,
-    centroid: Point3,
+    reference: Point3,
     initial_right: Vec3,
     initial_up: Vec3,
     initial_tangent: Vec3,
     frame: &Frame,
 ) -> Point3 {
-    let offset = point - centroid;
+    let offset = point - reference;
     let local_r = initial_right.dot(offset);
     let local_u = initial_up.dot(offset);
     let local_t = initial_tangent.dot(offset);
@@ -181,13 +218,13 @@ struct SweptWireData {
 /// Sweep a wire's vertices through the given frames, creating ring vertices,
 /// ring edges, and path edges.
 ///
-/// `centroid`, `initial_right/up/tangent` define the local coordinate system
+/// `reference`, `initial_right/up/tangent` define the local coordinate system
 /// from which profile offsets are measured.
 #[allow(clippy::too_many_arguments)]
 fn sweep_wire_through_frames(
     topo: &mut Topology,
     wire_id: brepkit_topology::wire::WireId,
-    centroid: Point3,
+    reference: Point3,
     initial_right: Vec3,
     initial_up: Vec3,
     initial_tangent: Vec3,
@@ -223,7 +260,7 @@ fn sweep_wire_through_frames(
             .map(|&pos| {
                 let transformed = transform_point(
                     pos,
-                    centroid,
+                    reference,
                     initial_right,
                     initial_up,
                     initial_tangent,
@@ -470,6 +507,7 @@ fn try_straight_extrude(
     topo: &mut Topology,
     profile: FaceId,
     path: &NurbsCurve,
+    placement: ProfilePlacement,
 ) -> Result<Option<SolidId>, crate::OperationsError> {
     let tol = Tolerance::new();
 
@@ -508,39 +546,54 @@ fn try_straight_extrude(
         return Ok(None);
     }
 
-    // Position a copy of the profile so its centroid lands on the path start —
-    // matching the general sweep's frame[0] placement — then extrude.
-    let centroid = profile_outer_centroid(topo, profile)?;
+    // Match the general sweep's frame[0] placement, then extrude: as-positioned
+    // sweeps extrude the profile in place; centroid placement first translates
+    // the profile's centroid onto the path start.
     let moved = crate::copy::copy_face(topo, profile)?;
-    let shift = start - centroid;
-    crate::transform::transform_face(
-        topo,
-        moved,
-        &Mat4::translation(shift.x(), shift.y(), shift.z()),
-    )?;
+    if placement == ProfilePlacement::CentroidOnPath {
+        let centroid = profile_outer_centroid(topo, profile)?;
+        let shift = start - centroid;
+        crate::transform::transform_face(
+            topo,
+            moved,
+            &Mat4::translation(shift.x(), shift.y(), shift.z()),
+        )?;
+    }
 
     Ok(Some(crate::extrude::extrude(topo, moved, dir, length)?))
 }
 
 /// Sweep a face along a path curve to produce a solid.
 ///
-/// Creates a solid by moving a profile along a NURBS curve, with the profile
-/// oriented perpendicular to the path tangent at each sample point. Side faces
-/// are planar quads connecting consecutive profile rings. The profile surface
-/// may be planar or curved — only its boundary is used; the end caps are filled
-/// from that boundary (a planar ring gets a `Plane` cap, a non-planar 4-sided
-/// ring a bilinear patch).
+/// The profile is swept from where it lies: the first section reproduces the
+/// profile exactly, and later sections are its rotation-minimizing-frame
+/// transports along the path, so the profile's position relative to the path
+/// is preserved (the reference-kernel pipe semantic). Side faces are planar
+/// quads connecting consecutive profile rings. The profile surface may be
+/// planar or curved — only its boundary is used; the end caps are filled from
+/// that boundary (a planar ring gets a `Plane` cap, a non-planar 4-sided ring
+/// a bilinear patch). An edge-on or oblique profile (plane not perpendicular
+/// to the path) is instead re-oriented onto the path via centroid placement.
 ///
 /// # Errors
 ///
 /// Returns an error if the path has fewer than 2 control points, a degenerate
 /// tangent is encountered, or a section boundary is non-planar with more than
 /// four edges or with holes (unsupported cap).
-#[allow(clippy::too_many_lines)]
 pub fn sweep(
     topo: &mut Topology,
     profile: FaceId,
     path: &NurbsCurve,
+) -> Result<SolidId, crate::OperationsError> {
+    sweep_placed(topo, profile, path, ProfilePlacement::AsPositioned)
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn sweep_placed(
+    topo: &mut Topology,
+    profile: FaceId,
+    path: &NurbsCurve,
+    placement: ProfilePlacement,
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
@@ -551,7 +604,7 @@ pub fn sweep(
     }
 
     // A straight perpendicular sweep is a prism — build it exactly via extrude.
-    if let Some(solid) = try_straight_extrude(topo, profile, path)? {
+    if let Some(solid) = try_straight_extrude(topo, profile, path, placement)? {
         return Ok(solid);
     }
 
@@ -628,8 +681,6 @@ pub fn sweep(
         input_normal = -input_normal;
     }
 
-    let centroid = crate::winding::polygon_centroid(&input_positions);
-
     let num_segments = (path.control_points().len() * 2).max(4);
 
     // Seed the first frame's up-vector from the profile normal, projected
@@ -638,12 +689,23 @@ pub fn sweep(
 
     let frames = compute_frames(path, num_segments, up_hint, is_closed)?;
 
-    // The first frame's basis vectors define the local coordinate system
-    // in which profile vertex offsets are expressed.
-    // Map the profile's 2D shape onto the path's perpendicular plane using the
-    // profile's own basis, so a profile whose plane is not perpendicular to the
-    // path is still swept perpendicular (rather than collapsing to a ribbon).
-    let (initial_right, initial_up, initial_tangent) = profile_basis(input_normal);
+    // The decomposition basis and reference point pick the placement semantic:
+    // frame-0's own basis and origin make ring 0 the identity map (profile
+    // swept as positioned); the profile's basis with its centroid re-centers
+    // and re-orients the profile onto the path.
+    let (reference, initial_right, initial_up, initial_tangent) =
+        match resolve_placement(placement, input_normal, path_tangent_0) {
+            ProfilePlacement::AsPositioned => (
+                frames[0].origin,
+                frames[0].right,
+                frames[0].up,
+                frames[0].tangent,
+            ),
+            ProfilePlacement::CentroidOnPath => {
+                let (r, u, t) = profile_basis(input_normal);
+                (crate::winding::polygon_centroid(&input_positions), r, u, t)
+            }
+        };
 
     // ring_verts[k][i] = vertex at path sample k, profile vertex i.
     // For closed paths, frames has num_segments entries; we append a copy
@@ -656,7 +718,7 @@ pub fn sweep(
             .map(|&pos| {
                 let transformed = transform_point(
                     pos,
-                    centroid,
+                    reference,
                     initial_right,
                     initial_up,
                     initial_tangent,
@@ -716,7 +778,7 @@ pub fn sweep(
         inner_swept.push(sweep_wire_through_frames(
             topo,
             iw_id,
-            centroid,
+            reference,
             initial_right,
             initial_up,
             initial_tangent,
@@ -913,16 +975,26 @@ pub fn sweep_smooth(
         input_normal = -input_normal;
     }
 
-    let centroid = crate::winding::polygon_centroid(&input_positions);
-
     let num_segments = (path.control_points().len() * 2).max(4);
     let up_hint = orthogonalize(input_normal, path_tangent_0);
     let frames = compute_frames(path, num_segments, up_hint, is_closed)?;
 
-    // Map the profile's 2D shape onto the path's perpendicular plane using the
-    // profile's own basis, so a profile whose plane is not perpendicular to the
-    // path is still swept perpendicular (rather than collapsing to a ribbon).
-    let (initial_right, initial_up, initial_tangent) = profile_basis(input_normal);
+    // As-positioned placement (see `sweep`): frame-0's basis and origin make
+    // ring 0 the identity map, so the profile is swept from where it lies.
+    // Edge-on/oblique profiles fall back to the auto-orienting placement.
+    let (reference, initial_right, initial_up, initial_tangent) =
+        match resolve_placement(ProfilePlacement::AsPositioned, input_normal, path_tangent_0) {
+            ProfilePlacement::AsPositioned => (
+                frames[0].origin,
+                frames[0].right,
+                frames[0].up,
+                frames[0].tangent,
+            ),
+            ProfilePlacement::CentroidOnPath => {
+                let (r, u, t) = profile_basis(input_normal);
+                (crate::winding::polygon_centroid(&input_positions), r, u, t)
+            }
+        };
 
     // Compute all ring positions (without allocating vertices yet).
     let num_rings = frames.len();
@@ -934,7 +1006,7 @@ pub fn sweep_smooth(
                 .map(|&pos| {
                     transform_point(
                         pos,
-                        centroid,
+                        reference,
                         initial_right,
                         initial_up,
                         initial_tangent,
@@ -980,7 +1052,7 @@ pub fn sweep_smooth(
         inner_swept_smooth.push(sweep_wire_through_frames(
             topo,
             iw_id,
-            centroid,
+            reference,
             initial_right,
             initial_up,
             initial_tangent,
@@ -1224,10 +1296,12 @@ pub fn sweep_with_options(
 
     // A straight perpendicular sweep is a prism — build it exactly via extrude.
     // Only when no scale law or guide spine applies, since either makes the
-    // result non-prismatic.
+    // result non-prismatic. This family keeps centroid placement (the contact
+    // modes position the section on the spine themselves).
     if options.scale_law.is_none()
         && options.aux_spine.is_none()
-        && let Some(solid) = try_straight_extrude(topo, profile, path)?
+        && let Some(solid) =
+            try_straight_extrude(topo, profile, path, ProfilePlacement::CentroidOnPath)?
     {
         return Ok(solid);
     }
