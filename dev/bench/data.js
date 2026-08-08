@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786232546014,
+  "lastUpdate": 1786233066405,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25001,6 +25001,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24169806,
             "range": "± 82533",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0b709430c8166323c447b007e72500492210dea4",
+          "message": "chore(main): release 3.2.5 (#1467)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.2.5](https://github.com/andymai/brepkit/compare/v3.2.4...v3.2.5)\n(2026-08-08)\n\n\n### Bug Fixes\n\n* **blend:** close the fillet junction lens and pinch classes\n(grouped-scoop cases 2+3)\n([#1465](https://github.com/andymai/brepkit/issues/1465))\n([b74c9ac](https://github.com/andymai/brepkit/commit/b74c9ac8b168bdc5eedf03d428755e19aa05eda8))\n* **blend:** emit orientation-consistent faces from the v2 fillet\n([#1466](https://github.com/andymai/brepkit/issues/1466))\n([f1b2cd1](https://github.com/andymai/brepkit/commit/f1b2cd143e60b434ac7746441fbfbf0c1abe7de2))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.5 improves fillet behavior in `brepkit-blend` and makes v2\nfillet faces orientation-consistent. Also bumps all `brepkit-*`\nworkspace crates to 3.2.5.\n\n- **Bug Fixes**\n- Close fillet junction lens and pinch classes (grouped-scoop cases 2\nand 3).\n  - Emit orientation-consistent faces from the v2 fillet.\n\n<sup>Written for commit 31f6a091909de04aa54ce194c5ae542a0763f77a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1467?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T23:48:44Z",
+          "tree_id": "2f9f49354448161f349cda9f100e69b7a2745f95",
+          "url": "https://github.com/andymai/brepkit/commit/0b709430c8166323c447b007e72500492210dea4"
+        },
+        "date": 1786233064404,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 953845,
+            "range": "± 16007",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1032931,
+            "range": "± 4160",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12451,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702718,
+            "range": "± 2373",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25427085,
+            "range": "± 50609",
             "unit": "ns/iter"
           }
         ]
