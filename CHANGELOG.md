@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.2.1](https://github.com/andymai/brepkit/compare/v3.2.0...v3.2.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* **algo:** DCEL rescue for non-periodic band grand tours ([#1453](https://github.com/andymai/brepkit/issues/1453)) ([53536cc](https://github.com/andymai/brepkit/commit/53536cc61751b378e454fde67d131ef86e550b89))
+
+
+### Performance
+
+* **algo:** materialize deduped sections only when a duplicate exists ([#1454](https://github.com/andymai/brepkit/issues/1454)) ([b94429e](https://github.com/andymai/brepkit/commit/b94429e727c73f50e2d62e2c71ce3718ecb1cb3d))
+
 ## [3.2.0](https://github.com/andymai/brepkit/compare/v3.1.4...v3.2.0) (2026-08-08)
 
 
