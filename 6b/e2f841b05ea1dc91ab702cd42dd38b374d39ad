@@ -1,0 +1,22 @@
+crates/blend/src/spherical_triangle.rs
+  s_8b449c7ef64a35::t_4651a899d4a27d 62-69,82-89,93-100,108-115,137-140
+  s_8b449c7ef64a35::t_8d5c7f154397aa 141-142,148-153,180-187,214-219,271-278,292-299,343-348,391-396,401-406
+crates/blend/src/corner.rs
+  s_8b449c7ef64a35::t_cb945f49008859 251-264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "6be2f841b05ea1dc91ab702cd42dd38b374d39ad",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
