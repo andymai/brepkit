@@ -1026,11 +1026,14 @@ fn sweep_miter_l_shaped_volume_correct() {
 
     let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
 
-    // The exact volume depends on the miter geometry, but should be
-    // in a reasonable range for a 1×1 profile swept along two 5-unit legs.
+    // Exact mitered volume: each leg is a prism cut by the bisector plane
+    // x + z = 5 at the kink. The as-positioned profile (x, y in [0,1],
+    // centroid offset 0.5 toward the inside of the bend) shortens each leg
+    // by (centroid . n)/(n . t) = 0.5, so V = 10 - 2*0.5 = 9.
+    let expected = 9.0;
     assert!(
-        vol > 5.0 && vol < 15.0,
-        "L-sweep volume should be roughly 10 (two 5-unit legs), got {vol}"
+        (vol - expected).abs() < 1e-6,
+        "L-sweep mitered volume should be exactly {expected}, got {vol}"
     );
 }
 
@@ -2050,8 +2053,7 @@ fn sweep_with_options_keeps_offset_profile_position() {
 fn miter_sweep_keeps_offset_profile_position() {
     // The miter family joins the as-positioned contract: a perpendicular
     // offset profile swept along a kinked path keeps its lateral placement,
-    // and the up-transported frames keep cross-sections unskewed through the
-    // kink (the volume oracle: area x path length).
+    // and both legs share one exact kink ring on the bisector plane.
     let mut topo = Topology::new();
     let t = 1e-7;
     let v0 = topo.add_vertex(Vertex::new(Point3::new(5.0, 5.0, 0.0), t));
@@ -2112,14 +2114,21 @@ fn miter_sweep_keeps_offset_profile_position() {
         "offset profile must keep its y placement, got {bb:?}"
     );
     let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
-    let expected = 5.0 + 29.0_f64.sqrt();
+    // Exact mitered volume, NOT area x path length: each leg is a prism cut
+    // by the bisector plane at the kink, and a profile offset toward the
+    // inside of the bend shortens BOTH legs by (centroid . n)/(n . t1) with
+    // n = t1 + t2 (the offset's component against the miter normal).
+    let t2 = Vec3::new(2.0, 0.0, 5.0).normalize().unwrap();
+    let n = Vec3::new(0.0, 0.0, 1.0) + t2;
+    let deficit = 5.5 * n.x() / n.z();
+    let expected = 5.0 + 29.0_f64.sqrt() - 2.0 * deficit;
     assert!(
-        (vol - expected).abs() / expected < 0.05,
-        "miter tube volume should be ~{expected}, got {vol}"
+        (vol - expected).abs() < 1e-6,
+        "miter tube volume should be exactly {expected}, got {vol}"
     );
 }
 #[test]
-#[ignore = "diagnostic — dissects the parked as-positioned offset miter elbow (see roadmap)"]
+#[ignore = "diagnostic — face inventory, watertightness, and volume for the offset miter elbow"]
 #[allow(
     clippy::cast_possible_truncation,
     clippy::too_many_lines,
