@@ -151,17 +151,17 @@ fn run_once(iter: usize) -> (usize, usize) {
                     _ => "other".to_string(),
                 };
                 let w = topo.wire(f.outer_wire()).unwrap();
-                let e0 = topo.edge(w.edges()[0].edge()).unwrap();
-                let first = topo
-                    .vertex(w.edges()[0].oriented_start(e0))
-                    .unwrap()
-                    .point();
+                let first = w.edges().first().map_or_else(
+                    || "<empty wire>".to_string(),
+                    |oe| {
+                        let e0 = topo.edge(oe.edge()).unwrap();
+                        let p = topo.vertex(oe.oriented_start(e0)).unwrap().point();
+                        format!("({:.3},{:.3},{:.3})", p.x(), p.y(), p.z())
+                    },
+                );
                 format!(
-                    "OPDUMP {fid:?} rev={} {surf} first=({:.3},{:.3},{:.3})",
-                    f.is_reversed(),
-                    first.x(),
-                    first.y(),
-                    first.z()
+                    "OPDUMP {fid:?} rev={} {surf} first={first}",
+                    f.is_reversed()
                 )
             })
             .collect();
