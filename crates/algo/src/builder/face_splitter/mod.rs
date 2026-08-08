@@ -4308,6 +4308,25 @@ fn split_face_2d_impl(
             "STRACE face={face_id:?} plane={is_plane} sections={}",
             sections.len()
         );
+        let mut rows: Vec<String> = sections
+            .iter()
+            .map(|sec| {
+                format!(
+                    "STRACE-SEC s=({:.7},{:.7},{:.7}) e=({:.7},{:.7},{:.7}) pb={:?}",
+                    sec.start.x(),
+                    sec.start.y(),
+                    sec.start.z(),
+                    sec.end.x(),
+                    sec.end.y(),
+                    sec.end.z(),
+                    sec.pave_block_id
+                )
+            })
+            .collect();
+        rows.sort();
+        for r in rows {
+            log::debug!("{r}");
+        }
     }
 
     // Use provided frame or build one from wire points (plane faces only).
@@ -5916,6 +5935,40 @@ fn split_face_2d_impl(
 
     // Build wire loops via angular-sorting traversal.
     let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
+    if trace_split {
+        let mut rows: Vec<String> = all_edges
+            .iter()
+            .map(|e| {
+                format!(
+                    "STRACE-IN ({:.7},{:.7})->({:.7},{:.7}) src={:?}",
+                    e.start_uv.x(),
+                    e.start_uv.y(),
+                    e.end_uv.x(),
+                    e.end_uv.y(),
+                    e.source_edge_idx
+                )
+            })
+            .collect();
+        rows.sort();
+        for r in rows {
+            log::debug!("{r}");
+        }
+        let mut lrows: Vec<String> = loops
+            .iter()
+            .map(|lp| {
+                let mut vs: Vec<String> = lp
+                    .iter()
+                    .map(|e| format!("({:.7},{:.7})", e.start_uv.x(), e.start_uv.y()))
+                    .collect();
+                vs.sort();
+                format!("STRACE-LOOP n={} {}", lp.len(), vs.join(""))
+            })
+            .collect();
+        lrows.sort();
+        for r in lrows {
+            log::debug!("{r}");
+        }
+    }
     // Clockwise-boundary handling: this face's UV frame derives from the raw
     // surface normal, not the effective face orientation, so an inner-shell
     // (cavity) wall winds CW in UV while the outer wall winds CCW. Two effects
