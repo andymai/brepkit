@@ -298,6 +298,30 @@ impl<'a> FilletBuilder<'a> {
             blend_cross_edges.push(info.cross_start);
         }
 
+        // Faces using each vertex, over the ORIGINAL shell: a stripe end
+        // whose outline vertex belongs to a third face (a perpendicular
+        // end face) is closed by the notch-arc path, not by a cap.
+        let mut vertex_face_count: std::collections::HashMap<
+            brepkit_topology::vertex::VertexId,
+            usize,
+        > = std::collections::HashMap::new();
+        for &fid in &original_faces {
+            let face = topo.face(fid)?;
+            let mut wires = vec![face.outer_wire()];
+            wires.extend_from_slice(face.inner_wires());
+            let mut seen: HashSet<brepkit_topology::vertex::VertexId> = HashSet::new();
+            for wid in wires {
+                for oe in topo.wire(wid)?.edges() {
+                    let e = topo.edge(oe.edge())?;
+                    seen.insert(e.start());
+                    seen.insert(e.end());
+                }
+            }
+            for v in seen {
+                *vertex_face_count.entry(v).or_insert(0) += 1;
+            }
+        }
+
         // Cap each abrupt stripe end that produced notch edges on BOTH
         // adjacent faces: the cap is the cross-section wedge [notch on one
         // face, terminal section arc, notch on the other face] sharing the
@@ -318,6 +342,14 @@ impl<'a> FilletBuilder<'a> {
                     })
                     .collect();
                 if pair.len() != 2 || pair[0].outline_vid != pair[1].outline_vid {
+                    continue;
+                }
+                if vertex_face_count
+                    .get(&pair[0].outline_vid)
+                    .copied()
+                    .unwrap_or(0)
+                    > 2
+                {
                     continue;
                 }
                 let (na, nb) = if (pair[0].contact_pt - sec.p1).length() < 1e-6 {
@@ -342,7 +374,10 @@ impl<'a> FilletBuilder<'a> {
                     nb.contact_vid,
                     EdgeCurve::Circle(circle),
                 ));
-                let fwd_of = |topo: &Topology, eid: EdgeId, from: brepkit_topology::vertex::VertexId| -> Result<bool, BlendError> {
+                let fwd_of = |topo: &Topology,
+                              eid: EdgeId,
+                              from: brepkit_topology::vertex::VertexId|
+                 -> Result<bool, BlendError> {
                     Ok(topo.edge(eid)?.start() == from)
                 };
                 let oe1 = OrientedEdge::new(na.edge, fwd_of(topo, na.edge, na.outline_vid)?);
@@ -1322,6 +1357,8 @@ fn rebuild_closed_rim_loop_faces(
                 from: Point3,
                 to: Point3,
                 curve: brepkit_math::nurbs::curve::NurbsCurve,
+                from_vid: Option<brepkit_topology::vertex::VertexId>,
+                to_vid: Option<brepkit_topology::vertex::VertexId>,
             },
             Original {
                 edges: Vec<OrientedEdge>,
@@ -1370,6 +1407,8 @@ fn rebuild_closed_rim_loop_faces(
                         from,
                         to,
                         curve: contact,
+                        from_vid: Option::None,
+                        to_vid: Option::None,
                     });
                 }
                 Option::None => {
@@ -1423,12 +1462,109 @@ fn rebuild_closed_rim_loop_faces(
             }
         }
 
+        // Where a contact endpoint lands ON a neighbouring original LINE
+        // edge (a full-edge fillet whose contact ends on the perpendicular
+        // boundary), split that edge there — the classic trim behaviour,
+        // propagated into neighbour wires — instead of overlaying a notch
+        // line on top of the boundary.
+        let seg_dist = |a: Point3, b: Point3, q: Point3| -> f64 {
+            let ab = b - a;
+            let len2 = ab.dot(ab);
+            if len2 < 1e-18 {
+                return (q - a).length();
+            }
+            let t = (ab.dot(q - a) / len2).clamp(0.0, 1.0);
+            (q - (a + ab * t)).length()
+        };
+        for k in 0..m {
+            let next = (k + 1) % m;
+            // contact (k) -> original (next): contact END may lie on the
+            // original run's FIRST edge.
+            let (cp, is_end_side) = match (&pieces[k], &pieces[next]) {
+                (RunPiece::Contact { to, .. }, RunPiece::Original { .. }) => (*to, true),
+                (RunPiece::Original { .. }, RunPiece::Contact { from, .. }) => (*from, false),
+                _ => continue,
+            };
+            let (orig_idx, edge_pos) = if is_end_side {
+                (next, 0usize)
+            } else {
+                (k, usize::MAX)
+            };
+            let RunPiece::Original { edges, .. } = &pieces[orig_idx] else {
+                continue;
+            };
+            let epos = if edge_pos == usize::MAX {
+                edges.len() - 1
+            } else {
+                0
+            };
+            let oe = edges[epos];
+            let edge = topo.edge(oe.edge())?;
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                continue;
+            }
+            let (pa, pb) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            if seg_dist(pa, pb, cp) > WELD {
+                continue;
+            }
+            // Endpoint coincidence is the weld case, not a split.
+            if (cp - pa).length() <= WELD || (cp - pb).length() <= WELD {
+                continue;
+            }
+            let v_split = topo.add_vertex(Vertex::new(cp, 1e-7));
+            let (pre, post) = trimmer::split_edge_at(topo, &oe, v_split)?;
+            // The kept sub-piece: the part AWAY from the contact junction.
+            match (&mut pieces[orig_idx], is_end_side) {
+                (
+                    RunPiece::Original {
+                        edges,
+                        from_vid,
+                        from,
+                        ..
+                    },
+                    true,
+                ) => {
+                    edges[0] = post;
+                    *from_vid = v_split;
+                    *from = cp;
+                }
+                (
+                    RunPiece::Original {
+                        edges, to_vid, to, ..
+                    },
+                    false,
+                ) => {
+                    let last = edges.len() - 1;
+                    edges[last] = pre;
+                    *to_vid = v_split;
+                    *to = cp;
+                }
+                _ => {}
+            }
+            let contact_idx = if is_end_side { k } else { next };
+            match &mut pieces[contact_idx] {
+                RunPiece::Contact { to_vid, .. } if is_end_side => {
+                    *to_vid = Some(v_split);
+                }
+                RunPiece::Contact { from_vid, .. } if !is_end_side => {
+                    *from_vid = Some(v_split);
+                }
+                _ => {}
+            }
+        }
+
         // Start vertex per piece: original runs reuse their existing outline
         // vertex; contact runs mint one.
         let mut junction_vids: Vec<brepkit_topology::vertex::VertexId> = Vec::with_capacity(m);
         for piece in &pieces {
             let vid = match piece {
                 RunPiece::Original { from_vid, .. } => *from_vid,
+                RunPiece::Contact {
+                    from_vid: Some(v), ..
+                } => *v,
                 RunPiece::Contact { from, .. } => topo.add_vertex(Vertex::new(*from, 1e-7)),
             };
             junction_vids.push(vid);
@@ -1445,11 +1581,14 @@ fn rebuild_closed_rim_loop_faces(
                     forward,
                     curve,
                     to,
+                    to_vid,
                     ..
                 } => {
                     let v_from = junction_vids[k];
                     let welds = (*to - next_start).length() <= WELD;
-                    let v_to = if welds {
+                    let v_to = if let Some(v) = to_vid {
+                        *v
+                    } else if welds {
                         junction_vids[next]
                     } else {
                         topo.add_vertex(Vertex::new(*to, 1e-7))
@@ -1481,11 +1620,8 @@ fn rebuild_closed_rim_loop_faces(
                 RunPiece::Original { edges, to_vid, .. } => {
                     loop_edges.extend(edges.iter().copied());
                     if (piece_end(&pieces[k]) - next_start).length() > WELD {
-                        let notch = topo.add_edge(Edge::new(
-                            *to_vid,
-                            junction_vids[next],
-                            EdgeCurve::Line,
-                        ));
+                        let notch =
+                            topo.add_edge(Edge::new(*to_vid, junction_vids[next], EdgeCurve::Line));
                         loop_edges.push(OrientedEdge::new(notch, true));
                         notch_count += 1;
                         if let RunPiece::Contact { stripe: nsi, .. } = &pieces[next] {

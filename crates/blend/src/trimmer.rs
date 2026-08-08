@@ -435,7 +435,7 @@ fn resolve_hit_ends(
 ///
 /// Returns `(before, after)` as [`OrientedEdge`] values following the same
 /// traversal direction as the input.
-fn split_edge_at(
+pub(crate) fn split_edge_at(
     topo: &mut Topology,
     oe: &OrientedEdge,
     split_vertex: VertexId,
