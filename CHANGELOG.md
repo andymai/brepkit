@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.2](https://github.com/andymai/brepkit/compare/v3.0.1...v3.0.2) (2026-08-08)
+
+
+### Bug Fixes
+
+* **operations:** drop sub-resolution polygons in mixed boolean assembly ([#1423](https://github.com/andymai/brepkit/issues/1423)) ([56da284](https://github.com/andymai/brepkit/commit/56da2846891ccf3bcb45eb9ad8201a37e91c8579))
+
 ## [3.0.1](https://github.com/andymai/brepkit/compare/v3.0.0...v3.0.1) (2026-08-08)
 
 
