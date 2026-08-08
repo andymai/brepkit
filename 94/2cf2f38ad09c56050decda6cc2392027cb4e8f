@@ -1,0 +1,19 @@
+crates/io/tests/slots_lipcone_cut_inmem.rs
+  s_8b449c7ef64a35::t_f4cfb4d9df3648 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "942cf2f38ad09c56050decda6cc2392027cb4e8f",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
