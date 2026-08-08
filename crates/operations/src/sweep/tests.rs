@@ -1026,11 +1026,14 @@ fn sweep_miter_l_shaped_volume_correct() {
 
     let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
 
-    // The exact volume depends on the miter geometry, but should be
-    // in a reasonable range for a 1×1 profile swept along two 5-unit legs.
+    // Exact mitered volume: each leg is a prism cut by the bisector plane
+    // x + z = 5 at the kink. The as-positioned profile (x, y in [0,1],
+    // centroid offset 0.5 toward the inside of the bend) shortens each leg
+    // by (centroid . n)/(n . t) = 0.5, so V = 10 - 2*0.5 = 9.
+    let expected = 9.0;
     assert!(
-        vol > 5.0 && vol < 15.0,
-        "L-sweep volume should be roughly 10 (two 5-unit legs), got {vol}"
+        (vol - expected).abs() < 1e-6,
+        "L-sweep mitered volume should be exactly {expected}, got {vol}"
     );
 }
 
@@ -2044,4 +2047,209 @@ fn sweep_with_options_keeps_offset_profile_position() {
         bb.min.x() > 4.5 && bb.max.x() < 6.7 && bb.min.y() > 4.5 && bb.max.y() < 6.5,
         "offset profile must stay near x,y in [5,6], got {bb:?}"
     );
+}
+
+#[test]
+fn miter_sweep_keeps_offset_profile_position() {
+    // The miter family joins the as-positioned contract: a perpendicular
+    // offset profile swept along a kinked path keeps its lateral placement,
+    // and both legs share one exact kink ring on the bisector plane.
+    let mut topo = Topology::new();
+    let t = 1e-7;
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(5.0, 5.0, 0.0), t));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(6.0, 5.0, 0.0), t));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(6.0, 6.0, 0.0), t));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(5.0, 6.0, 0.0), t));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e0, true),
+            OrientedEdge::new(e1, true),
+            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e3, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let profile = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    // Polyline path with one kink: up 5, then slanted up 5.
+    let path = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 0.5, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 5.0),
+            Point3::new(2.0, 0.0, 10.0),
+        ],
+        vec![1.0, 1.0, 1.0],
+    )
+    .unwrap();
+
+    let solid = sweep_with_options(
+        &mut topo,
+        profile,
+        &path,
+        &SweepOptions {
+            corner_mode: SweepCornerMode::Miter,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let bb = crate::measure::solid_bounding_box(&topo, solid).unwrap();
+    // The tube rides the kinked path in x/z; the y placement is the
+    // discriminating pin (centroid placement would center it on y=0).
+    assert!(
+        (bb.min.y() - 5.0).abs() < 0.1 && (bb.max.y() - 6.0).abs() < 0.1,
+        "offset profile must keep its y placement, got {bb:?}"
+    );
+    let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+    // Exact mitered volume, NOT area x path length: each leg is a prism cut
+    // by the bisector plane at the kink, and a profile offset toward the
+    // inside of the bend shortens BOTH legs by (centroid . n)/(n . t1) with
+    // n = t1 + t2 (the offset's component against the miter normal).
+    let t2 = Vec3::new(2.0, 0.0, 5.0).normalize().unwrap();
+    let n = Vec3::new(0.0, 0.0, 1.0) + t2;
+    let deficit = 5.5 * n.x() / n.z();
+    let expected = 5.0 + 29.0_f64.sqrt() - 2.0 * deficit;
+    assert!(
+        (vol - expected).abs() < 1e-6,
+        "miter tube volume should be exactly {expected}, got {vol}"
+    );
+}
+#[test]
+#[ignore = "diagnostic — face inventory, watertightness, and volume for the offset miter elbow"]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::print_stderr
+)]
+fn miter_offset_elbow_dissect() {
+    let mut topo = Topology::new();
+    let t = 1e-7;
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(5.0, 5.0, 0.0), t));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(6.0, 5.0, 0.0), t));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(6.0, 6.0, 0.0), t));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(5.0, 6.0, 0.0), t));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e0, true),
+            OrientedEdge::new(e1, true),
+            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e3, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let profile = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let path = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 0.5, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 5.0),
+            Point3::new(2.0, 0.0, 10.0),
+        ],
+        vec![1.0, 1.0, 1.0],
+    )
+    .unwrap();
+    let solid = sweep_with_options(
+        &mut topo,
+        profile,
+        &path,
+        &SweepOptions {
+            corner_mode: SweepCornerMode::Miter,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let report = crate::validate::validate_solid(&topo, solid).unwrap();
+    eprintln!("VALID: {:?}", report.is_valid());
+    for defl in [0.1, 0.01, 0.001] {
+        let vol = crate::measure::solid_volume(&topo, solid, defl).unwrap();
+        eprintln!("VOL defl={defl}: {vol:.4}");
+    }
+    let ovol = crate::measure::oriented_solid_volume(&topo, solid, 0.01).unwrap();
+    eprintln!("ORIENTED VOL: {ovol:.4}");
+    let mesh = crate::tessellate::tessellate_solid(&topo, solid, 0.01).unwrap();
+    let mut edge_count: HashMap<(u64, u64), usize> = HashMap::new();
+    let q = |p: Point3| -> u64 {
+        let s = 1.0e4_f64;
+        let xi = (p.x() * s).round() as i64;
+        let yi = (p.y() * s).round() as i64;
+        let zi = (p.z() * s).round() as i64;
+        ((xi as u64) & 0x001F_FFFF)
+            | (((yi as u64) & 0x001F_FFFF) << 21)
+            | (((zi as u64) & 0x001F_FFFF) << 42)
+    };
+    for tri in mesh.indices.chunks(3) {
+        for k in 0..3 {
+            let a = mesh.positions[tri[k] as usize];
+            let b = mesh.positions[tri[(k + 1) % 3] as usize];
+            let (qa, qb) = (q(a), q(b));
+            let key = if qa <= qb { (qa, qb) } else { (qb, qa) };
+            *edge_count.entry(key).or_insert(0) += 1;
+        }
+    }
+    let bnd = edge_count.values().filter(|&&c| c == 1).count();
+    let nm = edge_count.values().filter(|&&c| c > 2).count();
+    eprintln!(
+        "MESH boundary={bnd} nonmanifold={nm} tris={}",
+        mesh.indices.len() / 3
+    );
+
+    // Per-face inventory: normal/plane + area-ish via bbox
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    eprintln!("FACES: {}", faces.len());
+    for &fid in &faces {
+        let f = topo.face(fid).unwrap();
+        let w = topo.wire(f.outer_wire()).unwrap();
+        let pts: Vec<Point3> = w
+            .edges()
+            .iter()
+            .map(|oe| {
+                let e = topo.edge(oe.edge()).unwrap();
+                topo.vertex(oe.oriented_start(e)).unwrap().point()
+            })
+            .collect();
+        let zs: Vec<f64> = pts.iter().map(|p| p.z()).collect();
+        let zmin = zs.iter().copied().fold(f64::MAX, f64::min);
+        let zmax = zs.iter().copied().fold(f64::MIN, f64::max);
+        if let FaceSurface::Plane { normal, d } = f.surface() {
+            eprintln!(
+                "  F{:?} n=({:.2},{:.2},{:.2}) d={:.2} z=[{:.2},{:.2}] nv={}",
+                fid,
+                normal.x(),
+                normal.y(),
+                normal.z(),
+                d,
+                zmin,
+                zmax,
+                pts.len()
+            );
+        }
+    }
 }

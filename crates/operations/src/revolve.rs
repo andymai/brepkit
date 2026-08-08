@@ -44,7 +44,7 @@ pub(crate) fn rotate_point(point: Point3, origin: Point3, axis: Vec3, angle: f64
 }
 
 /// Rotate a direction vector around an axis by angle θ (no translation).
-fn rotate_vec(dir: Vec3, axis: Vec3, angle: f64) -> Vec3 {
+pub(crate) fn rotate_vec(dir: Vec3, axis: Vec3, angle: f64) -> Vec3 {
     let cos_a = angle.cos();
     let sin_a = angle.sin();
     let k_dot_v = axis.dot(dir);
