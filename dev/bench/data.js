@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786197207178,
+  "lastUpdate": 1786199134263,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23867,6 +23867,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24853105,
             "range": "± 42442",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "54fbedc128f35922421734a3461a97d5e4d3dfa9",
+          "message": "docs(roadmap): park the second miter attempt with the open volume question (#1443)\n\nRecords the second as-positioned miter attempt (branch\nfix/miter-as-positioned-2, parked): rotational up-transport across kinks\nfixes what naive chaining broke (all existing miter tests pass; centered\nelbow volume improves), but the offset elbow's volume disagrees with the\nrigid-transport oracle by ~1.7 and it is unresolved which side is wrong.\nNext probe recorded (render the elbow or dissect per-leg volumes).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPark the second as‑positioned `sweep_miter` attempt (branch\n`fix/miter-as-positioned-2`) in the roadmap and document the open\noffset‑elbow volume mismatch.\nNotes rotational up‑transport across kinks + global‑basis decomposition\n(all miter tests pass; centered elbow volume improves) but the offset\nelbow is ~1.7 low vs the rigid‑transport oracle; next probe is to render\nthe elbow or split per‑leg volumes.\n\n<sup>Written for commit bf77b75397bfbd7c11ef5fe7a22680b1cbbc76a7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1443?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T14:23:12Z",
+          "tree_id": "433222158f21814dd789a8650ce58ffc10403a24",
+          "url": "https://github.com/andymai/brepkit/commit/54fbedc128f35922421734a3461a97d5e4d3dfa9"
+        },
+        "date": 1786199131857,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 948705,
+            "range": "± 4693",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1022447,
+            "range": "± 66592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11971,
+            "range": "± 473",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700794,
+            "range": "± 1146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24863865,
+            "range": "± 39950",
             "unit": "ns/iter"
           }
         ]
