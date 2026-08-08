@@ -1830,21 +1830,11 @@ fn analytic_lip_ring_fuses_onto_hollow_box() {
         "contact fuse volume must be the sum: expected ~{expected}, got {fused_vol}"
     );
 
-    // Watertightness: every edge used by exactly two faces. Full orientation
-    // validity is pinned separately below: shell_op's cavity corner cylinders
-    // carry a pre-existing sense inversion the fuse preserves.
-    let mut edge_uses: HashMap<usize, usize> = HashMap::new();
-    for &fid in &faces {
-        let f = topo.face(fid).unwrap();
-        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
-            for oe in topo.wire(wid).unwrap().edges() {
-                *edge_uses.entry(oe.edge().index()).or_insert(0) += 1;
-            }
-        }
-    }
-    for (&e, &c) in &edge_uses {
-        assert_eq!(c, 2, "fused solid edge {e} used {c} times");
-    }
+    let report = crate::validate::validate_solid(&topo, fused).unwrap();
+    assert!(
+        report.is_valid(),
+        "fused lip+box must be a valid solid: {report:?}"
+    );
 }
 
 #[test]
@@ -1908,7 +1898,6 @@ fn exact_coincident_lip_fuse_stays_analytic() {
 }
 
 #[test]
-#[ignore = "ready-repro: shell_op cavity corner cylinders emit 16 same-sense edges (4 corner             cylinders x 4 edges, r = corner radius - thickness, vs cavity walls/floor/rim); a             naive winding flip breaks the spec assembler's CylindricalFace arc pairing — needs             the emission-vs-assembly sense contract dug at the shell_op/assemble_solid_mixed             boundary. Un-ignore when that fix ships."]
 fn shelled_rounded_box_is_orientation_clean() {
     let mut topo = Topology::new();
     let spine_for_face = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
