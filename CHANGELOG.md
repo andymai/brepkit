@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.3](https://github.com/andymai/brepkit/compare/v3.2.2...v3.2.3) (2026-08-08)
+
+
+### Bug Fixes
+
+* **blend:** close the closed-rim and mixed-radius fillet classes (scoop repro 56 → 0 free) ([#1460](https://github.com/andymai/brepkit/issues/1460)) ([a128062](https://github.com/andymai/brepkit/commit/a1280628498e1f9147b93004cbc438771e3bf7cc))
+
 ## [3.2.2](https://github.com/andymai/brepkit/compare/v3.2.1...v3.2.2) (2026-08-08)
 
 
