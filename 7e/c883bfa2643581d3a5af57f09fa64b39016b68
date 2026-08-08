@@ -1,0 +1,19 @@
+crates/blend/src/corner.rs
+  s_8b449c7ef64a35::t_661725bdcfa301 388-400,402-403,517-526,528-529,728-752
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "7ec883bfa2643581d3a5af57f09fa64b39016b68",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
