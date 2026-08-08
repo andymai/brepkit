@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786184264991,
+  "lastUpdate": 1786186275809,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23435,6 +23435,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24781067,
             "range": "± 859306",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "17990172da7e41f3beb47bb560f62145a79401e5",
+          "message": "fix(operations): assemble the shell rim from sorted boundary edges (#1434)\n\n## Root cause (closes the coincident-fuse nondeterminism dig)\n\n`shell_op` collected its open-boundary edges by iterating\n`edge_to_face_map` — a HashMap — so the rim loop's **starting edge\nvaried run to run**. The rim face's wire origin is what\n`PlaneFrame::from_plane_face` anchors on, so the face splitter's UV\nframe rotated per run, shifting quantized edge sets enough that\nsame-domain's within-rank dedup of the coincident z=21 contact faces\nformed or not. Result: the exact-coincidence lip fuse kept both contact\nfaces as an internal membrane in ~10-33% of runs of the same build.\n\nThe chain was walked upstream over four instrumented passes (all\nrecorded in the roadmap row): FF sections byte-identical → SD edge sets\ndiverge for one source face → its splitter inputs differ *in UV only* →\nthe operand's rim wire start varies. Fix: sort the boundary edge ids\nbefore chaining the rim loops (one line).\n\n## Measured\n\n- Hollow-box operand byte-variance: 24/29 runs → **0/99**.\n- Bad fuse outcome: ~10-33% → **0/100**.\n- `exact_coincident_lip_fuse_stays_analytic`: **un-ignored**, 10/10\ngreen.\n\n## Also in this PR\n\nDurable env-gated instruments from the dig: `BK_FF_DUMP` (phase-FF\nsection dump), `BK_SD_SETS` (same-domain edge-set dump), split-trace\nsection/input dumps, `BK_OPERAND_DUMP` in the loop probe.\n\n## Verification\n\nFull workspace green (117 suites, render excluded), clippy `-D\nwarnings`, fmt.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMake shell rim assembly deterministic by sorting boundary edges before\nchaining loops. Fixes UV-frame rotation from HashMap order that made\nexact-coincidence fuses flaky and re-enables the analytic lip fuse test.\n\n- **Bug Fixes**\n- `shell_op`: sort boundary edge ids before rim chaining to stabilize\nthe rim wire origin and downstream plane-frame anchoring.\n- Results: operand bytes stable (0/99 diffs); bad fuse runs drop to\n0/100; `exact_coincident_lip_fuse_stays_analytic` is un-ignored and\ngreen.\n\n- **New Features**\n- Env-gated diagnostics for debugging: `BK_FF_DUMP`, `BK_SD_SETS`,\nsplitter traces (`STRACE-SEC`, `STRACE-IN`, `STRACE-LOOP`), and\n`BK_OPERAND_DUMP` (now degrades gracefully on empty wires).\n\n<sup>Written for commit 5d4b0bcdba340e34f31c7dca3018fa380d9a5f5a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1434?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T10:49:03Z",
+          "tree_id": "7f4cf8b96a6cd4d160714f050f39cf63c6ba9985",
+          "url": "https://github.com/andymai/brepkit/commit/17990172da7e41f3beb47bb560f62145a79401e5"
+        },
+        "date": 1786186274000,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 772729,
+            "range": "± 8200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 858043,
+            "range": "± 18147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10312,
+            "range": "± 345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 579929,
+            "range": "± 7453",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20666337,
+            "range": "± 311111",
             "unit": "ns/iter"
           }
         ]
