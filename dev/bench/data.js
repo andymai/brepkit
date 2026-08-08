@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786228460067,
+  "lastUpdate": 1786228965976,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24839,6 +24839,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25505351,
             "range": "± 32062",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9403a5ec00b8d8ee073aa5dd97059623f0217ea1",
+          "message": "chore(main): release 3.2.4 (#1464)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.2.4](https://github.com/andymai/brepkit/compare/v3.2.3...v3.2.4)\n(2026-08-08)\n\n\n### Bug Fixes\n\n* **algo:** keep pinch-shim faces through within-rank same-domain dedup\n([#1463](https://github.com/andymai/brepkit/issues/1463))\n([2d50f28](https://github.com/andymai/brepkit/commit/2d50f281cb6e12a2eb22cb8eef4bc5bf79e017d7))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.4 with a fix that preserves pinch-shim faces during\nsame-domain dedup to prevent valid faces from being dropped.\n\n- **Bug Fixes**\n- In `brepkit-algo`, keep pinch-shim faces during within-rank\nsame-domain dedup to maintain topology in tight-geometry cases (#1463).\n\n<sup>Written for commit 3c16c6162029d60ec8574ffa7d9b3115a4c39bc3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1464?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T22:40:26Z",
+          "tree_id": "bb2bdccb785e553c94bc61e2dc24947dfba62b88",
+          "url": "https://github.com/andymai/brepkit/commit/9403a5ec00b8d8ee073aa5dd97059623f0217ea1"
+        },
+        "date": 1786228964002,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 959218,
+            "range": "± 2115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1038905,
+            "range": "± 6960",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11960,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710210,
+            "range": "± 1290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25669326,
+            "range": "± 41244",
             "unit": "ns/iter"
           }
         ]
