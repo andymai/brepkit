@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786177583279,
+  "lastUpdate": 1786179887554,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23219,6 +23219,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26459155,
             "range": "± 133460",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "921e189ae3e310511a8491682ee237d082e2aa7a",
+          "message": "test(io): add the coincident-fuse nondeterminism loop probe (#1430)\n\n## What\n\nAdds `crates/io/examples/coincident_fuse_loop.rs`: an in-process loop\nrepro for the maximal-coincidence lip fuse nondeterminism (the\nready-repro class recorded in the roadmap after #1427). `N=<runs>`\ncontrols iterations, `BK_LOOP_DEBUG=1` enables per-iteration kernel\ndebug logs; on a bad iteration it attributes every defective edge\n(position + owner surfaces).\n\n## First-pass findings (recorded in the roadmap row)\n\n- The bad outcome is structurally stable: raw GFA emits F=64 with 14\ndefective edges, all at the z=21 contact plane — both coincident contact\nmemberships kept (rim-top plane + lip-bottom annulus as an internal\nmembrane; walls and both r=3.75 corner cylinders triple-sharing their\nz=21 edges). Good runs emit F=58. Rate ~5-20% per run of the same build.\n- Two distinct order-sensitive sites measured: the splitter's sub-face\ncount varies among good runs (74 or 68 both → F=58, benign so far), and\nwith identical splitter logs (68 subs) good vs bad diverge downstream in\ncoincident classification / SD pairing — the harmful site.\n- Next probe and the fix doctrine (deterministic ordering, not wider\ntolerances) are in the roadmap row.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an in-process loop probe to reproduce the exact-coincidence lip\nfuse nondeterminism and attribute defective edges. Now uses a static\nlogger for consistent per-iteration debug output; the roadmap entry is\nupdated with probe details and findings.\n\n- **New Features**\n- Added `crates/io/examples/coincident_fuse_loop.rs` to run the lip fuse\nN times and report per-iteration results (good vs bad).\n- Controls: `N=<runs>` and `BK_LOOP_DEBUG=1` for per-iteration kernel\nlogs; static logger ensures reliable output across runs.\n- On bad runs, prints up to 20 defective edges with endpoints and owner\nsurface types; tags analytic vs fallback via curved-face count and\nprints a fallback summary.\n- Updated the roadmap row to reference this probe and record first-pass\nfindings.\n\n<sup>Written for commit bbd581392ffa788ba6171a247bc92125139b80d2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1430?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T09:02:20Z",
+          "tree_id": "767abb931c40e5b045f7b1b5cc51a8990d760d02",
+          "url": "https://github.com/andymai/brepkit/commit/921e189ae3e310511a8491682ee237d082e2aa7a"
+        },
+        "date": 1786179885274,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 946285,
+            "range": "± 7878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1023535,
+            "range": "± 1773",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12197,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 711091,
+            "range": "± 2979",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24962203,
+            "range": "± 2563882",
             "unit": "ns/iter"
           }
         ]
