@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786188971818,
+  "lastUpdate": 1786189476593,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23543,6 +23543,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24919845,
             "range": "± 602104",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bf72b1d6b4c4400ae2735400742a72b0bdf65ae4",
+          "message": "chore(main): release 3.1.2 (#1436)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.1.2](https://github.com/andymai/brepkit/compare/v3.1.1...v3.1.2)\n(2026-08-08)\n\n\n### Bug Fixes\n\n* **operations:** assemble the shell rim from sorted boundary edges\n([#1434](https://github.com/andymai/brepkit/issues/1434))\n([1799017](https://github.com/andymai/brepkit/commit/17990172da7e41f3beb47bb560f62145a79401e5))\n* **operations:** correct the shell cavity face senses end to end\n([#1435](https://github.com/andymai/brepkit/issues/1435))\n([ea8204f](https://github.com/andymai/brepkit/commit/ea8204fab9144bf046fb23190fbc3ec024c54394))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPublish 3.1.2 and bump all workspace crate versions. Fix shell assembly\nin `brepkit-operations` so rims are built from sorted boundary edges and\ncavity face senses are correct.\n\n- **Bug Fixes**\n- Assemble shell rims from sorted boundary edges to prevent misordered\nloops.\n  - Correct cavity face senses end-to-end to avoid inverted faces.\n\n<sup>Written for commit f9ed7e9f70a1fea272e32e6b2a178d5d8ee224bb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1436?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T11:42:05Z",
+          "tree_id": "1f9fbec5d77e10376a6879e4e612200dbd1f27a3",
+          "url": "https://github.com/andymai/brepkit/commit/bf72b1d6b4c4400ae2735400742a72b0bdf65ae4"
+        },
+        "date": 1786189474777,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 951124,
+            "range": "± 3784",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1033957,
+            "range": "± 1982",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11834,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704778,
+            "range": "± 1289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25026286,
+            "range": "± 32587",
             "unit": "ns/iter"
           }
         ]
