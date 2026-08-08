@@ -31,6 +31,39 @@ fn census(topo: &Topology, solid: SolidId, label: &str) {
     }
     let free = uses.values().filter(|&&c| c == 1).count();
     let over = uses.values().filter(|&&c| c > 2).count();
+    if let Ok(spec) = std::env::var("DUMP_NEAR") {
+        let v: Vec<f64> = spec.split(',').map(|x| x.parse().unwrap()).collect();
+        let target = Point3::new(v[0], v[1], v[2]);
+        let r = v[3];
+        for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+            let face = topo.face(fid).unwrap();
+            let tag = face.surface().type_tag();
+            let mut wires = vec![face.outer_wire()];
+            wires.extend_from_slice(face.inner_wires());
+            for wid in wires {
+                for oe in topo.wire(wid).unwrap().edges() {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    let (a, b) = (
+                        topo.vertex(e.start()).unwrap().point(),
+                        topo.vertex(e.end()).unwrap().point(),
+                    );
+                    if (a - target).length() < r || (b - target).length() < r {
+                        println!(
+                            "  NEAR e{} {} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4}) on {fid:?}:{tag}",
+                            oe.edge().index(),
+                            e.curve().type_tag(),
+                            a.x(),
+                            a.y(),
+                            a.z(),
+                            b.x(),
+                            b.y(),
+                            b.z()
+                        );
+                    }
+                }
+            }
+        }
+    }
     if std::env::var("ORIENT").is_ok() {
         let mut senses: HashMap<usize, Vec<(String, bool)>> = HashMap::new();
         for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
