@@ -480,7 +480,26 @@ pub(crate) fn weld_coincident_free_edges(
         let (sv, ev) = (e.start(), e.end());
         let sp = topo.vertex(sv)?.point();
         let ep = topo.vertex(ev)?.point();
-        let mid = e.curve().evaluate_with_endpoints(0.5, sp, ep);
+        // The geometric identity slot. Stored-curve evaluation is
+        // phase-dependent for circles (endpoints do not trim the raw
+        // parameterization), so circle edges key on centre + radius + |axis|
+        // instead; antipodal endpoint pairs stay unkeyed (minor/major arc
+        // ambiguity — the merge-key lesson).
+        let mid = match e.curve() {
+            EdgeCurve::Circle(c) => {
+                let chord_mid = Point3::new(
+                    (sp.x() + ep.x()) * 0.5,
+                    (sp.y() + ep.y()) * 0.5,
+                    (sp.z() + ep.z()) * 0.5,
+                );
+                if (chord_mid - c.center()).length() < 1e-6 {
+                    continue;
+                }
+                let ax = c.normal();
+                c.center() + Vec3::new(ax.x().abs(), ax.y().abs(), ax.z().abs()) * c.radius()
+            }
+            _ => e.curve().evaluate_with_endpoints(0.5, sp, ep),
+        };
         let (ks, ke) = (q(sp), q(ep));
         let key = if ks <= ke {
             (ks, ke, q(mid))
