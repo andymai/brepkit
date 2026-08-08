@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/andymai/brepkit/compare/v3.0.0...v3.0.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* **operations:** sweep profiles as positioned instead of re-centering on the path ([#1421](https://github.com/andymai/brepkit/issues/1421)) ([c9d9298](https://github.com/andymai/brepkit/commit/c9d9298ca4bc3f51c91adac4a464ec655f6302e0))
+
 ## [3.0.0](https://github.com/andymai/brepkit/compare/v2.129.15...v3.0.0) (2026-08-07)
 
 
