@@ -1,0 +1,25 @@
+crates/io/tests/data/slots_lip_body.bin
+  s_8b449c7ef64a35::t_2aaa808f8bc4e2 1
+crates/io/tests/data/slots_lip_tool.bin
+  s_8b449c7ef64a35::t_2aaa808f8bc4e2 1
+crates/io/tests/slots_lipcone_cut_inmem.rs
+  s_8b449c7ef64a35::t_a7bbcee687a55b 62-66,78-87,91-94
+  s_8b449c7ef64a35::t_820f6f877d4b1f 1-61,67-77,88-90,95-96
+  s_8b449c7ef64a35::t_691f76b6b0f0b8 97-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0879e2fb2274c769abaa06cfd0265ce1adc23261",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
