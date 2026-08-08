@@ -1939,3 +1939,109 @@ fn shelled_rounded_box_is_orientation_clean() {
     let report = crate::validate::validate_solid(&topo, hollow).unwrap();
     assert!(report.is_valid(), "shelled rounded box: {report:?}");
 }
+
+#[test]
+fn pipe_keeps_offset_profile_position() {
+    // A perpendicular profile away from the path must pipe from where it
+    // lies, not be translated onto the path start.
+    let mut topo = Topology::new();
+    let t = 1e-7;
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(5.0, 5.0, 0.0), t));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(6.0, 5.0, 0.0), t));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(6.0, 6.0, 0.0), t));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(5.0, 6.0, 0.0), t));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e0, true),
+            OrientedEdge::new(e1, true),
+            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e3, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let profile = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    // A gently curved path so the pipe's general ring machinery runs.
+    let path = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.1, 0.0, 5.0),
+            Point3::new(0.0, 0.0, 10.0),
+        ],
+        vec![1.0, 1.0, 1.0],
+    )
+    .unwrap();
+
+    let solid = crate::pipe::pipe(&mut topo, profile, &path, None).unwrap();
+    let bb = crate::measure::solid_bounding_box(&topo, solid).unwrap();
+    assert!(
+        bb.min.x() > 4.5 && bb.max.x() < 6.7 && bb.min.y() > 4.5 && bb.max.y() < 6.5,
+        "offset profile must stay near x,y in [5,6], got {bb:?}"
+    );
+}
+
+#[test]
+fn sweep_with_options_keeps_offset_profile_position() {
+    // Same contract for the options family (scale law absent, curved path).
+    let mut topo = Topology::new();
+    let t = 1e-7;
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(5.0, 5.0, 0.0), t));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(6.0, 5.0, 0.0), t));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(6.0, 6.0, 0.0), t));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(5.0, 6.0, 0.0), t));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e0, true),
+            OrientedEdge::new(e1, true),
+            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e3, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let profile = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let path = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.1, 0.0, 5.0),
+            Point3::new(0.0, 0.0, 10.0),
+        ],
+        vec![1.0, 1.0, 1.0],
+    )
+    .unwrap();
+
+    let solid = sweep_with_options(&mut topo, profile, &path, &SweepOptions::default()).unwrap();
+    let bb = crate::measure::solid_bounding_box(&topo, solid).unwrap();
+    assert!(
+        bb.min.x() > 4.5 && bb.max.x() < 6.7 && bb.min.y() > 4.5 && bb.max.y() < 6.5,
+        "offset profile must stay near x,y in [5,6], got {bb:?}"
+    );
+}

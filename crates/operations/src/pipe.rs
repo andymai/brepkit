@@ -92,7 +92,20 @@ pub fn pipe(
         input_normal = -input_normal;
     }
 
-    let centroid = crate::winding::polygon_centroid(&input_verts);
+    // As-positioned placement (the reference-kernel pipe semantic): a profile
+    // perpendicular to the path sweeps from where it lies — offsets are
+    // measured from the path start, making ring 0 a pure identity. Edge-on or
+    // oblique profiles keep the legacy centroid-on-path translation.
+    let reference = match crate::sweep::resolve_placement(
+        crate::sweep::ProfilePlacement::AsPositioned,
+        input_normal,
+        path_tangent_0,
+    ) {
+        crate::sweep::ProfilePlacement::AsPositioned => path.evaluate(0.0),
+        crate::sweep::ProfilePlacement::CentroidOnPath => {
+            crate::winding::polygon_centroid(&input_verts)
+        }
+    };
 
     let num_segments = (path.control_points().len() * 2).max(4);
     let scale_factors = compute_scale_factors(path, guide, num_segments, tol)?;
@@ -116,7 +129,7 @@ pub fn pipe(
         let ring: Vec<_> = input_verts
             .iter()
             .map(|&pos| {
-                let offset = pos - centroid;
+                let offset = pos - reference;
                 let local_r = initial_right.dot(offset) * scale;
                 let local_u = initial_up.dot(offset) * scale;
                 let local_t = initial_tangent.dot(offset);
@@ -159,7 +172,7 @@ pub fn pipe(
             let ring: Vec<_> = iw_verts
                 .iter()
                 .map(|&pos| {
-                    let offset = pos - centroid;
+                    let offset = pos - reference;
                     let local_r = initial_right.dot(offset) * scale;
                     let local_u = initial_up.dot(offset) * scale;
                     let local_t = initial_tangent.dot(offset);
