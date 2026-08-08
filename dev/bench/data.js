@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786233066405,
+  "lastUpdate": 1786233223412,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25055,6 +25055,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25427085,
             "range": "± 50609",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8c21365539dca93555d1c35321c1024f0d5633cb",
+          "message": "perf(blend): O(E) sense lookup in orientation propagation (#1468)\n\nFollow-up to #1466 addressing the Copilot review finding that landed\nafter automerge: `propagate_orientation` re-walked each face's wires for\nevery adjacent edge and neighbor, making the BFS quadratic on larger\nfillet outputs. Raw wire senses are immutable during propagation and\nonly the reversal bit changes on a flip, so raw senses are now\nprecomputed per face and reversal tracked in a map (effective = raw XOR\nreversal on demand).\n\nBehavior identical: all six captured grouped-scoop cases measure the\nsame (brep same-sense 0; tess boundary 153/72/77/59/0/3); blend + io\nsuites 356 passed / 0 failed; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMake orientation propagation in blends O(E) by precomputing raw wire\nsenses per face and tracking reversals, eliminating redundant wire\nwalks. Behavior is unchanged; improves performance on large fillets.\n\n- **Refactors**\n- Precompute per-face raw edge senses and store in a `raw_senses` map;\ntrack per-face reversal in `revs` and compute effective sense as raw XOR\nrev during BFS.\n- Build `edge_users` once from `raw_senses` to avoid repeated wire\ntraversals while visiting neighbors.\n  - Tests unchanged (blend + io suites pass).\n\n- **New Features**\n- `replay_fillet_variable` example: add `DUMP_NEAR=x,y,z,r` env var to\nprint edges near a point for easier debugging.\n\n<sup>Written for commit e60509adfe6ab1030f01bff860ce6954dd47edf8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1468?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T23:50:04Z",
+          "tree_id": "7ceeae0f690d2f7fb412034cb120ae504f42cb37",
+          "url": "https://github.com/andymai/brepkit/commit/8c21365539dca93555d1c35321c1024f0d5633cb"
+        },
+        "date": 1786233220720,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1001377,
+            "range": "± 4599",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1086193,
+            "range": "± 1306",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13034,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 715464,
+            "range": "± 685",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26775816,
+            "range": "± 61399",
             "unit": "ns/iter"
           }
         ]
