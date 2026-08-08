@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786203785323,
+  "lastUpdate": 1786206181608,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24083,6 +24083,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24855096,
             "range": "± 30207",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "62b471918280eff4206e1f886e11cef4e0d8fef3",
+          "message": "feat(operations): mesh-fallback counter and simplify-honoring boolean bindings (#1450)\n\nKernel-side half of issues #1445 and #1447, informed by the measurement\nposted on #1446.\n\n## What\n\n- **Fallback detectability (#1445's tractable ask):**\n`boolean::mesh_fallback_count()` — an atomic counter incremented at the\nsingle mesh-fallback dispatch site — exposed as `meshFallbackCount()` on\nthe wasm kernel and as an `executeBatch` op. Export pipelines snapshot\nthe counter around a chain and refuse the output when it grew, instead\nof shipping a mesh with holes. This also becomes the tool-side\ninstrument for locating which op in a slow chain first falls back\n(log-tapping from JS is dead per the roadmap).\n- **Honor `simplify` (#1447):** `fuseWithOptions` / `cutWithOptions` /\n`intersectWithOptions` plus an optional `simplify` flag on the batch\n`fuse`/`cut`/`intersect` ops, routing to the existing\n`boolean_with_options` unify-faces post-pass. brepjs can now pass the\nrequest through instead of warn-dropping it (adapter wiring is a\nfollow-up brepjs PR).\n\n## Why not more\n\nThe slots measurement on #1446 showed the generated solid is 7766\nall-planar faces with `unifyFaces` removing 0 — the perf root is the\nfallback firing early and poisoning the chain, not missing\nsimplification. The counter is the instrument for the next step (capture\nthe first falling-back op and fix that geometry class); simplify support\nremoves the silent-drop surface.\n\n## Verification\n\n- New pin `mesh_fallback_counter_records_fallbacks`: clean overlapping\nfuse, then an edge-touching fuse (non-manifold union edge → GFA\nvalidation rejects → fallback) asserts the counter grew; single test so\nthe reads cannot race under the parallel runner.\n- New wasm contract test `batch_fuse_simplify_flag_and_fallback_count`\nvia `execute_batch` (simplify flag accepted, volume exact, counter flat\nacross a clean chain).\n- operations 819/819, wasm 230/230 incl. gridfinity 27/27, clippy/fmt\nclean, wasm32 target builds.\n\nRoadmap updated in-PR with the GH-issue campaign row and the corrected\nslots diagnosis.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a kernel-wide mesh-fallback counter and exposes it to wasm and\nbatch so export pipelines can detect approximate results. Also honors\nboolean `simplify` via new `*WithOptions` methods and a batch flag.\n\n- **New Features**\n- `boolean::mesh_fallback_count()` counts mesh-boolean fallbacks;\nincremented at the single fallback site.\n- Exposed as wasm `meshFallbackCount()` and an `executeBatch` op for\nsnapshot-before/after chains (meets #1445).\n- `fuseWithOptions`/`cutWithOptions`/`intersectWithOptions` and batch\n`simplify: true` route to `BooleanOptions.unify_faces` (honors #1447).\n- Measurement from #1446: `simplify` is not the slots perf fix; the\ncounter is how to locate the first fallback.\n\n- **Bug Fixes**\n- Batch `meshFallbackCount` now returns f64 and docs clarify the counter\nis process‑wide.\n\n<sup>Written for commit 6b18fb744b1855401670f5feb56c12aa115ba94b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1450?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T16:20:52Z",
+          "tree_id": "4e053872e2b8dd0774ce49172ca5282ac1da6729",
+          "url": "https://github.com/andymai/brepkit/commit/62b471918280eff4206e1f886e11cef4e0d8fef3"
+        },
+        "date": 1786206179713,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 635164,
+            "range": "± 18998",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 691880,
+            "range": "± 26104",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8250,
+            "range": "± 167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 457194,
+            "range": "± 3177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17432638,
+            "range": "± 734988",
             "unit": "ns/iter"
           }
         ]
