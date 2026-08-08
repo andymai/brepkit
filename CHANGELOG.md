@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.4](https://github.com/andymai/brepkit/compare/v3.1.3...v3.1.4) (2026-08-08)
+
+
+### Bug Fixes
+
+* **operations:** exact miter sweep via domain-correct frames and a shared bisector ring ([#1448](https://github.com/andymai/brepkit/issues/1448)) ([6cc0ab0](https://github.com/andymai/brepkit/commit/6cc0ab09e147c16ca55f1240e9b70df37fbc8261))
+
 ## [3.1.3](https://github.com/andymai/brepkit/compare/v3.1.2...v3.1.3) (2026-08-08)
 
 
