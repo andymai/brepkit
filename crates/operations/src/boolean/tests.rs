@@ -7310,3 +7310,35 @@ fn bench_equiv_cut_box_corner_cylinder_volume_is_exact() {
         "quarter-cylinder cut volume should be ~{exact:.4}, got {vol:.4}"
     );
 }
+
+#[test]
+fn mesh_fallback_counter_records_fallbacks() {
+    // Single test (not two) so the two counter reads cannot race each
+    // other under the parallel test runner. The monotonic assertions
+    // tolerate concurrent increments from unrelated tests; only the
+    // ordering within this test is load-bearing.
+    //
+    // Phase 1: a clean overlapping-box fuse stays analytic. Phase 2:
+    // edge-touching boxes fuse into a non-manifold union (the shared
+    // vertical edge carries four faces), which the GFA validation gate
+    // rejects — the operation routes through the mesh fallback and the
+    // counter must record it.
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let m = brepkit_math::mat::Mat4::translation(1.0, 1.0, 1.0);
+    crate::transform::transform_solid(&mut topo, b, &m).unwrap();
+    let clean = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    assert!(crate::measure::solid_volume(&topo, clean, 0.1).unwrap() > 0.0);
+
+    let c = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let d = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let m = brepkit_math::mat::Mat4::translation(1.0, 1.0, 0.0);
+    crate::transform::transform_solid(&mut topo, d, &m).unwrap();
+    let before = super::mesh_fallback_count();
+    let _ = boolean(&mut topo, BooleanOp::Fuse, c, d);
+    assert!(
+        super::mesh_fallback_count() > before,
+        "edge-touching fuse should route through the mesh fallback and increment the counter"
+    );
+}

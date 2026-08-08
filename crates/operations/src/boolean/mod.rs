@@ -33,6 +33,19 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
+static MESH_FALLBACK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Number of boolean operations that have used the mesh (co-refinement)
+/// fallback since process start.
+///
+/// The fallback loses analytic surface types and does not guarantee a
+/// watertight result, so callers that require exact geometry (export
+/// pipelines in particular) can snapshot this counter around an operation
+/// chain and refuse the output when it grew.
+pub fn mesh_fallback_count() -> u64 {
+    MESH_FALLBACK_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Perform a boolean operation on two solids.
 ///
 /// Uses the GFA pipeline as the primary engine, with mesh boolean
@@ -817,6 +830,7 @@ pub fn boolean(
         target: "brepkit_approx",
         "boolean {op:?}: GFA unusable — using mesh (co-refinement) fallback; analytic surface types will be lost"
     );
+    MESH_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let opts = BooleanOptions::default();
     let raw = match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
         Ok(raw) => raw,
