@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786171022478,
+  "lastUpdate": 1786171913622,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23003,6 +23003,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20383356,
             "range": "± 54889",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "afd221fd1385443419776d1d0244c080a220a604",
+          "message": "docs(roadmap): record the lip-fuse close at test level on 3.0.2 (#1426)\n\nRecords in the roadmap that the gridfinity-smoke lip-fuse defect is\nclosed at test level: #1421 (sweep placement) + #1423 (mesh-assembly\nempty-wire guard), full smoke file 26/26 on the npm 3.0.2 overlay. The\nopen quality residuals (GFA coplanar free-edge result, mesh\nco-refinement volume, analytic sweep faces as the ranked lever) stay in\nthe row.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to mark the gridfinity‑smoke lip‑fuse defect as\nclosed at test level on 3.0.2, with the full smoke file passing (26/26).\nAdds context on the upstream fixes (#1421 sweep placement, #1423\nmesh‑assembly empty‑wire guard) and notes remaining quality follow‑ups\n(GFA coplanar free‑edge result, mesh co‑refinement volume, analytic\nsweep faces).\n\n<sup>Written for commit a3036bf1adfe70df02549eda36e8482a5e8e4b1a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1426?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T06:49:25Z",
+          "tree_id": "b4d2acb610249320b01067331da16175d25cf089",
+          "url": "https://github.com/andymai/brepkit/commit/afd221fd1385443419776d1d0244c080a220a604"
+        },
+        "date": 1786171911272,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 944647,
+            "range": "± 9331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1024027,
+            "range": "± 1910",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12092,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703584,
+            "range": "± 29350",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24806795,
+            "range": "± 501345",
             "unit": "ns/iter"
           }
         ]
