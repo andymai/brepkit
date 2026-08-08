@@ -411,9 +411,11 @@ impl BrepKernel {
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
-            "meshFallbackCount" => Ok(serde_json::json!(
-                brepkit_operations::boolean::mesh_fallback_count()
-            )),
+            "meshFallbackCount" => {
+                #[allow(clippy::cast_precision_loss)]
+                let count = brepkit_operations::boolean::mesh_fallback_count() as f64;
+                Ok(serde_json::json!(count))
+            }
             "detectCoincidentFaces" => {
                 let a = get_u32(args, "solidA")?;
                 let b = get_u32(args, "solidB")?;

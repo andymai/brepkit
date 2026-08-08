@@ -122,12 +122,15 @@ impl BrepKernel {
     }
 
     /// Number of boolean operations that have used the mesh (co-refinement)
-    /// fallback since kernel start.
+    /// fallback since module load.
     ///
-    /// The fallback loses analytic surface types and does not guarantee a
-    /// watertight result. Snapshot this counter before an operation chain
-    /// and compare after: if it grew, the chain contains at least one
-    /// approximate result, and an export pipeline can refuse the output.
+    /// The counter is process-wide: it is shared across all `BrepKernel`
+    /// instances in the same wasm module and never resets. Snapshot it
+    /// before an operation chain and compare after — a relative check, so
+    /// the shared scope does not matter to single-threaded callers. If it
+    /// grew, the chain contains at least one approximate result (analytic
+    /// surface types lost, watertightness not guaranteed), and an export
+    /// pipeline can refuse the output.
     #[wasm_bindgen(js_name = "meshFallbackCount")]
     #[must_use]
     // &self keeps this an instance method on the JS kernel object.
