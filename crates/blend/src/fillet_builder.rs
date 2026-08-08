@@ -440,6 +440,7 @@ impl<'a> FilletBuilder<'a> {
         // two use-1 edges with identical geometry. Weld those: two open
         // rims tracing the same curve can only be a stitching failure.
         crate::builder_utils::weld_coincident_free_edges(topo, &result_faces)?;
+        crate::builder_utils::close_residual_free_loops(topo, &mut result_faces)?;
 
         let new_shell = Shell::new(result_faces)?;
         let new_shell_id = topo.add_shell(new_shell);
@@ -1147,111 +1148,6 @@ fn build_pcurve_from_contact(
     Ok(brepkit_math::curves2d::Curve2D::Line(line))
 }
 
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-
-    use super::*;
-    use brepkit_topology::adjacency::AdjacencyIndex;
-    use brepkit_topology::face::FaceSurface;
-    use brepkit_topology::test_utils::make_unit_cube_manifold;
-
-    #[test]
-    fn fillet_builder_empty_edges_error() {
-        let mut topo = Topology::new();
-        let solid = make_unit_cube_manifold(&mut topo);
-
-        let builder = FilletBuilder::new(&mut topo, solid);
-        let result = builder.build();
-        assert!(result.is_err(), "empty edge set should produce an error");
-    }
-
-    #[test]
-    fn fillet_builder_plane_plane_box_edge() {
-        let mut topo = Topology::new();
-        let solid = make_unit_cube_manifold(&mut topo);
-
-        let adjacency = AdjacencyIndex::build(&topo, solid).unwrap();
-        let shell_id = topo.solid(solid).unwrap().outer_shell();
-        let faces = topo.shell(shell_id).unwrap().faces().to_vec();
-
-        let mut target_edge = None;
-        'outer: for &fid in &faces {
-            let face = topo.face(fid).unwrap();
-            let wire = topo.wire(face.outer_wire()).unwrap();
-            for oe in wire.edges() {
-                let adj = adjacency.faces_for_edge(oe.edge());
-                if adj.len() == 2 {
-                    target_edge = Some(oe.edge());
-                    break 'outer;
-                }
-            }
-        }
-        let target_edge = target_edge.expect("cube should have manifold edges");
-
-        let original_face_count = faces.len();
-        let mut builder = FilletBuilder::new(&mut topo, solid);
-        builder.add_edges(&[target_edge], 0.1);
-        let result = builder.build().expect("fillet build should succeed");
-
-        let result_solid = topo.solid(result.solid).unwrap();
-        let result_shell = topo.shell(result_solid.outer_shell()).unwrap();
-
-        // More faces than the original (6 original + 1 blend, minus possibly trimmed).
-        assert!(
-            result_shell.faces().len() > original_face_count,
-            "expected more faces after fillet: got {}, original {}",
-            result_shell.faces().len(),
-            original_face_count,
-        );
-
-        assert!(result.succeeded.contains(&target_edge));
-        assert!(result.failed.is_empty());
-        assert!(!result.is_partial);
-
-        let mut found_cylinder = false;
-        for &fid in result_shell.faces() {
-            let face = topo.face(fid).unwrap();
-            if matches!(face.surface(), FaceSurface::Cylinder(_)) {
-                found_cylinder = true;
-            }
-        }
-        assert!(
-            found_cylinder,
-            "fillet should produce a cylindrical blend surface"
-        );
-    }
-
-    #[test]
-    fn fillet_builder_records_failed_edges() {
-        let mut topo = Topology::new();
-        let solid = make_unit_cube_manifold(&mut topo);
-
-        let v0 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
-            brepkit_math::vec::Point3::new(10.0, 10.0, 10.0),
-            1e-7,
-        ));
-        let v1 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
-            brepkit_math::vec::Point3::new(11.0, 10.0, 10.0),
-            1e-7,
-        ));
-        let fake_edge = topo.add_edge(brepkit_topology::edge::Edge::new(
-            v0,
-            v1,
-            brepkit_topology::edge::EdgeCurve::Line,
-        ));
-
-        let mut builder = FilletBuilder::new(&mut topo, solid);
-        builder.add_edges(&[fake_edge], 0.2);
-        let result = builder.build().expect("build should succeed (partial)");
-
-        assert!(result.failed.len() == 1);
-        assert_eq!(result.failed[0].0, fake_edge);
-        // With no successes, the original solid is returned.
-        assert_eq!(result.solid, solid);
-    }
-}
-
 /// Rebuild faces whose entire outer wire is consumed by fillet spine edges.
 ///
 /// For a closed rim, the face's post-fillet boundary is the chained loop of
@@ -1291,6 +1187,14 @@ fn shared_spine_vertex(
     verts(b).into_iter().find(|v| va.contains(v))
 }
 
+#[allow(
+    clippy::items_after_statements,
+    clippy::too_many_lines,
+    clippy::type_complexity,
+    clippy::match_wildcard_for_single_variants,
+    clippy::single_match_else,
+    clippy::collapsible_if
+)]
 fn rebuild_closed_rim_loop_faces(
     topo: &mut Topology,
     regular_results: &[&StripeResult],
@@ -1747,4 +1651,109 @@ fn rebuild_closed_rim_loop_faces(
     }
 
     Ok((out, notches))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_topology::adjacency::AdjacencyIndex;
+    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::test_utils::make_unit_cube_manifold;
+
+    #[test]
+    fn fillet_builder_empty_edges_error() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+
+        let builder = FilletBuilder::new(&mut topo, solid);
+        let result = builder.build();
+        assert!(result.is_err(), "empty edge set should produce an error");
+    }
+
+    #[test]
+    fn fillet_builder_plane_plane_box_edge() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+
+        let adjacency = AdjacencyIndex::build(&topo, solid).unwrap();
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let faces = topo.shell(shell_id).unwrap().faces().to_vec();
+
+        let mut target_edge = None;
+        'outer: for &fid in &faces {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                let adj = adjacency.faces_for_edge(oe.edge());
+                if adj.len() == 2 {
+                    target_edge = Some(oe.edge());
+                    break 'outer;
+                }
+            }
+        }
+        let target_edge = target_edge.expect("cube should have manifold edges");
+
+        let original_face_count = faces.len();
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&[target_edge], 0.1);
+        let result = builder.build().expect("fillet build should succeed");
+
+        let result_solid = topo.solid(result.solid).unwrap();
+        let result_shell = topo.shell(result_solid.outer_shell()).unwrap();
+
+        // More faces than the original (6 original + 1 blend, minus possibly trimmed).
+        assert!(
+            result_shell.faces().len() > original_face_count,
+            "expected more faces after fillet: got {}, original {}",
+            result_shell.faces().len(),
+            original_face_count,
+        );
+
+        assert!(result.succeeded.contains(&target_edge));
+        assert!(result.failed.is_empty());
+        assert!(!result.is_partial);
+
+        let mut found_cylinder = false;
+        for &fid in result_shell.faces() {
+            let face = topo.face(fid).unwrap();
+            if matches!(face.surface(), FaceSurface::Cylinder(_)) {
+                found_cylinder = true;
+            }
+        }
+        assert!(
+            found_cylinder,
+            "fillet should produce a cylindrical blend surface"
+        );
+    }
+
+    #[test]
+    fn fillet_builder_records_failed_edges() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+
+        let v0 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            brepkit_math::vec::Point3::new(10.0, 10.0, 10.0),
+            1e-7,
+        ));
+        let v1 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            brepkit_math::vec::Point3::new(11.0, 10.0, 10.0),
+            1e-7,
+        ));
+        let fake_edge = topo.add_edge(brepkit_topology::edge::Edge::new(
+            v0,
+            v1,
+            brepkit_topology::edge::EdgeCurve::Line,
+        ));
+
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&[fake_edge], 0.2);
+        let result = builder.build().expect("build should succeed (partial)");
+
+        assert!(result.failed.len() == 1);
+        assert_eq!(result.failed[0].0, fake_edge);
+        // With no successes, the original solid is returned.
+        assert_eq!(result.solid, solid);
+    }
 }

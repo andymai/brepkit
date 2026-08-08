@@ -108,7 +108,6 @@ fn operand_is_clean() {
 }
 
 #[test]
-#[ignore = "ready-repro: adaptive scoop filletVariable emits 6 unstitched NURBS walls (44 free edges); un-ignore with the fix"]
 fn scoop_fillet_variable_is_watertight() {
     let mut topo = Topology::new();
     let (solid, picks) = load_case(&mut topo);

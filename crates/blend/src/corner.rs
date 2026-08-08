@@ -446,12 +446,12 @@ fn build_horn_torus_for_pair(
     let va = topo.add_vertex(Vertex::new(a_base, TOL));
     let vb = topo.add_vertex(Vertex::new(b_base, TOL));
     let vp = topo.add_vertex(Vertex::new(pinch, TOL));
-    let mut arc = |topo: &mut Topology,
-                   c: Point3,
-                   from: Point3,
-                   to: Point3,
-                   v_from: VertexId,
-                   v_to: VertexId|
+    let arc = |topo: &mut Topology,
+               c: Point3,
+               from: Point3,
+               to: Point3,
+               v_from: VertexId,
+               v_to: VertexId|
      -> Option<EdgeId> {
         let nrm = (from - c).cross(to - c).normalize().ok()?;
         let circ = Circle3D::new(c, nrm, (from - c).length()).ok()?;
@@ -588,12 +588,12 @@ fn build_mixed_radius_band_for_pair(
     let va_w = topo.add_vertex(Vertex::new(a_wall, TOL));
     let vb_b = topo.add_vertex(Vertex::new(b_base, TOL));
     let vb_w = topo.add_vertex(Vertex::new(b_wall, TOL));
-    let mut arc_edge = |topo: &mut Topology,
-                        c: Point3,
-                        from: Point3,
-                        to: Point3,
-                        vf: VertexId,
-                        vt: VertexId|
+    let arc_edge = |topo: &mut Topology,
+                    c: Point3,
+                    from: Point3,
+                    to: Point3,
+                    vf: VertexId,
+                    vt: VertexId|
      -> Option<EdgeId> {
         let nrm = (from - c).cross(to - c).normalize().ok()?;
         let circ = brepkit_math::curves::Circle3D::new(c, nrm, (from - c).length()).ok()?;

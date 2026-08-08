@@ -126,12 +126,10 @@ pub fn fillet_v2_variable(
                 let mut grew = false;
                 let mut i = 0;
                 while i < remaining.len() {
-                    let cand_r = match remaining[i].1 {
-                        brepkit_blend::radius_law::RadiusLaw::Constant(c) => c,
-                        _ => {
-                            i += 1;
-                            continue;
-                        }
+                    let brepkit_blend::radius_law::RadiusLaw::Constant(cand_r) = remaining[i].1
+                    else {
+                        i += 1;
+                        continue;
                     };
                     if (cand_r - r).abs() > 1e-9 {
                         i += 1;

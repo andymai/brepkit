@@ -435,6 +435,7 @@ fn resolve_hit_ends(
 ///
 /// Returns `(before, after)` as [`OrientedEdge`] values following the same
 /// traversal direction as the input.
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) fn split_edge_at(
     topo: &mut Topology,
     oe: &OrientedEdge,
@@ -463,6 +464,7 @@ pub(crate) fn split_edge_at(
 /// endpoints alone would leave both halves spanning the full stored curve).
 ///
 /// `left`/`right` are the stored-direction sub-curves from `curve_split`.
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) fn split_edge_at_with_curves(
     topo: &mut Topology,
     oe: &OrientedEdge,

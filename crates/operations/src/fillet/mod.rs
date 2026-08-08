@@ -921,7 +921,7 @@ pub fn fillet_variable(
         match crate::blend_ops::fillet_v2_variable(topo, solid, v2_laws) {
             Ok(v2) => {
                 let open = solid_has_free_edges(topo, v2.solid)?;
-                eprintln!(
+                log::debug!(
                     "fillet_variable v2 retry: failed_edges={} open={open}",
                     v2.failed.len()
                 );
@@ -929,7 +929,7 @@ pub fn fillet_variable(
                     return Ok(v2.solid);
                 }
             }
-            Err(e) => eprintln!("fillet_variable v2 retry errored: {e}"),
+            Err(e) => log::debug!("fillet_variable v2 retry errored: {e}"),
         }
     }
 

@@ -436,6 +436,206 @@ pub fn surface_ref_or_adapter<'a>(
 /// match at weld distance, so complementary arcs and genuinely distinct
 /// co-endpoint edges are never merged; zero-length edges collapse away
 /// entirely when their twin is also zero-length.
+/// Split free Line edges whose interior contains another free edge's
+/// endpoint (a full corner-edge segment coexisting with its two halves),
+/// so the pieces become weldable, then fill CLOSED COPLANAR loops of
+/// remaining free edges with an exact plane face — a closed free loop is a
+/// hole, and the corner-floor triangles left by pairwise junction patches
+/// are planar by construction.
+#[allow(
+    clippy::redundant_pub_crate,
+    clippy::too_many_lines,
+    clippy::items_after_statements,
+    clippy::type_complexity
+)]
+pub(crate) fn close_residual_free_loops(
+    topo: &mut Topology,
+    faces: &mut Vec<FaceId>,
+) -> Result<(), BlendError> {
+    use brepkit_topology::edge::EdgeId;
+    use std::collections::HashMap;
+
+    let free_edges = |topo: &Topology, faces: &[FaceId]| -> Result<Vec<EdgeId>, BlendError> {
+        let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+        for &fid in faces {
+            let face = topo.face(fid)?;
+            let mut wires = vec![face.outer_wire()];
+            wires.extend_from_slice(face.inner_wires());
+            for wid in wires {
+                for oe in topo.wire(wid)?.edges() {
+                    *uses.entry(oe.edge()).or_insert(0) += 1;
+                }
+            }
+        }
+        let mut v: Vec<EdgeId> = uses
+            .iter()
+            .filter(|&(_, &c)| c == 1)
+            .map(|(&e, _)| e)
+            .collect();
+        v.sort_unstable_by_key(|e| e.index());
+        Ok(v)
+    };
+
+    // Pass 1: split covering Line edges at interior endpoints of other free
+    // edges, then re-weld.
+    let frees = free_edges(topo, faces)?;
+    let mut endpoints: Vec<(Point3, VertexId)> = Vec::new();
+    for &eid in &frees {
+        let e = topo.edge(eid)?;
+        for v in [e.start(), e.end()] {
+            let p = topo.vertex(v)?.point();
+            if !endpoints.iter().any(|(q, _)| (*q - p).length() < 1e-6) {
+                endpoints.push((p, v));
+            }
+        }
+    }
+    for &eid in &frees {
+        let e = topo.edge(eid)?;
+        if !matches!(e.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let (sv, ev) = (e.start(), e.end());
+        let sp = topo.vertex(sv)?.point();
+        let ep = topo.vertex(ev)?.point();
+        let dir = ep - sp;
+        let len2 = dir.dot(dir);
+        if len2 < 1e-18 {
+            continue;
+        }
+        for (p, vid) in endpoints.clone() {
+            let t = dir.dot(p - sp) / len2;
+            if !(1e-6..=1.0 - 1e-6).contains(&t) {
+                continue;
+            }
+            if (p - (sp + dir * t)).length() > 1e-6 {
+                continue;
+            }
+            let oe = OrientedEdge::new(eid, true);
+            let _ = crate::trimmer::split_edge_at(topo, &oe, vid)?;
+            break;
+        }
+    }
+    weld_coincident_free_edges(topo, faces)?;
+
+    // Pass 2: fill closed coplanar loops of remaining free edges. Chains
+    // connect POSITIONALLY (the loop's edges were minted by different
+    // faces and share no vertex ids); the fill face is built from
+    // geometry-identical COPIES with its own shared vertices, and the
+    // final weld unifies each copy with its free original.
+    let frees = free_edges(topo, faces)?;
+    let mut used: std::collections::HashSet<EdgeId> = std::collections::HashSet::new();
+    let ends_p = |topo: &Topology, eid: EdgeId| -> Result<(Point3, Point3), BlendError> {
+        let e = topo.edge(eid)?;
+        Ok((
+            topo.vertex(e.start())?.point(),
+            topo.vertex(e.end())?.point(),
+        ))
+    };
+    let mut filled_any = false;
+    for &seed in &frees {
+        if used.contains(&seed) {
+            continue;
+        }
+        let (s0, e0) = ends_p(topo, seed)?;
+        let mut chain: Vec<(EdgeId, bool)> = vec![(seed, true)];
+        let mut cursor = e0;
+        let mut guard = 0;
+        while (cursor - s0).length() > 1e-6 && guard < 8 {
+            guard += 1;
+            let mut advanced = false;
+            for &c in &frees {
+                if used.contains(&c) || chain.iter().any(|(x, _)| *x == c) {
+                    continue;
+                }
+                let Ok((a, b)) = ends_p(topo, c) else {
+                    continue;
+                };
+                if (a - cursor).length() <= 1e-6 {
+                    cursor = b;
+                    chain.push((c, true));
+                    advanced = true;
+                    break;
+                }
+                if (b - cursor).length() <= 1e-6 {
+                    cursor = a;
+                    chain.push((c, false));
+                    advanced = true;
+                    break;
+                }
+            }
+            if !advanced {
+                break;
+            }
+        }
+        if (cursor - s0).length() > 1e-6 || chain.len() < 3 || chain.len() > 4 {
+            continue;
+        }
+        // Loop corner positions in order, and coplanarity.
+        let mut pts: Vec<Point3> = Vec::new();
+        for &(eid, fwd) in &chain {
+            let (a, b) = ends_p(topo, eid)?;
+            pts.push(if fwd { a } else { b });
+        }
+        let n_raw = (pts[1] - pts[0]).cross(pts[2] - pts[0]);
+        let Ok(nrm) = n_raw.normalize() else { continue };
+        if pts.iter().any(|p| ((*p - pts[0]).dot(nrm)).abs() > 1e-6) {
+            continue;
+        }
+        // Mint shared corner vertices and copy edges.
+        let vids: Vec<VertexId> = pts
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let mut oes: Vec<OrientedEdge> = Vec::with_capacity(chain.len());
+        let mut ok = true;
+        for (k, &(eid, fwd)) in chain.iter().enumerate() {
+            let curve = topo.edge(eid)?.curve().clone();
+            let (v_from, v_to) = (vids[k], vids[(k + 1) % chain.len()]);
+            let new_e = if fwd {
+                topo.add_edge(Edge::new(v_from, v_to, curve))
+            } else {
+                topo.add_edge(Edge::new(v_to, v_from, curve))
+            };
+            if topo.edge(new_e).is_err() {
+                ok = false;
+                break;
+            }
+            oes.push(OrientedEdge::new(new_e, fwd));
+        }
+        if !ok {
+            continue;
+        }
+        let Ok(wire) = Wire::new(oes, true) else {
+            continue;
+        };
+        let wid = topo.add_wire(wire);
+        let d = nrm.dot(Vec3::new(pts[0].x(), pts[0].y(), pts[0].z()));
+        let fid = topo.add_face(Face::new(
+            wid,
+            Vec::new(),
+            FaceSurface::Plane { normal: nrm, d },
+        ));
+        faces.push(fid);
+        for &(eid, _) in &chain {
+            used.insert(eid);
+        }
+        filled_any = true;
+        log::debug!(
+            "residual free loop filled with a plane face ({} edges)",
+            chain.len()
+        );
+    }
+    if filled_any {
+        weld_coincident_free_edges(topo, faces)?;
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::redundant_pub_crate,
+    clippy::items_after_statements,
+    clippy::type_complexity
+)]
 pub(crate) fn weld_coincident_free_edges(
     topo: &mut Topology,
     faces: &[FaceId],
