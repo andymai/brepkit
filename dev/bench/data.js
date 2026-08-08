@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786208420164,
+  "lastUpdate": 1786209685641,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24245,6 +24245,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26288720,
             "range": "± 107455",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "53536cc61751b378e454fde67d131ef86e550b89",
+          "message": "fix(algo): DCEL rescue for non-periodic band grand tours (#1453)\n\nFixes the slots wall-pattern root (#1446, and the export-blocking\nwatertightness half of #1445's slots-family cases). Repro fixture landed\nin #1451; this PR un-ignores it.\n\n## Root\n\nThe slot tool's corner cylinder must split three ways (outside-the-bin /\nin-wall / in-cavity) along two wall circles and the lip-taper ellipse.\nThose sections meet at degree-3 T-junctions in UV, where the greedy wire\nwalker's order-dependent successor tours the three regions into one\nslitted 14-vertex loop — the in-wall piece never exists as a sub-face,\nthe result has 6 free edges per slot, validation rejects it, and the\nwhole compoundCut falls to the mesh fallback (the measured 2x-triangles\n/ 56x-slower signature, and a volume error of ~194 mm³).\n\nEvery existing DCEL rescue arm is `u_periodic`-gated; a non-periodic\nband had no recovery path.\n\n## Fix\n\n- A non-periodic band arm mirroring the proven periodic pattern: fires\nonly when the greedy loops are already broken (`greedy_broken`), adopts\nthe DCEL partition only when it yields strictly more loops AND passes\nevery loop-health check **absolutely** (no periodic-aware relaxation —\nthere is no seam on a non-periodic face).\n- Dedup of near-exact duplicate sections before the trace (two FF pairs\nemit the same curve when it rides the shared boundary of coplanar\nneighbour faces — parallel twin edges are hostile to the angular\nsuccessor). Not the breaker here, but measured real and shipped as\nhardening.\n\n## Measured\n\n| case | before | after |\n|---|---|---|\n| single slot cut | free=6, then mesh fallback (0 cones) | free=0,\nanalytic, 13 ms |\n| 60-tool compoundCut | 14.5 s mesh fallback, F=7766 all-planar, vol\n33282.6 | **752 ms analytic, F=546 (256 cyl + 12 cones), free=0, vol\n33088.9** |\n\n## Verification\n\n- `slots_lipcone_cut_inmem` un-ignored: watertight + cone-survival pins\ngreen.\n- Full foils: algo 210, io 63/63 suites (honeycomb residual pins, goma\nband, kumiko fixtures included), operations 819/819, wasm gridfinity\n27/27, clippy/fmt clean.\n\nRoadmap updated in-PR (three overturned framings recorded: the\noracle-confirmed correct drops, the false lip-cone attribution, and the\nduplicate-section non-root).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a DCEL rescue for non‑periodic bands and dedups duplicate section\ncurves in the face splitter to stop grand‑toured, slitted loops in slot\ncuts. This restores watertight analytic results and removes the mesh\nfallback in the slots wall‑pattern.\n\n- **Bug Fixes**\n- New non‑periodic band DCEL rescue: triggers only when greedy loops are\nbroken, adopts DCEL only if it yields more loops and passes all absolute\nloop‑health checks (no periodic relaxations).\n- Deduplicates near‑identical FF section curves that ride shared\ncoplanar boundaries to avoid parallel twin edges confusing the angular\nsuccessor.\n- Results: single slot cut free=6 → 0 (analytic); 60‑tool compoundCut\n14.5 s mesh fallback → 752 ms analytic with cylinders/cones preserved;\ntest `slots_lipcone_cut_inmem` un‑ignored and passing.\n\n<sup>Written for commit 40d036611d674ba4d81f246bb27a7cdea2e924a0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1453?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T10:19:06-07:00",
+          "tree_id": "f72022d41e7b0207e4fd80502e0b093c71dd99d1",
+          "url": "https://github.com/andymai/brepkit/commit/53536cc61751b378e454fde67d131ef86e550b89"
+        },
+        "date": 1786209683371,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 945174,
+            "range": "± 1229",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1023033,
+            "range": "± 13074",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11790,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699695,
+            "range": "± 14292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25246516,
+            "range": "± 58170",
             "unit": "ns/iter"
           }
         ]
