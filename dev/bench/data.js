@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786142340531,
+  "lastUpdate": 1786167773347,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22787,6 +22787,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25033715,
             "range": "± 323257",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c9d9298ca4bc3f51c91adac4a464ec655f6302e0",
+          "message": "fix(operations): sweep profiles as positioned instead of re-centering on the path (#1421)\n\n## Problem\n\nbrepjs gridfinity-smoke test 4 (\"real lip profile sweep produces\nnon-zero mesh when fused with box\") fails on every kernel version: the\nfused solid tops out at zMax 22.52 instead of 25.4. The test is excluded\nfrom brepjs's default vitest project, so CI never caught it.\n\nOperand capture exonerated the fuse: the swept lip solid itself spans z\n−2.88..1.52 instead of 0..4.4. `sweep()` decomposed each profile vertex\nas an offset from the profile **centroid** and rebuilt it at the path\nframes, so the profile's position relative to the spine was discarded —\nthe lip profile's centroid height is exactly the measured 2.88 shift.\n\n## Fix\n\n- `sweep()` / `sweep_smooth()` now sweep the profile **as positioned**\nwhen its plane is perpendicular to the path start tangent: frame-0's\nbasis and origin make the first ring the identity map, and later rings\nare its rotation-minimizing-frame transports (the reference-kernel pipe\nsemantic).\n- Edge-on / oblique profiles keep the legacy auto-orienting centroid\nplacement (`sweep_edge_on_profile_is_auto_oriented` still passes),\nresolved via `ProfilePlacement` + a perpendicularity gate (|cos| ≥\n0.99).\n- `helical_sweep` keeps centroid placement explicitly — its API\npositions the profile from axis + radius, and occt-wasm throws for\nhelicalSweep, so brepkit defines that contract.\n- The straight-path prism fast path extrudes the profile in place under\nas-positioned placement.\n\n## Verification\n\n- New pins: `sweep_keeps_offset_profile_position_on_straight_path`,\n`sweep_closed_path_keeps_profile_position` (closed lip-ring replica of\nthe brepjs construction; foil-verified — fails under the old placement).\n- Full workspace suite green (`--no-fail-fast`, render excluded for the\nknown SIGSEGV), `cargo test -p brepkit-wasm --lib gridfinity` 27/27,\nclippy `-D warnings`, boundaries clean.\n\n## Follow-ups (tracked in the roadmap)\n\n- `sweep_with_options` / `sweep_miter` (contact-mode family) and\n`pipe.rs` still re-center; each needs its own verification pass.\n- The lip sweep emits ~2730 facet faces where the reference kernel emits\nper-spine-edge analytic surfaces — an analytic-preservation gap for\nline/arc spines.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSweep now preserves the profile’s own position (for perpendicular\nprofiles) instead of re-centering on the path, fixing the gridfinity lip\nsweep offset/height and producing correct fuses. Edge-on/oblique\nprofiles keep the legacy auto-orienting behavior.\n\n- **Bug Fixes**\n- `sweep()`/`sweep_smooth()` use “as positioned” placement when the\nprofile plane is perpendicular to the path start; frame 0 is an identity\nmap and later frames follow a rotation-minimizing frame.\n- Edge-on/oblique profiles stay auto-oriented via a perpendicularity\ngate (|cos| ≥ 0.99) resolved through `ProfilePlacement`.\n- `helical_sweep` explicitly uses centroid-on-path placement (its API\npositions the section from axis + radius).\n- Straight-path prism fast path extrudes in place under as-positioned\nplacement; centroid placement translates the centroid to the path start.\n- New tests pin behavior:\n`sweep_keeps_offset_profile_position_on_straight_path`,\n`sweep_closed_path_keeps_profile_position`.\n- Follow-ups: `sweep_with_options`/`sweep_miter` and `pipe.rs` still\nre-center and will be addressed separately.\n\n<sup>Written for commit 2ae178f9ec09c28085f959b47290692032853e8e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1421?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T05:40:28Z",
+          "tree_id": "3b01280701ba515e9dbd4dd1af0935ad017f22b6",
+          "url": "https://github.com/andymai/brepkit/commit/c9d9298ca4bc3f51c91adac4a464ec655f6302e0"
+        },
+        "date": 1786167770602,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 946940,
+            "range": "± 1758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1024869,
+            "range": "± 4292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11831,
+            "range": "± 176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697507,
+            "range": "± 1794",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24830431,
+            "range": "± 51324",
             "unit": "ns/iter"
           }
         ]
