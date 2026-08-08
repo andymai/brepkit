@@ -80,6 +80,98 @@ fn detects_within_rank_planar_containment() {
     assert_eq!(dup.duplicate, 1, "small face (idx 1) is the duplicate");
 }
 
+/// A containment-matched same-rank face whose edges serve a face OUTSIDE
+/// the SD group is a structural shim, not #696 residue. The grouped-scoop
+/// pinch: a horn-torus corner patch touches the pocket floor tangentially,
+/// and the blend closes the tangent arc with a tiny corner face contained
+/// in the unsplit floor; its edges pair the torus rim and wall stubs.
+/// Dropping it orphans those edges into free boundary edges
+/// (`gscoop_pinch_cut_inmem` is the end-to-end pin).
+#[test]
+fn contained_shim_with_outside_edge_user_is_kept() {
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let arena = GfaArena::new();
+    let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+    let tol = Tolerance::new();
+
+    let large = rect_sub_face(
+        &mut topo,
+        0.0,
+        10.0,
+        0.0,
+        10.0,
+        Rank::A,
+        Point3::new(5.0, 5.0, 0.0),
+    );
+    let small = rect_sub_face(
+        &mut topo,
+        3.0,
+        5.0,
+        3.0,
+        5.0,
+        Rank::A,
+        Point3::new(4.0, 4.0, 0.0),
+    );
+
+    // Witness: a vertical face sharing the small face's first EDGE entity,
+    // the way the torus corner patch shares the shim's tangent arc.
+    let small_face = topo.face(small.face_id).unwrap();
+    let shared = topo.wire(small_face.outer_wire()).unwrap().edges()[0];
+    let shared_edge = topo.edge(shared.edge()).unwrap();
+    let (v0, v1) = (shared_edge.start(), shared_edge.end());
+    let p0 = topo.vertex(v0).unwrap().point();
+    let p1 = topo.vertex(v1).unwrap().point();
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(p1.x(), p1.y(), 2.0), 1e-7));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(p0.x(), p0.y(), 2.0), 1e-7));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(shared.edge(), true),
+            OrientedEdge::new(e1, true),
+            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e3, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let witness_fid = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, -1.0, 0.0),
+            d: -p0.y(),
+        },
+    ));
+    let witness = SubFace {
+        face_id: witness_fid,
+        source_face: witness_fid,
+        classification: FaceClass::Unknown,
+        rank: Rank::A,
+        interior_point: Some(Point3::new(f64::midpoint(p0.x(), p1.x()), p0.y(), 1.0)),
+    };
+
+    let sub_faces = vec![large, small, witness];
+    let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+
+    assert!(
+        result.within_rank_dups.is_empty(),
+        "the contained shim's edges serve the witness face; it must not be dropped as residue, got {:?}",
+        result
+            .within_rank_dups
+            .iter()
+            .map(|d| (d.representative, d.duplicate))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// Two adjacent non-overlapping coplanar faces should NOT be unioned —
 /// regression guard against the over-aggressive interior-only test
 /// that broke `fuse_ring_overlapping_shelled_box_height`.
