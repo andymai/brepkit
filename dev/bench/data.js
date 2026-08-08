@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786203226987,
+  "lastUpdate": 1786203785323,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24029,6 +24029,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24787606,
             "range": "± 64700",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cc99dba3ccafcff9b7408bc3a8cc1f7ae5b1e0f2",
+          "message": "chore(main): release 3.1.4 (#1449)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.1.4](https://github.com/andymai/brepkit/compare/v3.1.3...v3.1.4)\n(2026-08-08)\n\n\n### Bug Fixes\n\n* **operations:** exact miter sweep via domain-correct frames and a\nshared bisector ring\n([#1448](https://github.com/andymai/brepkit/issues/1448))\n([6cc0ab0](https://github.com/andymai/brepkit/commit/6cc0ab09e147c16ca55f1240e9b70df37fbc8261))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.1.4 fixes miter sweep accuracy in `brepkit-operations` to\nproduce exact joins on sharp corners. All workspace crates are bumped to\nversion 3.1.4.\n\n- **Bug Fixes**\n- Exact miter sweep using domain-correct frames and a shared bisector\nring in `brepkit-operations` for cleaner edge joins and no corner\nartifacts.\n\n<sup>Written for commit c74a2a3ce49d9e2be4bdf90cc6ed3281d8cd9215.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1449?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T15:40:33Z",
+          "tree_id": "f4a8c4e29c492ce49fa03cec9621118ee5894115",
+          "url": "https://github.com/andymai/brepkit/commit/cc99dba3ccafcff9b7408bc3a8cc1f7ae5b1e0f2"
+        },
+        "date": 1786203782899,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 943994,
+            "range": "± 768",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1022897,
+            "range": "± 82352",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11810,
+            "range": "± 173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698113,
+            "range": "± 2906",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24855096,
+            "range": "± 30207",
             "unit": "ns/iter"
           }
         ]
