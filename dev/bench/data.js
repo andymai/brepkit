@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786167773347,
+  "lastUpdate": 1786168277495,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22841,6 +22841,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24830431,
             "range": "± 51324",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2e159775114c1f6f4c4249f46e274cfc2f8b3fb0",
+          "message": "chore(main): release 3.0.1 (#1422)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.0.1](https://github.com/andymai/brepkit/compare/v3.0.0...v3.0.1)\n(2026-08-08)\n\n\n### Bug Fixes\n\n* **operations:** sweep profiles as positioned instead of re-centering\non the path ([#1421](https://github.com/andymai/brepkit/issues/1421))\n([c9d9298](https://github.com/andymai/brepkit/commit/c9d9298ca4bc3f51c91adac4a464ec655f6302e0))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.0.1 with a sweep operation fix that preserves profile\nplacement instead of re-centering on the path. This yields more\npredictable results and respects sketch intent.\n\n- **Bug Fixes**\n- `brepkit-operations`: Sweep now uses profiles as positioned rather\nthan re-centering on the path (#1421).\n\n- **Dependencies**\n- Bumped workspace crate versions to `3.0.1`; updated\n`.release-please-manifest.json` and `CHANGELOG.md`.\n\n<sup>Written for commit 5cf8ed425a6fab86c007dd3ae833e0a47032c795.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1422?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T05:48:46Z",
+          "tree_id": "001b85c6217871567436d29dffbc097e594ce423",
+          "url": "https://github.com/andymai/brepkit/commit/2e159775114c1f6f4c4249f46e274cfc2f8b3fb0"
+        },
+        "date": 1786168274949,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 989769,
+            "range": "± 1642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1078219,
+            "range": "± 1627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13238,
+            "range": "± 72",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713202,
+            "range": "± 40511",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26245158,
+            "range": "± 112842",
             "unit": "ns/iter"
           }
         ]
