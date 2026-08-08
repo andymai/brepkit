@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786222726697,
+  "lastUpdate": 1786224699989,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24731,6 +24731,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24310270,
             "range": "± 91576",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fc6bbe10011d42fdd6c42509d22c90988653719f",
+          "message": "docs(roadmap): groupedScoop 3.2.3 re-measure — residual fillet configs enumerated (#1462)\n\nRecords the released-3.2.3 tool-side measurement of the groupedScoop\nexport suite after #1460: one case fully closed, most counts collapsed\n(47→23, 53→18, 33→6, 33→3), two held; the residual classes (rotated\nmembers, asymmetric W/D, aggressive radii, multi-depth) are the next\ncapture targets.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap with tool-side re-measurement of the groupedScoop\nexport suite on 3.2.3: 1 of 7 cases now passes (asymmetric W/D), counts\ndrop (47→23, 53→18, 33→6, 33→3), and two hold (different-cut-depths 65,\naggressive-radius 25). Adds a residual fillet census: 4 of 6 configs are\nalready watertight (incl. rotated members, asymmetric W/D); two still\nleak (7 and 6 free) due to divergent per-stripe junction-curve fits—next\nstep is to share the junction curve at build time and capture full\nchains, advancing GH #1445–#1447.\n\n<sup>Written for commit b0f6fe367eec8cf60b95313905e9a49abe3003d5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1462?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T21:29:30Z",
+          "tree_id": "8da7f1bef561ce79656ebcc4c8844d733ed0d270",
+          "url": "https://github.com/andymai/brepkit/commit/fc6bbe10011d42fdd6c42509d22c90988653719f"
+        },
+        "date": 1786224698103,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 820380,
+            "range": "± 7533",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 862435,
+            "range": "± 8560",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10085,
+            "range": "± 88",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 567857,
+            "range": "± 4645",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20592574,
+            "range": "± 96760",
             "unit": "ns/iter"
           }
         ]
