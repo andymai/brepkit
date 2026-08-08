@@ -382,32 +382,39 @@ impl BrepKernel {
                 transform_solid(self.topo_mut(), solid, &mat).map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
-            "fuse" => {
+            "fuse" | "cut" | "intersect" => {
+                let bool_op = match op {
+                    "fuse" => BooleanOp::Fuse,
+                    "cut" => BooleanOp::Cut,
+                    _ => BooleanOp::Intersect,
+                };
                 let a = get_u32(args, "solidA")?;
                 let b = get_u32(args, "solidB")?;
                 let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
                 let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
-                let result = boolean(self.topo_mut(), BooleanOp::Fuse, a_id, b_id)
-                    .map_err(|e| e.to_string())?;
+                let simplify = args["simplify"].as_bool().unwrap_or(false);
+                let result = if simplify {
+                    let opts = brepkit_operations::boolean::BooleanOptions {
+                        unify_faces: true,
+                        ..Default::default()
+                    };
+                    brepkit_operations::boolean::boolean_with_options(
+                        self.topo_mut(),
+                        bool_op,
+                        a_id,
+                        b_id,
+                        opts,
+                    )
+                } else {
+                    boolean(self.topo_mut(), bool_op, a_id, b_id)
+                }
+                .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
-            "cut" => {
-                let a = get_u32(args, "solidA")?;
-                let b = get_u32(args, "solidB")?;
-                let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
-                let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
-                let result = boolean(self.topo_mut(), BooleanOp::Cut, a_id, b_id)
-                    .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
-            }
-            "intersect" => {
-                let a = get_u32(args, "solidA")?;
-                let b = get_u32(args, "solidB")?;
-                let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
-                let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
-                let result = boolean(self.topo_mut(), BooleanOp::Intersect, a_id, b_id)
-                    .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+            "meshFallbackCount" => {
+                #[allow(clippy::cast_precision_loss)]
+                let count = brepkit_operations::boolean::mesh_fallback_count() as f64;
+                Ok(serde_json::json!(count))
             }
             "detectCoincidentFaces" => {
                 let a = get_u32(args, "solidA")?;

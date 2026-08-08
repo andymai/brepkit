@@ -4,7 +4,9 @@
 
 use wasm_bindgen::prelude::*;
 
-use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::boolean::{
+    BooleanOp, BooleanOptions, boolean, boolean_with_options, mesh_fallback_count,
+};
 use brepkit_operations::compound_ops;
 
 use crate::handles::solid_id_to_u32;
@@ -76,6 +78,65 @@ impl BrepKernel {
         let b_id = self.resolve_solid(b)?;
         let result = boolean(self.topo_mut(), BooleanOp::Cut, a_id, b_id)?;
         Ok(solid_id_to_u32(result))
+    }
+
+    /// Fuse (union) two solids with post-processing options.
+    ///
+    /// `simplify` merges co-surface face fragments after the boolean
+    /// (the `BooleanOptions.simplify` request from brepjs).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty or non-manifold result.
+    #[wasm_bindgen(js_name = "fuseWithOptions")]
+    pub fn fuse_with_options(&mut self, a: u32, b: u32, simplify: bool) -> Result<u32, JsError> {
+        self.boolean_with_options_impl(BooleanOp::Fuse, a, b, simplify)
+    }
+
+    /// Cut (subtract) solid `b` from solid `a` with post-processing options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty or non-manifold result.
+    #[wasm_bindgen(js_name = "cutWithOptions")]
+    pub fn cut_with_options(&mut self, a: u32, b: u32, simplify: bool) -> Result<u32, JsError> {
+        self.boolean_with_options_impl(BooleanOp::Cut, a, b, simplify)
+    }
+
+    /// Intersect two solids with post-processing options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty or non-manifold result.
+    #[wasm_bindgen(js_name = "intersectWithOptions")]
+    pub fn intersect_with_options(
+        &mut self,
+        a: u32,
+        b: u32,
+        simplify: bool,
+    ) -> Result<u32, JsError> {
+        self.boolean_with_options_impl(BooleanOp::Intersect, a, b, simplify)
+    }
+
+    /// Number of boolean operations that have used the mesh (co-refinement)
+    /// fallback since module load.
+    ///
+    /// The counter is process-wide: it is shared across all `BrepKernel`
+    /// instances in the same wasm module and never resets. Snapshot it
+    /// before an operation chain and compare after — a relative check, so
+    /// the shared scope does not matter to single-threaded callers. If it
+    /// grew, the chain contains at least one approximate result (analytic
+    /// surface types lost, watertightness not guaranteed), and an export
+    /// pipeline can refuse the output.
+    #[wasm_bindgen(js_name = "meshFallbackCount")]
+    #[must_use]
+    // &self keeps this an instance method on the JS kernel object.
+    #[allow(clippy::cast_precision_loss, clippy::unused_self)]
+    pub fn mesh_fallback_count(&self) -> f64 {
+        mesh_fallback_count() as f64
     }
 
     /// Detect surface-level coincident face pairs between two solids
@@ -257,6 +318,25 @@ impl BrepKernel {
     }
 }
 
+impl BrepKernel {
+    fn boolean_with_options_impl(
+        &mut self,
+        op: BooleanOp,
+        a: u32,
+        b: u32,
+        simplify: bool,
+    ) -> Result<u32, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let opts = BooleanOptions {
+            unify_faces: simplify,
+            ..Default::default()
+        };
+        let result = boolean_with_options(self.topo_mut(), op, a_id, b_id, opts)?;
+        Ok(solid_id_to_u32(result))
+    }
+}
+
 // Separate impl block: `compound_cut` uses manual `catch_unwind` for panic
 // safety — any panic that unwinds across the wasm-bindgen boundary leaves
 // its internal RefCell borrowed, breaking all subsequent JS calls.
@@ -334,6 +414,35 @@ mod tests {
     }
 
     // ── fuse ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn batch_fuse_simplify_flag_and_fallback_count() {
+        let mut k = BrepKernel::new();
+        // Overlapping boxes fuse analytically; the optional simplify flag
+        // must be accepted, and meshFallbackCount must report a number
+        // that does not grow across a clean chain.
+        let r = k.execute_batch(
+            r#"[
+                {"op": "meshFallbackCount", "args": {}},
+                {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 10}},
+                {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 10}},
+                {"op": "transform", "args": {"solid": 1, "matrix": [1,0,0,5, 0,1,0,5, 0,0,1,5, 0,0,0,1]}},
+                {"op": "fuse", "args": {"solidA": 0, "solidB": 1, "simplify": true}},
+                {"op": "volume", "args": {"solid": 2}},
+                {"op": "meshFallbackCount", "args": {}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert!(batch_has_ok(&r, 4), "fuse with simplify must succeed: {r}");
+        let vol = parsed[5]["ok"].as_f64().unwrap();
+        assert!((vol - 1875.0).abs() < 5.0, "union volume ~1875, got {vol}");
+        let before = parsed[0]["ok"].as_f64().unwrap();
+        let after = parsed[6]["ok"].as_f64().unwrap();
+        assert!(
+            (after - before).abs() < 0.5,
+            "clean chain must not grow the fallback count: {before} -> {after}"
+        );
+    }
 
     #[test]
     fn fuse_two_boxes_returns_valid_handle() {
