@@ -55,6 +55,8 @@ fn load_case(topo: &mut Topology) -> (SolidId, Vec<(brepkit_topology::edge::Edge
         serde_json::from_str(&std::fs::read_to_string(fixture("gscoop_fillet_spec.json")).unwrap())
             .unwrap();
 
+    let mut seen: std::collections::HashSet<brepkit_topology::edge::EdgeId> =
+        std::collections::HashSet::new();
     let mut edge_ends: Vec<(brepkit_topology::edge::EdgeId, Point3, Point3)> = Vec::new();
     for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
         let face = topo.face(fid).unwrap();
@@ -63,7 +65,7 @@ fn load_case(topo: &mut Topology) -> (SolidId, Vec<(brepkit_topology::edge::Edge
         for wid in wires {
             for oe in topo.wire(wid).unwrap().edges() {
                 let eid = oe.edge();
-                if edge_ends.iter().any(|(k, _, _)| *k == eid) {
+                if !seen.insert(eid) {
                     continue;
                 }
                 let e = topo.edge(eid).unwrap();

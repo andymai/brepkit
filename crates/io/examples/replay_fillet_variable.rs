@@ -1,6 +1,7 @@
 //! Replay a captured `filletVariable` call: deserialize the input solid,
-//! match the captured per-edge radii onto the fresh arena by edge midpoint,
-//! run `fillet_variable`, and report the result's health.
+//! match the captured per-edge radii onto the fresh arena by endpoint pairs
+//! (midpoint parameters are not portable across arenas), run
+//! `fillet_variable`, and report the result's health.
 //!
 //! Usage: `F=<input.bin> SPEC=<spec.json> cargo run --release -p brepkit-io \
 //!   --example replay_fillet_variable`
@@ -46,8 +47,12 @@ fn main() {
     let specs: Vec<serde_json::Value> =
         serde_json::from_str(&std::fs::read_to_string(spec_path).unwrap()).unwrap();
 
-    // Collect every edge of the solid with its midpoint for matching.
-    let mut edge_mids: Vec<(brepkit_topology::edge::EdgeId, Point3)> = Vec::new();
+    // Endpoint pairs are the portable identity: the tool-side midpoint eval
+    // uses the stored curve's own parameterization, which need not put the
+    // segment midpoint at t=0.5.
+    let mut seen: std::collections::HashSet<brepkit_topology::edge::EdgeId> =
+        std::collections::HashSet::new();
+    let mut edge_ends: Vec<(brepkit_topology::edge::EdgeId, Point3, Point3)> = Vec::new();
     for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
         let face = topo.face(fid).unwrap();
         let mut wires = vec![face.outer_wire()];
@@ -55,31 +60,17 @@ fn main() {
         for wid in wires {
             for oe in topo.wire(wid).unwrap().edges() {
                 let eid = oe.edge();
-                if edge_mids.iter().any(|(k, _)| *k == eid) {
+                if !seen.insert(eid) {
                     continue;
                 }
                 let e = topo.edge(eid).unwrap();
-                let (a, b) = (
+                edge_ends.push((
+                    eid,
                     topo.vertex(e.start()).unwrap().point(),
                     topo.vertex(e.end()).unwrap().point(),
-                );
-                let mid = e.curve().evaluate_with_endpoints(0.5, a, b);
-                edge_mids.push((eid, mid));
+                ));
             }
         }
-    }
-
-    // Endpoint pairs are the portable identity: the tool-side midpoint eval
-    // uses the stored curve's own parameterization, which need not put the
-    // segment midpoint at t=0.5.
-    let mut edge_ends: Vec<(brepkit_topology::edge::EdgeId, Point3, Point3)> = Vec::new();
-    for (eid, _) in &edge_mids {
-        let e = topo.edge(*eid).unwrap();
-        edge_ends.push((
-            *eid,
-            topo.vertex(e.start()).unwrap().point(),
-            topo.vertex(e.end()).unwrap().point(),
-        ));
     }
     let mut edge_laws: Vec<(brepkit_topology::edge::EdgeId, FilletRadiusLaw)> = Vec::new();
     for spec in &specs {
