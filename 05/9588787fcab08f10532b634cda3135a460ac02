@@ -1,0 +1,23 @@
+crates/io/examples/coincident_fuse_loop.rs
+  s_2a71d6758e8e91::t_daebd019b15d25 237-240
+crates/algo/src/builder/wire_builder.rs
+  s_2a71d6758e8e91::t_67c2976cde1473 1086-1124
+crates/algo/src/pave_filler/phase_ff.rs
+  s_2a71d6758e8e91::t_daebd019b15d25 791-792
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "059588787fcab08f10532b634cda3135a460ac02",
+  "prompts": {},
+  "sessions": {
+    "s_2a71d6758e8e91": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71aa2b82-a9ce-4c0f-b7cd-052a7695fc30",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
