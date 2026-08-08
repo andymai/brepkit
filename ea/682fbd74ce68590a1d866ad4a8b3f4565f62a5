@@ -1,0 +1,30 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_2a71d6758e8e91::t_43f8e8af493164 4311-4315,4322-4329
+  s_2a71d6758e8e91::t_efaa7e8cbbf65d 4316-4321
+  s_2a71d6758e8e91::t_e8416a1742d1e0 5938-5971
+crates/algo/src/builder/same_domain.rs
+  s_2a71d6758e8e91::t_90b767e274d5b9 167-193
+crates/io/examples/coincident_fuse_loop.rs
+  s_2a71d6758e8e91::t_0073fcda465ccf 137-172
+.claude/skills/roadmap/SKILL.md
+  s_2a71d6758e8e91::t_3f08c3b747ff45 134
+crates/operations/src/shell_op.rs
+  s_2a71d6758e8e91::t_87cd54e0f599fa 508-510,512
+  s_2a71d6758e8e91::t_24d226882ce08b 511
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ea682fbd74ce68590a1d866ad4a8b3f4565f62a5",
+  "prompts": {},
+  "sessions": {
+    "s_2a71d6758e8e91": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71aa2b82-a9ce-4c0f-b7cd-052a7695fc30",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
