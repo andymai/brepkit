@@ -1,0 +1,24 @@
+crates/blend/src/fillet_builder.rs
+  s_8b449c7ef64a35::t_bfdad7ade84bf0 176,1229-1238,1243-1249,1254,1491-1499,1516
+  s_8b449c7ef64a35::t_704734543133e2 1302-1303
+  s_8b449c7ef64a35::t_feb258cec0eaef 1285-1293,1304
+  s_8b449c7ef64a35::t_82b0a07371f3f7 301-365
+  s_8b449c7ef64a35::t_561fd6fb6233a2 1315-1332,1334,1336,1338,1340-1342,1345-1347,1349,1351-1392,1396-1406,1416-1419,1426-1428,1430-1434,1436-1438,1440-1469,1479-1490,1500-1502,1512
+  s_8b449c7ef64a35::t_90719fdc050751 1407-1414,1420-1421,1470-1478
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f3b85038141d9a551be5c8c0e241394c3641966a",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
