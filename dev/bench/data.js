@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786218133181,
+  "lastUpdate": 1786222193956,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24623,6 +24623,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25735603,
             "range": "± 1593307",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1280628498e1f9147b93004cbc438771e3bf7cc",
+          "message": "fix(blend): close the closed-rim and mixed-radius fillet classes (scoop repro 56 → 0 free) (#1460)\n\nCloses the fillet-engine root of #1445: the adaptive-scoop\n`filletVariable` now produces a **watertight, largely analytic** solid\non the captured repro (was 44 free edges v1 / 56 free edges v2; now\n**0**, verified via the production path — the fixture's watertight pin\nis un-ignored and ACTIVE).\n\nSixteen measured rounds, each foil-gated (blend 97, operations 819/819,\nio 64 suites, wasm 230 incl. gridfinity):\n\n## Loop rebuilds replace infinite-line trims\nEvery stripe-adjacent face's post-fillet boundary is built directly:\nspine runs become the stripe contact curves, untouched edges keep their\nshared identity, contact endpoints landing ON boundary edges split them\n(Line and NURBS — the latter with properly trimmed sub-curves via\n`curve_split`; endpoint re-anchoring cannot trim a stored NURBS),\ninterior endpoints get notch bridges, and corner junctions get\noffset-arc bridges. The old per-stripe infinite-line trims amputated\nnon-convex territory that later stripes needed.\n\n## Corner solver\n- **Horn-torus patches** for equal-radius corners: the rolling ball\npivoting about the unfilleted corner edge sweeps a torus with major =\ntube = r, pinching where the wall contacts meet. The previous\nsphere/flat-triangle patches were geometrically the wrong surface.\n- **Ruled rational transition bands** (degree 2×1 between the terminal\ncross-section arcs) for mixed-radius junctions — the watertight stand-in\nfor the true variable-radius canal surface.\n- **Pairwise patches** when the sphere solver fails at multi-edge\nvertices; a failure at one vertex no longer discards every other corner\npatch.\n\n## Assembly closure\nCoincident free-edge welding with **circle-aware identity**\n(stored-curve midpoints are phase-dependent for arcs; arcs key on centre\n+ radius + |axis| with antipodal pairs excluded per the merge-key\nlesson), collinear split-welds, and exact plane fills for residual\nclosed coplanar loops.\n\n## Engine routing\n`fillet_variable` keeps its v1 output byte-identical when clean; when v1\ncomes back open it retries the v2 walking engine and adopts only a\nCLOSED, fully-blended result. Non-planar trims also gained a periodic-UV\nunwrap and a local-normal keep-side (`AwayFrom` no longer hard-fails on\ncurved neighbours).\n\nRoadmap updated in-PR. Diagnostic instruments kept env-gated\n(`BK_FORCE_V2`, `BK_PIECES`, `BK_CORNER_TRACE`, `BK_TRIM_TRACE`,\n`BK_SPLIT_PREPASS`, `BK_NOTCH_TRACE`). Full dig history on\n`diag/scoop-fillet-v2-dig-2`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes closed‑rim and mixed‑radius fillets to produce watertight solids.\nThe scoop `filletVariable` repro now goes from 56 free edges to 0.\n\n- **Bug Fixes**\n- Closed rim: rebuild face boundaries from a chained contact loop;\npreserve shared edges; split boundary edges with trimmed NURBS\nsub‑curves; add notch and offset‑arc bridges.\n- Corners: horn‑torus patches for equal‑radius; ruled bands for\nmixed‑radius; pairwise patches at multi‑edge vertices.\n- Assembly: weld coincident edges with arc‑aware identity; collinear\nsplit‑welds; exact planar fills for closed coplanar loops.\n- Trimming: periodic‑UV unwrap and local‑normal keep‑side for non‑planar\nneighbours.\n\n- **New Features**\n- Add `fillet_v2_variable` walking engine. `fillet_variable` keeps its\nv1 output when closed, and falls back to v2 only if v1 returns open,\nadopting the result only when closed.\n- Group tangent‑continuous constant‑radius runs into single chains to\navoid unnecessary corner patches; normalize tangents to prevent false\nbreaks.\n\n<sup>Written for commit 931b6bd143ae1a969405d2cea895589feb029893.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1460?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T20:47:24Z",
+          "tree_id": "038237a29673ab7b35951b9dea0a7c97ac6a04e1",
+          "url": "https://github.com/andymai/brepkit/commit/a1280628498e1f9147b93004cbc438771e3bf7cc"
+        },
+        "date": 1786222191276,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 951230,
+            "range": "± 1206",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1025409,
+            "range": "± 939",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12189,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699981,
+            "range": "± 3039",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25315539,
+            "range": "± 48180",
             "unit": "ns/iter"
           }
         ]
