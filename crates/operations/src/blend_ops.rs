@@ -93,3 +93,115 @@ pub fn chamfer_distance_angle(
     builder.add_edges_distance_angle(edges, distance, angle);
     Ok(builder.build()?)
 }
+
+/// Fillet edges with per-edge radius laws (v2 walking engine).
+///
+/// # Errors
+/// Returns `OperationsError` if `edge_laws` is empty or the blend
+/// computation fails.
+pub fn fillet_v2_variable(
+    topo: &mut Topology,
+    solid: SolidId,
+    edge_laws: Vec<(EdgeId, brepkit_blend::radius_law::RadiusLaw)>,
+) -> Result<BlendResult, OperationsError> {
+    if edge_laws.is_empty() {
+        return Err(OperationsError::InvalidInput {
+            reason: "no edges specified".into(),
+        });
+    }
+    // Group tangent-continuous runs with an identical constant radius into
+    // one edge chain: the builder walks a chain as a single spine, so the
+    // tangent junctions inside a run need no corner patch at all. Only true
+    // radius-change or angular junctions remain as corners.
+    let mut remaining: Vec<(EdgeId, brepkit_blend::radius_law::RadiusLaw)> = edge_laws;
+    let mut chains: Vec<(Vec<EdgeId>, brepkit_blend::radius_law::RadiusLaw)> = Vec::new();
+    while let Some((seed, law)) = remaining.pop() {
+        let seed_r = match law {
+            brepkit_blend::radius_law::RadiusLaw::Constant(r) => Some(r),
+            _ => None,
+        };
+        let mut chain = vec![seed];
+        if let Some(r) = seed_r {
+            loop {
+                let mut grew = false;
+                let mut i = 0;
+                while i < remaining.len() {
+                    let cand_r = match remaining[i].1 {
+                        brepkit_blend::radius_law::RadiusLaw::Constant(c) => c,
+                        _ => {
+                            i += 1;
+                            continue;
+                        }
+                    };
+                    if (cand_r - r).abs() > 1e-9 {
+                        i += 1;
+                        continue;
+                    }
+                    if chain_extends_tangently(topo, &chain, remaining[i].0) {
+                        chain.push(remaining[i].0);
+                        remaining.swap_remove(i);
+                        grew = true;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if !grew {
+                    break;
+                }
+            }
+        }
+        chains.push((chain, law));
+    }
+    let mut builder = FilletBuilder::new(topo, solid);
+    for (chain, law) in chains {
+        builder.add_edges_with_law(&chain, law);
+    }
+    Ok(builder.build()?)
+}
+
+/// Whether `cand` shares an endpoint with some chain edge and meets it
+/// tangentially (G1) there.
+fn chain_extends_tangently(topo: &Topology, chain: &[EdgeId], cand: EdgeId) -> bool {
+    use brepkit_math::vec::{Point3, Vec3};
+    let ends = |eid: EdgeId| -> Option<(Point3, Point3, brepkit_topology::edge::EdgeCurve)> {
+        let e = topo.edge(eid).ok()?;
+        Some((
+            topo.vertex(e.start()).ok()?.point(),
+            topo.vertex(e.end()).ok()?.point(),
+            e.curve().clone(),
+        ))
+    };
+    let Some((cs, ce, cc)) = ends(cand) else {
+        return false;
+    };
+    let tangent_at =
+        |curve: &brepkit_topology::edge::EdgeCurve, s: Point3, e: Point3, at_start: bool| -> Vec3 {
+            curve.tangent_with_endpoints(if at_start { 0.0 } else { 1.0 }, s, e)
+        };
+    for &eid in chain {
+        let Some((s, e, curve)) = ends(eid) else {
+            continue;
+        };
+        for (cp, c_at_start) in [(cs, true), (ce, false)] {
+            for (p, at_start) in [(s, true), (e, false)] {
+                if (cp - p).length() > 1e-6 {
+                    continue;
+                }
+                let t_chain = tangent_at(&curve, s, e, at_start);
+                let t_cand = tangent_at(&cc, cs, ce, c_at_start);
+                // Traversal directions at a shared vertex oppose when the
+                // curves continue smoothly through it exactly when one is
+                // at its start and the other at its end.
+                let aligned = if at_start == c_at_start {
+                    -t_chain.dot(t_cand)
+                } else {
+                    t_chain.dot(t_cand)
+                };
+                if aligned > 0.999 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}

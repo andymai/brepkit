@@ -841,50 +841,56 @@ pub fn trim_face_general(
         }
     }
 
-    let va = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
-    let vb = topo.add_vertex(Vertex::new(hit_b.point_3d, VERTEX_TOL));
-    let (sub_a1, sub_a2) = split_edge_at(topo, &oe_a, va)?;
-    let (sub_b1, sub_b2) = split_edge_at(topo, &oe_b, vb)?;
-    let (ea_pre, ea_post) = (sub_a1.edge(), sub_a2.edge());
-    let (eb_pre, eb_post) = (sub_b1.edge(), sub_b2.edge());
+    let ends_a = resolve_hit_ends(topo, oe_a, hit_a)?;
+    let ends_b = resolve_hit_ends(topo, oe_b, hit_b)?;
+    let (va, vb) = (ends_a.vertex, ends_b.vertex);
 
     let contact_eid = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
 
     // Build "left" side wire: edges from idx_a..idx_b + contact edge.
-    // New split edges (ea_post, eb_pre, etc.) are created in traversal order,
-    // so they use forward=true. Only existing boundary edges keep their
-    // original orientation.
+    // Split sub-edges are created in traversal order, so they use
+    // forward=true; endpoint hits contribute the whole original edge on
+    // one side and nothing on the other. Existing boundary edges keep
+    // their original orientation.
     let mut left_edges: Vec<OrientedEdge> = Vec::new();
-    left_edges.push(OrientedEdge::new(ea_post, true));
+    if let Some(oe) = ends_a.post {
+        left_edges.push(oe);
+    }
     for i in (idx_a + 1)..idx_b {
         left_edges.push(oriented_edges[i]);
     }
-    left_edges.push(OrientedEdge::new(eb_pre, true));
+    if let Some(oe) = ends_b.pre {
+        left_edges.push(oe);
+    }
     left_edges.push(OrientedEdge::new(contact_eid, false));
 
     let mut right_edges: Vec<OrientedEdge> = Vec::new();
-    right_edges.push(OrientedEdge::new(eb_post, true));
+    if let Some(oe) = ends_b.post {
+        right_edges.push(oe);
+    }
     let n = oriented_edges.len();
     for i in 1..(n - (idx_b - idx_a)) {
         let idx = (idx_b + i) % n;
         right_edges.push(oriented_edges[idx]);
     }
-    right_edges.push(OrientedEdge::new(ea_pre, true));
+    if let Some(oe) = ends_a.pre {
+        right_edges.push(oe);
+    }
     right_edges.push(OrientedEdge::new(contact_eid, true));
 
     let keep_side = match keep {
         TrimKeep::Side(side) => side,
         TrimKeep::AwayFrom(p) => {
-            let face_normal = match &surface {
-                FaceSurface::Plane { normal, .. } => {
-                    if reversed {
-                        -*normal
-                    } else {
-                        *normal
-                    }
-                }
-                _ => return Err(BlendError::TrimmingFailure { face: face_id }),
+            // The side test is local to hit_a, so a curved surface's normal
+            // AT the hit serves the same role the plane normal does.
+            let raw_normal = match &surface {
+                FaceSurface::Plane { normal, .. } => *normal,
+                _ => match surface.project_point(hit_a.point_3d) {
+                    Some((u, v)) => surface.normal(u, v),
+                    None => return Err(BlendError::TrimmingFailure { face: face_id }),
+                },
             };
+            let face_normal = if reversed { -raw_normal } else { raw_normal };
             let contact_dir = hit_b.point_3d - hit_a.point_3d;
             let left_sample = (idx_a..idx_b).rev().find_map(|i| {
                 let oe = oriented_edges[i];
@@ -931,8 +937,16 @@ pub fn trim_face_general(
 
     Ok(TrimResult {
         trimmed_face: new_face_id,
-        new_edges: vec![ea_pre, ea_post, eb_pre, eb_post],
-        new_vertices: vec![va, vb],
+        new_edges: {
+            let mut v = ends_a.minted_edges;
+            v.extend(ends_b.minted_edges);
+            v
+        },
+        new_vertices: ends_a
+            .minted_vertex
+            .into_iter()
+            .chain(ends_b.minted_vertex)
+            .collect(),
         contact_edge: Some(contact_eid),
     })
 }
