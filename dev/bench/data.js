@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786183735864,
+  "lastUpdate": 1786184264991,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23381,6 +23381,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24840053,
             "range": "± 31342",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aab2249e1022ea4c9bd62763645e343e0f0552b3",
+          "message": "chore(main): release 3.1.1 (#1433)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.1.1](https://github.com/andymai/brepkit/compare/v3.1.0...v3.1.1)\n(2026-08-08)\n\n\n### Bug Fixes\n\n* **algo:** peel pendant sections in deterministic order\n([#1432](https://github.com/andymai/brepkit/issues/1432))\n([364d556](https://github.com/andymai/brepkit/commit/364d5569f5d818f52c358706e9d9279857b46067))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.1.1 fixes nondeterministic peeling of pendant sections to\nensure stable, reproducible results. Also updates workspace crate\nversions and metadata for publish.\n\n- **Bug Fixes**\n- In `brepkit-algo`, peel pendant sections in a deterministic order to\nprevent fluctuating outputs and flaky tests.\n\n<sup>Written for commit 7463ab5670a4efddc23ff2880b47a35fae48c86a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1433?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T10:15:18Z",
+          "tree_id": "95525a6a2de7c354f26dac754d2bc772adbcd918",
+          "url": "https://github.com/andymai/brepkit/commit/aab2249e1022ea4c9bd62763645e343e0f0552b3"
+        },
+        "date": 1786184263144,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 945047,
+            "range": "± 1123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1021456,
+            "range": "± 9515",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12355,
+            "range": "± 83",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701479,
+            "range": "± 1683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24781067,
+            "range": "± 859306",
             "unit": "ns/iter"
           }
         ]
