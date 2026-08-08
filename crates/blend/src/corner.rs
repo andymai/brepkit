@@ -370,12 +370,17 @@ fn build_two_edge_patch(
     } else {
         // Degenerate case: not enough unique points
         if std::env::var("BK_CORNER_TRACE").is_ok() {
-            let radii: Vec<Option<f64>> = indices
-                .iter()
-                .map(|&i| stripe_radius_at_vertex(vertex_id, &stripes[i], topo))
-                .collect();
+            for &i in &indices {
+                let cp = contact_points_at_vertex(vertex_id, &stripes[i], topo);
+                let sec = contact_section_at_vertex(vertex_id, &stripes[i], topo)
+                    .map(|s| (s.center, s.radius, s.p1, s.p2));
+                let nsec = stripes[i].sections.len();
+                log::warn!(
+                    "CORNER-TRACE two-edge {vertex_id:?} stripe {i}: contacts={cp:?} sec={sec:?} nsec={nsec}"
+                );
+            }
             log::warn!(
-                "CORNER-TRACE two-edge {vertex_id:?}: stripes={indices:?} radii={radii:?} unique_pts={} {contact_pts:?}",
+                "CORNER-TRACE two-edge {vertex_id:?}: unique_pts={} {contact_pts:?}",
                 contact_pts.len()
             );
         }

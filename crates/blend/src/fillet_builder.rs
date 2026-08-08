@@ -299,6 +299,13 @@ impl<'a> FilletBuilder<'a> {
         result_faces.extend(&blend_face_ids);
         result_faces.extend(&corner_face_ids);
 
+        // Adjacent stripes whose terminal sections coincide (a tangent
+        // junction's shared arc, or a tangency point where the section
+        // collapses) each mint their own copy of the shared cross edge —
+        // two use-1 edges with identical geometry. Weld those: two open
+        // rims tracing the same curve can only be a stitching failure.
+        crate::builder_utils::weld_coincident_free_edges(topo, &result_faces)?;
+
         let new_shell = Shell::new(result_faces)?;
         let new_shell_id = topo.add_shell(new_shell);
         let new_solid = Solid::new(new_shell_id, Vec::new());

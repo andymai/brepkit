@@ -414,3 +414,112 @@ pub fn surface_ref_or_adapter<'a>(
         FaceSurface::Nurbs(n) => n as &dyn ParametricSurface,
     }
 }
+
+/// Weld pairs of free (use-1) edges that trace identical geometry.
+///
+/// Adjacent blend walls whose terminal sections coincide each mint their own
+/// cross edge — same endpoints, same curve, two edge entities each used by
+/// one face. Rewrite every wire of the faces to reference one edge per
+/// geometric identity. Requires BOTH endpoints and the curve midpoint to
+/// match at weld distance, so complementary arcs and genuinely distinct
+/// co-endpoint edges are never merged; zero-length edges collapse away
+/// entirely when their twin is also zero-length.
+pub(crate) fn weld_coincident_free_edges(
+    topo: &mut Topology,
+    faces: &[FaceId],
+) -> Result<(), BlendError> {
+    use brepkit_topology::edge::EdgeId;
+    use std::collections::HashMap;
+
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        let mut wires = vec![face.outer_wire()];
+        wires.extend_from_slice(face.inner_wires());
+        for wid in wires {
+            for oe in topo.wire(wid)?.edges() {
+                *uses.entry(oe.edge()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    const WELD: f64 = 1e-6;
+    let q = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() / WELD).round() as i64,
+            (p.y() / WELD).round() as i64,
+            (p.z() / WELD).round() as i64,
+        )
+    };
+
+    // Geometry key for every free edge: symmetric endpoint pair + midpoint.
+    let mut groups: HashMap<
+        ((i64, i64, i64), (i64, i64, i64), (i64, i64, i64)),
+        Vec<(EdgeId, VertexId, VertexId)>,
+    > = HashMap::new();
+    let mut free_edges: Vec<EdgeId> = uses
+        .iter()
+        .filter(|&(_, &c)| c == 1)
+        .map(|(&e, _)| e)
+        .collect();
+    free_edges.sort_unstable_by_key(|e| e.index());
+    for eid in free_edges {
+        let e = topo.edge(eid)?;
+        let (sv, ev) = (e.start(), e.end());
+        let sp = topo.vertex(sv)?.point();
+        let ep = topo.vertex(ev)?.point();
+        let mid = e.curve().evaluate_with_endpoints(0.5, sp, ep);
+        let (ks, ke) = (q(sp), q(ep));
+        let key = if ks <= ke {
+            (ks, ke, q(mid))
+        } else {
+            (ke, ks, q(mid))
+        };
+        groups.entry(key).or_default().push((eid, sv, ev));
+    }
+
+    // For each group, rewrite all wires to use the first edge.
+    let mut replace: HashMap<EdgeId, (EdgeId, bool)> = HashMap::new();
+    for members in groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let (keep, keep_sv, _) = members[0];
+        let keep_sp = topo.vertex(keep_sv)?.point();
+        for &(dup, dup_sv, _) in &members[1..] {
+            let dup_sp = topo.vertex(dup_sv)?.point();
+            let same_dir = (dup_sp - keep_sp).length() < WELD;
+            replace.insert(dup, (keep, same_dir));
+        }
+    }
+    if replace.is_empty() {
+        return Ok(());
+    }
+
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        let mut wires = vec![face.outer_wire()];
+        wires.extend_from_slice(face.inner_wires());
+        for wid in wires {
+            let wire = topo.wire(wid)?;
+            let mut edges = wire.edges().to_vec();
+            let mut changed = false;
+            for oe in &mut edges {
+                if let Some(&(keep, same_dir)) = replace.get(&oe.edge()) {
+                    let fwd = if same_dir {
+                        oe.is_forward()
+                    } else {
+                        !oe.is_forward()
+                    };
+                    *oe = OrientedEdge::new(keep, fwd);
+                    changed = true;
+                }
+            }
+            if changed {
+                let closed = wire.is_closed();
+                *topo.wire_mut(wid)? = Wire::new(edges, closed)?;
+            }
+        }
+    }
+    Ok(())
+}
