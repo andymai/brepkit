@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.1.2](https://github.com/andymai/brepkit/compare/v3.1.1...v3.1.2) (2026-08-08)
+
+
+### Bug Fixes
+
+* **operations:** assemble the shell rim from sorted boundary edges ([#1434](https://github.com/andymai/brepkit/issues/1434)) ([1799017](https://github.com/andymai/brepkit/commit/17990172da7e41f3beb47bb560f62145a79401e5))
+* **operations:** correct the shell cavity face senses end to end ([#1435](https://github.com/andymai/brepkit/issues/1435)) ([ea8204f](https://github.com/andymai/brepkit/commit/ea8204fab9144bf046fb23190fbc3ec024c54394))
+
 ## [3.1.1](https://github.com/andymai/brepkit/compare/v3.1.0...v3.1.1) (2026-08-08)
 
 
