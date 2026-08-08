@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.2.5](https://github.com/andymai/brepkit/compare/v3.2.4...v3.2.5) (2026-08-08)
+
+
+### Bug Fixes
+
+* **blend:** close the fillet junction lens and pinch classes (grouped-scoop cases 2+3) ([#1465](https://github.com/andymai/brepkit/issues/1465)) ([b74c9ac](https://github.com/andymai/brepkit/commit/b74c9ac8b168bdc5eedf03d428755e19aa05eda8))
+* **blend:** emit orientation-consistent faces from the v2 fillet ([#1466](https://github.com/andymai/brepkit/issues/1466)) ([f1b2cd1](https://github.com/andymai/brepkit/commit/f1b2cd143e60b434ac7746441fbfbf0c1abe7de2))
+
 ## [3.2.4](https://github.com/andymai/brepkit/compare/v3.2.3...v3.2.4) (2026-08-08)
 
 
