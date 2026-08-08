@@ -99,7 +99,7 @@ pub fn pipe(
     let reference = match crate::sweep::resolve_placement(
         crate::sweep::ProfilePlacement::AsPositioned,
         input_normal,
-        path.tangent(0.0)?,
+        path_tangent_0,
     ) {
         crate::sweep::ProfilePlacement::AsPositioned => path.evaluate(0.0),
         crate::sweep::ProfilePlacement::CentroidOnPath => {
