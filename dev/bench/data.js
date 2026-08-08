@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786229122050,
+  "lastUpdate": 1786232546014,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24947,6 +24947,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25566999,
             "range": "± 60898",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f1b2cd143e60b434ac7746441fbfbf0c1abe7de2",
+          "message": "fix(blend): emit orientation-consistent faces from the v2 fillet (#1466)\n\n## Root (GH #1445 residual: mesh-level flips on watertight fillet\nresults)\n\nAll six captured grouped-scoop fillet results were B-Rep watertight\n(free=0) yet tessellated with hundreds of directed boundary half-edges.\nThe directed count conflated two things: a small true-crack tail, and a\nlarge majority of SAME-SENSE pairs — whole faces whose triangles wind\nbackwards against every neighbour. The B-Rep itself carried\n55/14/12/30/0/29 same-sense edge pairs across the cases: v2\nconstructions (walls, corner patches, bands, fills, rebuilt originals)\npick wire order and reversal constructively, with no consistency\nguarantee against their neighbours.\n\n## Fix\n\nTwo passes at the end of `FilletBuilder::build`, touching only faces\nbuilt by the current pass (a previous fillet's NURBS wall arriving as an\ninput face is never re-judged — pinned by the existing\n`try_fillet_second_pass` test):\n\n1. **`propagate_orientation`** — BFS from carried-over input faces,\ntoggling reversal so effective wire senses (sense XOR reversal) oppose\nacross every shared edge.\n2. **`normalize_face_normals`** — an interior-side boundary-walk\nintegral detects faces whose effective surface normal disagrees with the\nsolid's walk convention. The convention is **calibrated from the\ncarried-over faces**: it is a property of the input solid (a\nclockwise-profile extrude walks its boundaries interior-right), so an\nabsolute winding test flips valid trimmed caps — that heuristic was\ntried first and refuted by the near-tangent-ridge regression test.\nRepair is the sense-preserving triple flip (reverse wire order + toggle\nsenses + toggle reversal): effective senses are invariant, the effective\nnormal flips. Closed bands (doubled seam edge) and holed faces are\nskipped — the structured two-rim mesher depends on the band's wire\nlayout.\n\nAlso: a pinched stripe end now shares one vertex entity between the two\ncontact curves, so the skipped cross edge's wire closes at entity level\n(the closure-tolerance point from the #1465 review).\n\n## Measured\n\n- B-Rep same-sense pairs: 0 on all six captured cases (was\n55/14/12/30/0/29).\n- Directed mesh boundary half-edges at 0.01 mm: 377/193/824/592/0/74 →\n153/72/77/59/0/3.\n- Orientation pin (`same_sense_pair_count == 0`) folded into all four\nscoop fixtures, running the production `fillet_variable` path.\n- Full foils: 1965 passed / 0 failed across blend, operations, io, algo,\nwasm, check, heal; clippy clean.\n\nRemaining tail tracked in the roadmap: the 0.01-offset T-junction crack\nclass and the pinch-shim double-cover mesh overlaps.\n\nPart of #1445.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes v2 fillet to emit orientation‑consistent faces, removing\nsame‑sense edge pairs and flipped triangle windings. Orientation is\npropagated from input faces and new faces are normalized without\ntouching prior fillet geometry.\n\n- **Bug Fixes**\n- Added `propagate_orientation` at the end of `FilletBuilder::build`:\nBFS from carried-over input faces; flips `reversed` so effective wire\nsenses (sense XOR reversal) oppose across each shared edge.\n- Added `normalize_face_normals`: interior-side boundary-walk integral\ncalibrated from seed faces; repairs with a sense-preserving triple flip\n(reverse wire order, toggle edge senses, toggle `reversed`). Skips\nclosed bands and faces with holes.\n- Limits both passes to faces built in the current fillet pass; input\nfaces and earlier fillets are not re-judged.\n- Pinched stripe ends now share a vertex between contact curves to avoid\nzero-length cross edges.\n- Tests and measure: same-sense pairs are 0 on all captured\ngrouped-scoop cases; tessellation boundary half-edges drop from\n377/193/824/592/0/74 to 153/72/77/59/0/3; fixtures assert\n`same_sense_pair_count == 0`.\n\n<sup>Written for commit a808e8deff4e6a5a98f953df266d468d82aed654.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1466?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T23:39:52Z",
+          "tree_id": "a126fe6b0bad492d84d79d158783ec4308a3da5b",
+          "url": "https://github.com/andymai/brepkit/commit/f1b2cd143e60b434ac7746441fbfbf0c1abe7de2"
+        },
+        "date": 1786232543976,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 904819,
+            "range": "± 3496",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 985257,
+            "range": "± 11628",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11534,
+            "range": "± 226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 656456,
+            "range": "± 13094",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24169806,
+            "range": "± 82533",
             "unit": "ns/iter"
           }
         ]
