@@ -59,9 +59,14 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), Blen
     }
     let len = normal_sum.length();
     if len < TOL {
-        return Err(BlendError::CornerFailure {
-            vertex: data.vertex_id,
-        });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site1");
+            }
+            return Err(BlendError::CornerFailure {
+                vertex: data.vertex_id,
+            });
+        }
     }
 
     // Each face pushes the sphere center by R along its normal.
@@ -74,15 +79,25 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), Blen
     };
 
     if data.contact_points.is_empty() {
-        return Err(BlendError::CornerFailure {
-            vertex: data.vertex_id,
-        });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site2");
+            }
+            return Err(BlendError::CornerFailure {
+                vertex: data.vertex_id,
+            });
+        }
     }
     let sphere_radius = (data.contact_points[0] - center).length();
     if sphere_radius < TOL {
-        return Err(BlendError::CornerFailure {
-            vertex: data.vertex_id,
-        });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site3");
+            }
+            return Err(BlendError::CornerFailure {
+                vertex: data.vertex_id,
+            });
+        }
     }
 
     // Validate: all contact points should be at the same distance from center.
@@ -90,9 +105,14 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), Blen
         let dist = (*cp - center).length();
         let err = (dist - sphere_radius).abs();
         if err > TOL * 100.0 {
-            return Err(BlendError::CornerFailure {
-                vertex: data.vertex_id,
-            });
+            {
+                if std::env::var("BK_CORNER_TRACE").is_ok() {
+                    log::warn!("CORNER-FAIL st-site4");
+                }
+                return Err(BlendError::CornerFailure {
+                    vertex: data.vertex_id,
+                });
+            }
         }
     }
 
@@ -114,13 +134,23 @@ fn build_great_circle_arc(
     let bisector_raw = dir_i + dir_j;
     let bisector_len = bisector_raw.length();
     if bisector_len < TOL {
-        return Err(BlendError::CornerFailure { vertex: vertex_id });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site5");
+            }
+            return Err(BlendError::CornerFailure { vertex: vertex_id });
+        }
     }
     let bisector = bisector_raw * (1.0 / bisector_len);
 
     let cos_half = dir_i.dot(bisector);
     if cos_half.abs() < TOL {
-        return Err(BlendError::CornerFailure { vertex: vertex_id });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site6");
+            }
+            return Err(BlendError::CornerFailure { vertex: vertex_id });
+        }
     }
     // Tangent intersection point (the middle control point in 3D).
     let mid_cp = center + bisector * (radius / cos_half);
@@ -147,9 +177,14 @@ pub fn build_spherical_corner(
     data: &VertexContactData,
 ) -> Result<SphericalCornerResult, BlendError> {
     if data.contact_points.len() < 3 {
-        return Err(BlendError::CornerFailure {
-            vertex: data.vertex_id,
-        });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site7");
+            }
+            return Err(BlendError::CornerFailure {
+                vertex: data.vertex_id,
+            });
+        }
     }
 
     let (center, r) = compute_sphere_center(data)?;
@@ -176,7 +211,12 @@ pub fn build_spherical_corner(
     let apex_dir_raw = dir1 + dir2 + dir3;
     let apex_dir_len = apex_dir_raw.length();
     if apex_dir_len < TOL {
-        return Err(BlendError::CornerFailure { vertex: vid });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site8");
+            }
+            return Err(BlendError::CornerFailure { vertex: vid });
+        }
     }
     let apex_dir = apex_dir_raw * (1.0 / apex_dir_len);
     let apex = center + apex_dir * r;
@@ -228,9 +268,14 @@ pub fn build_n_edge_corner(
 ) -> Result<Vec<SphericalCornerResult>, BlendError> {
     let n = data.contact_points.len();
     if n < 3 {
-        return Err(BlendError::CornerFailure {
-            vertex: data.vertex_id,
-        });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site9");
+            }
+            return Err(BlendError::CornerFailure {
+                vertex: data.vertex_id,
+            });
+        }
     }
 
     let (center, r) = compute_sphere_center(data)?;
@@ -244,9 +289,14 @@ pub fn build_n_edge_corner(
 
     let centroid_len = centroid_raw.length();
     if centroid_len < TOL {
-        return Err(BlendError::CornerFailure {
-            vertex: data.vertex_id,
-        });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site10");
+            }
+            return Err(BlendError::CornerFailure {
+                vertex: data.vertex_id,
+            });
+        }
     }
     let centroid = center + centroid_raw * (r / centroid_len);
 
@@ -290,7 +340,12 @@ fn build_triangle_on_sphere(
     let apex_dir_raw = dir1 + dir2 + dir3;
     let apex_dir_len = apex_dir_raw.length();
     if apex_dir_len < TOL {
-        return Err(BlendError::CornerFailure { vertex: vertex_id });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site11");
+            }
+            return Err(BlendError::CornerFailure { vertex: vertex_id });
+        }
     }
     let apex = center + apex_dir_raw * (r / apex_dir_len);
     let w_apex = w_q1q2 * w_q2q3 * w_q3q1;
@@ -333,12 +388,22 @@ fn edge_mid_cp(
     let bisector_raw = dir_a + dir_b;
     let bisector_len = bisector_raw.length();
     if bisector_len < TOL {
-        return Err(BlendError::CornerFailure { vertex: vertex_id });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site12");
+            }
+            return Err(BlendError::CornerFailure { vertex: vertex_id });
+        }
     }
     let bisector = bisector_raw * (1.0 / bisector_len);
     let cos_half = dir_a.dot(bisector);
     if cos_half.abs() < TOL {
-        return Err(BlendError::CornerFailure { vertex: vertex_id });
+        {
+            if std::env::var("BK_CORNER_TRACE").is_ok() {
+                log::warn!("CORNER-FAIL st-site13");
+            }
+            return Err(BlendError::CornerFailure { vertex: vertex_id });
+        }
     }
     Ok(center + bisector * (radius / cos_half))
 }

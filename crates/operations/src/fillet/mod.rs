@@ -887,5 +887,66 @@ pub fn fillet_variable(
         }
     }
 
+    // The planar trimming machinery above mishandles a closed rim with
+    // curved neighbours (the fused-outline scoop: the polygon trim skips
+    // non-planar faces entirely, leaving every blend wall unstitched). When
+    // the assembled result comes back open, retry with the v2 walking
+    // engine on the ORIGINAL solid and adopt its result only when it is
+    // closed with every edge blended — cases this path already handles
+    // keep their existing output unchanged.
+    if solid_has_free_edges(topo, solid_id)? {
+        let v2_laws: Vec<(EdgeId, brepkit_blend::radius_law::RadiusLaw)> = edge_laws
+            .iter()
+            .map(|(eid, law)| {
+                let mapped = match law {
+                    FilletRadiusLaw::Constant(r) => {
+                        brepkit_blend::radius_law::RadiusLaw::Constant(*r)
+                    }
+                    FilletRadiusLaw::Linear { start, end } => {
+                        brepkit_blend::radius_law::RadiusLaw::Linear {
+                            start: *start,
+                            end: *end,
+                        }
+                    }
+                    FilletRadiusLaw::SCurve { start, end } => {
+                        brepkit_blend::radius_law::RadiusLaw::SCurve {
+                            start: *start,
+                            end: *end,
+                        }
+                    }
+                };
+                (*eid, mapped)
+            })
+            .collect();
+        match crate::blend_ops::fillet_v2_variable(topo, solid, v2_laws) {
+            Ok(v2) => {
+                let open = solid_has_free_edges(topo, v2.solid)?;
+                log::debug!(
+                    "fillet_variable v2 retry: failed_edges={} open={open}",
+                    v2.failed.len()
+                );
+                if v2.failed.is_empty() && (!open || std::env::var("BK_FORCE_V2").is_ok()) {
+                    return Ok(v2.solid);
+                }
+            }
+            Err(e) => log::debug!("fillet_variable v2 retry errored: {e}"),
+        }
+    }
+
     Ok(solid_id)
+}
+
+fn solid_has_free_edges(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(fid)?;
+        let mut wires = vec![face.outer_wire()];
+        wires.extend_from_slice(face.inner_wires());
+        for wid in wires {
+            for oe in topo.wire(wid)?.edges() {
+                *uses.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(uses.values().any(|&c| c == 1))
 }
