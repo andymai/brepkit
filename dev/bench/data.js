@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786209685641,
+  "lastUpdate": 1786210258244,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24299,6 +24299,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25246516,
             "range": "± 58170",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b94429e727c73f50e2d62e2c71ce3718ecb1cb3d",
+          "message": "perf(algo): materialize deduped sections only when a duplicate exists (#1454)\n\nFollow-up to #1453, addressing the Copilot finding that merged before\nthis commit landed: the section dedup cloned every `SectionEdge`\nunconditionally on the hot split path. Duplicates are now detected on\nborrowed data with midpoints precomputed once, and an owned `Vec` is\nmaterialized only when a duplicate actually exists. Fixture + algo suite\ngreen.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nOptimize section dedup in face splitting by detecting duplicates on\nborrowed data with precomputed midpoints and only materializing a Vec\nwhen a duplicate exists. This removes unconditional cloning of all\n`SectionEdge`s on the hot path without changing behavior (follow-up to\n#1453).\n\n- **Performance**\n  - Precompute midpoints once and reuse to detect duplicates.\n- Reuse the input slice when no duplicates; allocate and clone only when\nneeded.\n\n<sup>Written for commit 0bcd9940cc48772f5f3e995168ea0ce3dc49f716.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1454?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T17:28:26Z",
+          "tree_id": "73c6c29280bb8bebd7fe9399404e6ba8df472e88",
+          "url": "https://github.com/andymai/brepkit/commit/b94429e727c73f50e2d62e2c71ce3718ecb1cb3d"
+        },
+        "date": 1786210255868,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 991370,
+            "range": "± 11989",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1077105,
+            "range": "± 20738",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12864,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707440,
+            "range": "± 6922",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26492971,
+            "range": "± 67064",
             "unit": "ns/iter"
           }
         ]
