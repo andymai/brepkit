@@ -2301,7 +2301,7 @@ mod spine;
 /// A closed planar G1 chain of lines and tangent circular arcs (a rounded
 /// rectangle) with an all-line perpendicular profile is swept analytically:
 /// one exact plane / cylinder / cone face per profile edge per spine segment
-/// (see [`spine`]). Anything else falls back to sampling the chain, fitting an
+/// (the `spine` submodule). Anything else falls back to sampling the chain, fitting an
 /// interpolating NURBS curve, and sweeping along that.
 ///
 /// # Errors
