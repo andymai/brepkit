@@ -369,6 +369,16 @@ fn build_two_edge_patch(
         &contact_pts[..3]
     } else {
         // Degenerate case: not enough unique points
+        if std::env::var("BK_CORNER_TRACE").is_ok() {
+            let radii: Vec<Option<f64>> = indices
+                .iter()
+                .map(|&i| stripe_radius_at_vertex(vertex_id, &stripes[i], topo))
+                .collect();
+            log::warn!(
+                "CORNER-TRACE two-edge {vertex_id:?}: stripes={indices:?} radii={radii:?} unique_pts={} {contact_pts:?}",
+                contact_pts.len()
+            );
+        }
         return Err(BlendError::CornerFailure { vertex: vertex_id });
     };
 
