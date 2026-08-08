@@ -1,0 +1,28 @@
+crates/io/examples/replay_fillet_variable.rs
+  s_8b449c7ef64a35::t_ceb34d42853143 39-50,52-53,114-152
+crates/operations/src/blend_ops.rs
+  s_8b449c7ef64a35::t_ceb34d42853143 96-111,155,158-159
+  s_8b449c7ef64a35::t_38f64ad15675cf 112-154,156-157,160-207
+crates/operations/src/fillet/mod.rs
+  s_8b449c7ef64a35::t_ceb34d42853143 890-935,938-952
+crates/blend/src/trimmer.rs
+  s_8b449c7ef64a35::t_f8268e73c7e5b2 844-846,851-854,856-858,862-864,868-870,876-878
+  s_8b449c7ef64a35::t_e29689e4b192ed 884-891,893
+  s_8b449c7ef64a35::t_8627e9a7935faf 940-949
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "5ebf8e946445cd74f1050ba026b68fa4b2932af4",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
