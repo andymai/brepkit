@@ -164,6 +164,33 @@ fn build_sd_grouping(
         .map(|sf| compute_edge_set_quantized(topo, arena, sf.face_id, scale))
         .collect();
 
+    // `BK_SD_SETS=1`: print every sub-face's quantized edge set (sorted), for
+    // run-to-run determinism diffs of the SD grouping input.
+    if std::env::var("BK_SD_SETS").is_ok() {
+        let mut rows: Vec<String> = sub_faces
+            .iter()
+            .zip(edge_sets.iter())
+            .map(|(sf, es)| {
+                let set = es.as_ref().map_or_else(
+                    || "-".to_string(),
+                    |es| {
+                        let mut items: Vec<String> = es.iter().map(|q| format!("{q:?}")).collect();
+                        items.sort();
+                        items.join(";")
+                    },
+                );
+                format!(
+                    "SDSET src={:?} rank={:?} set={set}",
+                    sf.source_face, sf.rank
+                )
+            })
+            .collect();
+        rows.sort();
+        for r in rows {
+            log::debug!("{r}");
+        }
+    }
+
     // Key = edge set, Value = list of sub-face indices with that set.
     let mut groups: HashMap<EdgeSet, Vec<usize>> = HashMap::new();
     for (idx, edge_set) in edge_sets.iter().enumerate() {

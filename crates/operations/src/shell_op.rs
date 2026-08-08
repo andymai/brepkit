@@ -505,6 +505,11 @@ pub fn shell(
         return Ok(solid);
     }
 
+    // `edge_to_face_map` iterates in hash order, so without this sort the rim
+    // loop's starting edge — and with it the rim face's wire origin, which
+    // downstream consumers use as a plane-frame anchor — varied run to run.
+    boundary_edge_ids.sort_by_key(|e| e.index());
+
     // Determine the oriented direction of each boundary edge relative to its single face.
     // The rim face must use the OPPOSITE orientation so the edge is shared correctly.
     let mut boundary_oriented: Vec<brepkit_topology::wire::OrientedEdge> = Vec::new();

@@ -134,6 +134,42 @@ fn run_once(iter: usize) -> (usize, usize) {
     };
     let hollow =
         brepkit_operations::shell_op::shell(&mut topo, box_solid, 1.2, &top_faces).unwrap();
+    if std::env::var("BK_OPERAND_DUMP").is_ok() {
+        let hfaces = brepkit_topology::explorer::solid_faces(&topo, hollow).unwrap();
+        let mut rows: Vec<String> = hfaces
+            .iter()
+            .map(|&fid| {
+                let f = topo.face(fid).unwrap();
+                let surf = match f.surface() {
+                    FaceSurface::Plane { normal, d } => format!(
+                        "P n=({:.3},{:.3},{:.3}) d={d:.3}",
+                        normal.x(),
+                        normal.y(),
+                        normal.z()
+                    ),
+                    FaceSurface::Cylinder(c) => format!("C r={:.3}", c.radius()),
+                    _ => "other".to_string(),
+                };
+                let w = topo.wire(f.outer_wire()).unwrap();
+                let first = w.edges().first().map_or_else(
+                    || "<empty wire>".to_string(),
+                    |oe| {
+                        let e0 = topo.edge(oe.edge()).unwrap();
+                        let p = topo.vertex(oe.oriented_start(e0)).unwrap().point();
+                        format!("({:.3},{:.3},{:.3})", p.x(), p.y(), p.z())
+                    },
+                );
+                format!(
+                    "OPDUMP {fid:?} rev={} {surf} first={first}",
+                    f.is_reversed()
+                )
+            })
+            .collect();
+        rows.sort();
+        for r in rows {
+            println!("{r}");
+        }
+    }
     let spine = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
     let profile = make_lip_profile(
         &mut topo,

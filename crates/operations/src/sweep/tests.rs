@@ -1848,7 +1848,6 @@ fn analytic_lip_ring_fuses_onto_hollow_box() {
 }
 
 #[test]
-#[ignore = "ready-repro: the maximal-coincidence lip fuse (lip outer wall and corner cylinders             exactly coincident with the box's, bottom coplanar with the rim) NONDETERMINISTICALLY             falls to the mesh fallback (~1 in 5 runs of the same build; HashMap-order class, see             perf_64cut_determinism). Un-ignore when the coincident-fuse determinism dig closes."]
 fn exact_coincident_lip_fuse_stays_analytic() {
     let mut topo = Topology::new();
     let spine_for_face = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
