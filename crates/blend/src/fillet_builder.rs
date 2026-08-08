@@ -1500,22 +1500,53 @@ fn rebuild_closed_rim_loop_faces(
             };
             let oe = edges[epos];
             let edge = topo.edge(oe.edge())?;
-            if !matches!(edge.curve(), EdgeCurve::Line) {
-                continue;
-            }
             let (pa, pb) = (
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
             );
-            if seg_dist(pa, pb, cp) > WELD {
-                continue;
-            }
             // Endpoint coincidence is the weld case, not a split.
             if (cp - pa).length() <= WELD || (cp - pb).length() <= WELD {
                 continue;
             }
+            enum SplitPlan {
+                Line,
+                Curve(
+                    brepkit_math::nurbs::curve::NurbsCurve,
+                    brepkit_math::nurbs::curve::NurbsCurve,
+                ),
+            }
+            let plan = match edge.curve() {
+                EdgeCurve::Line => {
+                    if seg_dist(pa, pb, cp) > WELD {
+                        continue;
+                    }
+                    SplitPlan::Line
+                }
+                EdgeCurve::NurbsCurve(nc) => {
+                    let Ok(proj) =
+                        brepkit_math::nurbs::projection::project_point_to_curve(nc, cp, 1e-9)
+                    else {
+                        continue;
+                    };
+                    if (proj.point - cp).length() > WELD {
+                        continue;
+                    }
+                    let Ok((left, right)) =
+                        brepkit_math::nurbs::knot_ops::curve_split(nc, proj.parameter)
+                    else {
+                        continue;
+                    };
+                    SplitPlan::Curve(left, right)
+                }
+                _ => continue,
+            };
             let v_split = topo.add_vertex(Vertex::new(cp, 1e-7));
-            let (pre, post) = trimmer::split_edge_at(topo, &oe, v_split)?;
+            let (pre, post) = match plan {
+                SplitPlan::Line => trimmer::split_edge_at(topo, &oe, v_split)?,
+                SplitPlan::Curve(left, right) => {
+                    trimmer::split_edge_at_with_curves(topo, &oe, v_split, left, right)?
+                }
+            };
             // The kept sub-piece: the part AWAY from the contact junction.
             match (&mut pieces[orig_idx], is_end_side) {
                 (

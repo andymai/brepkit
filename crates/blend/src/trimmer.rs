@@ -458,6 +458,36 @@ pub(crate) fn split_edge_at(
     ))
 }
 
+/// Split an oriented boundary edge at a vertex, assigning each sub-edge its
+/// properly TRIMMED sub-curve (for curved edges, where re-anchoring
+/// endpoints alone would leave both halves spanning the full stored curve).
+///
+/// `left`/`right` are the stored-direction sub-curves from `curve_split`.
+pub(crate) fn split_edge_at_with_curves(
+    topo: &mut Topology,
+    oe: &OrientedEdge,
+    split_vertex: VertexId,
+    left: brepkit_math::nurbs::curve::NurbsCurve,
+    right: brepkit_math::nurbs::curve::NurbsCurve,
+) -> Result<(OrientedEdge, OrientedEdge), BlendError> {
+    let edge = topo.edge(oe.edge())?;
+    let (s_v, e_v) = (edge.start(), edge.end());
+    let e1_id = topo.add_edge(Edge::new(s_v, split_vertex, EdgeCurve::NurbsCurve(left)));
+    let e2_id = topo.add_edge(Edge::new(split_vertex, e_v, EdgeCurve::NurbsCurve(right)));
+    propagate_split(topo, oe.edge(), true, e1_id, e2_id)?;
+    if oe.is_forward() {
+        Ok((
+            OrientedEdge::new(e1_id, true),
+            OrientedEdge::new(e2_id, true),
+        ))
+    } else {
+        Ok((
+            OrientedEdge::new(e2_id, false),
+            OrientedEdge::new(e1_id, false),
+        ))
+    }
+}
+
 /// Rewrite every wire referencing the split edge to use its two sub-edges.
 ///
 /// A boundary edge crossed by a contact curve is usually shared with a

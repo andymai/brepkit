@@ -210,6 +210,18 @@ pub fn notch_face_corner_with_arc(
         let e = topo.edge(oe.edge())?;
         Ok((oe.oriented_start(e), oe.oriented_end(e)))
     };
+    if std::env::var("BK_NOTCH_TRACE").is_ok() {
+        let mut has_a = false;
+        let mut has_b = false;
+        for oe in &oes {
+            let (s, e) = ends(oe)?;
+            has_a |= s == va || e == va;
+            has_b |= s == vb || e == vb;
+        }
+        if has_a || has_b {
+            log::warn!("NOTCH-TRACE face={face_id:?} has_va={has_a} has_vb={has_b} wire_len={n}");
+        }
+    }
     for i in 0..n {
         let j = (i + 1) % n;
         let (s0, e0) = ends(&oes[i])?;
