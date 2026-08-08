@@ -788,8 +788,8 @@ pub fn perform(
         }
     }
 
-    // `BK_FF_DUMP=1`: print every stored FF section (pair + quantized
-    // endpoints), sorted, for run-to-run determinism diffs.
+    // `BK_FF_DUMP=1`: print every stored FF section (face pair + curve
+    // bounding box), sorted, for run-to-run determinism diffs.
     if std::env::var("BK_FF_DUMP").is_ok() {
         let mut rows: Vec<String> = arena
             .curves

@@ -234,9 +234,10 @@ fn main() {
         if curved == 0 {
             fallbacks += 1;
         }
-        // The bad outcome keeps both coincident contact faces (F=64 with 14
-        // defective edges); the good analytic result is F=58.
-        if f != 58 {
+        // The bad ANALYTIC outcome keeps both coincident contact faces (F=64
+        // with 14 defective edges); the good analytic result is F=58. Mesh
+        // fallbacks are counted separately above.
+        if curved > 0 && f != 58 {
             bad += 1;
         }
         println!("iter {i}: F={f} curved={curved} {tag}");
