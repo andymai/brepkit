@@ -381,16 +381,26 @@ fn build_horn_torus_corner(
     stripes: &[Stripe],
     topo: &mut Topology,
 ) -> Result<Option<CornerResult>, BlendError> {
-    use brepkit_math::curves::Circle3D;
-    use brepkit_math::surfaces::ToroidalSurface;
-
     let indices = stripes_at_vertex(vertex_id, stripes, topo);
     if indices.len() != 2 {
         return Ok(Option::None);
     }
+    build_horn_torus_for_pair(vertex_id, stripes, indices[0], indices[1], topo)
+}
+
+fn build_horn_torus_for_pair(
+    vertex_id: VertexId,
+    stripes: &[Stripe],
+    ia: usize,
+    ib: usize,
+    topo: &mut Topology,
+) -> Result<Option<CornerResult>, BlendError> {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::ToroidalSurface;
+
     let (Some(sa), Some(sb)) = (
-        contact_section_at_vertex(vertex_id, &stripes[indices[0]], topo).cloned(),
-        contact_section_at_vertex(vertex_id, &stripes[indices[1]], topo).cloned(),
+        contact_section_at_vertex(vertex_id, &stripes[ia], topo).cloned(),
+        contact_section_at_vertex(vertex_id, &stripes[ib], topo).cloned(),
     ) else {
         return Ok(Option::None);
     };
@@ -504,9 +514,19 @@ fn build_mixed_radius_band(
     if indices.len() != 2 {
         return Ok(Option::None);
     }
+    build_mixed_radius_band_for_pair(vertex_id, stripes, indices[0], indices[1], topo)
+}
+
+fn build_mixed_radius_band_for_pair(
+    vertex_id: VertexId,
+    stripes: &[Stripe],
+    ia: usize,
+    ib: usize,
+    topo: &mut Topology,
+) -> Result<Option<CornerResult>, BlendError> {
     let (Some(sa), Some(sb)) = (
-        contact_section_at_vertex(vertex_id, &stripes[indices[0]], topo).cloned(),
-        contact_section_at_vertex(vertex_id, &stripes[indices[1]], topo).cloned(),
+        contact_section_at_vertex(vertex_id, &stripes[ia], topo).cloned(),
+        contact_section_at_vertex(vertex_id, &stripes[ib], topo).cloned(),
     ) else {
         return Ok(Option::None);
     };
@@ -705,7 +725,31 @@ pub fn compute_corners(
             },
             CornerType::MultiEdge(_) => match build_multi_edge_corner(vid, stripes, topo) {
                 Ok(corner_results) => results.extend(corner_results),
-                Err(e) => log::warn!("multi-edge corner at {vid:?} failed: {e}, skipping"),
+                Err(e) => {
+                    // The sphere solver cannot serve mixed radii; try
+                    // pairwise horn/band patches for each stripe pair at
+                    // the vertex instead of leaving the junction open.
+                    log::warn!("multi-edge corner at {vid:?} failed: {e}, trying pairwise patches");
+                    let idxs = stripes_at_vertex(vid, stripes, topo);
+                    for x in 0..idxs.len() {
+                        for y in (x + 1)..idxs.len() {
+                            let pair = match build_horn_torus_for_pair(
+                                vid, stripes, idxs[x], idxs[y], topo,
+                            ) {
+                                Ok(Some(r)) => Some(r),
+                                _ => match build_mixed_radius_band_for_pair(
+                                    vid, stripes, idxs[x], idxs[y], topo,
+                                ) {
+                                    Ok(Some(r)) => Some(r),
+                                    _ => Option::None,
+                                },
+                            };
+                            if let Some(r) = pair {
+                                results.push(r);
+                            }
+                        }
+                    }
+                }
             },
         }
     }
