@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.2](https://github.com/andymai/brepkit/compare/v3.2.1...v3.2.2) (2026-08-08)
+
+
+### Bug Fixes
+
+* **blend:** trimmer and corner hardening from the closed-rim scoop repro ([#1457](https://github.com/andymai/brepkit/issues/1457)) ([65096a2](https://github.com/andymai/brepkit/commit/65096a212634b11c24fa8133b0cd6d353247cf87))
+
 ## [3.2.1](https://github.com/andymai/brepkit/compare/v3.2.0...v3.2.1) (2026-08-08)
 
 
