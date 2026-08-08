@@ -1732,10 +1732,16 @@ fn sweep_miter(
         input_normal = -input_normal;
     }
 
-    // The miter path still re-centers the profile: its per-sub-path ring
-    // reconstruction and joint machinery are calibrated together, so the
-    // as-positioned semantic needs its own verification pass here.
-    let centroid = crate::winding::polygon_centroid(&input_positions);
+    // As-positioned placement (see `sweep`): a perpendicular profile's
+    // offsets are measured from the path start, so the first sub-path's ring 0
+    // reproduces the profile exactly; each later sub-path keeps the same
+    // offset convention (its start ring is bridged by the miter ring anyway).
+    // Edge-on/oblique profiles keep the centroid placement.
+    let reference =
+        match resolve_placement(ProfilePlacement::AsPositioned, input_normal, path_tangent_0) {
+            ProfilePlacement::AsPositioned => path.evaluate(domain_start),
+            ProfilePlacement::CentroidOnPath => crate::winding::polygon_centroid(&input_positions),
+        };
 
     // Split the path at each kink to get smooth sub-curves.
     let mut sub_paths: Vec<NurbsCurve> = Vec::with_capacity(kinks.len() + 1);
@@ -1825,7 +1831,7 @@ fn sweep_miter(
                 .map(|&pos| {
                     let transformed = transform_point(
                         pos,
-                        centroid,
+                        reference,
                         initial_right,
                         initial_up,
                         initial_tangent,
@@ -2008,7 +2014,7 @@ fn sweep_miter(
             inner_swept.push(sweep_wire_through_frames(
                 topo,
                 iw_id,
-                centroid,
+                reference,
                 initial_right,
                 initial_up,
                 initial_tangent,
