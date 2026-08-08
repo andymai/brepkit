@@ -1689,6 +1689,36 @@ fn analytic_spine_sweep_lip_ring_is_exact() {
 }
 
 #[test]
+fn analytic_spine_sweep_handles_flipped_chain_edges() {
+    // Edges stored end-to-start must be re-oriented by the chain extraction;
+    // an unflipped line direction transports the ring backwards and silently
+    // loses the analytic path.
+    let mut topo = Topology::new();
+    let spine = make_rounded_rect_spine(&mut topo, 84.0, 84.0, 3.75);
+    // Flip the third segment (a line edge) in place: rebuild it end-to-start.
+    let flipped = {
+        let e = topo.edge(spine[2]).unwrap();
+        let (a, b) = (e.start(), e.end());
+        topo.add_edge(Edge::new(b, a, EdgeCurve::Line))
+    };
+    let mut edges = spine;
+    edges[2] = flipped;
+    let profile = make_positioned_lip_profile(
+        &mut topo,
+        Point3::new(42.0, -38.25, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    );
+    let solid = crate::sweep::sweep_along_edges(&mut topo, profile, &edges).unwrap();
+    let solid_data = topo.solid(solid).unwrap();
+    let shell = topo.shell(solid_data.outer_shell()).unwrap();
+    assert_eq!(
+        shell.faces().len(),
+        40,
+        "the analytic path must still fire with a flipped chain edge"
+    );
+}
+
+#[test]
 fn sweep_along_edges_open_chain_falls_back() {
     // An open chain is outside the analytic gate and must still sweep via the
     // fitted path.

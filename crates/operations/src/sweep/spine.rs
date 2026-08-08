@@ -100,7 +100,8 @@ fn extract_closed_planar_spine(
     let make_seg = |sp: Point3, ep: Point3, curve: &EdgeCurve, flipped: bool| -> Option<SpineSeg> {
         match curve {
             EdgeCurve::Line => {
-                let chord = ep - sp;
+                let (from, to) = if flipped { (ep, sp) } else { (sp, ep) };
+                let chord = to - from;
                 let len = chord.length();
                 if len < lin {
                     return None;
