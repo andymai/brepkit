@@ -31,6 +31,117 @@ fn census(topo: &Topology, solid: SolidId, label: &str) {
     }
     let free = uses.values().filter(|&&c| c == 1).count();
     let over = uses.values().filter(|&&c| c > 2).count();
+    if std::env::var("ORIENT").is_ok() {
+        let mut senses: HashMap<usize, Vec<(String, bool)>> = HashMap::new();
+        for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+            let face = topo.face(fid).unwrap();
+            let rev = face.is_reversed();
+            let tag = format!("{fid:?}:{}", face.surface().type_tag());
+            let mut wires = vec![face.outer_wire()];
+            wires.extend_from_slice(face.inner_wires());
+            for wid in wires {
+                for oe in topo.wire(wid).unwrap().edges() {
+                    let eff = oe.is_forward() ^ rev;
+                    senses
+                        .entry(oe.edge().index())
+                        .or_default()
+                        .push((tag.clone(), eff));
+                }
+            }
+        }
+        let mut bad = 0;
+        for (eidx, users) in &senses {
+            if users.len() == 2 && users[0].1 == users[1].1 {
+                bad += 1;
+                let e = topo.edge(topo.edge_id_from_index(*eidx).unwrap()).unwrap();
+                let (a, b) = (
+                    topo.vertex(e.start()).unwrap().point(),
+                    topo.vertex(e.end()).unwrap().point(),
+                );
+                println!(
+                    "  SAMESENSE-BREP e{eidx} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) users={:?}",
+                    e.curve().type_tag(),
+                    a.x(),
+                    a.y(),
+                    a.z(),
+                    b.x(),
+                    b.y(),
+                    b.z(),
+                    users
+                );
+            }
+        }
+        println!("  {label} brep_same_sense={bad}");
+    }
+    if std::env::var("TESS_BND").is_ok() {
+        match brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+            topo,
+            solid,
+            0.01,
+            5.0_f64.to_radians(),
+        ) {
+            Ok(mesh) => {
+                println!(
+                    "  {label} tess_bnd={} tess_nm={}",
+                    brepkit_operations::tessellate::boundary_edge_count(&mesh),
+                    brepkit_operations::tessellate::non_manifold_edge_count(&mesh)
+                );
+                if std::env::var("TESS_BND").is_ok_and(|v| v == "2") {
+                    let mut edge_uses: HashMap<(usize, usize), usize> = HashMap::new();
+                    for t in mesh.indices.chunks_exact(3) {
+                        let t = [t[0] as usize, t[1] as usize, t[2] as usize];
+                        for k in 0..3 {
+                            let (a, b) = (t[k], t[(k + 1) % 3]);
+                            *edge_uses.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+                        }
+                    }
+                    let pos = |i: usize| {
+                        let p = mesh.positions[i];
+                        (p.x(), p.y(), p.z())
+                    };
+                    let mut rows: Vec<String> = edge_uses
+                        .iter()
+                        .filter(|&(_, &c)| c == 1)
+                        .map(|(&(a, b), _)| {
+                            let (pa, pb) = (pos(a), pos(b));
+                            format!(
+                                "  BND ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                                pa.0, pa.1, pa.2, pb.0, pb.1, pb.2
+                            )
+                        })
+                        .collect();
+                    let mut directed: HashMap<(usize, usize), usize> = HashMap::new();
+                    for t in mesh.indices.chunks_exact(3) {
+                        let t = [t[0] as usize, t[1] as usize, t[2] as usize];
+                        for k in 0..3 {
+                            *directed.entry((t[k], t[(k + 1) % 3])).or_insert(0) += 1;
+                        }
+                    }
+                    for &(a, b) in directed.keys() {
+                        if a < b && directed.contains_key(&(b, a)) {
+                            continue;
+                        }
+                        if a > b && directed.contains_key(&(b, a)) {
+                            continue;
+                        }
+                        let und = edge_uses.get(&(a.min(b), a.max(b))).copied().unwrap_or(0);
+                        if und >= 2 {
+                            let (pa, pb) = (pos(a), pos(b));
+                            rows.push(format!(
+                                "  SAMESENSE x{und} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                                pa.0, pa.1, pa.2, pb.0, pb.1, pb.2
+                            ));
+                        }
+                    }
+                    rows.sort();
+                    for r in &rows {
+                        println!("{r}");
+                    }
+                }
+            }
+            Err(e) => println!("  {label} tess_err={e}"),
+        }
+    }
     let mut rows: Vec<_> = types.into_iter().collect();
     rows.sort_unstable();
     println!("  {label}: mix={rows:?} free={free} over={over}");

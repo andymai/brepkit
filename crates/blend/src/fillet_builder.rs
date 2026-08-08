@@ -442,6 +442,27 @@ impl<'a> FilletBuilder<'a> {
         crate::builder_utils::weld_coincident_free_edges(topo, &result_faces)?;
         crate::builder_utils::close_residual_free_loops(topo, &mut result_faces)?;
 
+        // Faces carried over from the input solid keep their (correct)
+        // orientation: they seed the sense propagation and calibrate the
+        // boundary-walk convention. Only faces built by THIS pass — walls,
+        // corner patches, bands, fills, and rebuilt originals — are
+        // eligible for repair; a previous fillet's NURBS wall arriving as
+        // an input face must never be re-judged.
+        let original_set: std::collections::HashSet<FaceId> =
+            original_faces.iter().copied().collect();
+        let seeds: Vec<FaceId> = result_faces
+            .iter()
+            .filter(|f| original_set.contains(f))
+            .copied()
+            .collect();
+        let new_faces: Vec<FaceId> = result_faces
+            .iter()
+            .filter(|f| !original_set.contains(f))
+            .copied()
+            .collect();
+        crate::builder_utils::propagate_orientation(topo, &result_faces, &seeds)?;
+        crate::builder_utils::normalize_face_normals(topo, &new_faces, &seeds)?;
+
         let new_shell = Shell::new(result_faces)?;
         let new_shell_id = topo.add_shell(new_shell);
         let new_solid = Solid::new(new_shell_id, Vec::new());
