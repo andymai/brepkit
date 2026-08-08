@@ -171,7 +171,7 @@ const PROFILE_PERP_MIN_COS: f64 = 0.99;
 
 /// Resolve `AsPositioned` to `CentroidOnPath` when the profile is not
 /// perpendicular to the path start tangent (see [`PROFILE_PERP_MIN_COS`]).
-fn resolve_placement(
+pub(crate) fn resolve_placement(
     placement: ProfilePlacement,
     input_normal: Vec3,
     path_tangent_0: Vec3,
@@ -1296,12 +1296,12 @@ pub fn sweep_with_options(
 
     // A straight perpendicular sweep is a prism — build it exactly via extrude.
     // Only when no scale law or guide spine applies, since either makes the
-    // result non-prismatic. This family keeps centroid placement (the contact
-    // modes position the section on the spine themselves).
+    // result non-prismatic. As-positioned, matching the general path below
+    // (the fast path's gate already requires a perpendicular profile).
     if options.scale_law.is_none()
         && options.aux_spine.is_none()
         && let Some(solid) =
-            try_straight_extrude(topo, profile, path, ProfilePlacement::CentroidOnPath)?
+            try_straight_extrude(topo, profile, path, ProfilePlacement::AsPositioned)?
     {
         return Ok(solid);
     }
@@ -1349,8 +1349,6 @@ pub fn sweep_with_options(
     if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
         input_normal = -input_normal;
     }
-
-    let centroid = crate::winding::polygon_centroid(&input_positions);
 
     let num_segments = if options.segments > 0 {
         options.segments
@@ -1435,10 +1433,22 @@ pub fn sweep_with_options(
         }
     };
 
-    // Map the profile's 2D shape onto the path's perpendicular plane using the
-    // profile's own basis, so a profile whose plane is not perpendicular to the
-    // path is still swept perpendicular (rather than collapsing to a ribbon).
-    let (initial_right, initial_up, initial_tangent) = profile_basis(input_normal);
+    // As-positioned placement (see `sweep`): frame-0's basis and origin make
+    // ring 0 the identity map for a profile perpendicular to the path;
+    // edge-on/oblique profiles keep the auto-orienting centroid placement.
+    let (reference, initial_right, initial_up, initial_tangent) =
+        match resolve_placement(ProfilePlacement::AsPositioned, input_normal, path_tangent_0) {
+            ProfilePlacement::AsPositioned => (
+                frames[0].origin,
+                frames[0].right,
+                frames[0].up,
+                frames[0].tangent,
+            ),
+            ProfilePlacement::CentroidOnPath => {
+                let (r, u, t) = profile_basis(input_normal);
+                (crate::winding::polygon_centroid(&input_positions), r, u, t)
+            }
+        };
 
     let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_segments + 1);
 
@@ -1452,7 +1462,7 @@ pub fn sweep_with_options(
             .map(|&pos| {
                 let mut transformed = transform_point(
                     pos,
-                    centroid,
+                    reference,
                     initial_right,
                     initial_up,
                     initial_tangent,
@@ -1503,7 +1513,7 @@ pub fn sweep_with_options(
         inner_swept_opts.push(sweep_wire_through_frames(
             topo,
             iw_id,
-            centroid,
+            reference,
             initial_right,
             initial_up,
             initial_tangent,
@@ -1722,6 +1732,9 @@ fn sweep_miter(
         input_normal = -input_normal;
     }
 
+    // The miter path still re-centers the profile: its per-sub-path ring
+    // reconstruction and joint machinery are calibrated together, so the
+    // as-positioned semantic needs its own verification pass here.
     let centroid = crate::winding::polygon_centroid(&input_positions);
 
     // Split the path at each kink to get smooth sub-curves.
