@@ -292,6 +292,19 @@ pub(crate) fn assemble_solid_mixed(
                     continue;
                 }
 
+                // A reversed face flips every edge's effective traversal, so
+                // its wire must be built with reversed winding (the #1367
+                // rule) or the face traverses shared edges in the same
+                // effective sense as its neighbours. The arc EDGES above are
+                // built from the given vertex order — only the wire order
+                // flips here, not the curve geometry.
+                if *reversed {
+                    oriented_edges.reverse();
+                    for oe in &mut oriented_edges {
+                        *oe = OrientedEdge::new(oe.edge(), !oe.is_forward());
+                    }
+                }
+
                 let wire =
                     Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
                 let wire_id = topo.add_wire(wire);
