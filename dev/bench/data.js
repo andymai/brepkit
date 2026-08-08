@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786207887611,
+  "lastUpdate": 1786208420164,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24191,6 +24191,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24854337,
             "range": "± 30089",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "366e81748876eeba823c33f12a8ab7d14a37cde3",
+          "message": "chore(main): release 3.2.0 (#1452)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.2.0](https://github.com/andymai/brepkit/compare/v3.1.4...v3.2.0)\n(2026-08-08)\n\n\n### Features\n\n* **operations:** mesh-fallback counter and simplify-honoring boolean\nbindings ([#1450](https://github.com/andymai/brepkit/issues/1450))\n([62b4719](https://github.com/andymai/brepkit/commit/62b471918280eff4206e1f886e11cef4e0d8fef3))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.0 adds new `brepkit-operations` bindings for a mesh-fallback\ncounter and a toggle to honor simplify in boolean ops. All `brepkit-*`\ncrates are bumped to 3.2.0.\n\n- **New Features**\n  - Exposes mesh-fallback counter in `brepkit-operations`.\n  - Adds boolean option to honor simplify.\n\n- **Dependencies**\n- Bump workspace crate versions to `3.2.0` and update release manifest.\n\n<sup>Written for commit 774c54908f066733962c66f905d241e170c0f7e7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1452?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T16:57:50Z",
+          "tree_id": "cec105931a3838f1a6418bc6f82233c904f7f01a",
+          "url": "https://github.com/andymai/brepkit/commit/366e81748876eeba823c33f12a8ab7d14a37cde3"
+        },
+        "date": 1786208417518,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 994710,
+            "range": "± 11437",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1075137,
+            "range": "± 8895",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13000,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709786,
+            "range": "± 2225",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26288720,
+            "range": "± 107455",
             "unit": "ns/iter"
           }
         ]
