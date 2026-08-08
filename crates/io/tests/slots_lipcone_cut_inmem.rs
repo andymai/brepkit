@@ -33,8 +33,6 @@ fn load(name: &str, topo: &mut Topology) -> SolidId {
 }
 
 fn free_edge_count(topo: &Topology, solid: SolidId) -> usize {
-    let report = brepkit_operations::validate::validate_solid(topo, solid).unwrap();
-    let _ = &report;
     let mut counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
         let face = topo.face(fid).unwrap();
@@ -89,7 +87,7 @@ fn single_slot_cut_is_watertight_and_analytic() {
         .filter(|&&fid| {
             matches!(
                 topo.face(fid).unwrap().surface(),
-                brepkit_topology::face::FaceSurface::Cone { .. }
+                brepkit_topology::face::FaceSurface::Cone(_)
             )
         })
         .count();
