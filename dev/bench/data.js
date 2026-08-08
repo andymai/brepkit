@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786168277495,
+  "lastUpdate": 1786170507408,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22895,6 +22895,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26245158,
             "range": "± 112842",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "56da2846891ccf3bcb45eb9ad8201a37e91c8579",
+          "message": "fix(operations): drop sub-resolution polygons in mixed boolean assembly (#1423)\n\n## Problem\n\nWith the sweep placement fix (#1421) verified on npm 3.0.1, the brepjs\ngridfinity-smoke lip-fuse test moved into a new failure:\n`fuse(hollowBox, lip)` throws **\"empty wire — at least one element is\nrequired\"** instead of returning a result.\n\nChain (measured on captured operands; box F=27 clean, lip F=2730\nall-planar clean): the raw GFA fuse of the coplanar-contact pair emits\nfree=74/over=28 with volume loss, validation rightly rejects it, and the\nmesh fallback then hard-errors: a sub-resolution sliver polygon in\n`assemble_solid_mixed` loses **every** edge to the degenerate/duplicate\nskips (all its vertices quantize to one merged vertex id), and\n`Wire::new` on the empty edge list errors the whole assembly. Located\nwith an env-gated panic backtrace at the empty-wire mint (assembly.rs\nplanar arm).\n\n## Fix\n\nBoth the planar and cylindrical assembly arms drop a ring whose\noriented-edge list comes out empty — a degenerate polygon bounds no\narea. The fallback then completes instead of failing the operation\noutright.\n\n## Verification\n\n- New pin: `assemble_mixed_drops_sub_resolution_polygon` (unit cube + a\n1e-9-scale sliver spec; foil-verified — fails on the unguarded\nassembly).\n- Native replay of the captured lip-fuse pair: `operations::boolean` now\nreturns a fallback result instead of erroring.\n- Boolean suite 171/171, io fixture suites all green, wasm gridfinity\ncanary 27/27, clippy `-D warnings`, fmt.\n\n## Not fixed here (tracked in the roadmap)\n\n- The GFA coplanar fuse emitting free=74 with volume loss on this pair.\n- The mesh co-refinement fallback's output quality on coplanar contact\n(volume far off).\n- The upstream lever: analytic sweep faces for line/arc spines (removes\nthe 2730-face operand fragmentation entirely).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDrop sub-resolution polygons that collapse to empty rings in mixed\nboolean assembly to prevent \"empty wire\" crashes in mesh-fallback\nbooleans. Fuses like hollow-box + swept-lip now complete instead of\naborting when operands include sliver faces.\n\n- **Bug Fixes**\n- In both planar and cylindrical arms of `assemble_solid_mixed`, skip\nrings with no oriented edges (zero-area polygons).\n- Added test `assemble_mixed_drops_sub_resolution_polygon` to pin the\nbehavior.\n\n<sup>Written for commit 5ad1dd24e114105a42ece682e710b6f02aac0089.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1423?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T06:26:17Z",
+          "tree_id": "953d9e97c96dad390b4aed86737a33232e102dfb",
+          "url": "https://github.com/andymai/brepkit/commit/56da2846891ccf3bcb45eb9ad8201a37e91c8579"
+        },
+        "date": 1786170505327,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 684523,
+            "range": "± 31541",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 739044,
+            "range": "± 50397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8133,
+            "range": "± 417",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 458259,
+            "range": "± 18592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17481930,
+            "range": "± 67120",
             "unit": "ns/iter"
           }
         ]
