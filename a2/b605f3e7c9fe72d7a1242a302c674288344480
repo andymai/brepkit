@@ -1,0 +1,35 @@
+crates/operations/src/boolean/mod.rs
+  s_8b449c7ef64a35::t_b5fe5e51c1de75 36-48
+  s_8b449c7ef64a35::t_2200022d9e9201 833
+crates/operations/src/boolean/tests.rs
+  s_8b449c7ef64a35::t_1c7c0e2f47a71c 7313-7314,7323-7330,7333,7338,7343-7344
+  s_8b449c7ef64a35::t_58a0216cdf76a3 7315-7322,7331-7332,7334-7337,7339-7342
+.claude/skills/roadmap/SKILL.md
+  s_8b449c7ef64a35::t_44562871ac9256 127-128
+crates/wasm/src/bindings/batch.rs
+  s_8b449c7ef64a35::t_257bb6d8b6134f 385-390,395-411,414-416
+crates/wasm/src/bindings/booleans.rs
+  s_8b449c7ef64a35::t_e47bcc6ede3a66 318-336
+  s_8b449c7ef64a35::t_f9e732056ff057 7-9
+  s_8b449c7ef64a35::t_23ce4db36d06c8 416-425,429-443
+  s_8b449c7ef64a35::t_00468f051c2bc5 426-428
+  s_8b449c7ef64a35::t_be193e9e732c59 132-134
+  s_8b449c7ef64a35::t_b608e27436d866 83-131,135-138
+  s_8b449c7ef64a35::t_d5c55d9269637e 415
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a2b605f3e7c9fe72d7a1242a302c674288344480",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
