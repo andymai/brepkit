@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786181323816,
+  "lastUpdate": 1786183735864,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23327,6 +23327,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21083614,
             "range": "± 422145",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "364d5569f5d818f52c358706e9d9279857b46067",
+          "message": "fix(algo): peel pendant sections in deterministic order (#1432)\n\n## What\n\n- `wire_builder::remove_pendant_sections` peeled the FIRST pendant found\nin HashMap iteration order (with a `break`), so the peel order — and\nwith it sub-face edge sets downstream — varied run to run. It now peels\nthe lowest source index per round.\n- Adds `BK_FF_DUMP=1` (phase_ff): sorted dump of every stored FF section\nfor run-to-run determinism diffs.\n- The coincident-fuse loop probe now reports the bad outcome (`F!=58`)\nseparately from mesh fallbacks; its old counter under-counted (the bad\nresult has curved faces).\n\n## Status of the dig (recorded in the roadmap)\n\nPhase FF is exonerated: the 44 stored sections are byte-identical across\ngood and bad runs. This peel fix is correct hardening but not the whole\nroot — the bad outcome persists at ~12/100 (historic band 10-33%), so at\nleast one more order-sensitive site remains between the FF sections and\nthe sub-face edge sets. Next instrument: per-sub-face quantized edge-set\ndump to see which face's set diverges.\n\n## Verification\n\nFull workspace green (`--no-fail-fast`, render excluded), boolean\n171/171, algo 209/209, wasm gridfinity canary 27/27, clippy `-D\nwarnings`, fmt.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMake pendant peeling deterministic to reduce run-to-run variation in\ncoincident fuses. Adds a sorted FF-section dump and tightens the loop\nprobe to track bad analytic outcomes without counting mesh fallbacks.\n\n- **Bug Fixes**\n- Deterministic pendant peeling: `wire_builder::remove_pendant_sections`\nnow peels the lowest source index each round instead of the first\nHashMap hit.\n- Test added: `multi_pendant_peel_is_deterministic` pins invariant peel\nresults over 50 runs.\n\n- **New Features**\n- `BK_FF_DUMP=1`: emits a sorted dump of stored FF sections (face pair +\ncurve bounding box) for determinism diffs.\n- Loop probe: reports the bad analytic outcome (`F!=58`) separately and\nexcludes fallback runs.\n\n<sup>Written for commit 059588787fcab08f10532b634cda3135a460ac02.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1432?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T10:06:18Z",
+          "tree_id": "55d8da9f4b42816e882e322ad604cc68d4b3a2b3",
+          "url": "https://github.com/andymai/brepkit/commit/364d5569f5d818f52c358706e9d9279857b46067"
+        },
+        "date": 1786183733506,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 947733,
+            "range": "± 4538",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1026877,
+            "range": "± 2197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12442,
+            "range": "± 50",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702162,
+            "range": "± 1925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24840053,
+            "range": "± 31342",
             "unit": "ns/iter"
           }
         ]
