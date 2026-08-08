@@ -36,7 +36,21 @@ fn census(topo: &Topology, solid: SolidId, label: &str) {
     println!("  {label}: mix={rows:?} free={free} over={over}");
 }
 
+struct Tap;
+impl log::Log for Tap {
+    fn enabled(&self, _m: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, r: &log::Record) {
+        println!("    [log {}] {}", r.level(), r.args());
+    }
+    fn flush(&self) {}
+}
+static TAP: Tap = Tap;
+
 fn main() {
+    let _ = log::set_logger(&TAP);
+    log::set_max_level(log::LevelFilter::Debug);
     let input = std::env::var_os("F").expect("F=<input.bin>");
     let spec_path = std::env::var_os("SPEC").expect("SPEC=<spec.json>");
 
@@ -97,6 +111,45 @@ fn main() {
         Ok(result) => {
             println!("-- fillet_variable {}ms --", t.elapsed().as_millis());
             census(&topo, result, "RESULT");
+            if std::env::var("FREE_DETAIL").is_ok() {
+                let mut users: HashMap<usize, (Vec<String>, Point3, Point3)> = HashMap::new();
+                for fid in brepkit_topology::explorer::solid_faces(&topo, result).unwrap() {
+                    let face = topo.face(fid).unwrap();
+                    let tag = face.surface().type_tag();
+                    let mut wires = vec![face.outer_wire()];
+                    wires.extend_from_slice(face.inner_wires());
+                    for wid in wires {
+                        for oe in topo.wire(wid).unwrap().edges() {
+                            let e = topo.edge(oe.edge()).unwrap();
+                            let (a, b) = (
+                                topo.vertex(e.start()).unwrap().point(),
+                                topo.vertex(e.end()).unwrap().point(),
+                            );
+                            users
+                                .entry(oe.edge().index())
+                                .or_insert_with(|| (Vec::new(), a, b))
+                                .0
+                                .push(format!("{fid:?}:{tag}"));
+                        }
+                    }
+                }
+                for (eidx, (owners, a, b)) in &users {
+                    if owners.len() != 1 {
+                        continue;
+                    }
+                    println!(
+                        "  FREE e{} ({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2}) owner={:?}",
+                        eidx,
+                        a.x(),
+                        a.y(),
+                        a.z(),
+                        b.x(),
+                        b.y(),
+                        b.z(),
+                        owners
+                    );
+                }
+            }
         }
         Err(e) => println!("-- fillet_variable FAILED: {e}"),
     }
