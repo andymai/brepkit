@@ -214,7 +214,8 @@ fn main() {
         }
         fn flush(&self) {}
     }
-    let _ = log::set_logger(Box::leak(Box::new(P)));
+    static LOGGER: P = P;
+    let _ = log::set_logger(&LOGGER);
     log::set_max_level(if std::env::var("BK_LOOP_DEBUG").is_ok() {
         log::LevelFilter::Debug
     } else {
