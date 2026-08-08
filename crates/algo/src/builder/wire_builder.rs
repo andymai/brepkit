@@ -480,6 +480,9 @@ pub fn remove_pendant_sections(
             }
         }
 
+        // Peel the lowest-indexed pendant source each round: `vmap` is a
+        // HashMap, so taking the first hit in iteration order made the peel
+        // order (and with it sub-face edge sets downstream) vary run to run.
         let mut pendant_src: Option<usize> = None;
         for incident in vmap.values() {
             let mut srcs = incident.iter().map(|&i| edges[i].source_edge_idx);
@@ -489,8 +492,7 @@ pub fn remove_pendant_sections(
                     .iter()
                     .all(|&i| edges[i].source_edge_idx == Some(src))
             {
-                pendant_src = Some(src);
-                break;
+                pendant_src = Some(pendant_src.map_or(src, |cur| cur.min(src)));
             }
         }
 
