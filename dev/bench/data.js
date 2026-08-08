@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786171913622,
+  "lastUpdate": 1786176194483,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23057,6 +23057,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24806795,
             "range": "± 501345",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d8c4adb0d7d5042c827d6d77de16a237c1fda66",
+          "message": "feat(operations): analytic sweep along closed planar line/arc spines (#1427)\n\n## What\n\n`sweepAlongEdges` gains an exact analytic path for the gridfinity\nstacking-lip class: a **closed planar G1 chain of lines and tangent\ncircular arcs** (a rounded rectangle) swept by an **all-line planar\nprofile** perpendicular to the chain, sketched on the plane through the\nchain start — exactly what brepjs's `sweepSketch` constructs.\n\n- Straight runs emit exact planar quads; arc corners emit revolution\nbands (plane / cylinder / cone) via the existing\n`revolution_band_surface` machinery (revolve helpers exposed\n`pub(crate)`).\n- Junction rings are transported exactly (translate per run, rotate per\ncorner) with closure verified before any allocation; ring 0 reuses the\nprofile's own vertices and edges.\n- The whole `sweepAlongEdges` chain (analytic gate + the fitted-NURBS\nfallback that previously lived in the wasm binding) moves into\n`operations::sweep::sweep_along_edges`; the binding is now a thin\nresolver.\n\n## Why\n\nThe lip sweep previously produced ~2730 facet quads, which is what\npushed the lip+box fuse into the (broken-on-coplanar-contact) mesh\nfallback. With this path the lip is **40 exact faces** (24 planes, 8\ncylinders, 8 cones) and the native hollow-box + lip fuse **stays\nanalytic with exact sum volume** — the ranked lever from the roadmap's\nlip-fuse chain.\n\n## Pins\n\n- `analytic_spine_sweep_lip_ring_is_exact` — 40 faces, exact surface\nmix, edge-use-2 watertight, valid, Pappus-exact volume.\n- `analytic_lip_ring_fuses_onto_hollow_box` — the native smoke chain:\nanalytic fuse, exact sum volume, watertight.\n- `sweep_along_edges_open_chain_falls_back` — fallback preserved.\n- `shelled_rounded_box_is_orientation_clean` — `#[ignore]`d ready-repro\nfor a **new finding**: shell_op emits its cavity corner cylinders\ndouble-flipped (16 same-sense edges, pre-existing on every shelled\nrounded bin). A naive winding flip breaks the spec assembler's arc\npairing (measured), so it needs its own dig; recorded in the roadmap.\n\n## Verification\n\nFull workspace green (117 suites, render excluded for the known\nSIGSEGV), wasm gridfinity canary 27/27, clippy `-D warnings`, boundaries\n+ doc-paths clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an analytic sweep along closed, planar G1 line/arc spines with an\nall-line planar profile to produce exact plane/cylinder/cone faces. The\ngridfinity lip now builds as 40 analytic faces (was ~2730 facets) and\nfuses with the hollow box analytically with exact sum volume; tests are\nstabilized by insetting the lip 0.25 from the outer wall, with an\nexact-coincidence repro pinned as ignored.\n\n- **New Features**\n- `sweep_along_edges` detects closed planar chains of lines + tangent\narcs and sweeps analytically: planar quads on runs;\n`revolution_band_surface` bands on corners (plane/cylinder/cone).\n- Exact per-segment ring transport with closure check; gate requires an\nall-line planar profile, perpendicular to the start tangent, sketched on\nthe plane through the chain start. Non-gated cases fall back to the\nfitted‑NURBS path.\n- Fitted-path sweep moved into `operations::sweep::sweep_along_edges`;\nthe `wasm` binding now forwards. `rotate_point`, `make_arc_curve`, and\n`revolution_band_surface` are `pub(crate)`.\n\n- **Bug Fixes**\n- Chain extraction re-orients flipped line edges so the analytic path\nstill applies.\n- Stabilized the lip‑fuse pin by insetting the lip 0.25 from the outer\nwall to avoid nondeterministic mesh fallback; the exact‑coincidence fuse\nremains as an ignored ready repro.\n\n<sup>Written for commit a0308784064821dc3c9bc0324ebb12912f23e101.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1427?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T08:00:42Z",
+          "tree_id": "ef5a71e4ab4303c3a9fc0e88f7fabaafafaad6a8",
+          "url": "https://github.com/andymai/brepkit/commit/1d8c4adb0d7d5042c827d6d77de16a237c1fda66"
+        },
+        "date": 1786176192693,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 899048,
+            "range": "± 16715",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 985898,
+            "range": "± 12890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11107,
+            "range": "± 161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 658419,
+            "range": "± 8011",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23794906,
+            "range": "± 55974",
             "unit": "ns/iter"
           }
         ]
