@@ -4298,6 +4298,32 @@ fn split_face_2d_impl(
         Ok(f) => f,
         Err(_) => return Vec::new(),
     };
+    // Two FF pairs emit the SAME section when the partner faces are coplanar
+    // neighbours and the curve rides their shared boundary (a slot-corner
+    // cylinder against a wall face and the coplanar lip band above it).
+    // Duplicate sections become parallel twin edges in the trace input, and
+    // the greedy walker's angular successor is ill-defined on parallel
+    // twins — it grand-tours adjacent regions into one slitted loop instead
+    // of partitioning them. Drop near-exact geometric duplicates.
+    let deduped_sections: Vec<SectionEdge> = {
+        let band = tol.linear * 10.0;
+        let same_pt = |p: Point3, q: Point3| (p - q).length() <= band;
+        let mid = |s: &SectionEdge| s.curve_3d.evaluate_with_endpoints(0.5, s.start, s.end);
+        let mut kept: Vec<SectionEdge> = Vec::with_capacity(sections.len());
+        for sec in sections {
+            let m_new = mid(sec);
+            let dup = kept.iter().any(|k| {
+                let ends_match = (same_pt(k.start, sec.start) && same_pt(k.end, sec.end))
+                    || (same_pt(k.start, sec.end) && same_pt(k.end, sec.start));
+                ends_match && same_pt(mid(k), m_new)
+            });
+            if !dup {
+                kept.push(sec.clone());
+            }
+        }
+        kept
+    };
+    let sections: &[SectionEdge] = &deduped_sections;
     let trace_split =
         std::env::var("BK_SPLIT_TRACE").is_ok_and(|v| v == format!("{}", face_id.index()));
     let surface = face.surface().clone();
@@ -6348,6 +6374,24 @@ fn split_face_2d_impl(
             && !wire_loops_have_degenerate_area(&dcel, tol.linear)
             && (!wire_loops_self_cross(&dcel, tol.linear)
                 || wire_loops_self_cross(&loops, tol.linear))
+            && (!greedy_outer_loops_nested(&dcel, cw_loops)
+                || greedy_outer_loops_nested(&loops, cw_loops))
+        {
+            loops = dcel;
+        }
+    } else if !u_periodic && !v_periodic && !is_plane && !sections.is_empty() && greedy_broken {
+        // Non-periodic band grand tour: sections meeting at T-junctions
+        // (a slot-corner cylinder crossing a wall-face pair and the lip
+        // taper) give the greedy walker degree-3 nodes where its
+        // order-dependent successor tours adjacent regions into one
+        // slitted loop. The DCEL successor is a pure function of the
+        // graph; adopt it only when it strictly refines the partition and
+        // is clean by EVERY absolute loop-health signature (no seam on a
+        // non-periodic face, so no periodic-aware relaxation applies).
+        let dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
+        if dcel.len() > loops.len()
+            && !wire_loops_have_degenerate_area(&dcel, tol.linear)
+            && !wire_loops_self_cross(&dcel, tol.linear)
             && (!greedy_outer_loops_nested(&dcel, cw_loops)
                 || greedy_outer_loops_nested(&loops, cw_loops))
         {
