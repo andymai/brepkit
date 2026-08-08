@@ -1,0 +1,38 @@
+crates/operations/src/sweep/tests.rs
+  s_2a71d6758e8e91::t_181636cee37d60 1707-1734,1737-1770,1773-1797,1857
+  s_2a71d6758e8e91::t_2938689e22389c 1704
+  s_2a71d6758e8e91::t_99bfafe1f0d915 1552-1568,1570-1606,1608-1614,1620-1667,1670-1680,1683-1703,1705-1706
+  s_2a71d6758e8e91::t_55c38035cc468e 1735-1736,1771-1772
+  s_2a71d6758e8e91::t_b7aa95ad8fb40b 1615-1619,1681-1682
+  s_2a71d6758e8e91::t_1107c352897cf8 1798-1806,1809-1811,1813-1856
+  s_2a71d6758e8e91::t_fd34ea10b16c72 1607
+  s_2a71d6758e8e91::t_3b9635ba0dfcd9 1807-1808,1812
+  s_2a71d6758e8e91::t_5e7a55139c3a73 1569,1668-1669
+.claude/skills/roadmap/SKILL.md
+  s_2a71d6758e8e91::t_f10035bc0bce11 134-135
+crates/operations/src/revolve.rs
+  s_2a71d6758e8e91::t_2992e4b4debd8e 36,93,170
+crates/wasm/src/bindings/operations.rs
+  s_2a71d6758e8e91::t_2592bcac105062 13,21
+  s_2a71d6758e8e91::t_01b23003fc8977 875-878,894-897,899-900
+crates/operations/src/sweep.rs
+  s_2a71d6758e8e91::t_be512246ceaf22 2297-2399
+crates/operations/src/sweep/spine.rs
+  s_2a71d6758e8e91::t_d20da05de804f7 1-474
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "b6f27eea484734d6ff08c40372cbc804548a9d75",
+  "prompts": {},
+  "sessions": {
+    "s_2a71d6758e8e91": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71aa2b82-a9ce-4c0f-b7cd-052a7695fc30",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
