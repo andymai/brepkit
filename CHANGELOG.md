@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.3](https://github.com/andymai/brepkit/compare/v3.1.2...v3.1.3) (2026-08-08)
+
+
+### Bug Fixes
+
+* **operations:** sweep pipes and option sweeps as positioned ([#1438](https://github.com/andymai/brepkit/issues/1438)) ([621d4a8](https://github.com/andymai/brepkit/commit/621d4a8129c73787d0f47821e9f45b131ccfc759))
+
 ## [3.1.2](https://github.com/andymai/brepkit/compare/v3.1.1...v3.1.2) (2026-08-08)
 
 
