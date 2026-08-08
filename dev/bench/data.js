@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786224699989,
+  "lastUpdate": 1786228460067,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24785,6 +24785,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20592574,
             "range": "± 96760",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2d50f281cb6e12a2eb22cb8eef4bc5bf79e017d7",
+          "message": "fix(algo): keep pinch-shim faces through within-rank same-domain dedup (#1463)\n\n## Root (GH #1445 residual, grouped-scoop cases 1 and 6)\n\nThe captured case-1 post-fillet cut (raw GFA free=12) was not a fillet\ndefect and not a section/imprint defect: both operands replay\nwatertight, and trace shows no z=11 coplanar face pair even reaches the\nFF-coplanar phase.\n\nA variable-radius corner fillet that pinches to zero at the pocket floor\nproduces a horn torus touching the floor plane tangentially along an\narc. The blend encodes that tangent contact watertightly with a tiny\ncorner-triangle face coincident with (contained in) the unsplit floor:\nthe shim pairs the tangent arc with the torus rim and the stub edges\nwith the walls.\n\nThe within-rank same-domain dedup matched shim-contained-in-floor via\nthe geometric containment pass and dropped it as #696 residue (same\nshell, so the slotted cross-shell gate could not save it), orphaning the\narc and stubs into 12 free edges. Validation rejected the GFA result and\nthe tool-side export mesh-fell-back.\n\n## Fix\n\n`detect_same_domain_with_shells` now keeps a containment-matched\nwithin-rank duplicate whose edges serve sub-faces OUTSIDE its SD group\n(a structural shim). True residue stays droppable on either of two\ngrounds: coextensive with its representative (identical quantized edge\nset, the stacked-caps family, where the shared edges keep their pairing\nthrough the representative), or boundary-isolated (its edges serve no\nface outside the group).\n\n## Measured\n\n- Case-1 cut: free 12 -> 0, over=0, all 8 horn-torus corner patches\nsurvive analytically, volume moves to the exact operand difference.\n- Case-6 cut closes with the same fix (free -> 0).\n- Fixtures: `crates/io/tests/gscoop_pinch_cut_inmem.rs` (full\n`operations::boolean` path, watertight + torus-survival pins) and\ndetection-level `contained_shim_with_outside_edge_user_is_kept`.\n- Foils: algo + operations + blend + io 1597 passed / 0 failed; wasm +\ncheck + heal 365 passed / 0 failed; the #696 containment pin and the\nslotted cross-shell fixture stay green; clippy clean.\n\nPart of #1445.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nKeeps pinch‑shim faces during within‑rank same‑domain dedup so\ngrouped‑scoop cuts stay watertight and avoid mesh fallback. Addresses\n#1445 cases 1 and 6: free edges 12→0 and all 8 horn‑torus patches remain\nanalytic.\n\n- **Bug Fixes**\n- Residue gate in `detect_same_domain_with_shells`: keep\ncontainment‑matched duplicates whose edges serve faces outside the SD\ngroup (structural shims); still drop coextensive (identical quantized\n`EdgeSet`) and boundary‑isolated duplicates; cross‑shell gate unchanged.\n- Added unit and e2e pins\n(`contained_shim_with_outside_edge_user_is_kept`,\n`gscoop_pinch_cut_inmem.rs` + `gscoop_pinch_{body,tool}.bin`); shim\ncheck uses O(1) group membership.\n\n<sup>Written for commit ef0a29e23c5ad080ab5576c6279d97334dc03a3e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1463?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T22:31:54Z",
+          "tree_id": "04fc90f4068d03931de27599d62ac676dc1d92ff",
+          "url": "https://github.com/andymai/brepkit/commit/2d50f281cb6e12a2eb22cb8eef4bc5bf79e017d7"
+        },
+        "date": 1786228458267,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 961587,
+            "range": "± 10977",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1040681,
+            "range": "± 1390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11680,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706515,
+            "range": "± 1702",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25505351,
+            "range": "± 32062",
             "unit": "ns/iter"
           }
         ]
