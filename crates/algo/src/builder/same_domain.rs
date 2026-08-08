@@ -136,6 +136,7 @@ struct SdGrouping {
     sd_groups: HashMap<usize, Vec<usize>>,
     pair_data: HashMap<(usize, usize), bool>,
     geometric_overlap_groups: HashSet<usize>,
+    edge_sets: Vec<Option<EdgeSet>>,
 }
 
 /// Detect and union all coincident (same-domain) sub-faces.
@@ -151,6 +152,7 @@ fn build_sd_grouping(
             sd_groups: HashMap::new(),
             pair_data: HashMap::new(),
             geometric_overlap_groups: HashSet::new(),
+            edge_sets: Vec::new(),
         };
     }
 
@@ -435,6 +437,7 @@ fn build_sd_grouping(
         sd_groups,
         pair_data,
         geometric_overlap_groups,
+        edge_sets,
     }
 }
 
@@ -474,6 +477,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
         sd_groups,
         pair_data,
         geometric_overlap_groups,
+        edge_sets,
     } = build_sd_grouping(topo, arena, sub_faces, tol);
 
     let mut pairs = Vec::new();
@@ -489,7 +493,51 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
     // dropping it as a duplicate orphans the void walls into an open hole
     // shell. Without shell information (`None`, the test-only path) every
     // pair keeps the historic dedup.
-    let is_residue = |i: usize, j: usize| -> bool {
+    // A second structural gate: a containment-matched duplicate whose edges
+    // are load-bearing for sub-faces OUTSIDE its SD group is not residue —
+    // it is a shim. The grouped-scoop pinch is the canonical case: a
+    // zero-radius fillet's horn torus touches the pocket floor tangentially,
+    // and the blend closes the tangent arc with a tiny corner face
+    // coincident with (contained in) the unsplit floor. Its arc edge is
+    // shared with the torus and its stub edges with the walls; dropping it
+    // as a duplicate orphans all of them into free edges. True #696 residue
+    // is either coextensive with its representative (identical quantized
+    // edge set — the stacked-caps family, where the shared edges keep their
+    // pairing through the representative) or boundary-isolated (its edges
+    // serve no face outside the group), so both stay droppable.
+    let mut edge_users: HashMap<brepkit_topology::edge::EdgeId, Vec<usize>> = HashMap::new();
+    for (idx, sf) in sub_faces.iter().enumerate() {
+        let Ok(face) = topo.face(sf.face_id) else {
+            continue;
+        };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                edge_users.entry(oe.edge()).or_default().push(idx);
+            }
+        }
+    }
+    let entangled_outside_group = |i: usize, members: &[usize]| -> bool {
+        let Ok(face) = topo.face(sub_faces[i].face_id) else {
+            return false;
+        };
+        let wires: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wid in wires {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                if edge_users
+                    .get(&oe.edge())
+                    .is_some_and(|users| users.iter().any(|u| !members.contains(u)))
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    let is_residue = |i: usize, j: usize, members: &[usize]| -> bool {
         let cross_shell = face_shells.is_some_and(|fs| {
             match (
                 fs.get(&sub_faces[i].source_face),
@@ -499,16 +547,21 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                 _ => false,
             }
         });
+        let coextensive = matches!(
+            (&edge_sets[i], &edge_sets[j]),
+            (Some(a), Some(b)) if a == b
+        );
+        let shim = !coextensive && entangled_outside_group(i, members);
         if std::env::var("BK_SD").is_ok() {
             log::debug!(
-                "SD residue-gate i={i} face={:?} src={:?} j={j} face={:?} src={:?} cross_shell={cross_shell}",
+                "SD residue-gate i={i} face={:?} src={:?} j={j} face={:?} src={:?} cross_shell={cross_shell} coextensive={coextensive} shim={shim}",
                 sub_faces[i].face_id,
                 sub_faces[i].source_face,
                 sub_faces[j].face_id,
                 sub_faces[j].source_face
             );
         }
-        !cross_shell
+        !cross_shell && !shim
     };
 
     for (root, members) in &sd_groups {
@@ -580,7 +633,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                     } else {
                         idx_b
                     };
-                    if !is_residue(idx, rep) {
+                    if !is_residue(idx, rep, members) {
                         continue;
                     }
                     within_rank_dups.push(WithinRankDuplicate {
@@ -595,7 +648,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
             // classification (issue #696).
             (Some(rep), None) | (None, Some(rep)) => {
                 for &idx in members {
-                    if idx != rep && is_residue(idx, rep) {
+                    if idx != rep && is_residue(idx, rep, members) {
                         within_rank_dups.push(WithinRankDuplicate {
                             representative: rep,
                             duplicate: idx,
