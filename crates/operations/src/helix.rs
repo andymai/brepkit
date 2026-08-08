@@ -72,7 +72,14 @@ pub fn helical_sweep(
         segments_per_turn,
     )?;
 
-    crate::sweep::sweep(topo, profile, &helix_curve)
+    // The helix API positions the profile itself (axis + radius define the
+    // path); the caller's profile is a cross-section shape, not a located one.
+    crate::sweep::sweep_placed(
+        topo,
+        profile,
+        &helix_curve,
+        crate::sweep::ProfilePlacement::CentroidOnPath,
+    )
 }
 
 /// Build a NURBS curve approximating a helix.

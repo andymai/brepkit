@@ -1403,3 +1403,149 @@ fn multi_section_sweep_nonplanar_sections_is_valid_solid() {
         "non-planar multi-section sweep volume should be ~96, got {vol}"
     );
 }
+
+/// Helper: an L-ish lip profile positioned AT a path point, the way brepjs
+/// sketches a sweep profile on the plane through the spine start: 2D (u, v)
+/// maps to `start + u*x_dir + v*z`, with `x_dir` pointing radially outward.
+fn make_positioned_lip_profile(topo: &mut Topology, start: Point3, x_dir: Vec3) -> FaceId {
+    let uv = [
+        (-2.6, 0.0),
+        (-1.9, 0.7),
+        (-1.9, 2.5),
+        (0.0, 4.4),
+        (0.0, 0.0),
+    ];
+    let t = 1e-7;
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let verts: Vec<VertexId> = uv
+        .iter()
+        .map(|&(u, v)| topo.add_vertex(Vertex::new(start + x_dir * u + z * v, t)))
+        .collect();
+    let n = verts.len();
+    let edges: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(verts[i], verts[(i + 1) % n], EdgeCurve::Line)))
+        .collect();
+    let wire = Wire::new(
+        edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let normal = x_dir.cross(z).normalize().unwrap();
+    let d = normal.dot(Vec3::new(start.x(), start.y(), start.z()));
+    topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }))
+}
+
+#[test]
+fn sweep_keeps_offset_profile_position_on_straight_path() {
+    // A profile away from the path must be swept from where it lies (the
+    // reference-kernel pipe semantic), not re-centered onto the path start.
+    let mut topo = Topology::new();
+    let t = 1e-7;
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(5.0, 5.0, 0.0), t));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(6.0, 5.0, 0.0), t));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(6.0, 6.0, 0.0), t));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(5.0, 6.0, 0.0), t));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e0, true),
+            OrientedEdge::new(e1, true),
+            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e3, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let profile = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let path = straight_z_path(2.0);
+
+    let solid = sweep(&mut topo, profile, &path).unwrap();
+
+    let bb = crate::measure::solid_bounding_box(&topo, solid).unwrap();
+    assert!(
+        (bb.min.x() - 5.0).abs() < 1e-9
+            && (bb.max.x() - 6.0).abs() < 1e-9
+            && (bb.min.y() - 5.0).abs() < 1e-9
+            && (bb.max.y() - 6.0).abs() < 1e-9,
+        "offset profile must stay at x,y in [5,6], got {bb:?}"
+    );
+    assert!(
+        bb.min.z().abs() < 1e-9 && (bb.max.z() - 2.0).abs() < 1e-9,
+        "prism must span z in [0,2], got {bb:?}"
+    );
+}
+
+#[test]
+fn sweep_closed_path_keeps_profile_position() {
+    // The gridfinity stacking-lip construction: a profile sketched on the
+    // plane through the spine start (v=0 at the spine's z, u extending
+    // inward from the spine) swept along a closed loop. Re-centering the
+    // profile's centroid onto the path start shifted the lip down by the
+    // centroid height (~2.88) and pushed it radially outward; as-positioned
+    // placement keeps the solid spanning exactly v in [0, 4.4].
+    let mut topo = Topology::new();
+    let radius = 42.0;
+
+    // Closed circular-ish path through interpolated samples, starting at
+    // (42, 0, 0) with tangent +Y, matching the sweepAlongEdges fitting path.
+    let n_pts = 32;
+    let mut pts: Vec<Point3> = (0..=n_pts)
+        .map(|i| {
+            let theta = std::f64::consts::TAU * f64::from(i) / f64::from(n_pts);
+            Point3::new(radius * theta.cos(), radius * theta.sin(), 0.0)
+        })
+        .collect();
+    // Exact closure.
+    let last = pts.len() - 1;
+    pts[last] = pts[0];
+    let path = brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap();
+
+    let profile = make_positioned_lip_profile(
+        &mut topo,
+        Point3::new(radius, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    );
+
+    let solid = sweep(&mut topo, profile, &path).unwrap();
+
+    let bb = crate::measure::solid_bounding_box(&topo, solid).unwrap();
+    assert!(
+        bb.min.z() > -0.05 && bb.min.z() < 0.05,
+        "lip bottom must stay at the sketch plane z=0, got {}",
+        bb.min.z()
+    );
+    assert!(
+        (bb.max.z() - 4.4).abs() < 0.05,
+        "lip top must reach the profile height 4.4, got {}",
+        bb.max.z()
+    );
+    assert!(
+        bb.max.x() < radius + 0.05,
+        "profile extends inward from the spine, so x must not exceed the spine radius, got {}",
+        bb.max.x()
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid(),
+        "closed-path as-positioned sweep must be a valid solid"
+    );
+    // Pappus: profile area 6.8 × centroid circumference 2π·(42 − 1.41) ≈ 1735.
+    let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+    assert!(
+        vol > 1500.0 && vol < 2000.0,
+        "lip ring volume should be ~1735, got {vol}"
+    );
+}
