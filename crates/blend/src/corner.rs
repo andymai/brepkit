@@ -474,6 +474,144 @@ fn build_horn_torus_corner(
     }))
 }
 
+/// Rational quadratic Bezier control points for a circular arc.
+fn rational_arc_cps(center: Point3, from: Point3, to: Point3) -> Option<([Point3; 3], f64)> {
+    let u = from - center;
+    let r = u.length();
+    let du = u.normalize().ok()?;
+    let dv = (to - center).normalize().ok()?;
+    let bis = (du + dv).normalize().ok()?;
+    let cos_half = du.dot(bis);
+    if cos_half.abs() < 1e-9 {
+        return Option::None;
+    }
+    let mid = center + bis * (r / cos_half);
+    Some(([from, mid, to], cos_half))
+}
+
+/// Ruled transition band between two different-radius terminal sections at
+/// a junction on a shared corner edge: boundary = the two cross-section
+/// arcs (welded with the blend walls' cross edges), the corner-edge
+/// segment between the two wall-contact heights, and the base chord. The
+/// wall is a ruled NURBS between the arcs — the watertight stand-in for
+/// the true variable-radius canal surface.
+fn build_mixed_radius_band(
+    vertex_id: VertexId,
+    stripes: &[Stripe],
+    topo: &mut Topology,
+) -> Result<Option<CornerResult>, BlendError> {
+    let indices = stripes_at_vertex(vertex_id, stripes, topo);
+    if indices.len() != 2 {
+        return Ok(Option::None);
+    }
+    let (Some(sa), Some(sb)) = (
+        contact_section_at_vertex(vertex_id, &stripes[indices[0]], topo).cloned(),
+        contact_section_at_vertex(vertex_id, &stripes[indices[1]], topo).cloned(),
+    ) else {
+        return Ok(Option::None);
+    };
+    if (sa.radius - sb.radius).abs() <= 1e-6 {
+        return Ok(Option::None);
+    }
+    let v = topo.vertex(vertex_id)?.point();
+
+    // Identify (base, wall) per section: the wall contacts and the corner
+    // vertex are collinear along the corner edge.
+    let mut found = Option::None;
+    for (a_base, a_wall, b_base, b_wall) in [
+        (sa.p1, sa.p2, sb.p1, sb.p2),
+        (sa.p1, sa.p2, sb.p2, sb.p1),
+        (sa.p2, sa.p1, sb.p1, sb.p2),
+        (sa.p2, sa.p1, sb.p2, sb.p1),
+    ] {
+        let da = a_wall - v;
+        let db = b_wall - v;
+        let (Ok(na), Ok(nb)) = (da.normalize(), db.normalize()) else {
+            continue;
+        };
+        if na.dot(nb) > 1.0 - 1e-6
+            && (da.length() - sa.radius).abs() <= 1e-5
+            && (db.length() - sb.radius).abs() <= 1e-5
+        {
+            found = Some((a_base, a_wall, b_base, b_wall));
+            break;
+        }
+    }
+    let Some((a_base, a_wall, b_base, b_wall)) = found else {
+        return Ok(Option::None);
+    };
+
+    let (Some((cps_a, w_a)), Some((cps_b, w_b))) = (
+        rational_arc_cps(sa.center, a_base, a_wall),
+        rational_arc_cps(sb.center, b_base, b_wall),
+    ) else {
+        return Ok(Option::None);
+    };
+    let control_points = vec![
+        vec![cps_a[0], cps_b[0]],
+        vec![cps_a[1], cps_b[1]],
+        vec![cps_a[2], cps_b[2]],
+    ];
+    let weights = vec![vec![1.0, 1.0], vec![w_a, w_b], vec![1.0, 1.0]];
+    let Ok(nurbs) = brepkit_math::nurbs::surface::NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        control_points,
+        weights,
+    ) else {
+        return Ok(Option::None);
+    };
+
+    let va_b = topo.add_vertex(Vertex::new(a_base, TOL));
+    let va_w = topo.add_vertex(Vertex::new(a_wall, TOL));
+    let vb_b = topo.add_vertex(Vertex::new(b_base, TOL));
+    let vb_w = topo.add_vertex(Vertex::new(b_wall, TOL));
+    let mut arc_edge = |topo: &mut Topology,
+                        c: Point3,
+                        from: Point3,
+                        to: Point3,
+                        vf: VertexId,
+                        vt: VertexId|
+     -> Option<EdgeId> {
+        let nrm = (from - c).cross(to - c).normalize().ok()?;
+        let circ = brepkit_math::curves::Circle3D::new(c, nrm, (from - c).length()).ok()?;
+        Some(topo.add_edge(Edge::new(vf, vt, EdgeCurve::Circle(circ))))
+    };
+    let (Some(e_a), Some(e_b)) = (
+        arc_edge(topo, sa.center, a_base, a_wall, va_b, va_w),
+        arc_edge(topo, sb.center, b_base, b_wall, vb_b, vb_w),
+    ) else {
+        return Ok(Option::None);
+    };
+    let e_top = topo.add_edge(Edge::new(va_w, vb_w, EdgeCurve::Line));
+    let e_bottom = topo.add_edge(Edge::new(vb_b, va_b, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_a, true),
+            OrientedEdge::new(e_top, true),
+            OrientedEdge::new(e_b, false),
+            OrientedEdge::new(e_bottom, true),
+        ],
+        true,
+    )?;
+    let wid = topo.add_wire(wire);
+    let surface = FaceSurface::Nurbs(nurbs);
+    let fid = topo.add_face(Face::new(wid, Vec::new(), surface.clone()));
+    log::debug!(
+        "mixed-radius band at {vertex_id:?} r {} -> {}",
+        sa.radius,
+        sb.radius
+    );
+    Ok(Some(CornerResult {
+        face_id: fid,
+        surface,
+        new_edges: vec![e_a, e_top, e_b, e_bottom],
+        new_vertices: vec![va_b, va_w, vb_b, vb_w],
+    }))
+}
+
 fn build_two_edge_patch(
     vertex_id: VertexId,
     stripes: &[Stripe],
@@ -555,9 +693,13 @@ pub fn compute_corners(
             CornerType::None => {}
             CornerType::TwoEdge => match build_horn_torus_corner(vid, stripes, topo) {
                 Ok(Some(result)) => results.push(result),
-                Ok(Option::None) => match build_two_edge_patch(vid, stripes, topo) {
-                    Ok(result) => results.push(result),
-                    Err(e) => log::warn!("corner patch at {vid:?} failed: {e}, skipping"),
+                Ok(Option::None) => match build_mixed_radius_band(vid, stripes, topo) {
+                    Ok(Some(result)) => results.push(result),
+                    Ok(Option::None) => match build_two_edge_patch(vid, stripes, topo) {
+                        Ok(result) => results.push(result),
+                        Err(e) => log::warn!("corner patch at {vid:?} failed: {e}, skipping"),
+                    },
+                    Err(e) => log::warn!("mixed-radius band at {vid:?} failed: {e}, skipping"),
                 },
                 Err(e) => log::warn!("horn-torus corner at {vid:?} failed: {e}, skipping"),
             },
