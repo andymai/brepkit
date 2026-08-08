@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786206181608,
+  "lastUpdate": 1786207887611,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24137,6 +24137,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17432638,
             "range": "± 734988",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "83bc8a8b8008f8a93f11c3757e36f21f9bd5f9f1",
+          "message": "test(io): pin the slots wall-pattern lip-cone cut (GH #1446 root repro) (#1451)\n\nReduces the slots wall-pattern perf/watertightness root (#1445/#1446) to\na committed 13 ms repro.\n\n## Chain anatomy (captured from the tool via the raw-kernel hook)\n\nThe generator carves the slots pattern as ONE `compoundCut` of 60\nrounded-corner slot prisms — 52.8 s of the 54 s generation. The 60-tool\nfuse stage succeeds analytically; the FINAL cut's GFA result carries 540\nfree boundary edges (9 per slot), validation rejects it, and the mesh\nfallback emits the 7766-face all-planar solid the tool measures (2x\ntriangles, 56x slower).\n\n## The atom\n\nEvery single slot cut against the bin body leaves exactly **6 free\nedges** — a closed hexagonal loop at the slot corner where the tool's\ncorner cylinder crosses the bin's **lip cone** (the loop includes a\nplane-cone ellipse edge; the region spans the wall thickness at lip\nheight). One cone sub-face piece is dropped.\n\n## Fixture\n\n- `operands_are_clean` (active): both captured operands are free=0.\n- `single_slot_cut_is_watertight_and_analytic` (ignored ready-repro):\npins watertightness AND >= 12 surviving cone faces — the mesh fallback\nalso yields a watertight solid but flattens every cone, so cone survival\nis the discriminant. Currently fails with cones=0.\n\nCapture gotcha recorded in the roadmap: `compoundCut` tools arrive as a\n`Uint32Array`, which `Array.isArray` misses — `ArrayBuffer.isView` is\nrequired (this exact trap cost the first capture run its tools).\n\nRoadmap row updated with the reduction and the next dig step (cone-face\nsplit probes).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins a 13 ms in‑memory repro for the slots wall‑pattern lip‑cone cut (GH\n#1446/#1445). It isolates the leak to a single slot cut at the lip cone\nthat triggers mesh fallback and all‑planar output, and adds clean\noperands plus a guarded analytic/watertight assertion.\n\n- **New Features**\n  - Added `crates/io/tests/slots_lipcone_cut_inmem.rs`:\n    - `operands_are_clean` ensures both operands have 0 free edges.\n- `single_slot_cut_is_watertight_and_analytic` (ignored) requires free=0\nand ≥12 cone faces to distinguish a real fix from the all‑planar\nfallback.\n- Added captured operands: `crates/io/tests/data/slots_lip_body.bin`,\n`crates/io/tests/data/slots_lip_tool.bin`. Roadmap row updated with the\nreduction and a capture gotcha (`Uint32Array` tools need\n`ArrayBuffer.isView`, not `Array.isArray`).\n\n- **Refactors**\n- Removed an unused validate call in the test and simplified Cone face\nmatching to a tuple pattern.\n\n<sup>Written for commit 942cf2f38ad09c56050decda6cc2392027cb4e8f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1451?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T16:48:56Z",
+          "tree_id": "965b1e748b5ef769e68576057d99d95efa6388a7",
+          "url": "https://github.com/andymai/brepkit/commit/83bc8a8b8008f8a93f11c3757e36f21f9bd5f9f1"
+        },
+        "date": 1786207885799,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 944143,
+            "range": "± 4139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1021205,
+            "range": "± 23899",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11855,
+            "range": "± 350",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700398,
+            "range": "± 1233",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24854337,
+            "range": "± 30089",
             "unit": "ns/iter"
           }
         ]
