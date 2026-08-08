@@ -1,0 +1,19 @@
+crates/operations/src/sweep.rs
+  s_8b449c7ef64a35::t_c16bc2b44e790a 33-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "85f049e81ea39a4e206c11bd0b6e3bd36af92423",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
