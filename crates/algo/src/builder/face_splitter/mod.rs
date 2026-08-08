@@ -4305,25 +4305,42 @@ fn split_face_2d_impl(
     // the greedy walker's angular successor is ill-defined on parallel
     // twins — it grand-tours adjacent regions into one slitted loop instead
     // of partitioning them. Drop near-exact geometric duplicates.
-    let deduped_sections: Vec<SectionEdge> = {
+    let deduped_sections: Option<Vec<SectionEdge>> = {
         let band = tol.linear * 10.0;
         let same_pt = |p: Point3, q: Point3| (p - q).length() <= band;
-        let mid = |s: &SectionEdge| s.curve_3d.evaluate_with_endpoints(0.5, s.start, s.end);
-        let mut kept: Vec<SectionEdge> = Vec::with_capacity(sections.len());
-        for sec in sections {
-            let m_new = mid(sec);
-            let dup = kept.iter().any(|k| {
-                let ends_match = (same_pt(k.start, sec.start) && same_pt(k.end, sec.end))
-                    || (same_pt(k.start, sec.end) && same_pt(k.end, sec.start));
-                ends_match && same_pt(mid(k), m_new)
-            });
-            if !dup {
-                kept.push(sec.clone());
+        let mids: Vec<Point3> = sections
+            .iter()
+            .map(|s| s.curve_3d.evaluate_with_endpoints(0.5, s.start, s.end))
+            .collect();
+        let mut keep = vec![true; sections.len()];
+        let mut any_dup = false;
+        for i in 0..sections.len() {
+            if !keep[i] {
+                continue;
+            }
+            for j in (i + 1)..sections.len() {
+                if !keep[j] {
+                    continue;
+                }
+                let (a, b) = (&sections[i], &sections[j]);
+                let ends_match = (same_pt(a.start, b.start) && same_pt(a.end, b.end))
+                    || (same_pt(a.start, b.end) && same_pt(a.end, b.start));
+                if ends_match && same_pt(mids[i], mids[j]) {
+                    keep[j] = false;
+                    any_dup = true;
+                }
             }
         }
-        kept
+        any_dup.then(|| {
+            sections
+                .iter()
+                .zip(&keep)
+                .filter(|&(_, &k)| k)
+                .map(|(s, _)| s.clone())
+                .collect()
+        })
     };
-    let sections: &[SectionEdge] = &deduped_sections;
+    let sections: &[SectionEdge] = deduped_sections.as_deref().unwrap_or(sections);
     let trace_split =
         std::env::var("BK_SPLIT_TRACE").is_ok_and(|v| v == format!("{}", face_id.index()));
     let surface = face.surface().clone();
