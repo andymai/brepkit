@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.1](https://github.com/andymai/brepkit/compare/v3.1.0...v3.1.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* **algo:** peel pendant sections in deterministic order ([#1432](https://github.com/andymai/brepkit/issues/1432)) ([364d556](https://github.com/andymai/brepkit/commit/364d5569f5d818f52c358706e9d9279857b46067))
+
 ## [3.1.0](https://github.com/andymai/brepkit/compare/v3.0.2...v3.1.0) (2026-08-08)
 
 
