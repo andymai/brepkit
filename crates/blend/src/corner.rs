@@ -412,16 +412,21 @@ pub fn compute_corners(
     for vid in vertices {
         let corner_type = classify_corner(vid, stripes, topo);
 
+        // A failure at one vertex must not discard every other corner
+        // patch: the caller treats an Err as "no corners at all", and on a
+        // closed rim that turns one hard junction into an open shell
+        // everywhere. Keep the corners that compute; the skipped vertex
+        // degrades locally.
         match corner_type {
             CornerType::None => {}
-            CornerType::TwoEdge => {
-                let result = build_two_edge_patch(vid, stripes, topo)?;
-                results.push(result);
-            }
-            CornerType::MultiEdge(_) => {
-                let corner_results = build_multi_edge_corner(vid, stripes, topo)?;
-                results.extend(corner_results);
-            }
+            CornerType::TwoEdge => match build_two_edge_patch(vid, stripes, topo) {
+                Ok(result) => results.push(result),
+                Err(e) => log::warn!("corner patch at {vid:?} failed: {e}, skipping"),
+            },
+            CornerType::MultiEdge(_) => match build_multi_edge_corner(vid, stripes, topo) {
+                Ok(corner_results) => results.extend(corner_results),
+                Err(e) => log::warn!("multi-edge corner at {vid:?} failed: {e}, skipping"),
+            },
         }
     }
 
