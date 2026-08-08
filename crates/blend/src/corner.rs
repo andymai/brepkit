@@ -369,6 +369,111 @@ fn build_multi_edge_corner(
 ///
 /// # Errors
 /// Returns `BlendError` if topology lookups fail.
+/// Horn-torus corner for two equal-radius stripes meeting at an unfilleted
+/// corner edge: the rolling ball pivots about the corner edge, tangent to
+/// the shared base face, sweeping a torus with major radius == tube radius
+/// == r that pinches onto the edge exactly where both stripes' wall
+/// contacts already end. Boundary: the base offset arc (radius r about the
+/// corner vertex — the loop rebuild's bridge, unified by the weld pass)
+/// plus the two terminal cross-section arcs meeting at the pinch.
+fn build_horn_torus_corner(
+    vertex_id: VertexId,
+    stripes: &[Stripe],
+    topo: &mut Topology,
+) -> Result<Option<CornerResult>, BlendError> {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::ToroidalSurface;
+
+    let indices = stripes_at_vertex(vertex_id, stripes, topo);
+    if indices.len() != 2 {
+        return Ok(Option::None);
+    }
+    let (Some(sa), Some(sb)) = (
+        contact_section_at_vertex(vertex_id, &stripes[indices[0]], topo).cloned(),
+        contact_section_at_vertex(vertex_id, &stripes[indices[1]], topo).cloned(),
+    ) else {
+        return Ok(Option::None);
+    };
+    if (sa.radius - sb.radius).abs() > 1e-6 {
+        return Ok(Option::None);
+    }
+    let r = sa.radius;
+    let v = topo.vertex(vertex_id)?.point();
+
+    // Find the pairing where one contact of each stripe coincides (the
+    // pinch on the corner edge) and the other two sit at radius r from the
+    // corner vertex on the shared base face.
+    let arrangements = [
+        (sa.p1, sa.p2, sb.p1, sb.p2),
+        (sa.p1, sa.p2, sb.p2, sb.p1),
+        (sa.p2, sa.p1, sb.p1, sb.p2),
+        (sa.p2, sa.p1, sb.p2, sb.p1),
+    ];
+    let mut found = Option::None;
+    for (a_base, a_pinch, b_base, b_pinch) in arrangements {
+        if (a_pinch - b_pinch).length() <= 1e-6
+            && ((a_base - v).length() - r).abs() <= 1e-5
+            && ((b_base - v).length() - r).abs() <= 1e-5
+            && (a_base - b_base).length() > 1e-6
+        {
+            found = Some((a_base, a_pinch, b_base));
+            break;
+        }
+    }
+    let Some((a_base, pinch, b_base)) = found else {
+        return Ok(Option::None);
+    };
+    let Ok(axis) = (pinch - v).normalize() else {
+        return Ok(Option::None);
+    };
+    if ((pinch - v).length() - r).abs() > 1e-5 {
+        return Ok(Option::None);
+    }
+    let Ok(torus) = ToroidalSurface::with_axis(v + axis * r, r, r, axis) else {
+        return Ok(Option::None);
+    };
+
+    let va = topo.add_vertex(Vertex::new(a_base, TOL));
+    let vb = topo.add_vertex(Vertex::new(b_base, TOL));
+    let vp = topo.add_vertex(Vertex::new(pinch, TOL));
+    let mut arc = |topo: &mut Topology,
+                   c: Point3,
+                   from: Point3,
+                   to: Point3,
+                   v_from: VertexId,
+                   v_to: VertexId|
+     -> Option<EdgeId> {
+        let nrm = (from - c).cross(to - c).normalize().ok()?;
+        let circ = Circle3D::new(c, nrm, (from - c).length()).ok()?;
+        Some(topo.add_edge(Edge::new(v_from, v_to, EdgeCurve::Circle(circ))))
+    };
+    let (Some(e_base), Some(e_b), Some(e_a)) = (
+        arc(topo, v, a_base, b_base, va, vb),
+        arc(topo, sb.center, b_base, pinch, vb, vp),
+        arc(topo, sa.center, pinch, a_base, vp, va),
+    ) else {
+        return Ok(Option::None);
+    };
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_base, true),
+            OrientedEdge::new(e_b, true),
+            OrientedEdge::new(e_a, true),
+        ],
+        true,
+    )?;
+    let wid = topo.add_wire(wire);
+    let surface = FaceSurface::Torus(torus);
+    let fid = topo.add_face(Face::new(wid, Vec::new(), surface.clone()));
+    log::debug!("horn-torus corner at {vertex_id:?} r={r}");
+    Ok(Some(CornerResult {
+        face_id: fid,
+        surface,
+        new_edges: vec![e_base, e_b, e_a],
+        new_vertices: vec![va, vb, vp],
+    }))
+}
+
 fn build_two_edge_patch(
     vertex_id: VertexId,
     stripes: &[Stripe],
@@ -448,9 +553,13 @@ pub fn compute_corners(
         // degrades locally.
         match corner_type {
             CornerType::None => {}
-            CornerType::TwoEdge => match build_two_edge_patch(vid, stripes, topo) {
-                Ok(result) => results.push(result),
-                Err(e) => log::warn!("corner patch at {vid:?} failed: {e}, skipping"),
+            CornerType::TwoEdge => match build_horn_torus_corner(vid, stripes, topo) {
+                Ok(Some(result)) => results.push(result),
+                Ok(Option::None) => match build_two_edge_patch(vid, stripes, topo) {
+                    Ok(result) => results.push(result),
+                    Err(e) => log::warn!("corner patch at {vid:?} failed: {e}, skipping"),
+                },
+                Err(e) => log::warn!("horn-torus corner at {vid:?} failed: {e}, skipping"),
             },
             CornerType::MultiEdge(_) => match build_multi_edge_corner(vid, stripes, topo) {
                 Ok(corner_results) => results.extend(corner_results),
