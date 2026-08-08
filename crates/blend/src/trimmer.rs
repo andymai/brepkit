@@ -244,15 +244,15 @@ pub fn trim_face(
         }
     }
 
-    let va_id = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
-    let vb_id = topo.add_vertex(Vertex::new(hit_b.point_3d, VERTEX_TOL));
-
-    // Each hit splits one oriented edge into two sub-edges:
-    //   original: oriented from S→E
-    //   sub-edge 1: S → V_hit  (forward w.r.t. original orientation)
-    //   sub-edge 2: V_hit → E
-    let (sub_a1, sub_a2) = split_edge_at(topo, &edge_data[hit_a.edge_idx].0, va_id)?;
-    let (sub_b1, sub_b2) = split_edge_at(topo, &edge_data[hit_b.edge_idx].0, vb_id)?;
+    // Each hit either splits its oriented edge into two sub-edges, or —
+    // when it lands on an existing boundary vertex (a previous stripe's
+    // propagated split) — reuses that vertex outright: splitting at t=0/1
+    // would mint a duplicate vertex and a zero-length sub-edge.
+    let ends_a = resolve_hit_ends(topo, edge_data[hit_a.edge_idx].0, hit_a)?;
+    let ends_b = resolve_hit_ends(topo, edge_data[hit_b.edge_idx].0, hit_b)?;
+    let (va_id, vb_id) = (ends_a.vertex, ends_b.vertex);
+    let (sub_a1, sub_a2) = (ends_a.pre, ends_a.post);
+    let (sub_b1, sub_b2) = (ends_b.pre, ends_b.post);
 
     // The contact edge connects the two intersection vertices.
     // Its direction determines which side is "left" vs "right".
@@ -269,20 +269,28 @@ pub fn trim_face(
     let mut chain1: Vec<OrientedEdge> = Vec::new();
     let mut chain2: Vec<OrientedEdge> = Vec::new();
 
-    chain1.push(sub_a2);
+    if let Some(oe) = sub_a2 {
+        chain1.push(oe);
+    }
     for i in (hit_a.edge_idx + 1)..hit_b.edge_idx {
         chain1.push(oriented_edges[i]);
     }
-    chain1.push(sub_b1);
+    if let Some(oe) = sub_b1 {
+        chain1.push(oe);
+    }
 
-    chain2.push(sub_b2);
+    if let Some(oe) = sub_b2 {
+        chain2.push(oe);
+    }
     for i in (hit_b.edge_idx + 1)..n_edges {
         chain2.push(oriented_edges[i]);
     }
     for i in 0..hit_a.edge_idx {
         chain2.push(oriented_edges[i]);
     }
-    chain2.push(sub_a1);
+    if let Some(oe) = sub_a1 {
+        chain2.push(oe);
+    }
 
     // Use the face plane normal and contact direction to determine left/right.
     let face_normal = match &surface {
@@ -360,13 +368,66 @@ pub fn trim_face(
     }
     let trimmed_face_id = topo.add_face(trimmed_face);
 
-    let new_edges = vec![sub_a1.edge(), sub_a2.edge(), sub_b1.edge(), sub_b2.edge()];
+    let mut new_edges = ends_a.minted_edges;
+    new_edges.extend(ends_b.minted_edges);
+    let mut new_vertices = Vec::new();
+    new_vertices.extend(ends_a.minted_vertex);
+    new_vertices.extend(ends_b.minted_vertex);
 
     Ok(TrimResult {
         trimmed_face: trimmed_face_id,
         new_edges,
-        new_vertices: vec![va_id, vb_id],
+        new_vertices,
         contact_edge: Some(contact_edge_id),
+    })
+}
+
+/// How one boundary hit resolves: the vertex at the crossing plus the
+/// boundary pieces before/after it in wire order (`None` when the hit sits
+/// on the edge's own endpoint and no split is needed).
+struct HitEnds {
+    vertex: VertexId,
+    pre: Option<OrientedEdge>,
+    post: Option<OrientedEdge>,
+    minted_vertex: Option<VertexId>,
+    minted_edges: Vec<EdgeId>,
+}
+
+fn resolve_hit_ends(
+    topo: &mut Topology,
+    oe: OrientedEdge,
+    hit: &BoundaryHit,
+) -> Result<HitEnds, BlendError> {
+    let edge = topo.edge(oe.edge())?;
+    let (sv, ev) = (oe.oriented_start(edge), oe.oriented_end(edge));
+    let sp = topo.vertex(sv)?.point();
+    let ep = topo.vertex(ev)?.point();
+    if (hit.point_3d - sp).length() < 1e-6 {
+        return Ok(HitEnds {
+            vertex: sv,
+            pre: None,
+            post: Some(oe),
+            minted_vertex: None,
+            minted_edges: Vec::new(),
+        });
+    }
+    if (hit.point_3d - ep).length() < 1e-6 {
+        return Ok(HitEnds {
+            vertex: ev,
+            pre: Some(oe),
+            post: None,
+            minted_vertex: None,
+            minted_edges: Vec::new(),
+        });
+    }
+    let v = topo.add_vertex(Vertex::new(hit.point_3d, VERTEX_TOL));
+    let (s1, s2) = split_edge_at(topo, &oe, v)?;
+    Ok(HitEnds {
+        vertex: v,
+        pre: Some(s1),
+        post: Some(s2),
+        minted_vertex: Some(v),
+        minted_edges: vec![s1.edge(), s2.edge()],
     })
 }
 
