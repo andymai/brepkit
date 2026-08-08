@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786189476593,
+  "lastUpdate": 1786190466722,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23597,6 +23597,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25026286,
             "range": "± 32587",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd88c21e313937255d7b8222428f2c535896dfd9",
+          "message": "docs(roadmap): shell cavity-sense fix verified across the brepjs suite on 3.1.2 (#1437)\n\nRecords consumer-side verification of #1435 on released 3.1.2: the full\nbrepjs brepkit project (307 files, 4567 tests) passes with zero failures\non the npm overlay, covering the shell-orientation change across every\nshelled-bin path.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap to record that the shell cavity corner cylinder\norientation fix (PR #1435) is merged and released in 3.1.2, and is now\nconsumer-verified. The full `brepjs` brepkit project passes on the npm\n3.1.2 overlay (307 files, 4567 tests, 0 failures).\n\n<sup>Written for commit 1b5e138f8c46794ca69741d7418a8dd604406699.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1437?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T11:58:28Z",
+          "tree_id": "30b210a95743a1e982b7cf9788937763e40be95d",
+          "url": "https://github.com/andymai/brepkit/commit/bd88c21e313937255d7b8222428f2c535896dfd9"
+        },
+        "date": 1786190463971,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 955599,
+            "range": "± 1931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1036345,
+            "range": "± 9627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11999,
+            "range": "± 196",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703048,
+            "range": "± 3255",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25178624,
+            "range": "± 53954",
             "unit": "ns/iter"
           }
         ]
