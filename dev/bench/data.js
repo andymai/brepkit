@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786213388261,
+  "lastUpdate": 1786215270035,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -24461,6 +24461,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25256691,
             "range": "± 38768",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "65096a212634b11c24fa8133b0cd6d353247cf87",
+          "message": "fix(blend): trimmer and corner hardening from the closed-rim scoop repro (#1457)\n\nThree v2-engine hardenings found while digging #1445's grouped-scoop\nclosed-rim fillet (repro: `scoop_fillet_variable_inmem.rs` from #1456).\nEach strictly widens what the v2 trimmer/corner machinery survives;\nevery previously-passing case is unchanged (blend 97, operations 819,\nfillet/blend foils green).\n\n- **Trim hits on existing boundary vertices**: a contact endpoint\nlanding on a previous stripe's propagated split registered on both\nincident chords (t=1 and t=0 — one geometric crossing counted twice) and\nfailed the 2-hit gate; and even past the gate, splitting at t=0/1 minted\na duplicate vertex plus a zero-length sub-edge that broke the kept wire.\nHits now dedupe by position, and endpoint hits reuse the existing vertex\nwithout splitting. Foil-verified regression test\n(`trim_through_a_presplit_boundary_vertex_succeeds`).\n- **Periodic UV unwrap in `trim_face_general`**: the non-planar path\nintersected boundary chords in raw [0, TAU) parameters, so seam-crossing\nfaces swept spurious crossings; u unwraps sequentially along the wire\nwith the contact aligned to the same branch.\n- **Per-vertex corner resilience**: `compute_corners` aborted every\ncorner patch when one vertex failed; failures now skip locally and keep\nthe corners that compute.\n\nAlso adds env-gated `BK_TRIM_TRACE` failure-site instrumentation.\n\nNot in this PR: the parked v1→v2 retry chain for `fillet_variable`\n(diag/scoop-fillet-v2-dig) — it ships only when the v2 engine fully\ncloses the scoop repro (remaining classes: contact-ends-mid-face,\nboundary-riding contacts, tangent-junction and mixed-radius corner\njoins).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nHardens the `blend` v2 trimmer and corner logic so closed‑rim fillets\ntrim reliably on the grouped-scoop repro. Fixes double-counted boundary\nhits, unwraps periodic UV in `trim_face_general`, and keeps computed\ncorners.\n\n- **Bug Fixes**\n- Deduplicate position‑coincident boundary hits before the 2‑hit gate;\nreuse existing boundary vertices when a hit lands at t=0/1 to avoid\nzero‑length edges and broken wires.\n- Unwrap periodic u for cylinder/cone/sphere faces in\n`trim_face_general`, then align the contact endpoints to the same branch\nto prevent spurious seam crossings.\n- Corner patches now skip per‑vertex failures instead of aborting all\ncorners, preserving valid patches elsewhere.\n\n- **New Features**\n- Added `BK_TRIM_TRACE` env‑gated logging at failure sites; included a\nregression test (`trim_through_a_presplit_boundary_vertex_succeeds`).\n\n<sup>Written for commit 9b27a0763374b9fe7659e81aa59091b8a4b9bd13.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1457?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T18:52:11Z",
+          "tree_id": "1d3d2efd9e6405b4b2f939aeecd147454efb8c19",
+          "url": "https://github.com/andymai/brepkit/commit/65096a212634b11c24fa8133b0cd6d353247cf87"
+        },
+        "date": 1786215267759,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 767804,
+            "range": "± 2183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 839152,
+            "range": "± 2769",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9531,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 561058,
+            "range": "± 1928",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20808834,
+            "range": "± 117869",
             "unit": "ns/iter"
           }
         ]
