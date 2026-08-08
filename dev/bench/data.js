@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786193503042,
+  "lastUpdate": 1786194461682,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23759,6 +23759,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30355989,
             "range": "± 35578",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "58b35a7a5a014ae5c6106c7466b20751dc3bf7f9",
+          "message": "docs(roadmap): placement family verified across the brepjs suite on 3.1.3 (#1440)\n\nRecords consumer-side verification of #1438 on released 3.1.3: the full\nbrepjs brepkit project (4567 tests) passes on the npm overlay, covering\nthe pipe and option-sweep placement changes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to record consumer-side verification of the\nplacement fixes for `pipe` and `sweep_with_options` released in 3.1.3.\nConfirms the full `brepjs`/`brepkit` project (4567 tests) passes on the\nnpm 3.1.3 overlay.\n\n<sup>Written for commit b25bf53afff35bdbc733968b5b6f058a61f83dab.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1440?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T13:05:10Z",
+          "tree_id": "b1332224c8b38683bc6565f1c6aed47c840a61f9",
+          "url": "https://github.com/andymai/brepkit/commit/58b35a7a5a014ae5c6106c7466b20751dc3bf7f9"
+        },
+        "date": 1786194459800,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 980403,
+            "range": "± 13214",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1056435,
+            "range": "± 5635",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12187,
+            "range": "± 103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 720136,
+            "range": "± 25124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25182722,
+            "range": "± 129036",
             "unit": "ns/iter"
           }
         ]
