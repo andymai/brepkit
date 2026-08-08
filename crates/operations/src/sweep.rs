@@ -30,11 +30,12 @@ struct Frame {
 
 /// Compute rotation-minimizing frames along a NURBS path.
 ///
-/// Samples the path at evenly-spaced parameter values and propagates the
-/// initial up-vector using the double-reflection method to produce smooth,
-/// twist-free frames. For open paths, produces `num_segments + 1` frames
-/// (t=0 through t=1). For closed paths, produces `num_segments` frames
-/// (t=0 through t=(N-1)/N), omitting t=1 since it duplicates t=0.
+/// Samples the path at evenly-spaced parameters across its own domain
+/// `[u_min, u_max]` and propagates the initial up-vector using the
+/// double-reflection method to produce smooth, twist-free frames. For open
+/// paths, produces `num_segments + 1` frames (domain start through domain
+/// end). For closed paths, produces `num_segments` frames, omitting the
+/// domain end since it duplicates the start.
 fn compute_frames(
     path: &NurbsCurve,
     num_segments: usize,
