@@ -1,0 +1,35 @@
+crates/io/examples/replay_fillet_variable.rs
+  s_8b449c7ef64a35::t_7784f351e175c8 39-50,52-53,114-152
+crates/operations/src/blend_ops.rs
+  s_8b449c7ef64a35::t_7784f351e175c8 96-205
+crates/operations/src/fillet/mod.rs
+  s_8b449c7ef64a35::t_7784f351e175c8 890-935,938-951
+  s_8b449c7ef64a35::t_24137526834567 952
+crates/blend/src/spherical_triangle.rs
+  s_8b449c7ef64a35::t_7784f351e175c8 62-69,82-89,93-100,108-115,137-142,148-153,180-187,214-219,271-278,292-299,343-348,391-396,401-406
+crates/blend/src/builder_utils.rs
+  s_8b449c7ef64a35::t_7784f351e175c8 213-224,429-756
+crates/blend/src/fillet_builder.rs
+  s_8b449c7ef64a35::t_7784f351e175c8 169-178,197,199-206,225-234,255-264,301-400,437-444,1151-1654
+  s_8b449c7ef64a35::t_616a87f7e638f6 1655
+crates/blend/src/corner.rs
+  s_8b449c7ef64a35::t_7784f351e175c8 251-264,372-634,649-663,714-724,728-752
+crates/blend/src/trimmer.rs
+  s_8b449c7ef64a35::t_7784f351e175c8 438-439,462-492,876-878,883-886,888-890,894-896,900-902,908-910,916-923,925,972-981
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "280afc3dd61fc1f53f3a4fa09845f9ec09c19b8f",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
