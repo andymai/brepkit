@@ -1,0 +1,35 @@
+crates/operations/src/blend_ops.rs
+  s_8b449c7ef64a35::t_3e0c46a623475d 129-132
+crates/operations/src/fillet/mod.rs
+  s_8b449c7ef64a35::t_4ac02a8fbbba05 924,932
+crates/blend/src/builder_utils.rs
+  s_8b449c7ef64a35::t_bec8cc7a18b5b2 445-450,456,550-552,608-610,634-638
+  s_8b449c7ef64a35::t_6c48788cd8b402 439-444,451-455,457-519,525-526,528,533,535-538,540-542,544,571-572,574-575,578-580,582-583,586,588,611-621,630-633
+  s_8b449c7ef64a35::t_3d9d24dc6294ef 520-524,527,529-532,534,539,543,545-549,553-570,573,576-577,581,584-585,587,589-607,622-629
+crates/blend/src/fillet_builder.rs
+  s_8b449c7ef64a35::t_6c48788cd8b402 443
+  s_8b449c7ef64a35::t_93dbc59010082e 1655-1758
+  s_8b449c7ef64a35::t_d6ac9dc926cddb 1190-1197
+  s_8b449c7ef64a35::t_501d919089efac 1759
+crates/blend/src/corner.rs
+  s_8b449c7ef64a35::t_bec8cc7a18b5b2 450-454,592-596
+  s_8b449c7ef64a35::t_639460144884aa 449,591
+crates/blend/src/trimmer.rs
+  s_8b449c7ef64a35::t_b790c5a466c4fa 438,467
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "90419df4c19f91db23f609eb6b7d3c657b1cb09e",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
