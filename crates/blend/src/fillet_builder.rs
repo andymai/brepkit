@@ -1271,6 +1271,26 @@ struct NotchRecord {
     contact_pt: Point3,
 }
 
+/// The vertex shared by two stripes' spine edges, if any.
+fn shared_spine_vertex(
+    topo: &Topology,
+    a: &Stripe,
+    b: &Stripe,
+) -> Option<brepkit_topology::vertex::VertexId> {
+    let verts = |st: &Stripe| -> Vec<brepkit_topology::vertex::VertexId> {
+        let mut v = Vec::new();
+        for &eid in st.spine.edges() {
+            if let Ok(e) = topo.edge(eid) {
+                v.push(e.start());
+                v.push(e.end());
+            }
+        }
+        v
+    };
+    let va = verts(a);
+    verts(b).into_iter().find(|v| va.contains(v))
+}
+
 fn rebuild_closed_rim_loop_faces(
     topo: &mut Topology,
     regular_results: &[&StripeResult],
@@ -1427,6 +1447,24 @@ fn rebuild_closed_rim_loop_faces(
                         from: run_start,
                         to,
                     });
+                }
+            }
+        }
+
+        if std::env::var("BK_PIECES").is_ok() {
+            for (k, piece) in pieces.iter().enumerate() {
+                match piece {
+                    RunPiece::Contact {
+                        stripe, from, to, ..
+                    } => log::warn!(
+                        "PIECES face={face_id:?} [{k}] Contact s{stripe} ({from:?})->({to:?})"
+                    ),
+                    RunPiece::Original {
+                        edges, from, to, ..
+                    } => log::warn!(
+                        "PIECES face={face_id:?} [{k}] Original n={} ({from:?})->({to:?})",
+                        edges.len()
+                    ),
                 }
             }
         }
@@ -1633,8 +1671,36 @@ fn rebuild_closed_rim_loop_faces(
                     loop_edges.push(OrientedEdge::new(eid, *forward));
                     out.insert((face_id, *stripe), eid);
                     if !welds {
+                        // Contact-to-contact junction: the true boundary at
+                        // an equal-radius corner is the OFFSET CORNER ARC
+                        // centred on the shared spine vertex — the sphere
+                        // corner patch's own bottom rim, so the weld pass
+                        // pairs them. Mixed radii fall back to a chord.
+                        let mut bridge_curve = EdgeCurve::Line;
+                        if let RunPiece::Contact {
+                            stripe: nsi,
+                            from: nfrom,
+                            ..
+                        } = &pieces[next]
+                        {
+                            if let Some(cv) = shared_spine_vertex(
+                                topo,
+                                &regular_results[*stripe].stripe,
+                                &regular_results[*nsi].stripe,
+                            ) {
+                                let c = topo.vertex(cv)?.point();
+                                let r1 = (*to - c).length();
+                                let r2 = (*nfrom - c).length();
+                                if (r1 - r2).abs() <= 1e-6
+                                    && let Ok(nrm) = (*to - c).cross(*nfrom - c).normalize()
+                                    && let Ok(circle) = Circle3D::new(c, nrm, r1)
+                                {
+                                    bridge_curve = EdgeCurve::Circle(circle);
+                                }
+                            }
+                        }
                         let notch =
-                            topo.add_edge(Edge::new(v_to, junction_vids[next], EdgeCurve::Line));
+                            topo.add_edge(Edge::new(v_to, junction_vids[next], bridge_curve));
                         loop_edges.push(OrientedEdge::new(notch, true));
                         notch_count += 1;
                         if matches!(pieces[next], RunPiece::Original { .. }) {
