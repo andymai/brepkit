@@ -2045,3 +2045,76 @@ fn sweep_with_options_keeps_offset_profile_position() {
         "offset profile must stay near x,y in [5,6], got {bb:?}"
     );
 }
+
+#[test]
+fn miter_sweep_keeps_offset_profile_position() {
+    // The miter family joins the as-positioned contract: a perpendicular
+    // offset profile swept along a kinked path keeps its lateral placement,
+    // and the up-transported frames keep cross-sections unskewed through the
+    // kink (the volume oracle: area x path length).
+    let mut topo = Topology::new();
+    let t = 1e-7;
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(5.0, 5.0, 0.0), t));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(6.0, 5.0, 0.0), t));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(6.0, 6.0, 0.0), t));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(5.0, 6.0, 0.0), t));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e0, true),
+            OrientedEdge::new(e1, true),
+            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e3, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let profile = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    // Polyline path with one kink: up 5, then slanted up 5.
+    let path = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 0.5, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 5.0),
+            Point3::new(2.0, 0.0, 10.0),
+        ],
+        vec![1.0, 1.0, 1.0],
+    )
+    .unwrap();
+
+    let solid = sweep_with_options(
+        &mut topo,
+        profile,
+        &path,
+        &SweepOptions {
+            corner_mode: SweepCornerMode::Miter,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let bb = crate::measure::solid_bounding_box(&topo, solid).unwrap();
+    // The tube rides the kinked path in x/z; the y placement is the
+    // discriminating pin (centroid placement would center it on y=0).
+    assert!(
+        (bb.min.y() - 5.0).abs() < 0.1 && (bb.max.y() - 6.0).abs() < 0.1,
+        "offset profile must keep its y placement, got {bb:?}"
+    );
+    let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+    let expected = 5.0 + 29.0_f64.sqrt();
+    assert!(
+        (vol - expected).abs() / expected < 0.05,
+        "miter tube volume should be ~{expected}, got {vol}"
+    );
+}

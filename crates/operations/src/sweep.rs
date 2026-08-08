@@ -1732,10 +1732,18 @@ fn sweep_miter(
         input_normal = -input_normal;
     }
 
-    // The miter path still re-centers the profile: its per-sub-path ring
-    // reconstruction and joint machinery are calibrated together, so the
-    // as-positioned semantic needs its own verification pass here.
-    let centroid = crate::winding::polygon_centroid(&input_positions);
+    // As-positioned placement (see `sweep`): a perpendicular profile's
+    // offsets are decomposed ONCE in the global frame-0 basis and measured
+    // from the path start, so the first ring reproduces the profile exactly
+    // and later sub-paths reconstruct the same coordinates in their own
+    // (up-transported, continuous) frames. Edge-on/oblique profiles keep the
+    // centroid placement with per-sub-path bases.
+    let placement = resolve_placement(ProfilePlacement::AsPositioned, input_normal, path_tangent_0);
+    let reference = match placement {
+        ProfilePlacement::AsPositioned => path.evaluate(domain_start),
+        ProfilePlacement::CentroidOnPath => crate::winding::polygon_centroid(&input_positions),
+    };
+    let mut global_basis: Option<(Vec3, Vec3, Vec3)> = None;
 
     // Split the path at each kink to get smooth sub-curves.
     let mut sub_paths: Vec<NurbsCurve> = Vec::with_capacity(kinks.len() + 1);
@@ -1760,13 +1768,34 @@ fn sweep_miter(
     // so we can connect them via miter faces.
     let mut prev_end_ring: Option<Vec<VertexId>> = None;
     let mut prev_end_ring_edges: Option<Vec<brepkit_topology::edge::EdgeId>> = None;
+    let mut prev_up: Option<(Vec3, Vec3)> = None; // (up, tangent) at the previous segment's end
 
     for (seg_idx, sub_path) in sub_paths.iter().enumerate() {
         let is_first = seg_idx == 0;
         let is_last = seg_idx == sub_paths.len() - 1;
 
         let sub_tangent_0 = sub_path.tangent(sub_path.domain().0)?;
-        let up_hint = orthogonalize(input_normal, sub_tangent_0);
+        // Chain the frame convention across sub-paths: transport the previous
+        // segment's end up-vector through the kink by the rotation that maps
+        // the old tangent onto the new one. A bare re-orthogonalization
+        // degenerates when the old up parallels the new tangent (an L-path
+        // whose first leg fell back to a world-axis up), spinning the section
+        // 90 degrees at the joint. The first sub-path seeds from the profile
+        // normal as before.
+        let up_hint = match prev_up {
+            None => orthogonalize(input_normal, sub_tangent_0),
+            Some((up_prev, t_prev)) => {
+                let cross = t_prev.cross(sub_tangent_0);
+                let transported = match cross.normalize() {
+                    Ok(axis) => {
+                        let angle = t_prev.dot(sub_tangent_0).clamp(-1.0, 1.0).acos();
+                        crate::revolve::rotate_vec(up_prev, axis, angle)
+                    }
+                    Err(_) => up_prev, // parallel tangents — no rotation needed
+                };
+                orthogonalize(transported, sub_tangent_0)
+            }
+        };
 
         let num_segments = if options.segments > 0 {
             options.segments
@@ -1813,9 +1842,16 @@ fn sweep_miter(
                 .collect(),
         };
 
-        let initial_right = sub_frames[0].right;
-        let initial_up = sub_frames[0].up;
-        let initial_tangent = sub_frames[0].tangent;
+        if global_basis.is_none() {
+            global_basis = Some((sub_frames[0].right, sub_frames[0].up, sub_frames[0].tangent));
+        }
+        if let Some(last) = sub_frames.last() {
+            prev_up = Some((last.up, last.tangent));
+        }
+        let (initial_right, initial_up, initial_tangent) = match (placement, global_basis) {
+            (ProfilePlacement::AsPositioned, Some((r, u, t))) => (r, u, t),
+            _ => (sub_frames[0].right, sub_frames[0].up, sub_frames[0].tangent),
+        };
 
         // Create ring vertices for this segment.
         let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_segments + 1);
@@ -1825,7 +1861,7 @@ fn sweep_miter(
                 .map(|&pos| {
                     let transformed = transform_point(
                         pos,
-                        centroid,
+                        reference,
                         initial_right,
                         initial_up,
                         initial_tangent,
@@ -2008,7 +2044,7 @@ fn sweep_miter(
             inner_swept.push(sweep_wire_through_frames(
                 topo,
                 iw_id,
-                centroid,
+                reference,
                 initial_right,
                 initial_up,
                 initial_tangent,
