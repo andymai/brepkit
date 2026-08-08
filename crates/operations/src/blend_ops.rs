@@ -110,9 +110,11 @@ pub fn fillet_v2_variable(
         });
     }
     // Group tangent-continuous runs with an identical constant radius into
-    // one edge chain: the builder walks a chain as a single spine, so the
-    // tangent junctions inside a run need no corner patch at all. Only true
-    // radius-change or angular junctions remain as corners.
+    // one edge set. The builder still computes per-edge stripes inside a
+    // set, so grouping does not remove in-run junctions by itself; it keeps
+    // each run under one radius law and gives downstream corner handling a
+    // consistent picture of which junctions are true radius-change or
+    // angular corners.
     let mut remaining: Vec<(EdgeId, brepkit_blend::radius_law::RadiusLaw)> = edge_laws;
     let mut chains: Vec<(Vec<EdgeId>, brepkit_blend::radius_law::RadiusLaw)> = Vec::new();
     while let Some((seed, law)) = remaining.pop() {
@@ -172,10 +174,16 @@ fn chain_extends_tangently(topo: &Topology, chain: &[EdgeId], cand: EdgeId) -> b
     let Some((cs, ce, cc)) = ends(cand) else {
         return false;
     };
-    let tangent_at =
-        |curve: &brepkit_topology::edge::EdgeCurve, s: Point3, e: Point3, at_start: bool| -> Vec3 {
-            curve.tangent_with_endpoints(if at_start { 0.0 } else { 1.0 }, s, e)
-        };
+    let tangent_at = |curve: &brepkit_topology::edge::EdgeCurve,
+                      s: Point3,
+                      e: Point3,
+                      at_start: bool|
+     -> Option<Vec3> {
+        curve
+            .tangent_with_endpoints(if at_start { 0.0 } else { 1.0 }, s, e)
+            .normalize()
+            .ok()
+    };
     for &eid in chain {
         let Some((s, e, curve)) = ends(eid) else {
             continue;
@@ -185,8 +193,12 @@ fn chain_extends_tangently(topo: &Topology, chain: &[EdgeId], cand: EdgeId) -> b
                 if (cp - p).length() > 1e-6 {
                     continue;
                 }
-                let t_chain = tangent_at(&curve, s, e, at_start);
-                let t_cand = tangent_at(&cc, cs, ce, c_at_start);
+                let (Some(t_chain), Some(t_cand)) = (
+                    tangent_at(&curve, s, e, at_start),
+                    tangent_at(&cc, cs, ce, c_at_start),
+                ) else {
+                    continue;
+                };
                 // Traversal directions at a shared vertex oppose when the
                 // curves continue smoothly through it exactly when one is
                 // at its start and the other at its end.
