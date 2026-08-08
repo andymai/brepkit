@@ -166,6 +166,16 @@ impl<'a> FilletBuilder<'a> {
             }
         }
 
+        // Closed-rim faces: when every edge of a face's outer wire is some
+        // stripe's spine edge, the face's boundary is consumed whole by the
+        // fillet and its trimmed form is the CHAINED CONTACT LOOP. The
+        // per-stripe trims cannot build that (each cuts with an infinite
+        // contact line, and on a non-convex outline stripe k's line
+        // amputates territory stripe j needs). Rebuild such faces directly
+        // and record the loop edges so the blend walls share them.
+        let rim_contact_edges =
+            rebuild_closed_rim_loop_faces(topo, &regular_results, &mut face_replacements)?;
+
         let stripes: Vec<Stripe> = regular_results.iter().map(|sr| sr.stripe.clone()).collect();
         let corner_results = match corner::compute_corners(topo, &stripes, self.solid) {
             Ok(results) => results,
@@ -184,9 +194,16 @@ impl<'a> FilletBuilder<'a> {
             Option<brepkit_topology::edge::EdgeId>,
             Option<brepkit_topology::edge::EdgeId>,
         )> = Vec::new();
-        for sr in &regular_results {
+        for (si, sr) in regular_results.iter().enumerate() {
             let stripe = &sr.stripe;
-            stripe_contact_edges.push((None, None));
+            stripe_contact_edges.push((
+                rim_contact_edges.get(&(stripe.face1, si)).copied(),
+                rim_contact_edges.get(&(stripe.face2, si)).copied(),
+            ));
+            let (rim1, rim2) = (
+                rim_contact_edges.contains_key(&(stripe.face1, si)),
+                rim_contact_edges.contains_key(&(stripe.face2, si)),
+            );
 
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
             let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
@@ -205,7 +222,16 @@ impl<'a> FilletBuilder<'a> {
                 .get(&stripe.face1)
                 .copied()
                 .unwrap_or(stripe.face1);
-            let trim1 = trimmer::trim_face_general(topo, current_face1, &contact1_pts, keep);
+            let trim1 = if rim1 {
+                Ok(trimmer::TrimResult {
+                    trimmed_face: current_face1,
+                    new_edges: Vec::new(),
+                    new_vertices: Vec::new(),
+                    contact_edge: None,
+                })
+            } else {
+                trimmer::trim_face_general(topo, current_face1, &contact1_pts, keep)
+            };
 
             match trim1 {
                 Ok(tr) if tr.trimmed_face != current_face1 => {
@@ -226,7 +252,16 @@ impl<'a> FilletBuilder<'a> {
                 .get(&stripe.face2)
                 .copied()
                 .unwrap_or(stripe.face2);
-            let trim2 = trimmer::trim_face_general(topo, current_face2, &contact2_pts, keep);
+            let trim2 = if rim2 {
+                Ok(trimmer::TrimResult {
+                    trimmed_face: current_face2,
+                    new_edges: Vec::new(),
+                    new_vertices: Vec::new(),
+                    contact_edge: None,
+                })
+            } else {
+                trimmer::trim_face_general(topo, current_face2, &contact2_pts, keep)
+            };
 
             match trim2 {
                 Ok(tr) if tr.trimmed_face != current_face2 => {
@@ -1115,4 +1150,171 @@ mod tests {
         // With no successes, the original solid is returned.
         assert_eq!(result.solid, solid);
     }
+}
+
+/// Rebuild faces whose entire outer wire is consumed by fillet spine edges.
+///
+/// For a closed rim, the face's post-fillet boundary is the chained loop of
+/// the stripes' contact curves on that face. Returns the loop edge chosen
+/// for each `(face, stripe index)` so the blend walls share those edges.
+/// Faces that fail any structural requirement (an outer-wire edge with no
+/// stripe, or a junction gap wider than weld distance) are left for the
+/// per-stripe trim path.
+#[allow(clippy::type_complexity, clippy::too_many_lines)]
+fn rebuild_closed_rim_loop_faces(
+    topo: &mut Topology,
+    regular_results: &[&StripeResult],
+    face_replacements: &mut std::collections::HashMap<FaceId, FaceId>,
+) -> Result<std::collections::HashMap<(FaceId, usize), EdgeId>, BlendError> {
+    use std::collections::HashMap;
+
+    const WELD: f64 = 1e-6;
+    let mut out: HashMap<(FaceId, usize), EdgeId> = HashMap::new();
+
+    // Spine edge -> stripe index.
+    let mut spine_owner: HashMap<EdgeId, usize> = HashMap::new();
+    for (si, sr) in regular_results.iter().enumerate() {
+        for &eid in sr.stripe.spine.edges() {
+            spine_owner.insert(eid, si);
+        }
+    }
+
+    // Candidate faces: those adjacent to any stripe.
+    let mut candidates: Vec<FaceId> = Vec::new();
+    for sr in regular_results {
+        for f in [sr.stripe.face1, sr.stripe.face2] {
+            if !candidates.contains(&f) {
+                candidates.push(f);
+            }
+        }
+    }
+
+    'faces: for face_id in candidates {
+        let face = topo.face(face_id)?;
+        let surface = face.surface().clone();
+        let reversed = face.is_reversed();
+        let inner_wires = face.inner_wires().to_vec();
+        let wire = topo.wire(face.outer_wire())?;
+        let oriented: Vec<OrientedEdge> = wire.edges().to_vec();
+        if oriented.len() < 2 {
+            continue;
+        }
+
+        // Every outer-wire edge must belong to a stripe.
+        let mut owners: Vec<usize> = Vec::with_capacity(oriented.len());
+        for oe in &oriented {
+            match spine_owner.get(&oe.edge()) {
+                Some(&si) => owners.push(si),
+                Option::None => continue 'faces,
+            }
+        }
+
+        // Rotate so the walk starts at a stripe-run boundary.
+        let n = oriented.len();
+        let start = (0..n)
+            .find(|&i| owners[i] != owners[(i + n - 1) % n])
+            .unwrap_or(0);
+
+        // Group consecutive edges by stripe run, in wire order.
+        let mut runs: Vec<usize> = Vec::new();
+        for k in 0..n {
+            let si = owners[(start + k) % n];
+            if runs.last() != Some(&si) {
+                runs.push(si);
+            }
+        }
+        if runs.len() >= 2 && runs.first() == runs.last() {
+            runs.pop();
+        }
+
+        // Collect each run's contact curve on this face, oriented to follow
+        // the wire traversal: the contact start should sit near the run's
+        // first oriented-edge start.
+        struct LoopPiece {
+            stripe: usize,
+            forward: bool,
+            from: Point3,
+            to: Point3,
+            curve: brepkit_math::nurbs::curve::NurbsCurve,
+        }
+        let mut pieces: Vec<LoopPiece> = Vec::with_capacity(runs.len());
+        let mut cursor = start;
+        for &si in &runs {
+            let first_oe = oriented[cursor % n];
+            let run_len = (0..n)
+                .take_while(|&k| owners[(cursor + k) % n] == si)
+                .count();
+            cursor += run_len;
+
+            let stripe = &regular_results[si].stripe;
+            let contact = if stripe.face1 == face_id {
+                stripe.contact1.clone()
+            } else {
+                stripe.contact2.clone()
+            };
+            let (c0, c1) = {
+                let (d0, d1) = contact.domain();
+                (contact.evaluate(d0), contact.evaluate(d1))
+            };
+            let edge = topo.edge(first_oe.edge())?;
+            let run_start = topo
+                .vertex(if first_oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                })?
+                .point();
+            let forward = (c0 - run_start).length() <= (c1 - run_start).length();
+            let (from, to) = if forward { (c0, c1) } else { (c1, c0) };
+            pieces.push(LoopPiece {
+                stripe: si,
+                forward,
+                from,
+                to,
+                curve: contact,
+            });
+        }
+
+        // Junction gaps must weld or the loop is not closed (a failed corner
+        // leaves a gap; those faces keep the trim path).
+        let m = pieces.len();
+        for k in 0..m {
+            let gap = (pieces[k].to - pieces[(k + 1) % m].from).length();
+            if gap > WELD {
+                continue 'faces;
+            }
+        }
+
+        // Build shared junction vertices and the loop edges.
+        let mut junctions: Vec<brepkit_topology::vertex::VertexId> = Vec::with_capacity(m);
+        for piece in &pieces {
+            junctions.push(topo.add_vertex(Vertex::new(piece.from, 1e-7)));
+        }
+        let mut loop_edges: Vec<OrientedEdge> = Vec::with_capacity(m);
+        for k in 0..m {
+            let v_from = junctions[k];
+            let v_to = junctions[(k + 1) % m];
+            let piece = &pieces[k];
+            let curve = EdgeCurve::NurbsCurve(piece.curve.clone());
+            let eid = if piece.forward {
+                topo.add_edge(Edge::new(v_from, v_to, curve))
+            } else {
+                topo.add_edge(Edge::new(v_to, v_from, curve))
+            };
+            loop_edges.push(OrientedEdge::new(eid, piece.forward));
+            out.insert((face_id, piece.stripe), eid);
+        }
+
+        let new_wire = Wire::new(loop_edges, true)?;
+        let new_wire_id = topo.add_wire(new_wire);
+        let mut new_face = Face::new(new_wire_id, inner_wires, surface);
+        new_face.set_reversed(reversed);
+        let new_face_id = topo.add_face(new_face);
+        face_replacements.insert(face_id, new_face_id);
+        log::debug!(
+            "closed-rim loop rebuild: face {face_id:?} -> {new_face_id:?} with {m} contact edges"
+        );
+    }
+
+    Ok(out)
 }
