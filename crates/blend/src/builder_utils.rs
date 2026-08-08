@@ -1032,24 +1032,30 @@ pub(crate) fn propagate_orientation(
     use brepkit_topology::edge::EdgeId;
     use std::collections::{HashMap, HashSet, VecDeque};
 
-    let face_senses = |topo: &Topology, fid: FaceId| -> Result<Vec<(EdgeId, bool)>, BlendError> {
+    // Raw wire senses are immutable during propagation; only the reversal
+    // bit changes on a flip. Precompute per-face raw senses and track
+    // reversal in a map so the BFS stays O(E) instead of re-walking wires
+    // per visited edge.
+    let mut raw_senses: HashMap<FaceId, Vec<(EdgeId, bool)>> = HashMap::new();
+    let mut revs: HashMap<FaceId, bool> = HashMap::new();
+    for &fid in faces {
         let face = topo.face(fid)?;
-        let rev = face.is_reversed();
+        revs.insert(fid, face.is_reversed());
         let mut v = Vec::new();
         let mut wires = vec![face.outer_wire()];
         wires.extend_from_slice(face.inner_wires());
         for wid in wires {
             for oe in topo.wire(wid)?.edges() {
-                v.push((oe.edge(), oe.is_forward() ^ rev));
+                v.push((oe.edge(), oe.is_forward()));
             }
         }
-        Ok(v)
-    };
+        raw_senses.insert(fid, v);
+    }
 
     let mut edge_users: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
-    for &fid in faces {
-        for (eid, _) in face_senses(topo, fid)? {
-            edge_users.entry(eid).or_default().push(fid);
+    for (&fid, senses) in &raw_senses {
+        for (eid, _) in senses {
+            edge_users.entry(*eid).or_default().push(fid);
         }
     }
 
@@ -1071,8 +1077,10 @@ pub(crate) fn propagate_orientation(
 
     let mut flipped = 0usize;
     while let Some(fid) = queue.pop_front() {
-        let senses = face_senses(topo, fid)?;
-        for (eid, my_sense) in senses {
+        let my_rev = revs.get(&fid).copied().unwrap_or(false);
+        let senses = raw_senses.get(&fid).cloned().unwrap_or_default();
+        for (eid, raw) in senses {
+            let my_sense = raw ^ my_rev;
             let Some(users) = edge_users.get(&eid) else {
                 continue;
             };
@@ -1083,13 +1091,16 @@ pub(crate) fn propagate_orientation(
                 if other == fid || visited.contains(&other) {
                     continue;
                 }
-                let other_senses = face_senses(topo, other)?;
-                let Some(&(_, other_sense)) = other_senses.iter().find(|(e, _)| *e == eid) else {
+                let other_rev = revs.get(&other).copied().unwrap_or(false);
+                let Some(&(_, other_raw)) = raw_senses
+                    .get(&other)
+                    .and_then(|v| v.iter().find(|(e, _)| *e == eid))
+                else {
                     continue;
                 };
-                if other_sense == my_sense {
-                    let cur = topo.face(other)?.is_reversed();
-                    topo.face_mut(other)?.set_reversed(!cur);
+                if other_raw ^ other_rev == my_sense {
+                    topo.face_mut(other)?.set_reversed(!other_rev);
+                    revs.insert(other, !other_rev);
                     flipped += 1;
                 }
                 visited.insert(other);
