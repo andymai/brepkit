@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786176680085,
+  "lastUpdate": 1786177583279,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -23165,6 +23165,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20725404,
             "range": "± 923272",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e2e8d5767e3329bfa9a3dd28dc5a7d7310605cba",
+          "message": "docs(roadmap): analytic sweep released in 3.1.0 and verified tool-side (#1429)\n\nRecords the tool-side verification of #1427 on released 3.1.0: full\nbrepjs gridfinity-smoke 26/26 in 1.57 s (was ~9-12 s), lip at 60 exact\nanalytic faces (was ~2730 facets), production lip fuse analytic at 86\nfaces with exact sum volume. The coincident-fuse nondeterminism\nready-repro remains the next dig entry point.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to mark analytic sweep shipped in 3.1.0 and verified\ntool-side. `brepjs` gridfinity smoke now passes 26/26 in 1.57 s; the lip\nis 60 analytic faces, the fused result is 86 analytic faces with exact\nvolume, and the coincident-fuse nondeterminism is noted for follow-up.\n\n<sup>Written for commit 5c83be52b54feeefa3ea20cd5650f9d6fa8089c9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1429?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-08T08:23:43Z",
+          "tree_id": "5619519fa767dd1aca5ac48bf3395840710ddb25",
+          "url": "https://github.com/andymai/brepkit/commit/e2e8d5767e3329bfa9a3dd28dc5a7d7310605cba"
+        },
+        "date": 1786177581126,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 990670,
+            "range": "± 5382",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1076841,
+            "range": "± 21611",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13424,
+            "range": "± 570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 712278,
+            "range": "± 17995",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26459155,
+            "range": "± 133460",
             "unit": "ns/iter"
           }
         ]
