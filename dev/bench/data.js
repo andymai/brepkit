@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786170507408,
+  "lastUpdate": 1786171022478,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -22949,6 +22949,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17481930,
             "range": "± 67120",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1383e4aee31fbfdb7356fd32493af2a936afc563",
+          "message": "chore(main): release 3.0.2 (#1425)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.0.2](https://github.com/andymai/brepkit/compare/v3.0.1...v3.0.2)\n(2026-08-08)\n\n\n### Bug Fixes\n\n* **operations:** drop sub-resolution polygons in mixed boolean assembly\n([#1423](https://github.com/andymai/brepkit/issues/1423))\n([56da284](https://github.com/andymai/brepkit/commit/56da2846891ccf3bcb45eb9ad8201a37e91c8579))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes robustness in mixed boolean assembly by dropping sub-resolution\npolygons. Publishes `3.0.2` and aligns all workspace crate versions.\n\n- **Bug Fixes**\n- `brepkit-operations`: drop sub-resolution polygons in mixed boolean\nassembly to avoid stray fragments.\n\n- **Dependencies**\n  - Align all `brepkit-*` workspace crates and root to version `3.0.2`.\n\n<sup>Written for commit e331003dd2b332d6594d8a9933e31c940393a3b1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1425?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-08T06:34:50Z",
+          "tree_id": "2bbac5ac2abb49799c74ded28a1fcb6217a1c930",
+          "url": "https://github.com/andymai/brepkit/commit/1383e4aee31fbfdb7356fd32493af2a936afc563"
+        },
+        "date": 1786171019816,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 765352,
+            "range": "± 713",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 836163,
+            "range": "± 1478",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10284,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 547553,
+            "range": "± 880",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20383356,
+            "range": "± 54889",
             "unit": "ns/iter"
           }
         ]
