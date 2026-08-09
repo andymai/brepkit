@@ -1589,6 +1589,13 @@ fn stitch_rings(
 /// Projects shared edge points into (u,v) parameter space, generates interior
 /// sample points, then runs Constrained Delaunay Triangulation. Boundary
 /// vertices use their pre-existing global IDs (watertight by construction).
+/// `BK_CDT_TRACE` (any value): log CDT boundary sourcing and UV mapping.
+/// Resolved ONCE per process — the checks sit in per-edge loops.
+fn cdt_trace() -> bool {
+    static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var("BK_CDT_TRACE").is_ok())
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn tessellate_nonplanar_cdt(
     topo: &Topology,
@@ -1615,7 +1622,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         let edge_idx = edge_id_local.index();
         let is_fwd = oe.is_forward();
         if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
-            if std::env::var("BK_CDT_TRACE").is_ok() {
+            if cdt_trace() {
                 log::debug!(
                     "cdt {face_id:?} edge e{edge_idx} SHARED n={} gids {}..{}",
                     global_ids.len(),
@@ -1642,7 +1649,7 @@ pub(super) fn tessellate_nonplanar_cdt(
                 boundary_3d.push((merged.positions[gid as usize], gid, edge_id_local, is_fwd));
             }
         } else {
-            if std::env::var("BK_CDT_TRACE").is_ok() {
+            if cdt_trace() {
                 log::debug!("cdt {face_id:?} edge e{edge_idx} RESAMPLED");
             }
             // Edge not in shared pool -- insert directly.
@@ -1729,8 +1736,18 @@ pub(super) fn tessellate_nonplanar_cdt(
                     false
                 }
             };
-            for i in 1..boundary_uv.len() {
-                let prev_u = boundary_uv[i - 1].0;
+            // The boundary is cyclic, so the anchor itself can sit on the
+            // degenerate locus (the wire may start at the pinch); unwrap
+            // from the first NON-degenerate point instead so an arbitrary
+            // anchor u never steers the walk.
+            let n = boundary_uv.len();
+            let start = (0..n)
+                .find(|&i| !degenerate_u(boundary_uv[i].1))
+                .unwrap_or(0);
+            for k in 1..n {
+                let i = (start + k) % n;
+                let prev = (start + k + n - 1) % n;
+                let prev_u = boundary_uv[prev].0;
                 if degenerate_u(boundary_uv[i].1) {
                     boundary_uv[i].0 = prev_u;
                     continue;
@@ -1896,7 +1913,7 @@ pub(super) fn tessellate_nonplanar_cdt(
     let boundary_cdt_ids = cdt
         .insert_points_hilbert(&boundary_pts)
         .map_err(crate::OperationsError::Math)?;
-    if std::env::var("BK_CDT_TRACE").is_ok() {
+    if cdt_trace() {
         for (i, &cid) in boundary_cdt_ids.iter().enumerate() {
             log::debug!(
                 "cdt {face_id:?} bpt[{i}] gid={} cdtid={cid} uv=({:.5},{:.5})",
