@@ -175,6 +175,16 @@ fn tessellate_solid_core(
 
     let all_faces = explorer::solid_faces(topo, solid)?;
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
+    let mut phase_t = std::time::Instant::now();
+    let phase = |label: &str, t: &mut std::time::Instant| {
+        if tess_phases() {
+            log::debug!(
+                "TESS_PHASE {label}: {:.1}ms",
+                t.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        *t = std::time::Instant::now();
+    };
 
     // The map is a std `HashMap`, so sort its keys into ID order before use —
     // keeping all downstream iteration deterministic regardless of
@@ -231,6 +241,7 @@ fn tessellate_solid_core(
         map
     };
 
+    phase("edge_sampling", &mut phase_t);
     // Synchronize circle edge samples with face grid density so a face's rim
     // points line up with its own analytic grid columns.
     {
@@ -304,6 +315,7 @@ fn tessellate_solid_core(
         }
     }
 
+    phase("circle_sync", &mut phase_t);
     let mut merged = TriangleMesh::default();
     let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
     let mut edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
@@ -324,9 +336,58 @@ fn tessellate_solid_core(
         edge_global_indices.insert(edge_idx, global_ids);
     }
 
+    phase("edge_weld_pool", &mut phase_t);
     {
         let tol_linear = brepkit_math::tolerance::Tolerance::new().linear;
         let refine_tol = tol_linear * 10.0;
+
+        // Spatial hash over the shared edge-point pool. The T-junction splice
+        // below must find every pool point lying ON each circle edge; scanning
+        // the whole pool per circle is O(circle-edges × pool-points) and
+        // dominated a 1274-face export tessellation at 90% of its wall clock
+        // (gh #1500). Instead, bucket the pool once and walk each circle at
+        // cell-sized arc steps, inspecting the 3×3×3 neighborhood of each
+        // visited cell — sound because a candidate sits within
+        // `refine_tol + step/2 ≤ cell` of some walked sample, so its cell
+        // index differs by at most 1 per axis.
+        let (grid_cell, point_grid) = {
+            let mut lo = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+            let mut hi = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for p in &merged.positions {
+                lo = Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z()));
+                hi = Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z()));
+            }
+            let diag = (hi - lo).length();
+            let cell = if diag.is_finite() && diag > 0.0 {
+                (diag / 128.0).max(refine_tol * 4.0)
+            } else {
+                refine_tol.max(1e-3)
+            };
+            let inv = 1.0 / cell;
+            let key = |p: &Point3| -> (i64, i64, i64) {
+                #[allow(clippy::cast_possible_truncation)]
+                (
+                    (p.x() * inv).floor() as i64,
+                    (p.y() * inv).floor() as i64,
+                    (p.z() * inv).floor() as i64,
+                )
+            };
+            let mut grid: DetHashMap<(i64, i64, i64), Vec<u32>> = DetHashMap::default();
+            for (gid, p) in merged.positions.iter().enumerate() {
+                #[allow(clippy::cast_possible_truncation)]
+                grid.entry(key(p)).or_default().push(gid as u32);
+            }
+            (cell, grid)
+        };
+        let grid_inv = 1.0 / grid_cell;
+        let cell_of = |p: &Point3| -> (i64, i64, i64) {
+            #[allow(clippy::cast_possible_truncation)]
+            (
+                (p.x() * grid_inv).floor() as i64,
+                (p.y() * grid_inv).floor() as i64,
+                (p.z() * grid_inv).floor() as i64,
+            )
+        };
 
         for &edge_idx in &edge_indices {
             let Some(edge_id) = topo.edge_id_from_index(edge_idx) else {
@@ -357,10 +418,34 @@ fn tessellate_solid_core(
                 .unwrap_or_default();
             let existing_gids: DetHashSet<u32> = existing_gids_vec.iter().copied().collect();
 
+            let candidates: Vec<u32> = {
+                let steps = ((std::f64::consts::TAU * circle.radius() * grid_inv).ceil() as usize)
+                    .clamp(8, 8192);
+                let mut visited: DetHashSet<(i64, i64, i64)> = DetHashSet::default();
+                let mut cand: Vec<u32> = Vec::new();
+                #[allow(clippy::cast_precision_loss)]
+                for i in 0..steps {
+                    let t = std::f64::consts::TAU * (i as f64) / (steps as f64);
+                    let (cx, cy, cz) = cell_of(&circle.evaluate(t));
+                    for dx in -1..=1_i64 {
+                        for dy in -1..=1_i64 {
+                            for dz in -1..=1_i64 {
+                                let c = (cx + dx, cy + dy, cz + dz);
+                                if visited.insert(c)
+                                    && let Some(gids) = point_grid.get(&c)
+                                {
+                                    cand.extend_from_slice(gids);
+                                }
+                            }
+                        }
+                    }
+                }
+                cand
+            };
+
             let mut insertions: Vec<(f64, u32)> = Vec::new();
-            for (gid, pos) in merged.positions.iter().enumerate() {
-                #[allow(clippy::cast_possible_truncation)]
-                let gid32 = gid as u32;
+            for gid32 in candidates {
+                let pos = &merged.positions[gid32 as usize];
                 if existing_gids.contains(&gid32) {
                     continue;
                 }
@@ -412,6 +497,7 @@ fn tessellate_solid_core(
         }
     }
 
+    phase("circle_refine_scan", &mut phase_t);
     // When tracking, `tri_faces` runs parallel to the mesh triangles:
     // tri_faces[t] is the index (into `all_faces`) of the face that produced
     // triangle t. The ungrouped caller skips this bookkeeping entirely.
@@ -504,6 +590,7 @@ fn tessellate_solid_core(
         other_face_indices.push(fi);
     }
 
+    phase("cdt_job_prep", &mut phase_t);
     #[cfg(not(target_arch = "wasm32"))]
     let cdt_results: Vec<CdtResult> = if cdt_jobs.len() >= 2 {
         use rayon::prelude::*;
@@ -523,6 +610,7 @@ fn tessellate_solid_core(
         .map(|job| run_planar_cdt(&job.pts2d, job.outer_count, &job.inner_wire_ranges))
         .collect();
 
+    phase("cdt_run", &mut phase_t);
     for (job, result) in cdt_jobs.iter().zip(cdt_results) {
         let (tris, steiner) = result?;
 
@@ -651,6 +739,7 @@ fn tessellate_solid_core(
         }
     }
 
+    phase("planar_stitch", &mut phase_t);
     for &fi in &other_face_indices {
         if let Err(e) = tessellate_face_with_shared_edges(
             topo,
@@ -672,6 +761,7 @@ fn tessellate_solid_core(
         }
     }
 
+    phase("other_faces", &mut phase_t);
     let n_verts = merged.positions.len();
     let tri_count = merged.indices.len() / 3;
 
@@ -757,6 +847,7 @@ fn tessellate_solid_core(
         }
     }
 
+    phase("normals", &mut phase_t);
     weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
 
     // Drop coincident/cancelling triangles left by booleans that
@@ -764,8 +855,16 @@ fn tessellate_solid_core(
     // positions so position-coincident triangles with distinct vertex IDs
     // are still caught.
     dedupe_coincident_triangles(&mut merged, tri_faces.as_mut());
+    phase("weld_dedupe", &mut phase_t);
 
     Ok((merged, tri_faces, all_faces.len()))
+}
+
+/// `BK_TESS_PHASES` (any value): log per-phase wall clock of the solid
+/// tessellation pipeline. Resolved once per process.
+fn tess_phases() -> bool {
+    static PHASES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PHASES.get_or_init(|| std::env::var("BK_TESS_PHASES").is_ok())
 }
 
 /// `BK_TESS_TRACE` (any value): log each face's mesher-arm dispatch.
