@@ -124,7 +124,7 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **Stagnant bin rows: 4x4 mag no-lip 1.72x, 2x2 label bracket 1.59x** | Behind the reference kernel since 3.2.1, unmoved by the #1488 campaign (every other row is parity-or-faster on 3.2.13). Combined tool-side report with per-stage breakdown requested in the #1488 closing comment; wait for that before profiling. The #1502 tessellation fix may move these rows too — re-measure now that 3.2.16 is out |
+| **2x2 label bracket warm-path boolean residual (1.6x)** | Report #1510 (2026-08-09, 3.2.16): cold median already beats the reference (135 vs 152ms); warm in-suite 104 vs 65ms with the gap entirely in the boolean stage (83 vs 26ms, the label shelf+gusset fuse). Next step: capture the operands tool-side and replay natively per the standard recipe |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -136,6 +136,9 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **4x4 mag no-lip bin row (CLOSED 2026-08-09 at parity on 3.2.16, report #1510)** —
+  396 vs 398ms in-suite, 393 vs 400ms cold median against a same-session reference run; moved by the
+  #1502 splice spatial hash (magnet-hole-circle-heavy tessellation), no bin-targeted work involved.
 - **#1499/#1508 kumiko cutAll chain (CLOSED 2026-08-09 on released 3.2.16 + brepjs 18.124.2, kumikoProfile green)** —
   false containment EmptyResult (#1501: volume witness; regression `cut_wedge_by_thin_radial_strut_is_not_empty`)
   + four untrimmed-parent-curve consumers (`domain_with_endpoints`) + brepjs#1996 compound-base fan-out
