@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786287245062,
+  "lastUpdate": 1786299032475,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26621,6 +26621,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25635617,
             "range": "± 70080",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ca8c1ad35e406e4510c20a889b63977afb2c360f",
+          "message": "fix(operations): false trivial-containment on thin revolved cutters + untrimmed-arc volume misreads (#1501)\n\n## Summary\n\nFixes the kernel side of #1499 (the kumiko corner cutter chain).\n\nThe reported symptom (`cutAll requires a solid, got compound`) traces to\na kernel `cut` that wrongly threw `empty result: Cut with target fully\ncontained in tool` for a wedge 3.4x larger than the strut cutting it.\nThe brepjs adapter converts that empty-result error to an empty\ncompound, which the next loop iteration feeds back into `cutAll`, which\nthrows.\n\n## Root 1: AABB-only containment fallback trusts inflated boxes\n\n`detect_trivial_relation`'s no-classifier fallback claims containment\nfrom `aabb_strictly_contains` alone. The solid bounding box is a\nconservative outer bound: partial cylinder faces expand to the full\ncircle, so a thin angular strut's box balloons to the whole cylinder\nfootprint (±r squares) and strictly contains a much larger wedge's box\nin all three dims. The `center_outside` witness is disabled exactly\nhere, because the wedge's AABB center sits in its own annular hole (the\ndocumented incompleteness).\n\nFix: a volume witness on that arm. `inner ⊆ outer ⇒ vol(inner) ≤\nvol(outer)`, so `vol(inner) > 1.05·vol(outer)` refutes containment, and\nvolumes are immune to AABB inflation. Gated behind the rare fallback\narm, so no hot-path cost.\n\n## Root 2: consumers reading the parent curve's domain on split edges\n\nBoolean-split edges share their parent NURBS curve, with vertices\nmarking the sub-span (`domain_with_endpoints` is the sanctioned\naccessor, and `sample_edge` already warns about this). Four consumers\nstill read the parent extent:\n\n- `analytic_cylinder_signed_volume`, `analytic_cone_signed_volume`, and\nthe torus arm sampled `nc.domain()` midpoints, pushing angles outside\nthe face and widening `compute_angular_range` (a 0.22-rad band\nintegrated as 0.55 rad).\n- `planar.rs`'s NURBS boundary sampling walked the full knot domain,\ndragging cap wires through the split-away region: self-crossed CDT\ninput, folded triangles, sector caps over-counting area by 9-16%.\n\nThe result solids from cut/intersect of two annular wedges were\ngeometrically correct all along (mesh signed volume matches closed form\nto 4 decimal places); only these measurements lied.\n\n## Verification\n\n- New regression `cut_wedge_by_thin_radial_strut_is_not_empty` with\nfaithful geometry from the failing tool call (base vol 175.7, tool 52.1,\ntool box ⊋ base box by just over 10% in every dim): fails with\nEmptyResult before, passes with correct cut volume after.\n- `cargo nextest run -p brepkit-operations`: 1037 passed.\n- Full workspace suite green except the pre-existing GPU SIGSEGV in\nbrepkit-render compute-mesh tests (fails identically on clean main in\nthis sandbox).\n\nCloses nothing on its own: #1499 also wants the adapter to accept\ncompound bases (composability), which is a brepjs-side follow-up.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPrevents false empty cuts with thin revolved cutters by adding a\nvolume-based check to the AABB-only containment fallback. Also fixes\nvolume and planar tessellation errors by sampling NURBS edges using\ntheir endpoint-trimmed domain. Addresses the kernel side of #1499.\n\n- **Bug Fixes**\n- Containment shortcut: add a volume witness that rejects fallback\ncontainment when `vol(inner) > 1.05 * vol(outer)`; avoids AABB inflation\non partial cylinder/cone faces.\n- Volume integrals: in cylinder, cone, and torus paths, use\n`domain_with_endpoints` for boolean-split NURBS edges to prevent widened\nangular ranges and over-counted volumes.\n- Planar tessellation: sample only the edge’s sub-span and keep\nstart→end ordering for sub-spans; prevents self-crossing cap wires and\nCDT folding. Adds regression\n`cut_wedge_by_thin_radial_strut_is_not_empty`.\n\n- **Refactors**\n- Cache `BK_VOL_TRACE` via a process-level gate to avoid repeated env\nreads.\n- In the containment volume witness, compute a shared deflection once\nfrom the operands’ AABBs to reduce duplicate work.\n\n<sup>Written for commit ad8636b303a07d32640aacaaf24d86aa6dd7a9cb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1501?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T11:08:00-07:00",
+          "tree_id": "2c508559364d7a0f93a8ee98379389c7d6e8eccb",
+          "url": "https://github.com/andymai/brepkit/commit/ca8c1ad35e406e4510c20a889b63977afb2c360f"
+        },
+        "date": 1786299029925,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1042219,
+            "range": "± 18686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1092027,
+            "range": "± 5597",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13144,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 712845,
+            "range": "± 1882",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26788874,
+            "range": "± 40224",
             "unit": "ns/iter"
           }
         ]
