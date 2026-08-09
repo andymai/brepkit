@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786259954584,
+  "lastUpdate": 1786260289597,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26189,6 +26189,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25585003,
             "range": "± 86424",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c2959752573233a95b20bf8efbc0ca57099acf51",
+          "message": "perf(algo): clip sampled plane-analytic section chains to the face-pair overlap (#1490)\n\n## Summary\n\nAddresses the dominant cost in #1488 (baseplate generation 4-27x behind\nthe reference): the N-way fuse of touching baseplate pockets spent its\nentire budget in the FF phase's sampled plane-analytic path.\n\n## Root\n\nA pocket wall plane grazing a neighbor pocket's taper cone hits the\nhyperbola branch of `exact_plane_cone`, which samples the section across\nthe UNBOUNDED cone (~512 points, capped at 8x the vertex radius) and\nfeeds the whole chain to `interpolate`'s dense O(n³) Gauss solve — ~30ms\nper grazing face pair, measured via a temporary per-pair timer (fit =\n360ms of the 376ms plane-cone total at 2x2). A plain rectangular plate\nhas two such pairs per pocket adjacency (INSET_TOP = 0 puts every wall\nexactly on the cell boundary) plus the slab-perimeter walls, and the\npair count grows with adjacency, which is the issue's super-linear\nsignature.\n\n## Fix\n\nEverything downstream of `compute_raw_curves` keeps only spans inside\nboth faces' inflated AABBs (the in-both sample filter and\n`restrict_curves_to_faces`), so chain points that cannot reach the\npair's AABB overlap contribute nothing but interpolation cost.\n`clip_chain_to_pair_boxes` keeps the runs whose segments meet both boxes\n(expanded by chord length to absorb sampling sagitta, dilated by two\nneighbors so sub-pitch crossings keep fit support) and fits per run.\n\nClosed section loops stay whole or drop whole: the band splitters\nconsume closed curves, and open sub-arcs whose seam endpoints lie on no\nface boundary break them\n(`cut_torus_by_box_notch_is_analytic_watertight` caught this — it now\npasses).\n\n## Measured\n\n`plate_probe` (new example mirroring the issue's plain-plate workload:\nslab + tapered cell pockets via `compound_cut`), native release:\n\n| Grid | before | after |\n|------|--------|-------|\n| 1x1 | 38ms | 6ms |\n| 2x2 | 478ms | 81ms |\n| 3x3 | 1294ms | 255ms |\n| 4x4 | 2538ms | 564ms |\n| 6x4 | 4080ms | 1009ms |\n\nFace counts and volumes identical before/after on every grid.\n`boolean_tracking` vs main baseline: no change outside noise\n(intersect_box_box −3.5%).\n\n## Guard\n\nNew deterministic work counter `section_fit_points` (perf-counters\nfeature) + `tangent_graze_section_fit_is_clipped`: two tangent pockets\nfuse at 72 fit points (bound 600); with the clip reverted it explodes to\n2648 and the test fails. An overlapping-pocket fuse asserts the counter\nstays live (336 > 0).\n\nWorkspace suite green in both feature configs.\n\nPart of #1488 — tool-side re-measurement on a released kernel still\npending; the remaining FF/EF time is linear in pocket adjacencies.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClip sampled plane–analytic intersection chains to the face-pair AABB\noverlap to avoid fitting unbounded sections, addressing the dominant\ncost in #1488. This cuts baseplate fuse time by 4–6x+ with identical\ngeometry.\n\n- **Performance**\n- Added `clip_chain_to_pair_boxes` in the sampled plane–analytic path\nand fit NURBS per kept run; closed loops stay whole. Prevents sending\n~512-point chains into the O(n^3) interpolator.\n- Results (compound_cut, ms): 1x1 38→6, 2x2 478→81, 3x3 1294→255, 4x4\n2538→564, 6x4 4080→1009. Face counts and volumes unchanged.\n\n- **Tests and Guards**\n- New perf counter `section_fit_points` (feature `perf-counters`) and\ntest `tangent_graze_section_fit_is_clipped` (graze ≈72 fit points; bound\n600; overlapping case >0), ensuring the clip stays effective.\n- Added native example `crates/operations/examples/plate_probe.rs`\n(logger truncates on char boundaries). Hoisted the dedup tolerance in\nthe fit path for clarity.\n\n<sup>Written for commit f7b77b6823d46da0b3d401fa7117a237f9941eac.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1490?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T07:22:29Z",
+          "tree_id": "790cfcb7e1fa3df5023a9f2f6476d469d4f23ee0",
+          "url": "https://github.com/andymai/brepkit/commit/c2959752573233a95b20bf8efbc0ca57099acf51"
+        },
+        "date": 1786260287479,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 958869,
+            "range": "± 1817",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1036644,
+            "range": "± 3771",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11748,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706911,
+            "range": "± 17268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25620968,
+            "range": "± 57097",
             "unit": "ns/iter"
           }
         ]
