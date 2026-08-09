@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.13](https://github.com/andymai/brepkit/compare/v3.2.12...v3.2.13) (2026-08-09)
+
+
+### Bug Fixes
+
+* **operations:** bail compound_cut batching on fallback-tainted cluster fuses ([#1495](https://github.com/andymai/brepkit/issues/1495)) ([e78d905](https://github.com/andymai/brepkit/commit/e78d905cd85cd07b640d90fab8d65aef06a24c73))
+
 ## [3.2.12](https://github.com/andymai/brepkit/compare/v3.2.11...v3.2.12) (2026-08-09)
 
 
