@@ -278,7 +278,17 @@ jobs:
         with:
           tool: cargo-semver-checks
       # Baselines against the newest version of each crate on crates.io.
-      - run: cargo semver-checks --workspace
+      # Scoped to STABILITY.md's consumer-surface crates: the internal L1/L2
+      # crates are published only so the graph resolves and promise no API
+      # stability, so checking them reports breaks the policy already permits.
+      - run: >
+          cargo semver-checks
+          --package brepkit-math
+          --package brepkit-topology
+          --package brepkit-sketch
+          --package brepkit-operations
+          --package brepkit-io
+          --package brepkit-wasm
 
   machete:
     name: Unused Dependencies
