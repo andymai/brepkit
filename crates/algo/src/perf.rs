@@ -34,6 +34,8 @@ static RAY_GEOM_BUILDS: AtomicU64 = AtomicU64::new(0);
 static FACE_SPLIT_PROBES: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "perf-counters")]
 static LOCAL_VERTEX_INSERTS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "perf-counters")]
+static SECTION_FIT_POINTS: AtomicU64 = AtomicU64::new(0);
 
 /// Count one pave-vertex distance comparison (per candidate examined while
 /// snapping an intersection endpoint to a coincident vertex). Crate-internal:
@@ -87,6 +89,20 @@ pub(crate) fn bump_local_vertex_insert() {
     LOCAL_VERTEX_INSERTS.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Count the points fed to a section-curve NURBS interpolation in the FF
+/// phase's sampled plane-analytic path. The sampled chain spans the unbounded
+/// section conic; `clip_chain_to_pair_boxes` keeps only the runs that can
+/// reach the face pair's AABB overlap, so a tangent graze fits a handful of
+/// points. Reverting the clip feeds the full ~512-point chain to the dense
+/// O(n^3) solve per grazing pair — the baseplate fuse regression (#1488).
+/// Crate-internal.
+#[inline]
+#[allow(clippy::used_underscore_binding)]
+pub(crate) fn bump_section_fit_points(_n: u64) {
+    #[cfg(feature = "perf-counters")]
+    SECTION_FIT_POINTS.fetch_add(_n, Ordering::Relaxed);
+}
+
 /// A snapshot of every work counter since the last [`reset`]. Only available
 /// with `perf-counters`.
 #[cfg(feature = "perf-counters")]
@@ -103,6 +119,8 @@ pub struct PerfSnapshot {
     pub face_split_probes: u64,
     /// Sub-face-local vertex materializations in `build_topology_face`.
     pub local_vertex_inserts: u64,
+    /// Points fed to section-curve NURBS interpolation in the FF phase.
+    pub section_fit_points: u64,
 }
 
 /// Reset all counters to zero. Only available with `perf-counters`.
@@ -113,6 +131,7 @@ pub fn reset() {
     RAY_GEOM_BUILDS.store(0, Ordering::Relaxed);
     FACE_SPLIT_PROBES.store(0, Ordering::Relaxed);
     LOCAL_VERTEX_INSERTS.store(0, Ordering::Relaxed);
+    SECTION_FIT_POINTS.store(0, Ordering::Relaxed);
 }
 
 /// Every work counter since the last [`reset`]. Only available with
@@ -126,5 +145,6 @@ pub fn snapshot() -> PerfSnapshot {
         ray_geom_builds: RAY_GEOM_BUILDS.load(Ordering::Relaxed),
         face_split_probes: FACE_SPLIT_PROBES.load(Ordering::Relaxed),
         local_vertex_inserts: LOCAL_VERTEX_INSERTS.load(Ordering::Relaxed),
+        section_fit_points: SECTION_FIT_POINTS.load(Ordering::Relaxed),
     }
 }
