@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.8](https://github.com/andymai/brepkit/compare/v3.2.7...v3.2.8) (2026-08-09)
+
+
+### Bug Fixes
+
+* **operations:** give degenerate-locus points their predecessor's u in the CDT unwrap ([#1475](https://github.com/andymai/brepkit/issues/1475)) ([52fbb88](https://github.com/andymai/brepkit/commit/52fbb886f0c23967f742da34205074c00ef1c3e9))
+
 ## [3.2.7](https://github.com/andymai/brepkit/compare/v3.2.6...v3.2.7) (2026-08-09)
 
 
