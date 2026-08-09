@@ -1,0 +1,29 @@
+crates/io/examples/profile_export_tess.rs
+  s_55f022b7d30325::t_8d1f7cdcf960bb 19-22,26-30
+  s_55f022b7d30325::t_473951f7cc2671 31-39,41
+  s_55f022b7d30325::t_9fa33cb4fe2b4e 1-18,23-25,40,42-48
+crates/operations/src/tessellate/solid.rs
+  s_55f022b7d30325::t_7c6ed75e7e5d72 593,613
+  s_55f022b7d30325::t_88a8376443af96 742,764,850,858
+  s_55f022b7d30325::t_d0a0e267402037 344-391
+  s_55f022b7d30325::t_8d1f7cdcf960bb 178,180-184,422,863-867
+  s_55f022b7d30325::t_b7247bb5d63701 179,185-187,244,318,339,500
+  s_55f022b7d30325::t_80c578c7f26be5 421,423-445,447-448
+  s_55f022b7d30325::t_a5d2ee63651caa 868-869
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "41fd70956900db427e0d9ca3cde7a26c5d685f00",
+  "prompts": {},
+  "sessions": {
+    "s_55f022b7d30325": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "57d14345-a683-4f94-8bff-fcd1b3b48f27",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
