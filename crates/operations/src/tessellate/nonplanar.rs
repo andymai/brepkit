@@ -1589,6 +1589,13 @@ fn stitch_rings(
 /// Projects shared edge points into (u,v) parameter space, generates interior
 /// sample points, then runs Constrained Delaunay Triangulation. Boundary
 /// vertices use their pre-existing global IDs (watertight by construction).
+/// `BK_CDT_TRACE` (any value): log CDT boundary sourcing and UV mapping.
+/// Resolved ONCE per process — the checks sit in per-edge loops.
+fn cdt_trace() -> bool {
+    static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var("BK_CDT_TRACE").is_ok())
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn tessellate_nonplanar_cdt(
     topo: &Topology,
@@ -1615,6 +1622,14 @@ pub(super) fn tessellate_nonplanar_cdt(
         let edge_idx = edge_id_local.index();
         let is_fwd = oe.is_forward();
         if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
+            if cdt_trace() {
+                log::debug!(
+                    "cdt {face_id:?} edge e{edge_idx} SHARED n={} gids {}..{}",
+                    global_ids.len(),
+                    global_ids.first().copied().unwrap_or(0),
+                    global_ids.last().copied().unwrap_or(0)
+                );
+            }
             let ordered: Vec<u32> = if is_fwd {
                 global_ids.clone()
             } else {
@@ -1634,6 +1649,9 @@ pub(super) fn tessellate_nonplanar_cdt(
                 boundary_3d.push((merged.positions[gid as usize], gid, edge_id_local, is_fwd));
             }
         } else {
+            if cdt_trace() {
+                log::debug!("cdt {face_id:?} edge e{edge_idx} RESAMPLED");
+            }
             // Edge not in shared pool -- insert directly.
             let edge_data = topo.edge(oe.edge())?;
             let points = sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)?;
@@ -1702,8 +1720,38 @@ pub(super) fn tessellate_nonplanar_cdt(
                 | FaceSurface::Torus(_)
         );
         if is_periodic && !boundary_uv.is_empty() {
-            for i in 1..boundary_uv.len() {
-                let prev_u = boundary_uv[i - 1].0;
+            // A point on the surface's degenerate locus has no meaningful u
+            // (a horn torus pinches onto its axis at tube angle v = pi; the
+            // projection returns an arbitrary ring angle there). Left as
+            // projected, such a point can steer the consecutive unwrap the
+            // LONG way around the period, leaving the loop unclosed by a
+            // full turn — the UV polygon then self-overlaps and
+            // remove_exterior eats the triangles along the boundary strip.
+            // Give a degenerate point its predecessor's u so the unwrap
+            // steps over it neutrally.
+            let degenerate_u = |v: f64| -> bool {
+                if let FaceSurface::Torus(t) = face_data.surface() {
+                    (t.major_radius() + t.minor_radius() * v.cos()).abs() < t.minor_radius() * 1e-6
+                } else {
+                    false
+                }
+            };
+            // The boundary is cyclic, so the anchor itself can sit on the
+            // degenerate locus (the wire may start at the pinch); unwrap
+            // from the first NON-degenerate point instead so an arbitrary
+            // anchor u never steers the walk.
+            let n = boundary_uv.len();
+            let start = (0..n)
+                .find(|&i| !degenerate_u(boundary_uv[i].1))
+                .unwrap_or(0);
+            for k in 1..n {
+                let i = (start + k) % n;
+                let prev = (start + k + n - 1) % n;
+                let prev_u = boundary_uv[prev].0;
+                if degenerate_u(boundary_uv[i].1) {
+                    boundary_uv[i].0 = prev_u;
+                    continue;
+                }
                 let mut u = boundary_uv[i].0;
                 let diff = u - prev_u;
                 let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
@@ -1865,6 +1913,16 @@ pub(super) fn tessellate_nonplanar_cdt(
     let boundary_cdt_ids = cdt
         .insert_points_hilbert(&boundary_pts)
         .map_err(crate::OperationsError::Math)?;
+    if cdt_trace() {
+        for (i, &cid) in boundary_cdt_ids.iter().enumerate() {
+            log::debug!(
+                "cdt {face_id:?} bpt[{i}] gid={} cdtid={cid} uv=({:.5},{:.5})",
+                boundary_3d[i].1,
+                boundary_uv[i].0,
+                boundary_uv[i].1
+            );
+        }
+    }
     let max_cdt_idx = boundary_cdt_ids.iter().copied().max().unwrap_or(2);
     if cdt_to_global.len() <= max_cdt_idx {
         cdt_to_global.resize(max_cdt_idx + 1, None);

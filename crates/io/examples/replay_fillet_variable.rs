@@ -121,11 +121,13 @@ fn census(topo: &Topology, solid: SolidId, label: &str) {
                 );
                 if std::env::var("TESS_BND").is_ok_and(|v| v == "2") {
                     let mut edge_uses: HashMap<(usize, usize), usize> = HashMap::new();
-                    for t in mesh.indices.chunks_exact(3) {
+                    let mut edge_tri: HashMap<(usize, usize), usize> = HashMap::new();
+                    for (ti, t) in mesh.indices.chunks_exact(3).enumerate() {
                         let t = [t[0] as usize, t[1] as usize, t[2] as usize];
                         for k in 0..3 {
                             let (a, b) = (t[k], t[(k + 1) % 3]);
                             *edge_uses.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+                            edge_tri.insert((a.min(b), a.max(b)), ti);
                         }
                     }
                     let pos = |i: usize| {
@@ -138,8 +140,14 @@ fn census(topo: &Topology, solid: SolidId, label: &str) {
                         .map(|(&(a, b), _)| {
                             let (pa, pb) = (pos(a), pos(b));
                             format!(
-                                "  BND ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
-                                pa.0, pa.1, pa.2, pb.0, pb.1, pb.2
+                                "  BND [{a},{b}] tri={} ({:.6},{:.6},{:.6})->({:.6},{:.6},{:.6})",
+                                edge_tri.get(&(a.min(b), a.max(b))).copied().unwrap_or(0),
+                                pa.0,
+                                pa.1,
+                                pa.2,
+                                pb.0,
+                                pb.1,
+                                pb.2
                             )
                         })
                         .collect();
