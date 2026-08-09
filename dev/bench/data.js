@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786238980480,
+  "lastUpdate": 1786239495051,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25487,6 +25487,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25666117,
             "range": "± 68585",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "70e77e98d3a2e60efe5233cc528ad68e3ec168df",
+          "message": "chore(main): release 3.2.8 (#1476)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.2.8](https://github.com/andymai/brepkit/compare/v3.2.7...v3.2.8)\n(2026-08-09)\n\n\n### Bug Fixes\n\n* **operations:** give degenerate-locus points their predecessor's u in\nthe CDT unwrap ([#1475](https://github.com/andymai/brepkit/issues/1475))\n([52fbb88](https://github.com/andymai/brepkit/commit/52fbb886f0c23967f742da34205074c00ef1c3e9))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.8 with a robustness fix to CDT unwrap in\n`brepkit-operations`. This prevents artifacts when degenerate-locus\npoints appear.\n\n- **Bug Fixes**\n- In CDT unwrap, give degenerate-locus points their predecessor’s u to\nmaintain parameter continuity.\n\n- **Dependencies**\n  - Bumped all workspace crates to 3.2.8.\n\n<sup>Written for commit ebe69faa3f163b04d62e2e668ac7b7f782df2ef2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1476?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T01:35:45Z",
+          "tree_id": "0c8a12dafde00dca62fc1e717223bc0bb5329cc7",
+          "url": "https://github.com/andymai/brepkit/commit/70e77e98d3a2e60efe5233cc528ad68e3ec168df"
+        },
+        "date": 1786239492573,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 951563,
+            "range": "± 808",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1032396,
+            "range": "± 777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12005,
+            "range": "± 129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704478,
+            "range": "± 2105",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25448605,
+            "range": "± 125728",
             "unit": "ns/iter"
           }
         ]
