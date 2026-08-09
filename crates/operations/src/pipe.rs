@@ -85,9 +85,14 @@ pub fn pipe(
         .normalize()
         .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
 
-    // Ensure CCW winding relative to path direction at t=0.
-    // CW-wound profiles make `edge_dir.cross(path_dir)` point inward.
-    let path_tangent_0 = path.tangent(0.0)?;
+    // Ensure CCW winding relative to path direction at the domain start.
+    // CW-wound profiles make `edge_dir.cross(path_dir)` point inward. All
+    // parameters map into the curve's own domain: a curve_split sub-path
+    // carries a shifted domain, and raw [0,1] sampling would extrapolate
+    // its clamped end spans (the compute_frames bug class).
+    let (dom_t0, dom_t1) = path.domain();
+    let dom = |f: f64| dom_t0 + (dom_t1 - dom_t0) * f;
+    let path_tangent_0 = path.tangent(dom_t0)?;
     if crate::winding::ensure_ccw_positions(&mut input_verts, path_tangent_0) {
         input_normal = -input_normal;
     }
@@ -101,7 +106,7 @@ pub fn pipe(
         input_normal,
         path_tangent_0,
     ) {
-        crate::sweep::ProfilePlacement::AsPositioned => path.evaluate(0.0),
+        crate::sweep::ProfilePlacement::AsPositioned => path.evaluate(dom_t0),
         crate::sweep::ProfilePlacement::CentroidOnPath => {
             crate::winding::polygon_centroid(&input_verts)
         }
@@ -119,7 +124,7 @@ pub fn pipe(
 
     for (k, &scale) in scale_factors.iter().enumerate() {
         #[allow(clippy::cast_precision_loss)]
-        let t_param = (k as f64) / (num_segments as f64);
+        let t_param = dom((k as f64) / (num_segments as f64));
 
         let origin = path.evaluate(t_param);
         let tangent = path.tangent(t_param)?;
@@ -163,7 +168,7 @@ pub fn pipe(
 
         for (k, &scale) in scale_factors.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
-            let t_param = (k as f64) / (num_segments as f64);
+            let t_param = dom((k as f64) / (num_segments as f64));
             let origin = path.evaluate(t_param);
             let tangent = path.tangent(t_param)?;
             let up = orthogonalize(initial_up, tangent);
@@ -256,7 +261,7 @@ pub fn pipe(
         start_inner_wires.push(topo.add_wire(iw));
     }
     let start_verts = crate::cap::ring_point_positions(topo, &ring_verts[0])?;
-    let start_outward = crate::cap::outward_normal(&start_verts, -(path.tangent(0.0)?))?;
+    let start_outward = crate::cap::outward_normal(&start_verts, -(path.tangent(dom_t0)?))?;
     all_faces.push(crate::cap::build_cap_face(
         topo,
         &ring_edges[0],
@@ -379,7 +384,9 @@ fn compute_scale_factors(
         return Ok(vec![1.0; num_segments + 1]);
     };
 
-    let initial_dist = (guide.evaluate(0.0) - path.evaluate(0.0)).length();
+    let (p_t0, p_t1) = path.domain();
+    let (g_t0, g_t1) = guide.domain();
+    let initial_dist = (guide.evaluate(g_t0) - path.evaluate(p_t0)).length();
     if initial_dist < tol.linear {
         return Err(crate::OperationsError::InvalidInput {
             reason: "guide curve coincides with path at t=0 (zero initial distance)".into(),
@@ -389,8 +396,10 @@ fn compute_scale_factors(
     let mut factors = Vec::with_capacity(num_segments + 1);
     for k in 0..=num_segments {
         #[allow(clippy::cast_precision_loss)]
-        let t = (k as f64) / (num_segments as f64);
-        let dist = (guide.evaluate(t) - path.evaluate(t)).length();
+        let f = (k as f64) / (num_segments as f64);
+        let dist = (guide.evaluate(g_t0 + (g_t1 - g_t0) * f)
+            - path.evaluate(p_t0 + (p_t1 - p_t0) * f))
+        .length();
         factors.push(dist / initial_dist);
     }
 
@@ -445,6 +454,53 @@ mod tests {
             vec![1.0, 1.0],
         )
         .unwrap()
+    }
+
+    /// A curve_split sub-path carries a shifted domain; raw [0,1] sampling
+    /// would extrapolate its clamped end spans and sweep the wrong length.
+    /// Discriminating: fails with `path.evaluate(k / n)` sampling.
+    #[test]
+    fn pipe_shifted_domain_path_matches_unit_domain() {
+        let mut topo = Topology::new();
+        let face = make_unit_square_face(&mut topo);
+        let path = straight_z_path(2.0);
+        let unit = pipe(&mut topo, face, &path, None).unwrap();
+        let unit_vol = crate::measure::solid_volume(&topo, unit, 0.05).unwrap();
+
+        // Same geometry, domain [2, 3].
+        let shifted_path = NurbsCurve::new(
+            1,
+            vec![2.0, 2.0, 3.0, 3.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 2.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let mut topo2 = Topology::new();
+        let face2 = make_unit_square_face(&mut topo2);
+        let shifted = pipe(&mut topo2, face2, &shifted_path, None).unwrap();
+        let shifted_vol = crate::measure::solid_volume(&topo2, shifted, 0.05).unwrap();
+
+        assert!(
+            (unit_vol - shifted_vol).abs() < 1e-6,
+            "shifted-domain path must sweep identically: unit={unit_vol} shifted={shifted_vol}"
+        );
+        // Volume alone cannot catch a TRANSLATED tube (raw sampling
+        // extrapolates the clamped end spans into a same-length pipe at the
+        // wrong position); the solid must actually start at the path start.
+        let mut z_min = f64::INFINITY;
+        for fid in brepkit_topology::explorer::solid_faces(&topo2, shifted).unwrap() {
+            let face = topo2.face(fid).unwrap();
+            for oe in topo2.wire(face.outer_wire()).unwrap().edges() {
+                let e = topo2.edge(oe.edge()).unwrap();
+                for vid in [e.start(), e.end()] {
+                    z_min = z_min.min(topo2.vertex(vid).unwrap().point().z());
+                }
+            }
+        }
+        assert!(
+            z_min.abs() < 1e-9,
+            "shifted-domain pipe must start at the path start (z=0), got z_min={z_min}"
+        );
     }
 
     #[test]
