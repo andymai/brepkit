@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786235237221,
+  "lastUpdate": 1786235666091,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25325,6 +25325,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21003204,
             "range": "± 28156",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ab672e6f87480bdb49664ea044f48a438089d052",
+          "message": "chore(main): release 3.2.7 (#1473)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.2.7](https://github.com/andymai/brepkit/compare/v3.2.6...v3.2.7)\n(2026-08-09)\n\n\n### Performance\n\n* **operations:** resolve BK_TESS_TRACE once per process\n([#1471](https://github.com/andymai/brepkit/issues/1471))\n([0d25f73](https://github.com/andymai/brepkit/commit/0d25f73bd1946219fee5459c28927f0e14248123))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.7 updates all workspace crates to 3.2.7. It improves\nperformance in `brepkit-operations` by resolving `BK_TESS_TRACE` once\nper process to reduce overhead.\n\n<sup>Written for commit 4c493b4ca74cf4e17c67002e4fbb53ad106a1ca7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1473?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T00:31:55Z",
+          "tree_id": "4e891e9cc5fa3a738e36d0363bf2a27ffb2cfe3e",
+          "url": "https://github.com/andymai/brepkit/commit/ab672e6f87480bdb49664ea044f48a438089d052"
+        },
+        "date": 1786235664037,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 951277,
+            "range": "± 2776",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1033424,
+            "range": "± 1385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11916,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702360,
+            "range": "± 48386",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25499572,
+            "range": "± 71904",
             "unit": "ns/iter"
           }
         ]
