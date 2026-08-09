@@ -98,7 +98,6 @@ fn labelbracket_fuse_operands_are_well_formed() {
 }
 
 #[test]
-#[ignore = "#1510: tangential graze at x=+-38 leaves the bracket's back wall straddling the bin boundary; it is dropped and the shell opens"]
 fn labelbracket_fuse_closes_the_back_wall() {
     let mut topo = Topology::new();
     let bin = load("labelbracket_fuse_bin.bin", &mut topo);
