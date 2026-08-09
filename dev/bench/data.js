@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786235666091,
+  "lastUpdate": 1786236769759,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25379,6 +25379,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25499572,
             "range": "± 71904",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "165168c3deb336187b8e38f286ed9ea3bcca9ec8",
+          "message": "docs: post-merge review nits (trace flag doc, roadmap table pipes) (#1474)\n\nTwo Copilot findings that landed after their PRs automerged: the\n`BK_TESS_TRACE` doc said `=1` where any value enables it (#1471), and\nthe roadmap row had unescaped pipes in `|axis|` breaking the Markdown\ntable plus a doubled period (#1472).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClarified `BK_TESS_TRACE` docs to say any value enables tessellation\ndispatch tracing, and fixed the roadmap table by escaping `|axis|` so\nthe Markdown renders correctly.\n\n<sup>Written for commit d3342640a25e74354db64ebe3dc73edfd94b607a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1474?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T00:50:23Z",
+          "tree_id": "deea50c7b755c31bfde68256892dcbc3e9014ae1",
+          "url": "https://github.com/andymai/brepkit/commit/165168c3deb336187b8e38f286ed9ea3bcca9ec8"
+        },
+        "date": 1786236767798,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 954377,
+            "range": "± 6300",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1034732,
+            "range": "± 9020",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11815,
+            "range": "± 134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704678,
+            "range": "± 2678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25570727,
+            "range": "± 106958",
             "unit": "ns/iter"
           }
         ]
