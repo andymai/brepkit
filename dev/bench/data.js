@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786254537850,
+  "lastUpdate": 1786259434098,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26081,6 +26081,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25584641,
             "range": "± 486219",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5358552b7067cd021603972e8e3c9e94b1121149",
+          "message": "fix(operations): cover constraint-recovery Steiner vertices in the CDT lift (#1489)\n\n## Summary\n\nFixes #1487, the 3.2.9 tessellation panic (`index out of bounds`) that\naborts the wasm instance and poisons the kernel on the 36-hole hex-array\nbin.\n\n## Root\n\n`tessellate_nonplanar_cdt` sized `cdt_to_global` from the ids returned\nby its own `insert_points_hilbert` calls. But `insert_constraint`'s edge\nrecovery can mint extra Steiner vertices the caller never sees: the\nconstrained-crossing split and the bisection backstop both call\n`insert_point` internally (`crates/math/src/cdt/constraints.rs`).\n\nThe bookkeeping gap is old, but the always-on interior-grid insertion\n(which runs after constraint insertion and resizes to its own max id)\ncovered the Steiner ids by accident. #1478 made developable faces skip\ninterior points on the display path, so a cylinder/cone face whose\nboundary needed recovery indexed past `final_global_ids` in the\nwinding-vote loop and panicked.\n\n## Fix\n\nSize `cdt_to_global` from `cdt.vertices().len()` before the lift.\nUntracked Steiner vertices then take the existing surface-eval lift\nbranch (evaluate at their UV, merge into the shared pool), the same\ntreatment they got pre-#1478 when the interior resize happened to cover\nthem. Paths where no Steiner vertices are minted are untouched, so the\nboolean path (floor on) stays bit-identical.\n\n## Test\n\nNew regression test\n`cdt_covers_steiner_vertices_from_constraint_recovery`: a cylinder face\nwhose UV boundary is a bowtie, forcing the constrained-crossing split\ndeterministically. Panics at the exact issue line before the fix; passes\nafter. Full operations suite green (821 lib + integration), clippy\nclean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes #1487 by preventing a tessellation panic caused by untracked\nSteiner vertices from CDT constraint recovery. Resizes `cdt_to_global`\nto the CDT’s vertex count so the lift assigns ids to all vertices and\navoids out-of-bounds on developable faces.\n\n- **Bug Fixes**\n- Resize `cdt_to_global` to `cdt.vertices().len()` before the lift to\ncover Steiner vertices created by crossing splits/backstop.\n- Add regression test\n`cdt_covers_steiner_vertices_from_constraint_recovery` that forces a\nconstrained-crossing split on a cylindrical face; fails before the fix,\npasses now.\n\n<sup>Written for commit 1ebd7c3abb36ed25bb37978f40cc0c6eb4919860.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1489?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T00:08:01-07:00",
+          "tree_id": "15c9b2d0c54663d718030390f78bd40d33a2bd73",
+          "url": "https://github.com/andymai/brepkit/commit/5358552b7067cd021603972e8e3c9e94b1121149"
+        },
+        "date": 1786259430857,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 956358,
+            "range": "± 1369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1037000,
+            "range": "± 4291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11910,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 705152,
+            "range": "± 6636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25536022,
+            "range": "± 83071",
             "unit": "ns/iter"
           }
         ]
