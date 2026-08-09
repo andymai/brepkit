@@ -1980,6 +1980,13 @@ pub(super) fn tessellate_nonplanar_cdt(
     let cdt_verts = cdt.vertices();
     let triangles = cdt.triangles();
 
+    // Constraint recovery can mint Steiner vertices (crossing splits,
+    // bisection backstop) whose ids the insert calls above never returned;
+    // cover them so the lift below assigns them global ids.
+    if cdt_to_global.len() < cdt_verts.len() {
+        cdt_to_global.resize(cdt_verts.len(), None);
+    }
+
     let mut final_global_ids: Vec<u32> = vec![0; cdt_to_global.len()];
 
     for i in 0..cdt_to_global.len() {

@@ -2251,3 +2251,62 @@ fn pinched_ledge_prism_is_watertight() {
         }
     }
 }
+
+/// #1487: constraint recovery can mint Steiner vertices the caller's
+/// `cdt_to_global` never tracked. Pre-#1478 the interior-grid resize masked
+/// the gap; with the curvature floor off, developable faces insert no
+/// interior points and the vote loop indexed past `final_global_ids`.
+/// A bowtie boundary in UV forces the constrained-crossing split, the
+/// deterministic way to mint an untracked Steiner vertex.
+#[test]
+fn cdt_covers_steiner_vertices_from_constraint_recovery() {
+    use brepkit_math::surfaces::CylindricalSurface;
+
+    let mut topo = Topology::new();
+    let cyl =
+        CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let u1 = 1.0_f64;
+    let pts = [
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(u1.cos(), u1.sin(), 1.0),
+        Point3::new(u1.cos(), u1.sin(), 0.0),
+        Point3::new(1.0, 0.0, 1.0),
+    ];
+    let verts: Vec<_> = pts
+        .iter()
+        .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+        .collect();
+    let edges: Vec<_> = (0..4)
+        .map(|i| topo.add_edge(Edge::new(verts[i], verts[(i + 1) % 4], EdgeCurve::Line)))
+        .collect();
+    let wire = Wire::new(
+        edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+
+    let face_data = topo.face(face).unwrap().clone();
+    let edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
+    let mut merged = TriangleMesh::default();
+    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+
+    let result = super::nonplanar::tessellate_nonplanar_cdt(
+        &topo,
+        face,
+        &face_data,
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        false,
+        &edge_global_indices,
+        &mut merged,
+        &mut point_to_global,
+    );
+    assert!(result.is_ok(), "CDT tessellation failed: {result:?}");
+
+    let n = merged.positions.len() as u32;
+    for &idx in &merged.indices {
+        assert!(idx < n, "triangle index {idx} out of bounds (len {n})");
+    }
+}
