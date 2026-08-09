@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786239687170,
+  "lastUpdate": 1786243135455,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25595,6 +25595,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26801017,
             "range": "± 35527",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2ecfced115c9a4c9c52e0d42c94d23d2523da5ed",
+          "message": "perf(operations): tolerance-driven display tessellation for developable faces (#1478)\n\n## Root (the slots tessellation-density residual)\n\nThe wallPatterns slots bin exported ~23.5k triangles vs the reference's\n~11.9k at equal tolerance, concentrated on the 256 cylinder slot-corner\nfaces. Attribution: boolean-result cylinder/cone faces take the CDT\nfallback path, whose interior grid HARDCODED the curvature floor\n(`arc·sqrt(r/deflection)`) — a quarter pillar wall meshed 117 triangles\n(interior lattice included) where the chord/angular tolerances need ~50.\n\n## Fix\n\n`interior_grid_resolution` threads the caller's `circle_floor`. Floor\noff (display/export): developable faces get NO interior points — the\nshared rim polylines carry the u density and the surface is exact along\nthe rulings, so interior points only inflate the mesh. Doubly curved\nsurfaces (sphere/torus) keep the floor unconditionally; the boolean path\n(floor on) is bit-identical by construction.\n\n## Measured\n\n- Single-slot slots cut at 0.01 mm / 5°: 4100 → 2324 triangles; cylinder\nfaces avg 65 → 32; mesh stays watertight (boundary 0, nm 0).\n- Grouped-scoop captured cases unchanged (15/…/3, nm unchanged).\n- Density + watertight pin added to the slots fixture; the mitsukude\nMESH-DERIVED volume pin re-calibrated for the density change (27045.9 →\n27027.9; the pre-fix leak value stays 68 units outside the window).\n- Foils: 1965 passed / 0 failed across the seven crates; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCuts triangle count for cylinders/cones by making display/export\ntessellation tolerance‑driven and dropping the CDT interior grid on\ndevelopable faces, while keeping meshes watertight and the boolean path\nbit‑identical. Doubly curved surfaces still use the curvature floor.\n\n- **Refactors**\n- Threaded `circle_floor` into `interior_grid_resolution`;\ndisplay/export skip interior points for developable faces, spheres/torus\nkeep the floor; boolean path unchanged.\n- Single-slot at 0.01 mm / 5°: 4100 → 2324 tris; cylinder faces avg 65 →\n32.\n- Added `crates/io/examples/slots_density.rs` for per-surface triangle\ncensus.\n- Tests: added slots density + watertight pin; re‑calibrated mitsukude\nmesh‑derived volume pin to 27027.9.\n\n<sup>Written for commit 9a25487b3fb7715c17769c004df9705bb09d68c9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1478?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T02:36:24Z",
+          "tree_id": "6a40f2260958a791b2a0cacefffe4ea01c82ddb0",
+          "url": "https://github.com/andymai/brepkit/commit/2ecfced115c9a4c9c52e0d42c94d23d2523da5ed"
+        },
+        "date": 1786243133259,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 956569,
+            "range": "± 17086",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1039340,
+            "range": "± 2945",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12360,
+            "range": "± 326",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709814,
+            "range": "± 13030",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26018346,
+            "range": "± 445348",
             "unit": "ns/iter"
           }
         ]
