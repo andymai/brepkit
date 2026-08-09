@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786305962765,
+  "lastUpdate": 1786307387346,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26999,6 +26999,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25396468,
             "range": "± 34042",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e62a2ad2796165da9b6a2a43487207665e6c9522",
+          "message": "docs(roadmap): close #1499/#1500/#1508 on released 3.2.16 (#1509)\n\nCollapses the two OPEN rows to Closed one-liners now that both are\nverified tool-side on stock released pins (brepkit-wasm 3.2.16 + brepjs\n18.124.2): kumikoProfile green (#1499/#1508) and exportCache warm\n490-503ms vs the reference's 890-906ms (#1500). Also records the #1506\nlesson (wasm CI builds but never runs) and flags the stagnant bin rows\nfor re-measurement on 3.2.16.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to close #1499, #1500, and #1508 after tool-side\nverification on released `brepkit-wasm` 3.2.16 and `brepjs` 18.124.2\n(kumikoProfile green).\nAlso records the wasm CI runtime note from #1506, standardizes units on\nall timing ranges, adds cold export timings (706–740ms vs 1691–1739ms),\nkeeps warm export at 490–503ms vs 890–906ms, and flags stagnant bin rows\nfor re-measurement on 3.2.16.\n\n<sup>Written for commit 5acf1b569809fcc454ca70a1ac9ee1db2358120f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1509?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T20:27:17Z",
+          "tree_id": "062c8046565cad8f064ebb9bd3f37167b8358147",
+          "url": "https://github.com/andymai/brepkit/commit/e62a2ad2796165da9b6a2a43487207665e6c9522"
+        },
+        "date": 1786307385132,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 911536,
+            "range": "± 11708",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1003023,
+            "range": "± 8378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11496,
+            "range": "± 169",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675826,
+            "range": "± 8081",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24781794,
+            "range": "± 186344",
             "unit": "ns/iter"
           }
         ]
