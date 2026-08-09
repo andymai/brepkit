@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786235102136,
+  "lastUpdate": 1786235237221,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25271,6 +25271,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25516258,
             "range": "± 253193",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68f652606df2b98445aa0c71e6b608607ef0d230",
+          "message": "docs(roadmap): record the GH issue campaign closure on 3.2.5 (#1472)\n\nRecords tool-side verification on released 3.2.5: #1445 closed\n(groupedScoop export and scenario suites 7/7), #1446 closed (every\nworst-offender row now beats the issue's baseline; table in the issue),\n#1447 closed earlier via the brepjs simplify wiring. #1424 remains\nowner-only. Also pins where the sub-export-tolerance mesh residuals\nstand after #1469.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to mark the GH issue campaign closed on released\n3.2.5 (#1445, #1446, #1447 via `brepjs` simplify wiring).\nAlso notes follow-ups targeting 3.2.6 (#1469, #1468, #1471) and that\n#1424 remains owner-only.\n\n<sup>Written for commit e31f38ab42903517c5b99626f105e192e9057757.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1472?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T00:23:23Z",
+          "tree_id": "347554739308c91a231dc47cfe5e7773c9f3dbc6",
+          "url": "https://github.com/andymai/brepkit/commit/68f652606df2b98445aa0c71e6b608607ef0d230"
+        },
+        "date": 1786235234802,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 780851,
+            "range": "± 1984",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 849669,
+            "range": "± 6193",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9551,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 570755,
+            "range": "± 1034",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21003204,
+            "range": "± 28156",
             "unit": "ns/iter"
           }
         ]
