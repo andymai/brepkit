@@ -26,8 +26,9 @@ The `#[ignore]` inventory is the load-bearing artifact. Before quoting any
 rg -n -A2 '#\[ignore' crates/    # filter the doc-comment false hits by hand
 ```
 
-**Inventory status (2026-08-09): CLEAN.** Every remaining `#[ignore]` is an explicit
-diagnostic or a slow-test marker — zero deferred-defect pins. Known stale-but-harmless:
+**Inventory status (2026-08-09): one deferred-defect pin.**
+`labelbracket_fuse_closes_the_back_wall` (#1510) is a live ready-repro; every other
+`#[ignore]` is an explicit diagnostic or a slow-test marker. Known stale-but-harmless:
 the `profile_intersect.rs` box-sphere probes (box-sphere shipped analytic in #1006),
 `staircase_fuse_with_cylinders` (~2 min perf run), the two `#696` dovetail entries and
 `diverge_first_cut` (print-only).
@@ -124,7 +125,7 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **2x2 label bracket warm-path boolean residual (1.6x)** | Report #1510 (2026-08-09, 3.2.16): cold median already beats the reference (135 vs 152ms); warm in-suite 104 vs 65ms with the gap entirely in the boolean stage (83 vs 26ms, the label shelf+gusset fuse). Next step: capture the operands tool-side and replay natively per the standard recipe |
+| **Label-bracket fuse opens the shell and mesh-falls-back (#1510)** | ROOT FOUND, unfixed. `fuse(bin, bracket)` returns 10 free edges so the ops layer pays the mesh fallback (121 all-planar vs 57 with 8 cylinders; 95 of the row's 124ms of boolean time). The bracket's SQUARE back corners intrude into the bin's ROUNDED cavity corners, and the cavity cylinder is tangent to y=40.550 at x=+-38. Phase FF computes the z=16.000 section across the FULL width (`BK_FF_DUMP`; a "missed graze section" reading was checked and REFUTED), but only its \|x\|<38 portion bounds the sub-face, so the complement sub-face straddles the bin boundary (columns inside, top strip outside) and one verdict drops it all. Look at pave-block attachment, not section computation and not SD. Repro `crates/io/tests/labelbracket_fuse_inmem.rs` (~11ms) |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
