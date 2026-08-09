@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786300167790,
+  "lastUpdate": 1786301317206,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26891,6 +26891,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25640978,
             "range": "± 54445",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b04e0bfda9725b52fe81064fffe5263e83343d9c",
+          "message": "fix(operations): make the tessellation phase timer a wasm no-op (#1506)\n\n## Summary\n\n**Release regression in 3.2.15, wasm only.** The `BK_TESS_PHASES` lap\ntimer added in #1502 calls `std::time::Instant::now()` unconditionally\ninside `tessellate_solid_core`, and `Instant::now()` panics on\nwasm32-unknown-unknown (no time source). On the released 3.2.15 wasm\npackage every solid tessellation aborts with `RuntimeError: unreachable`\n— observed tool-side through `tessellateSolidGrouped` (exportCache) and\nthrough `compoundCut`'s containment volume witness (kumikoProfile).\nNative is unaffected, which is why the Rust suite and CI stayed green;\nthe wasm CI job builds but does not execute.\n\nThe gridfinity tool still pins 3.2.13, so nothing consuming is broken;\nthis needs to ship before any pin bump.\n\n## Fix\n\nThe timer becomes a `PhaseTimer` struct whose `Instant` field and lap\nbody compile only off-wasm, matching the existing `timer_now()`\nconvention in `boolean/mod.rs` (same panic, same cure, documented\nthere). Audited the workspace for other `Instant::now()` uses reachable\nfrom wasm: none (remaining hits are the cfg'd boolean timer, native\ntests, and native-only examples).\n\n## Verification\n\n- Repro chain: captured the panicking `compoundCut` operands from the\ntool (arena .bin), native replay succeeds — isolating the failure to a\nwasm-only difference; the only wasm-divergent code on the path is the\ntimer.\n- `cargo build -p brepkit-wasm --target wasm32-unknown-unknown`: clean.\n- `cargo nextest run -p brepkit-operations` tessellation filter: 75\npassed; clippy clean.\n- Tool-side re-verification of kumikoProfile + exportCache on the\nreleased fix to follow (that loop is what caught this).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a wasm-only crash by making the tessellation phase timer a no-op\non `wasm32-unknown-unknown`. Restores solid tessellation by removing\nunconditional `Instant::now()` calls on wasm.\n\n- **Bug Fixes**\n- Added `PhaseTimer`: uses `std::time::Instant` and logs only off-wasm;\nno-op on wasm.\n- Replaced inline timer in `tessellate_solid_core` with\n`PhaseTimer::start()` and `lap(...)`.\n- Gated `tess_phases()` behind non-wasm cfg; audited for other\nwasm-reachable `Instant::now()` calls — none.\n\n<sup>Written for commit 23605bba3470547c04df8d6278857d46c60df09b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1506?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T18:46:15Z",
+          "tree_id": "51546bd6d76b7bdd3bd1962953d412821fcd8001",
+          "url": "https://github.com/andymai/brepkit/commit/b04e0bfda9725b52fe81064fffe5263e83343d9c"
+        },
+        "date": 1786301314982,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1088156,
+            "range": "± 105256",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1091077,
+            "range": "± 36362",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13183,
+            "range": "± 377",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 716494,
+            "range": "± 6349",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26767706,
+            "range": "± 63781",
             "unit": "ns/iter"
           }
         ]
