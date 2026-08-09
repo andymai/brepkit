@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.11](https://github.com/andymai/brepkit/compare/v3.2.10...v3.2.11) (2026-08-09)
+
+
+### Bug Fixes
+
+* **operations:** cover constraint-recovery Steiner vertices in the CDT lift ([#1489](https://github.com/andymai/brepkit/issues/1489)) ([5358552](https://github.com/andymai/brepkit/commit/5358552b7067cd021603972e8e3c9e94b1121149))
+
 ## [3.2.10](https://github.com/andymai/brepkit/compare/v3.2.9...v3.2.10) (2026-08-09)
 
 
