@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786261806049,
+  "lastUpdate": 1786261946492,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26351,6 +26351,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25490601,
             "range": "± 29809",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8addae27f7f966b7683e88e630ea5882d9251b3f",
+          "message": "ci(semver): scope the advisory check to the consumer-surface crates (#1494)\n\n## Summary\n\nThe `SemVer Check (advisory)` failed on the 3.2.12 release PR (#1492):\n`constructible_struct_adds_field` on `brepkit-algo`'s\n`PerfSnapshot.section_fit_points` (the perf counter added in #1490).\n\nThat is a break STABILITY.md already permits: `brepkit-algo` is in the\ninternal tier — published only so the dependency graph resolves, \"treat\nthese as private and expect breakage on any release\". Running the check\nwith `--workspace` makes it report breaks the policy does not govern, so\nroutine internal-crate evolution shows a red X on release PRs.\n\n## Fix\n\nScope the check to the documented consumer surface (`brepkit-math`,\n`brepkit-topology`, `brepkit-sketch`, `brepkit-operations`,\n`brepkit-io`, `brepkit-wasm`) and note the scoping in STABILITY.md's\nsemver-enforcement section. The check stays advisory and outside `CI\nPass`, unchanged.\n\nThe 3.2.12 red X itself is historical (the release shipped; the field is\nnow in the published baseline, so it would not re-fire regardless).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nScopes the advisory `cargo-semver-checks` job to the consumer-surface\ncrates so internal crate changes don’t trigger false failures on release\nPRs. Also documents this in STABILITY.md; the check stays non-blocking.\n\n- `cargo semver-checks` now runs only for: `brepkit-math`,\n`brepkit-topology`, `brepkit-sketch`, `brepkit-operations`,\n`brepkit-io`, `brepkit-wasm`\n\n<sup>Written for commit d33ac2eabaa3bec5f13b1d8230d7ed0b807ea70b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1494?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T07:48:26Z",
+          "tree_id": "654aa50a21203403a020ab350fc4958f5830d440",
+          "url": "https://github.com/andymai/brepkit/commit/8addae27f7f966b7683e88e630ea5882d9251b3f"
+        },
+        "date": 1786261944346,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 953741,
+            "range": "± 4467",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1036085,
+            "range": "± 2554",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11938,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703243,
+            "range": "± 814",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25518282,
+            "range": "± 73484",
             "unit": "ns/iter"
           }
         ]
