@@ -14,10 +14,10 @@ use std::sync::LazyLock;
 /// clipped to the wrong window (#1510). Read once; these sit on hot paths.
 static TRACE_SECEDGE: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_SECEDGE").is_ok());
 
-/// `BK_CLIPTRACE=1`: per-call chord vs true-arc crossings in
+/// `BK_CLIP=1`: per-call chord vs true-arc crossings in
 /// `clip_line_to_face_boundary`, which is what separates a chord-short clip
 /// from a genuinely absent section.
-static TRACE_CLIP: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_CLIPTRACE").is_ok());
+static TRACE_CLIP: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_CLIP").is_ok());
 
 /// Quantized 3D position pair for CommonBlock edge matching.
 type CbEdgeKey = ((i64, i64, i64), (i64, i64, i64));
@@ -2779,15 +2779,25 @@ fn clip_line_to_face_boundary(
     }
 
     crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    if std::env::var("BK_CLIP").is_ok() {
+    if *TRACE_CLIP {
+        // Crossings are reported as 3D points as well as raw t: a chord-short
+        // clip is only recognisable once you can read the coordinate it stops
+        // at against the face's real boundary (#1510).
+        let at = |t: f64| {
+            let p = line_start + line_dir * t;
+            (t, p.x(), p.y(), p.z())
+        };
         log::debug!(
-            "CLIP face={face_id:?} line=({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) crossings={crossings:?} ext={crossings_ext:?}",
+            "CLIP face={face_id:?} holed={} line=({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) crossings={:?} ext={:?}",
+            !face.inner_wires().is_empty(),
             line_start.x(),
             line_start.y(),
             line_start.z(),
             line_end.x(),
             line_end.y(),
-            line_end.z()
+            line_end.z(),
+            crossings.iter().map(|&t| at(t)).collect::<Vec<_>>(),
+            crossings_ext.iter().map(|&t| at(t)).collect::<Vec<_>>()
         );
     }
 
@@ -2861,33 +2871,6 @@ fn clip_line_to_face_boundary(
     // sections — pre-splitting them here breaks its bookkeeping (the groove
     // chain regressed). Hole-free faces have no weave; their concave bites
     // live on the OUTER wire where the outermost-pair heuristic overshoots.
-    if *TRACE_CLIP {
-        let pt = |t: f64| line_start + line_dir * t;
-        log::debug!(
-            "CLIPTRACE face={face_id:?} holed={} line ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) crossings={:?} ext={:?}",
-            !face.inner_wires().is_empty(),
-            line_start.x(),
-            line_start.y(),
-            line_start.z(),
-            line_end.x(),
-            line_end.y(),
-            line_end.z(),
-            crossings
-                .iter()
-                .map(|&t| {
-                    let p = pt(t);
-                    (t, p.x(), p.y())
-                })
-                .collect::<Vec<_>>(),
-            crossings_ext
-                .iter()
-                .map(|&t| {
-                    let p = pt(t);
-                    (t, p.x(), p.y())
-                })
-                .collect::<Vec<_>>(),
-        );
-    }
     let t_intervals: Vec<(f64, f64)> = if face.inner_wires().is_empty()
         && let (Some(frame), Some(poly)) = (plane_frame.as_ref(), poly.as_ref())
     {
