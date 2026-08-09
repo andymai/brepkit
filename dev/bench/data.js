@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786261946492,
+  "lastUpdate": 1786265924299,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26405,6 +26405,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25518282,
             "range": "± 73484",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e78d905cd85cd07b640d90fab8d65aef06a24c73",
+          "message": "fix(operations): bail compound_cut batching on fallback-tainted cluster fuses (#1495)\n\n## Summary\n\nSecond kernel-side root of #1488, and the one that owns the app-side\nnumbers: the baseplate **preview** path.\n\n## Root\n\nThe tool's preview pocket cutter is a 2-section loft\n(`buildSimplifiedPocketCutter`) whose pockets touch only along shared\ntop edges at z=+1. An edge-tangent union is genuinely non-manifold, so\n`gfa::fuse_n` rightly refuses — and then every pairwise fuse in\n`fuse_cluster`'s fallback fold degrades to the mesh fallback. Because\nthe fallback returns `Ok`, the batch never fails: `compound_cut` cuts\nthe slab against an all-planar mesh blob (15 fallback fuses for 16\npockets), which is both slow and wrong-shaped.\n\nMeasured against the app (harness in gridfinity-layout-tool#3348):\n`pocketsCut` = 10.9s of the 11.5s 4x4-plain generation on 3.2.12. A\nfaithful brepjs-side probe reproduced it exactly with the preview cutter\n(11.1s, 15 fallbacks) while the export cutter runs 1.1s with 0 fallbacks\n— which is why #1490's `plate_probe` (export profile) modeled only ~3%\nof the app's cost.\n\n## Fix\n\nA fallback-tainted merge is a FAILED merge for batching purposes:\n- `fuse_cluster` bails at the first tainted pairwise fuse, and unwinds\nthe discarded probe's counter increment so #1445 snapshot-and-refuse\nconsumers see no phantom degradation.\n- `compound_cut` additionally gates the merged tool on the counter\nbefore using it.\n\nEither way it falls to the existing exact sequential per-tool cuts,\nwhich never see the pocket-to-pocket tangency (it lies outside the\nslab).\n\n## Measured\n\nCaptured real 4x4 preview operands (brepjs-built, serialized via the new\nprobe; `replay_pair` gains a `TOOLS_SEQ` mode):\n\n| Path | time | result |\n|---|---|---|\n| before | 4467ms | F=1862, all planar (mesh blob), vol 22426.6 |\n| after | 305ms | F=134, 64 cones + 70 planes, free=0, vol 22433.99\n(exact) |\n\nThrough wasm the blob path was 10.9s, so the app's 4x4-plain\n`pocketsCut` should drop to well under a second, and preview geometry\nbecomes exact.\n\n## Test\n\n`compound_cut_edge_tangent_tools_stays_analytic`: 2x2 edge-tangent\npreview pockets; pins cone survival, watertightness, and the counter\nunwind (race-tolerant under threaded `cargo test`, deterministic under\nnextest). Full workspace green in both feature configs, clippy clean.\n\n## Not addressed here\n\nAndy's sweep also shows a non-monotonic, dimension-dependent cost in the\nLATER plate booleans (corner clip: 2452ms at 12 cells, 388ms at 16,\n8477ms at 24). That is a third, separate trigger — next on the list.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nStop batching `compound_cut` when a cluster fuse hits the mesh fallback,\nso preview pocket unions no longer turn into a slow all‑planar blob or\nlose cones. Falls back to exact per‑tool cuts and drops the 4x4\nbaseplate preview from ~11s to <1s.\n\n- **Bug Fixes**\n- `boolean`/counter: count only delivered mesh fallbacks via a\nthread‑local taint flag; no decrement/unwind, counter stays monotonic.\n- `fuse_cluster`/`compound_cut`: use the taint flag to detect\nfallback‑tainted merges and bail the batch; run sequential exact cuts\ninstead.\n- `replay_pair`: add `TOOLS_SEQ` for sequential profiling and `CORNER`\nto time the corner intersect.\n- Test: `compound_cut_edge_tangent_tools_stays_analytic` pins cone\nsurvival, watertightness, and that discarded merges don't advance the\ncounter.\n  - Roadmap: record #1488 phase‑2 root and the corner‑clip collateral.\n\n<sup>Written for commit e831ee8c44f2ea729b6391580e2a18cf1cf2979c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1495?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T08:56:15Z",
+          "tree_id": "dcb68def8df2d5c7c678b86d4d943df823330723",
+          "url": "https://github.com/andymai/brepkit/commit/e78d905cd85cd07b640d90fab8d65aef06a24c73"
+        },
+        "date": 1786265921449,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960517,
+            "range": "± 2144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1039978,
+            "range": "± 47086",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11883,
+            "range": "± 211",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706056,
+            "range": "± 9655",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25569302,
+            "range": "± 47711",
             "unit": "ns/iter"
           }
         ]
