@@ -24,6 +24,14 @@ The `#[ignore]` inventory below is the load-bearing artifact. Before quoting any
 rg -n -A2 '#\[ignore' crates/    # filter the 3 doc-comment false hits by hand
 ```
 
+**Inventory status (2026-08-08 night sweep): CLEAN.** Every remaining `#[ignore]` is an
+explicit diagnostic or a slow-test marker — zero deferred-defect pins. The ready queue is
+EMPTY: every row below is CLOSED, parked with rationale, TERMINAL, or Andy-gated (#1424
+crates.io publishing, the mesh-fallback open-mesh product call, the export angular-default
+parity choice, GTM). The next session should look for NEW signal (fresh issues, CI
+regressions, tool-side re-measures on new releases) or open a genuinely new frontier
+rather than re-scanning these rows.
+
 ## When to use
 
 - Starting a session with no assigned task and needing to pick high-value work.
