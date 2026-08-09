@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786266342504,
+  "lastUpdate": 1786267125585,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26513,6 +26513,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24958671,
             "range": "± 74506",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "494b792e6b4968c83d2ff4c8ea24c816b4fda3b2",
+          "message": "docs(roadmap): #1488 kernel-side closed, verified on 3.2.13 (#1497)\n\nUpdates the #1488 roadmap row: both kernel roots shipped (#1490 in\n3.2.12, #1495 in 3.2.13) and the tool-side per-stage re-measure on stock\n3.2.13 pins is done (same-machine, #3348 harness) — plates moved from\n4-27x behind to parity-or-faster on 3 of 4 rows, corner-clip anomaly\nconfirmed as fallback-blob collateral. Issue closure awaits Andy's own\nre-run; verified table on the issue.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap entry for #1488 to mark baseplate performance fixed\non the kernel side and verified on 3.2.13. Notes the two root fixes\n(#1490, #1495), measured results (parity-or-faster on 3/4; 6x4 magnets\n~1.25x), guards and repro path, and that final closure awaits a\nfollow-up re-run via gridfinity-layout-tool#3348.\n\n<sup>Written for commit f8e24c443617216879d0345c6e4ab0c5f77201f3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1497?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T09:16:30Z",
+          "tree_id": "a1113ac3007528170ef11e4ab17bdb315528e2a7",
+          "url": "https://github.com/andymai/brepkit/commit/494b792e6b4968c83d2ff4c8ea24c816b4fda3b2"
+        },
+        "date": 1786267122696,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 784685,
+            "range": "± 16622",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 838268,
+            "range": "± 1163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10392,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 556845,
+            "range": "± 5442",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20733054,
+            "range": "± 196542",
             "unit": "ns/iter"
           }
         ]
