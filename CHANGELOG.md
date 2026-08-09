@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.15](https://github.com/andymai/brepkit/compare/v3.2.14...v3.2.15) (2026-08-09)
+
+
+### Performance
+
+* **operations:** spatial-hash the circle T-junction splice in solid tessellation ([#1502](https://github.com/andymai/brepkit/issues/1502)) ([b9f37f3](https://github.com/andymai/brepkit/commit/b9f37f3958a5ff375ddd78053e2aee74ca901e14))
+
 ## [3.2.14](https://github.com/andymai/brepkit/compare/v3.2.13...v3.2.14) (2026-08-09)
 
 
