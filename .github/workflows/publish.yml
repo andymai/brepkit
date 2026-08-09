@@ -62,21 +62,20 @@ jobs:
           echo "Enabling auto-merge for PR #$PR_NUMBER"
           gh pr merge "$PR_NUMBER" --auto --squash --repo "$GITHUB_REPOSITORY"
 
-  # Publish triggers on three events:
-  # 1. release:created — fired when release-please creates a GitHub release
-  #    (works even if release-please crashes afterward trying to comment on
-  #    the locked/merged PR, which was preventing release_created from being set)
-  # 2. release_created output — belt-and-suspenders if release-please succeeds fully
-  # 3. workflow_dispatch — manual publish for a specific version
+  # Publish triggers on two events:
+  # 1. release:created — release-please creates the GitHub release with the bot
+  #    app token, so this event always fires (default-GITHUB_TOKEN suppression
+  #    does not apply) even if release-please crashes afterward trying to
+  #    comment on the locked/merged PR. The push run must NOT also publish via
+  #    the release_created output: when release-please succeeds fully, both
+  #    runs race the registries and the loser turns main red with
+  #    already-published errors.
+  # 2. workflow_dispatch — manual publish for a specific version
   publish:
     name: Build WASM & Publish
-    needs: [release-please]
     if: >-
-      always() && (
-        github.event_name == 'release' ||
-        github.event_name == 'workflow_dispatch' ||
-        needs.release-please.outputs.release_created == 'true'
-      )
+      github.event_name == 'release' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -143,7 +142,7 @@ jobs:
           fi
           echo "Publishing brepkit-wasm@$PKG_VERSION"
         env:
-          TAG_NAME: ${{ github.event.release.tag_name || needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
+          TAG_NAME: ${{ github.event.release.tag_name || format('v{0}', github.event.inputs.publish_version) }}
 
       - name: Publish to npm (skip if already published)
         working-directory: crates/wasm/pkg
@@ -168,20 +167,16 @@ jobs:
   # cannot block the npm release (brepjs pins the npm package, not the crates).
   publish-crates:
     name: Publish to crates.io
-    needs: [release-please]
     if: >-
-      always() && (
-        github.event_name == 'release' ||
-        github.event_name == 'workflow_dispatch' ||
-        needs.release-please.outputs.release_created == 'true'
-      )
+      github.event_name == 'release' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     environment: crates-io
     env:
-      TAG_NAME: ${{ github.event.release.tag_name || needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
+      TAG_NAME: ${{ github.event.release.tag_name || format('v{0}', github.event.inputs.publish_version) }}
     steps:
       # Pinned to the tag rather than the default branch: a delayed
       # `release:created` event or a manual dispatch would otherwise publish
