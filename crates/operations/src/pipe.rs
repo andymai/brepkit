@@ -261,7 +261,7 @@ pub fn pipe(
         start_inner_wires.push(topo.add_wire(iw));
     }
     let start_verts = crate::cap::ring_point_positions(topo, &ring_verts[0])?;
-    let start_outward = crate::cap::outward_normal(&start_verts, -(path.tangent(dom_t0)?))?;
+    let start_outward = crate::cap::outward_normal(&start_verts, -path_tangent_0)?;
     all_faces.push(crate::cap::build_cap_face(
         topo,
         &ring_edges[0],
@@ -373,7 +373,8 @@ pub fn pipe(
 /// Compute scale factors along the path from the guide curve.
 ///
 /// At each sample point, the scale is the ratio of the guide-to-path
-/// distance at that point versus the initial distance at t=0.
+/// distance at that point versus the initial distance at the curves'
+/// domain starts (guide and path domains are mapped independently).
 fn compute_scale_factors(
     path: &NurbsCurve,
     guide: Option<&NurbsCurve>,
