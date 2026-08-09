@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786234656546,
+  "lastUpdate": 1786235102136,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25217,6 +25217,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26793256,
             "range": "± 118071",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0d25f73bd1946219fee5459c28927f0e14248123",
+          "message": "perf(operations): resolve BK_TESS_TRACE once per process (#1471)\n\nFollow-up to #1469 addressing the Copilot review finding that landed\nafter automerge: the per-face dispatch trace paid an env lookup per face\neven when disabled. Resolved once via OnceLock, the same pattern as\n`ff_trace_x` in `phase_ff.rs`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nResolve BK_TESS_TRACE once per process to avoid an env var lookup for\nevery face during tessellation. Uses a OnceLock-backed helper to replace\nthe inline check, reducing overhead when tracing is disabled.\n\n<sup>Written for commit fc9146ad4b3d5e53391e9b9d2151660ac1ff3a39.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1471?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T00:22:38Z",
+          "tree_id": "dc89b499d4107a1a82edffa96976daafd750db3b",
+          "url": "https://github.com/andymai/brepkit/commit/0d25f73bd1946219fee5459c28927f0e14248123"
+        },
+        "date": 1786235099867,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 964181,
+            "range": "± 2009",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1040752,
+            "range": "± 1278",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11959,
+            "range": "± 50",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707281,
+            "range": "± 21103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25516258,
+            "range": "± 253193",
             "unit": "ns/iter"
           }
         ]
