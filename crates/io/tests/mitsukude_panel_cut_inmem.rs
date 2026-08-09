@@ -90,9 +90,12 @@ fn mitsukude_panel_cut_is_analytic_watertight() {
     assert_eq!(over, 0, "cut must stay manifold, got {over} over-shared");
     assert_eq!(free, 0, "cut must be closed, got {free} free edges");
     let vol = brepkit_operations::measure::oriented_solid_volume(&topo, result, 0.05).unwrap();
+    // Mesh-derived pin: re-calibrated when the developable-face interior
+    // grid was removed from the display tessellation (density change only;
+    // the pre-fix leak stays 68 units away).
     assert!(
-        (vol - 27045.9).abs() < 5.0,
-        "cut volume drifted: got {vol:.1}, pinned 27045.9 (the pre-fix leak measured 27095.9 \
+        (vol - 27027.9).abs() < 5.0,
+        "cut volume drifted: got {vol:.1}, pinned 27027.9 (the pre-fix leak measured 27095.9 \
          with the pinch band left uncut)"
     );
 }

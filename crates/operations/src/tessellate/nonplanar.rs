@@ -1941,8 +1941,14 @@ pub(super) fn tessellate_nonplanar_cdt(
     let du = u_max - u_min;
     let dv = v_max - v_min;
     if du > 1e-15 && dv > 1e-15 {
-        let (n_u, n_v) =
-            interior_grid_resolution(face_data.surface(), du, dv, deflection, angular_tol);
+        let (n_u, n_v) = interior_grid_resolution(
+            face_data.surface(),
+            du,
+            dv,
+            deflection,
+            angular_tol,
+            circle_floor,
+        );
 
         let boundary_uv_ref = &boundary_uv;
         let interior_pts: Vec<Point2> = (1..n_u)
@@ -2137,11 +2143,15 @@ fn interior_grid_resolution(
     dv: f64,
     deflection: f64,
     angular_tol: f64,
+    circle_floor: bool,
 ) -> (usize, usize) {
     // This is the non-standard-boundary CDT fallback (boolean-result faces).
     // Watertightness comes from the explicit boundary samples, not from these
-    // interior grid counts, and one radius drives both directions; keep the
-    // curvature floor on for all surfaces here as the conservative default.
+    // interior grid counts, and one radius drives both directions. Doubly
+    // curved surfaces keep the curvature floor unconditionally (the nominal
+    // radius understates the tightest curvature); developable surfaces
+    // thread the caller's `circle_floor` so the display/export path is
+    // tolerance-driven while the boolean path stays bit-identical.
     match surface {
         FaceSurface::Sphere(sphere) => {
             let r = sphere.radius();
@@ -2173,7 +2183,14 @@ fn interior_grid_resolution(
             // along the straight rulings (a length, not an angle): zero chord
             // sag, so feeding it to the chord formula would treat millimeters
             // as radians and emit hundreds of interior rows on a tall wall.
-            // Two rows suffice for CDT quality on a developable band.
+            // Two rows suffice for CDT quality on a developable band. With
+            // the curvature floor off (display/export), skip interior points
+            // entirely: the surface is exact along the rulings and the rim
+            // samples already carry the u density, so interior points only
+            // inflate the mesh.
+            if !circle_floor {
+                return (2, 1);
+            }
             let r = estimate_surface_radius(surface);
             let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol, true).max(2);
             (n_u, 2)

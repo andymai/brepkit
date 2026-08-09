@@ -98,4 +98,26 @@ fn single_slot_cut_is_watertight_and_analytic() {
         cones >= 12,
         "the lip cones must survive analytically (mesh fallback would flatten them), got {cones}"
     );
+
+    // Density pin: the display tessellation of developable faces is
+    // tolerance-driven (no interior grid, no curvature floor). The floored
+    // grid measured 4100 triangles at 0.01 mm / 5 deg; tolerance-driven is
+    // 2324. Guards against the floor silently returning to this path.
+    let mesh = brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+        &topo,
+        result,
+        0.01,
+        5.0_f64.to_radians(),
+    )
+    .unwrap();
+    assert_eq!(
+        brepkit_operations::tessellate::boundary_edge_count(&mesh),
+        0,
+        "single-slot cut mesh must stay watertight"
+    );
+    let tris = mesh.indices.len() / 3;
+    assert!(
+        tris < 3000,
+        "single-slot cut tessellation densified past the tolerance-driven budget: {tris} triangles"
+    );
 }
