@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786233223412,
+  "lastUpdate": 1786234156621,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25109,6 +25109,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26775816,
             "range": "± 61399",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a2e029e31e764f1c7f10572c9b96399226622585",
+          "message": "fix(operations): orient CDT face meshes by an area-weighted normal vote (#1469)\n\n## Root (GH #1445 residual: whole-face mesh inversions on the CDT path)\n\nA face tessellated via `tessellate_nonplanar_cdt` inherits triangle\nwinding from the CDT's UV orientation. That winding is internally\nconsistent but can be inverted as a whole against the surface: the\ngrouped-scoop horn-torus corner patches (which fall past the\nnotch/two-rim/latitude structured arms) have a pinched parameterization\nwhose base-arc UV image degenerates — the CDT triangulates cleanly yet\nwinds the whole patch against the outward normal, so its mesh stitches\nbackwards against every neighbour.\n\n## Fix\n\nOne flip decided per face by an area-weighted vote of\ngeometric-vs-surface-normal agreement over all emitted triangles.\nDefault (non-reversed) orientation is emitted; the caller's\n`is_reversed` flip applies afterward as before.\n\n**Refuted alternative, kept out deliberately:** per-triangle orientation\nby the surface normal at each triangle's UV centroid. Near the pinch the\nsampled normal scatters, individual flips break internal mesh\nconsistency, and every captured case measured WORSE (case1 153 → 297,\ncase2 72 → 499). The vote preserves internal consistency and fixes the\nwhole-face inversion.\n\n## Measured\n\n- Captured grouped-scoop cases' directed mesh boundary half-edges:\n153/72/77/59/0/3 → 89/38/39/59/0/3 (from 377/193/824/592/0/74 at the\nstart of the campaign; B-Rep same-sense pairs remain 0 everywhere).\n- Full foils: 1965 passed / 0 failed across the seven crates; clippy\nclean.\n\nPart of #1445.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes whole-face winding inversions on CDT-tessellated nonplanar faces\nby using an area-weighted normal vote and applying a single face-wide\nflip to match surface orientation. This preserves internal consistency\nand reduces mesh boundary mismatches in grouped-scoop cases (e.g.,\n153→89).\n\n- **Bug Fixes**\n- In `tessellate_nonplanar_cdt`, compute an area-weighted vote of\ntriangle geometric normals vs surface normals (sampled at UV centroids)\nand flip all triangles if the vote is negative.\n- Avoid per-triangle flipping; near pinches the sampled normal scatters\nand breaks mesh consistency.\n- The caller’s `is_reversed` handling remains unchanged and applies\nafter the vote.\n- Added `BK_TESS_TRACE`-gated debug logging in tessellation dispatch to\ntrace face type, reversal, and CDT success.\n\n<sup>Written for commit 9f5901a20cdcd77620a1cd2fab51cdc58636a505.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1469?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T00:06:36Z",
+          "tree_id": "476e9aeedacbda9a89c9b720c8bc56b17f6605d2",
+          "url": "https://github.com/andymai/brepkit/commit/a2e029e31e764f1c7f10572c9b96399226622585"
+        },
+        "date": 1786234153867,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960997,
+            "range": "± 1767",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1037743,
+            "range": "± 1901",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12156,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706339,
+            "range": "± 2864",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26001781,
+            "range": "± 514795",
             "unit": "ns/iter"
           }
         ]
