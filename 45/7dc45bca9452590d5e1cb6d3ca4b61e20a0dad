@@ -1,0 +1,21 @@
+.github/workflows/publish.yml
+  s_7dbf6a6f6878c2::t_6320e971a086a0 65-73,77-78
+  s_7dbf6a6f6878c2::t_4205fbc75984e7 171-172,179
+  s_7dbf6a6f6878c2::t_65bed54206e154 145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "457dc45bca9452590d5e1cb6d3ca4b61e20a0dad",
+  "prompts": {},
+  "sessions": {
+    "s_7dbf6a6f6878c2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fe91add3-14ee-4ae8-bfb2-e8395be2a83d",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
