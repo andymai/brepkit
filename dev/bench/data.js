@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786248393130,
+  "lastUpdate": 1786251883833,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25919,6 +25919,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27270937,
             "range": "± 40370",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d0c746ad65ac61f22574bd62281728c4a8883739",
+          "message": "fix(operations): map pipe sampling into the path's domain (#1483)\n\nCloses the latent sibling recorded in the sweep row: `pipe.rs` sampled\nframes at raw `k/n`, ignoring the path curve's domain (the class #1448\nfixed in `compute_frames`). On a shifted-domain path (a `curve_split`\nsub-path), raw sampling extrapolates the clamped end spans into a\nsame-length tube at the wrong position — volume checks can't\ndiscriminate a translated tube, which is why this survived.\n\nAll parameter sites are mapped: both ring loops, the as-positioned\nplacement reference, the CCW/tangent probes, the start-cap outward\nnormal, and `compute_scale_factors` (guide and path domains mapped\nindependently).\n\nPin: `pipe_shifted_domain_path_matches_unit_domain` asserts equal volume\nAND that the solid starts at the path start; foil-verified (raw sampling\nlands the tube at z_min=-4).\n\nFoils: operations + io + wasm 1523 passed / 0 failed; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `pipe` sampling to use the curve’s own domain instead of raw\n[0,1], so sub-paths from `curve_split` sweep at the correct position and\nstart at the true path start.\n\n- **Bug Fixes**\n- Map all parameter sites into the curve domain: both ring loops,\nas-positioned placement, CCW/tangent probes, start-cap outward normal,\nand `compute_scale_factors` (guide and path mapped independently).\n- Add regression test `pipe_shifted_domain_path_matches_unit_domain` to\nverify equal volume and correct start position on shifted-domain paths.\n\n- **Refactors**\n  - Reuse cached start tangent and fix doc comments.\n\n<sup>Written for commit 82c51c1b59be0556f22325d68cf453b18274b51c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1483?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T05:02:12Z",
+          "tree_id": "63e9062ac1ccf28dad0e7babeff3818d399dc8b0",
+          "url": "https://github.com/andymai/brepkit/commit/d0c746ad65ac61f22574bd62281728c4a8883739"
+        },
+        "date": 1786251881747,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 962901,
+            "range": "± 1627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1042201,
+            "range": "± 2867",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12034,
+            "range": "± 333",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706629,
+            "range": "± 1583",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26135690,
+            "range": "± 123399",
             "unit": "ns/iter"
           }
         ]
