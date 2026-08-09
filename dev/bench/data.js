@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786299593701,
+  "lastUpdate": 1786299745635,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26783,6 +26783,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25644147,
             "range": "± 24942",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3e2ece38abd5382a7416eaf2978c1d1c43aeb2fd",
+          "message": "docs(roadmap): open rows for #1499 and #1500 (#1504)\n\nRoadmap maintenance per the living-document rule: adds OPEN rows for the\n#1499 kumiko cutAll chain (kernel side merged in #1501, adapter side\nbrepjs#1996 in flight, tool-side verify gated on next release) and the\n#1500 warm re-export gap (fix in #1502, verify gated on release), and\nnotes that the stagnant bin rows should be re-measured after #1502\nships.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to add OPEN rows for #1499 (kumiko cutAll chain) and\n#1500 (warm re-export), with current kernel/adapter status and\nrelease-gated verify steps. Also note that stagnant bin rows will be\nre-measured after #1502 ships.\n\n<sup>Written for commit eea853d5b63bdf8e97963fde035fba7582ace72f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1504?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T18:20:14Z",
+          "tree_id": "59a4c1c102c7c6321ab29646a6cda5122457661b",
+          "url": "https://github.com/andymai/brepkit/commit/3e2ece38abd5382a7416eaf2978c1d1c43aeb2fd"
+        },
+        "date": 1786299742949,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 773254,
+            "range": "± 1933",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 838678,
+            "range": "± 942",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10314,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 550311,
+            "range": "± 863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20794439,
+            "range": "± 347011",
             "unit": "ns/iter"
           }
         ]
