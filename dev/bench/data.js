@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786234156621,
+  "lastUpdate": 1786234656546,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25163,6 +25163,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26001781,
             "range": "± 514795",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cdb2976396a4860714e0e18a52707fd0132b56ff",
+          "message": "chore(main): release 3.2.6 (#1470)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.2.6](https://github.com/andymai/brepkit/compare/v3.2.5...v3.2.6)\n(2026-08-09)\n\n\n### Bug Fixes\n\n* **operations:** orient CDT face meshes by an area-weighted normal vote\n([#1469](https://github.com/andymai/brepkit/issues/1469))\n([a2e029e](https://github.com/andymai/brepkit/commit/a2e029e31e764f1c7f10572c9b96399226622585))\n\n\n### Performance\n\n* **blend:** O(E) sense lookup in orientation propagation\n([#1468](https://github.com/andymai/brepkit/issues/1468))\n([8c21365](https://github.com/andymai/brepkit/commit/8c21365539dca93555d1c35321c1024f0d5633cb))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.6 improves CDT face mesh orientation accuracy and speeds up\nblend orientation propagation on large models.\n\n- **Bug Fixes**\n- Orient CDT face meshes using an area-weighted normal vote for\nconsistent winding.\n\n- **Performance**\n- Use O(E) sense lookup in blend orientation propagation to reduce\ntraversal overhead.\n\n<sup>Written for commit a96bb427b95fd2f8dfd5158819607e2e60778e88.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1470?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T00:15:06Z",
+          "tree_id": "b54821eb1ceeb1b0e98c31f9ae37b4fde850fdb2",
+          "url": "https://github.com/andymai/brepkit/commit/cdb2976396a4860714e0e18a52707fd0132b56ff"
+        },
+        "date": 1786234654481,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1031413,
+            "range": "± 3837",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1079944,
+            "range": "± 1838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13060,
+            "range": "± 553",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709467,
+            "range": "± 1395",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26793256,
+            "range": "± 118071",
             "unit": "ns/iter"
           }
         ]
