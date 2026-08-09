@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786243773862,
+  "lastUpdate": 1786245199895,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25757,6 +25757,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21076817,
             "range": "± 461866",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2dcd8dbd1c244df9251677e4a6efe04bc7141134",
+          "message": "docs(roadmap): tool-side density verification on 3.2.9 (#1481)\n\nRecords the wallPatterns re-measure on released 3.2.9: the slots 3x3x5\narm exports 20316 triangles (was 23484), both suites 14/14. The\ncurvature-floor removal binds mostly at fine deflection; the remaining\ngap to the reference count is the 5-degree angular default forcing 18\nsegments per quarter-arc on small slot corners — a tolerance-parity\nproduct choice, recorded as such.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to capture tool-side density verification on 3.2.9:\nthe wallPatterns slots 3x3x5 export now emits 20316 triangles (was\n23484).\nNotes that the remaining gap to the reference is driven by the 5 deg\nangular default (18 segments per quarter-arc on r=0.6 slot corners), not\nmesher waste, and is a tolerance-parity choice.\n\n<sup>Written for commit 7367946fcbfd9b9fd686ec0bb4526fd4e30ceb0d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1481?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T03:10:53Z",
+          "tree_id": "8ab3074b1d15c09e01d3a3a79fa4cf874e7b2223",
+          "url": "https://github.com/andymai/brepkit/commit/2dcd8dbd1c244df9251677e4a6efe04bc7141134"
+        },
+        "date": 1786245197803,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 962338,
+            "range": "± 1086",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1043124,
+            "range": "± 1282",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12090,
+            "range": "± 78",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710164,
+            "range": "± 2331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25873963,
+            "range": "± 836067",
             "unit": "ns/iter"
           }
         ]
