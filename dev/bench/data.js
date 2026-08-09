@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786299745635,
+  "lastUpdate": 1786300167790,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26837,6 +26837,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20794439,
             "range": "± 347011",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "049e9e9b5d949d759357caf6c9c61df7e820b167",
+          "message": "chore(main): release 3.2.15 (#1505)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.15](https://github.com/andymai/brepkit/compare/v3.2.14...v3.2.15)\n(2026-08-09)\n\n\n### Performance\n\n* **operations:** spatial-hash the circle T-junction splice in solid\ntessellation ([#1502](https://github.com/andymai/brepkit/issues/1502))\n([b9f37f3](https://github.com/andymai/brepkit/commit/b9f37f3958a5ff375ddd78053e2aee74ca901e14))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.15 improves solid tessellation performance by adding a\nspatial hash for circle T-junction splices. This reduces search work and\nspeeds up operations.\n\n- **Performance**\n- Added a spatial hash to the circle T-junction splice in solid\ntessellation to cut lookup cost and avoid quadratic scans.\n\n<sup>Written for commit 00badc80790cd61ff1e6cf49fd52fd1a6c218ce1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1505?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T18:26:55Z",
+          "tree_id": "b85185aa707ab587b3bc20456013cb723d1ff702",
+          "url": "https://github.com/andymai/brepkit/commit/049e9e9b5d949d759357caf6c9c61df7e820b167"
+        },
+        "date": 1786300165151,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 962291,
+            "range": "± 3612",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1040912,
+            "range": "± 17730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12070,
+            "range": "± 321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 712676,
+            "range": "± 5431",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25640978,
+            "range": "± 54445",
             "unit": "ns/iter"
           }
         ]
