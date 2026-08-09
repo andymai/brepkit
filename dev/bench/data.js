@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786243628749,
+  "lastUpdate": 1786243773862,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25703,6 +25703,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26755192,
             "range": "± 29393",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa60e66eb0d1b7a729c604978ea030d433ddc06b",
+          "message": "chore(io): stable face indices in the slots density census (#1480)\n\nFollow-up to #1478 addressing the Copilot finding that landed after\nautomerge: the census example built labels from `FaceId`'s Debug\nrepresentation and re-parsed them; it now carries the stable\n`fid.index()` directly.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUse stable face indices in the slots density census example for labeling\nand selection. Removed Debug-format parsing and now carry `fid.index()`\ndirectly, updating printed labels and densest-face logic.\n\n<sup>Written for commit 7da98dd9ca582651ed0e69e4f014dd278c145d14.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1480?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T02:47:18Z",
+          "tree_id": "c32ceca9bf26cc6d79f75470151fb03b2d27c6ab",
+          "url": "https://github.com/andymai/brepkit/commit/aa60e66eb0d1b7a729c604978ea030d433ddc06b"
+        },
+        "date": 1786243771864,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 784606,
+            "range": "± 7200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 853680,
+            "range": "± 7681",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9579,
+            "range": "± 58",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 568930,
+            "range": "± 13767",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21076817,
+            "range": "± 461866",
             "unit": "ns/iter"
           }
         ]
