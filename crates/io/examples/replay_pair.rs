@@ -234,6 +234,35 @@ fn main() {
             .filter(|t| !t.trim().is_empty())
             .map(|t| deserialize_solid(&std::fs::read(t.trim()).unwrap(), &mut topo).unwrap())
             .collect();
+        if std::env::var("TOOLS_SEQ").is_ok() {
+            println!("-- sequential cuts with {} tools --", tools.len());
+            let t = std::time::Instant::now();
+            let mut cur = a;
+            let mut failed = false;
+            for (i, &tool) in tools.iter().enumerate() {
+                match brepkit_operations::boolean::boolean(
+                    &mut topo,
+                    brepkit_operations::boolean::BooleanOp::Cut,
+                    cur,
+                    tool,
+                ) {
+                    Ok(next) => cur = next,
+                    Err(e) => {
+                        println!("  cut {i} FAILED: {e}");
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            if !failed {
+                describe(
+                    &topo,
+                    cur,
+                    &format!("sequential {}ms", t.elapsed().as_millis()),
+                );
+            }
+            return;
+        }
         println!("-- compound_cut with {} tools --", tools.len());
         let t = std::time::Instant::now();
         match brepkit_operations::boolean::compound_cut(
@@ -242,11 +271,36 @@ fn main() {
             &tools,
             brepkit_operations::boolean::BooleanOptions::default(),
         ) {
-            Ok(sid) => describe(
-                &topo,
-                sid,
-                &format!("compound_cut {}ms", t.elapsed().as_millis()),
-            ),
+            Ok(sid) => {
+                describe(
+                    &topo,
+                    sid,
+                    &format!("compound_cut {}ms", t.elapsed().as_millis()),
+                );
+                // CORNER=<path> follows with an intersect against the given
+                // solid (the baseplate corner-rounding step of #1488).
+                if let Ok(cpath) = std::env::var("CORNER") {
+                    let ctool =
+                        deserialize_solid(&std::fs::read(&cpath).unwrap(), &mut topo).unwrap();
+                    let t2 = std::time::Instant::now();
+                    match brepkit_operations::boolean::boolean(
+                        &mut topo,
+                        brepkit_operations::boolean::BooleanOp::Intersect,
+                        sid,
+                        ctool,
+                    ) {
+                        Ok(rid) => describe(
+                            &topo,
+                            rid,
+                            &format!("corner intersect {}ms", t2.elapsed().as_millis()),
+                        ),
+                        Err(e) => println!(
+                            "  corner intersect FAILED in {}ms: {e}",
+                            t2.elapsed().as_millis()
+                        ),
+                    }
+                }
+            }
             Err(e) => println!(
                 "  compound_cut FAILED in {}ms: {e}",
                 t.elapsed().as_millis()

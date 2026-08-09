@@ -46,6 +46,16 @@ pub fn mesh_fallback_count() -> u64 {
     MESH_FALLBACK_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+thread_local! {
+    /// Whether the innermost `boolean_inner` call routed through the mesh
+    /// fallback. Set at the fallback site, consumed by the callers that
+    /// decide whether the result is DELIVERED (counted) or DISCARDED (a
+    /// batching probe in `fuse_cluster`) — the public counter only records
+    /// fallbacks whose output actually reaches a caller, keeping its
+    /// monotonic snapshot-and-diff contract exact (#1445).
+    static LAST_USED_MESH_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Perform a boolean operation on two solids.
 ///
 /// Uses the GFA pipeline as the primary engine, with mesh boolean
@@ -55,13 +65,27 @@ pub fn mesh_fallback_count() -> u64 {
 ///
 /// Returns an error if either solid is invalid or the operation produces
 /// an empty or non-manifold result.
-#[allow(clippy::too_many_lines)]
 pub fn boolean(
     topo: &mut Topology,
     op: BooleanOp,
     a: SolidId,
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
+    let result = boolean_inner(topo, op, a, b);
+    if LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
+        MESH_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    result
+}
+
+#[allow(clippy::too_many_lines)]
+fn boolean_inner(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+) -> Result<SolidId, crate::OperationsError> {
+    LAST_USED_MESH_FALLBACK.with(|f| f.set(false));
     let tol = brepkit_math::tolerance::Tolerance::new();
 
     // Detect A⊂B or B⊂A (including A=B) and handle directly.
@@ -830,7 +854,7 @@ pub fn boolean(
         target: "brepkit_approx",
         "boolean {op:?}: GFA unusable — using mesh (co-refinement) fallback; analytic surface types will be lost"
     );
-    MESH_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    LAST_USED_MESH_FALLBACK.with(|f| f.set(true));
     let opts = BooleanOptions::default();
     let raw = match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
         Ok(raw) => raw,
@@ -919,11 +943,29 @@ pub fn compound_cut(
         && let Some(clusters) = cluster_tools_by_aabb(topo, tools)
         && !clusters.is_empty()
     {
+        // Tools that merely TOUCH (a plate's edge-tangent preview pockets)
+        // cluster together by AABB, and their union is genuinely non-manifold,
+        // so every pairwise fuse below "succeeds" through the mesh fallback —
+        // the batch then proceeds with a degraded all-planar tool and the cut
+        // grinds against it (11 s and lost cones on a 4x4 baseplate, #1488).
+        // A fallback-tainted merge is a FAILED merge for batching purposes:
+        // the sequential per-tool cuts are exact and never see the tangency.
+        // Taint propagates as Err from `fuse_cluster` and from the cross-
+        // cluster merge fuses below, so a discarded merge never touches the
+        // public fallback counter.
         let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
             let fused = fuse_cluster(topo, cluster)?;
             match acc {
                 None => Ok(Some(fused)),
-                Some(prev) => boolean(topo, BooleanOp::Fuse, prev, fused).map(Some),
+                Some(prev) => {
+                    let m = boolean_inner(topo, BooleanOp::Fuse, prev, fused)?;
+                    if LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
+                        return Err(crate::OperationsError::InvalidInput {
+                            reason: "cluster merge degraded to mesh fallback".to_string(),
+                        });
+                    }
+                    Ok(Some(m))
+                }
             }
         });
         if let Ok(Some(tool)) = merged
@@ -976,8 +1018,19 @@ pub(crate) fn fuse_cluster(
     {
         return Ok(fused);
     }
-    rest.iter()
-        .try_fold(first, |a, &t| boolean(topo, BooleanOp::Fuse, a, t))
+    // A pairwise fuse that degrades to the mesh fallback poisons the whole
+    // batch; bail at the first one instead of paying the fallback for every
+    // remaining pair. `boolean_inner` + the taint flag keeps the discarded
+    // probe out of the public fallback counter entirely.
+    rest.iter().try_fold(first, |a, &t| {
+        let fused = boolean_inner(topo, BooleanOp::Fuse, a, t)?;
+        if LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "cluster fuse degraded to mesh fallback".to_string(),
+            });
+        }
+        Ok(fused)
+    })
 }
 
 /// Group tools into AABB-overlap clusters (union-find over tolerance-
