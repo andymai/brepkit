@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786299439465,
+  "lastUpdate": 1786299593701,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26729,6 +26729,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25611346,
             "range": "± 248044",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b9f37f3958a5ff375ddd78053e2aee74ca901e14",
+          "message": "perf(operations): spatial-hash the circle T-junction splice in solid tessellation (#1502)\n\n## Summary\n\nKernel-side root of #1500's warm re-export gap.\n\nProfiling the tool's export path (kernel-call attribution via a timing\nproxy) put the warm 1292ms at: `tessellateSolidGroupedBinary` 870ms, one\nsurviving `fuseWithEvolution` 390ms, everything else ~35ms. Native\nprofiling of the tessellation on a captured arena .bin of the fused\n6x6x4 bin (1274 faces / 2784 edges, export tolerance 0.01 / angular 5)\nattributed 355ms of 395ms — 90% — to the circle T-junction splice: for\nevery circle edge, the pipeline scanned the entire shared edge-point\npool, projecting each point onto the circle. O(circle-edges ×\npool-points).\n\n## Change\n\nBucket the pool once into a uniform spatial hash (cell = bbox diag /\n128). Walk each circle at cell-sized arc steps, collecting candidates\nfrom the 3×3×3 neighborhood of visited cells, then run the unchanged\nper-point splice logic on the candidates only.\n\nSoundness of the neighborhood bound: a pool point within `refine_tol` of\nthe circle lies within `refine_tol + step/2 ≤ cell` of some walked\nsample, so its cell index differs from the sample's by at most one per\naxis. The candidate set therefore equals the full-scan set and the\noutput is unchanged.\n\n## Numbers (native, captured bin)\n\n| | before | after |\n|---|---|---|\n| circle_refine_scan | 355ms | 8.4ms |\n| whole tessellation | 395ms | 48ms |\n| mesh hash | `eaf6a88ec9414b8c` | `eaf6a88ec9414b8c` (identical) |\n\nProjected warm re-export: the 870ms wasm tessellation should drop to\nroughly 150-200ms, putting brepkit's warm total well under the\nreference's 948ms. Tool-side verification on the released kernel to\nfollow (local wasm builds are blocked in this sandbox).\n\n## Verification\n\n- Mesh output hash-identical on the capture (indices + positions),\ntris/verts/groups unchanged.\n- `cargo nextest run -p brepkit-operations` (1036), `-p brepkit-io -p\nbrepkit-wasm` (489): all green.\n- Also adds the `profile_export_tess` example (replays a captured arena\n.bin at export tolerance) and a `BK_TESS_PHASES` env gate logging\nper-phase wall clock — the instrumentation that found this.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpeeds up solid tessellation by spatial‑hashing the circle‑edge\nT‑junction splice, replacing an O(edges*points) scan. On the captured\nbin: circle scan 355ms→8.4ms, whole tessellation 395ms→48ms; mesh output\nis identical and warm wasm tessellation should drop to ~150–200ms.\n\n- **New Features**\n- Added `profile_export_tess` example to replay a captured solid at\nexport tolerance.\n- Added `BK_TESS_PHASES` env flag to log per‑phase tessellation timings.\n\n<sup>Written for commit 41fd70956900db427e0d9ca3cde7a26c5d685f00.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1502?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T18:15:14Z",
+          "tree_id": "897469b84e381105de8a90dd801d52b1d70dffd3",
+          "url": "https://github.com/andymai/brepkit/commit/b9f37f3958a5ff375ddd78053e2aee74ca901e14"
+        },
+        "date": 1786299590961,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 967544,
+            "range": "± 10894",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1045370,
+            "range": "± 1276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12104,
+            "range": "± 929",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710818,
+            "range": "± 14325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25644147,
+            "range": "± 24942",
             "unit": "ns/iter"
           }
         ]
