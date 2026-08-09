@@ -141,9 +141,13 @@ One line each; the fixture/PR carries the story. Newest first.
   section on an arc-cornered holed face stopped a sagitta short of the boundary and could not
   separate the piece beyond it (the bin annulus's outer corner chord meets y=40.550 at 39.200
   where the arc meets it at 40.7495). 121 all-planar fallback faces in 34ms became 58 keeping all
-  8 cylinders in 11ms, watertight. Fixture `crates/io/tests/labelbracket_fuse_inmem.rs`;
-  instruments `BK_SECEDGE` (per-face clipped section extents) and `BK_CLIPTRACE` (chord vs
-  true-arc crossings) — reach for those first when a section survives FF but the split is wrong.
+  8 cylinders in 11ms, watertight. Tool-side on released 3.2.18 the row moved from 1.60x slower than
+  the reference to 1.74x faster (104ms to 39ms against its 68ms) at 1510 to 1072 triangles, the only
+  one of the 22 scenarios whose triangle count moved; brepkit reads 0 non-manifold edges there where
+  the reference reads 147. Fixture `crates/io/tests/labelbracket_fuse_inmem.rs`;
+  instruments `BK_SECEDGE` (per-face clipped section extents) and `BK_CLIP` (chord vs true-arc
+  crossings, with 3D points) — reach for those first when a section survives FF but the split is
+  wrong.
 - **4x4 mag no-lip bin row (CLOSED 2026-08-09 at parity on 3.2.16, report #1510)** —
   396 vs 398ms in-suite, 393 vs 400ms cold median against a same-session reference run; moved by the
   #1502 splice spatial hash (magnet-hole-circle-heavy tessellation), no bin-targeted work involved.
