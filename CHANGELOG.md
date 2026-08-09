@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.14](https://github.com/andymai/brepkit/compare/v3.2.13...v3.2.14) (2026-08-09)
+
+
+### Bug Fixes
+
+* **operations:** false trivial-containment on thin revolved cutters + untrimmed-arc volume misreads ([#1501](https://github.com/andymai/brepkit/issues/1501)) ([ca8c1ad](https://github.com/andymai/brepkit/commit/ca8c1ad35e406e4510c20a889b63977afb2c360f))
+
 ## [3.2.13](https://github.com/andymai/brepkit/compare/v3.2.12...v3.2.13) (2026-08-09)
 
 
