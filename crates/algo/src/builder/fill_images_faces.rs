@@ -324,6 +324,22 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             has_sections,
             sections.len()
         );
+        // `BK_SECEDGE=1`: the clipped 3D extent of every section handed to the
+        // splitter for this face — the level at which a section that survived
+        // phase FF can still be clipped to the wrong window (#1510).
+        if std::env::var("BK_SECEDGE").is_ok() {
+            for (i, s) in sections.iter().enumerate() {
+                log::debug!(
+                    "SECEDGE face={face_id:?} #{i} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                    s.start.x(),
+                    s.start.y(),
+                    s.start.z(),
+                    s.end.x(),
+                    s.end.y(),
+                    s.end.z()
+                );
+            }
+        }
         if sections.is_empty() {
             let expanded =
                 rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
