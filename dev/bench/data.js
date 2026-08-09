@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786246476111,
+  "lastUpdate": 1786248393130,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25865,6 +25865,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25924063,
             "range": "± 85096",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ff1e5977273bc1a2b3c0c47df8b208b133c8827c",
+          "message": "docs(roadmap): night sweep — ignore inventory clean, ready queue empty (#1484)\n\nThe maintenance sweep after the day's campaigns: every remaining\n`#[ignore]` is an explicit diagnostic or slow-test marker (zero\ndeferred-defect pins), and every roadmap row is closed, parked with\nrationale, terminal, or owner-gated. Records that state so the next\nsession hunts new signal instead of re-scanning.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates `SKILL.md` with the 2026-08-08 night sweep: the `#[ignore]`\ninventory is clean (only diagnostics/slow-test markers) and the ready\nqueue is empty. Directs the next session to hunt new signal (fresh\nissues, CI regressions, tool re-measures) instead of re-scanning parked\nrows.\n\n<sup>Written for commit ffd1528731c70066bff371d294d8f6dfb6ce01a3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1484?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T04:03:57Z",
+          "tree_id": "e6361165f513493cb31a714271713e1add9e9925",
+          "url": "https://github.com/andymai/brepkit/commit/ff1e5977273bc1a2b3c0c47df8b208b133c8827c"
+        },
+        "date": 1786248391200,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1006929,
+            "range": "± 13219",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1093742,
+            "range": "± 35203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13219,
+            "range": "± 249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 720533,
+            "range": "± 1185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27270937,
+            "range": "± 40370",
             "unit": "ns/iter"
           }
         ]
