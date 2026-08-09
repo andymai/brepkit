@@ -25,13 +25,18 @@
 //! verdict wins, and the whole back wall vanishes — leaving a 10-edge hole.
 //!
 //! The split that would separate them runs along z=16.000 for |x| in
-//! [38, 40.550], between the bin's top annulus and the bracket's back wall. It
-//! is present for |x| < 38 and absent outside it, and |x|=38 is precisely the
-//! tangency point — so the missing section is the one beginning at the graze.
+//! [38, 40.550]. Phase FF DOES compute that section across the full width —
+//! `BK_FF_DUMP` reports the Id(18)/Id(23) section spanning x -40.550..40.550 —
+//! but only its |x| < 38 portion ends up bounding the sub-face. So the defect
+//! is not a missed section; it is that the section's outer pieces are never
+//! applied as split edges here. x=+-38 is where the section gets broken, being
+//! the tangency point, which points at pave-block attachment rather than at
+//! section computation.
 //!
 //! Ready-repro: the assertion below is what a fix must satisfy. It is ignored
-//! because the fix belongs at the graze/section level (phase FF or the section
-//! clip) and every change there has to clear the full face-splitter foil set.
+//! because every change in that area has to clear the full face-splitter foil
+//! set (d4 gridfinity, honeycomb pcut1/pcut3, divider-lip, groove-mouth,
+//! junction-disc, cylinder-slot, a1corner).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
