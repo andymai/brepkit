@@ -56,9 +56,11 @@ enumerate the current match sites.
 
 ## Semver enforcement
 
-CI runs `cargo semver-checks` on every PR as an **advisory** check. It reports
-API breakage against the published baseline but does not block the merge, and it
-is not part of the required `CI Pass` gate.
+CI runs `cargo semver-checks` on every PR as an **advisory** check, scoped to
+the consumer-surface crates above (the internal crates promise no stability, so
+checking them only reports breaks this policy already permits). It reports API
+breakage against the published baseline but does not block the merge, and it is
+not part of the required `CI Pass` gate.
 
 That is deliberate. The kernel is under active development and the enum change
 above is planned, so a blocking gate would force major bumps on routine work
