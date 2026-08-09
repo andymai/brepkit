@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.16](https://github.com/andymai/brepkit/compare/v3.2.15...v3.2.16) (2026-08-09)
+
+
+### Bug Fixes
+
+* **operations:** make the tessellation phase timer a wasm no-op ([#1506](https://github.com/andymai/brepkit/issues/1506)) ([b04e0bf](https://github.com/andymai/brepkit/commit/b04e0bfda9725b52fe81064fffe5263e83343d9c))
+
 ## [3.2.15](https://github.com/andymai/brepkit/compare/v3.2.14...v3.2.15) (2026-08-09)
 
 
