@@ -1,0 +1,20 @@
+crates/operations/src/pipe.rs
+  s_8b449c7ef64a35::t_f4c1501c1edd9a 376-377
+  s_8b449c7ef64a35::t_e44dcd8566ba82 264
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "82c51c1b59be0556f22325d68cf453b18274b51c",
+  "prompts": {},
+  "sessions": {
+    "s_8b449c7ef64a35": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fda9d98b-5159-4373-b1b4-cb5cf7cb52e2",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
