@@ -3142,7 +3142,7 @@ fn compute_raw_curves(
 
         (FaceSurface::Plane { normal, d }, other) if other.as_analytic().is_some() => {
             if let Some(analytic) = other.as_analytic() {
-                plane_analytic_intersection(*normal, *d, &analytic)
+                plane_analytic_intersection(*normal, *d, &analytic, bbox_a, bbox_b)
             } else {
                 Ok(Vec::new())
             }
@@ -3150,7 +3150,7 @@ fn compute_raw_curves(
 
         (other, FaceSurface::Plane { normal, d }) if other.as_analytic().is_some() => {
             if let Some(analytic) = other.as_analytic() {
-                plane_analytic_intersection(*normal, *d, &analytic)
+                plane_analytic_intersection(*normal, *d, &analytic, bbox_a, bbox_b)
             } else {
                 Ok(Vec::new())
             }
@@ -3405,10 +3405,83 @@ fn find_plane_plane_point(na: Vec3, da: f64, nb: Vec3, db: f64, dir: Vec3) -> Po
 }
 
 /// Plane-analytic surface intersection using exact curves.
+/// Split a sampled section chain into the runs that can reach the two faces'
+/// AABB overlap.
+///
+/// Downstream (the in-both sample filter and `restrict_curves_to_faces`)
+/// keeps only curve spans inside both faces' inflated AABBs, so chain points
+/// whose adjacent segments cannot touch the overlap contribute nothing but
+/// interpolation cost. Each segment is tested against the boxes expanded by
+/// its own chord length (absorbing sampling sagitta) plus a fixed guard; kept
+/// runs are dilated by two neighbors per side so a sub-pitch boundary
+/// crossing keeps enough support for the fit and the downstream refinement
+/// to find it.
+fn clip_chain_to_pair_boxes(pts: &[Point3], bbox_a: &Aabb3, bbox_b: &Aabb3) -> Vec<Vec<Point3>> {
+    const GUARD: f64 = 1e-3;
+    const DILATE: usize = 2;
+    let n = pts.len();
+    if n < 8 {
+        return vec![pts.to_vec()];
+    }
+    // A closed chain (sampled loop, first point repeated last) is circular:
+    // segment tests, dilation, and run extraction must wrap through the
+    // arbitrary chain start, or a kept span crossing it gets split into two
+    // open curves whose seam endpoints lie on no face boundary.
+    let closed = (pts[0] - pts[n - 1]).length() < 1e-9;
+    let m = if closed { n - 1 } else { n };
+    let seg_count = if closed { m } else { n - 1 };
+    let mut keep = vec![false; m];
+    for i in 0..seg_count {
+        let j = (i + 1) % m;
+        let (p, q) = (pts[i], pts[if closed { j } else { i + 1 }]);
+        let g = (q - p).length() + GUARD;
+        if segment_meets_both_boxes(p, q, bbox_a.expanded(g), bbox_b.expanded(g)) {
+            keep[i] = true;
+            keep[j] = true;
+        }
+    }
+    if !keep.iter().any(|&k| k) {
+        return Vec::new();
+    }
+    // A closed section loop stays whole: the band splitters downstream
+    // consume the closed curve (seam handling, tube severing), and open
+    // sub-arcs with endpoints on no face boundary break them. The win is
+    // still the common one — a loop that never reaches the overlap is
+    // dropped above, and unbounded conic branches (the expensive 512-point
+    // chains) are open and get clipped below.
+    if closed {
+        return vec![pts.to_vec()];
+    }
+    let mut dilated = keep.clone();
+    for (i, d) in dilated.iter_mut().enumerate() {
+        if !*d {
+            *d = (1..=DILATE).any(|off| keep[i.saturating_sub(off)] || keep[(i + off).min(m - 1)]);
+        }
+    }
+    if dilated.iter().all(|&k| k) {
+        return vec![pts.to_vec()];
+    }
+    let mut runs: Vec<Vec<Point3>> = Vec::new();
+    let mut current: Vec<Point3> = Vec::new();
+    for (i, &k) in dilated.iter().enumerate() {
+        if k {
+            current.push(pts[i]);
+        } else if !current.is_empty() {
+            runs.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        runs.push(current);
+    }
+    runs
+}
+
 fn plane_analytic_intersection(
     normal: Vec3,
     d: f64,
     analytic: &analytic_intersection::AnalyticSurface<'_>,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
 ) -> Result<Vec<RawCurve>, AlgoError> {
     let exact_curves = analytic_intersection::exact_plane_analytic(*analytic, normal, d)?;
 
@@ -3442,45 +3515,57 @@ fn plane_analytic_intersection(
                 });
             }
             analytic_intersection::ExactIntersectionCurve::Points(pts) => {
-                // A tangential contact can sample as one point repeated N
-                // times (adjacent half-socket corner cylinders touching the
-                // body wall): interpolation through duplicate points is
-                // singular and used to abort the whole boolean into the mesh
-                // fallback. Deduplicate first; fewer than 2 distinct points
-                // is a point contact, not a section curve — skip it (point
-                // interferences are EE/EF/VF territory).
-                let mut pts_dedup: Vec<Point3> = Vec::with_capacity(pts.len());
-                for &p in &pts {
-                    if pts_dedup.last().is_none_or(|&q| {
-                        (p - q).length() > brepkit_math::tolerance::Tolerance::new().linear
-                    }) {
-                        pts_dedup.push(p);
+                // The sampled chain spans the UNBOUNDED section conic (a
+                // hyperbola from a wall plane grazing a taper cone covers
+                // 8x the vertex radius), while everything downstream keeps
+                // only spans inside both faces' inflated AABBs. Fitting the
+                // full chain feeds `interpolate`'s dense O(n^3) solve with
+                // ~512 points per pair — the whole baseplate fuse budget
+                // (#1488). Clip to the segments that can reach the pair's
+                // AABB overlap first (with neighbor padding so boundary
+                // crossings keep local shape support) and fit per run.
+                let lin_tol = brepkit_math::tolerance::Tolerance::new().linear;
+                for pts in clip_chain_to_pair_boxes(&pts, bbox_a, bbox_b) {
+                    // A tangential contact can sample as one point repeated N
+                    // times (adjacent half-socket corner cylinders touching the
+                    // body wall): interpolation through duplicate points is
+                    // singular and used to abort the whole boolean into the mesh
+                    // fallback. Deduplicate first; fewer than 2 distinct points
+                    // is a point contact, not a section curve — skip it (point
+                    // interferences are EE/EF/VF territory).
+                    let mut pts_dedup: Vec<Point3> = Vec::with_capacity(pts.len());
+                    for &p in &pts {
+                        if pts_dedup.last().is_none_or(|&q| (p - q).length() > lin_tol) {
+                            pts_dedup.push(p);
+                        }
                     }
+                    // Fewer than 3 distinct survivors from a dense sample means
+                    // the whole "curve" spans tolerance scale — a chord through
+                    // 2 barely-distinct points would only mint micro edges.
+                    if pts_dedup.len() < 3 {
+                        continue;
+                    }
+                    let pts = pts_dedup;
+                    crate::perf::bump_section_fit_points(pts.len() as u64);
+                    // Fit a degree-3 NURBS curve through the sampled points
+                    let nurbs =
+                        brepkit_math::nurbs::fitting::interpolate(&pts, 3.min(pts.len() - 1))
+                            .map_err(|e| {
+                                AlgoError::IntersectionFailed(format!("NURBS fit failed: {e}"))
+                            })?;
+                    let t_range = nurbs.domain();
+                    let bbox = Aabb3::try_from_points(pts.iter().copied()).ok_or_else(|| {
+                        AlgoError::IntersectionFailed("empty points for NURBS fit".into())
+                    })?;
+                    let end_pt = pts[pts.len() - 1];
+                    results.push(RawCurve {
+                        curve: EdgeCurve::NurbsCurve(nurbs),
+                        bbox,
+                        t_range,
+                        p_start: pts[0],
+                        p_end: end_pt,
+                    });
                 }
-                // Fewer than 3 distinct survivors from a dense sample means
-                // the whole "curve" spans tolerance scale — a chord through
-                // 2 barely-distinct points would only mint micro edges.
-                if pts_dedup.len() < 3 {
-                    continue;
-                }
-                let pts = pts_dedup;
-                // Fit a degree-3 NURBS curve through the sampled points
-                let nurbs = brepkit_math::nurbs::fitting::interpolate(&pts, 3.min(pts.len() - 1))
-                    .map_err(|e| {
-                    AlgoError::IntersectionFailed(format!("NURBS fit failed: {e}"))
-                })?;
-                let t_range = nurbs.domain();
-                let bbox = Aabb3::try_from_points(pts.iter().copied()).ok_or_else(|| {
-                    AlgoError::IntersectionFailed("empty points for NURBS fit".into())
-                })?;
-                let end_pt = pts[pts.len() - 1];
-                results.push(RawCurve {
-                    curve: EdgeCurve::NurbsCurve(nurbs),
-                    bbox,
-                    t_range,
-                    p_start: pts[0],
-                    p_end: end_pt,
-                });
             }
         }
     }

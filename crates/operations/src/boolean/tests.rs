@@ -7342,3 +7342,123 @@ fn mesh_fallback_counter_records_fallbacks() {
         "edge-touching fuse should route through the mesh fallback and increment the counter"
     );
 }
+
+/// A gridfinity-style baseplate pocket: a ruled loft of rounded-rect
+/// sections, full cell size at the top (walls land exactly on the cell
+/// boundary) tapering inward below. At pitch == cell size, adjacent pockets'
+/// wall planes are coplanar and each wall plane is tangent to the neighbor's
+/// corner cones — the #1488 grazing configuration.
+#[cfg(feature = "perf-counters")]
+fn make_plate_pocket(topo: &mut Topology, cx: f64, cy: f64) -> SolidId {
+    let cell = 42.0;
+    let sections = [
+        (1.0, 0.0),
+        (0.0, 0.0),
+        (-0.25, 0.0),
+        (-2.4, 2.15),
+        (-4.2, 2.15),
+        (-5.0, 2.95),
+        (-6.0, 2.95),
+    ];
+    let profs: Vec<brepkit_topology::face::FaceId> = sections
+        .iter()
+        .map(|&(z, inset): &(f64, f64)| {
+            let w = cell - 2.0 * inset;
+            let r = (4.0_f64 - inset).max(0.1);
+            make_offset_rounded_rect_face(topo, cx, cy, w, r, z)
+        })
+        .collect();
+    crate::loft::loft(topo, &profs).unwrap()
+}
+
+#[cfg(feature = "perf-counters")]
+fn make_offset_rounded_rect_face(
+    topo: &mut Topology,
+    cx: f64,
+    cy: f64,
+    w: f64,
+    r: f64,
+    z: f64,
+) -> brepkit_topology::face::FaceId {
+    use brepkit_math::curves::Circle3D;
+    let tol_val = 1e-7;
+    let c = w / 2.0 - r;
+    let corners = [
+        (cx + c, cy + c, 0.0_f64),
+        (cx - c, cy + c, 90.0),
+        (cx - c, cy - c, 180.0),
+        (cx + c, cy - c, 270.0),
+    ];
+    let pt = |kx: f64, ky: f64, deg: f64| {
+        let a = deg.to_radians();
+        Point3::new(kx + r * a.cos(), ky + r * a.sin(), z)
+    };
+    let mut vids = Vec::new();
+    for &(kx, ky, a0) in &corners {
+        vids.push(topo.add_vertex(Vertex::new(pt(kx, ky, a0), tol_val)));
+        vids.push(topo.add_vertex(Vertex::new(pt(kx, ky, a0 + 90.0), tol_val)));
+    }
+    let mut oes = Vec::new();
+    for (k, &(kx, ky, _)) in corners.iter().enumerate() {
+        let circle = Circle3D::new(Point3::new(kx, ky, z), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let arc = topo.add_edge(Edge::new(
+            vids[2 * k],
+            vids[2 * k + 1],
+            EdgeCurve::Circle(circle),
+        ));
+        oes.push(OrientedEdge::new(arc, true));
+        let line = topo.add_edge(Edge::new(
+            vids[2 * k + 1],
+            vids[(2 * k + 2) % 8],
+            EdgeCurve::Line,
+        ));
+        oes.push(OrientedEdge::new(line, true));
+    }
+    let wid = topo.add_wire(Wire::new(oes, true).unwrap());
+    topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z,
+        },
+    ))
+}
+
+/// Complexity guard for the #1488 baseplate regression: a wall plane grazing
+/// a neighbor pocket's taper cone samples the section hyperbola across the
+/// UNBOUNDED cone; without `clip_chain_to_pair_boxes` the full ~512-point
+/// chain feeds the dense O(n³) interpolation per grazing pair (~60ms each,
+/// the whole plate fuse budget). Counting fit points keeps the guard
+/// deterministic. Bounds calibrated on the fixed path; reverting the clip
+/// sends the grazing count into the thousands.
+#[cfg(feature = "perf-counters")]
+#[test]
+fn tangent_graze_section_fit_is_clipped() {
+    // Two pockets at exact cell pitch: coplanar walls, tangent cones.
+    let mut topo = Topology::new();
+    let a = make_plate_pocket(&mut topo, 21.0, 21.0);
+    let b = make_plate_pocket(&mut topo, 63.0, 21.0);
+    brepkit_algo::perf::reset();
+    brepkit_algo::gfa::fuse_n(&mut topo, &[a, b]).unwrap();
+    let graze = brepkit_algo::perf::snapshot().section_fit_points;
+
+    // Same pockets genuinely overlapping: real plane×cone crossings must
+    // still fit their (clipped) sections, proving the counter is live.
+    let mut topo = Topology::new();
+    let a = make_plate_pocket(&mut topo, 21.0, 21.0);
+    let b = make_plate_pocket(&mut topo, 51.0, 21.0);
+    brepkit_algo::perf::reset();
+    brepkit_algo::gfa::fuse_n(&mut topo, &[a, b]).unwrap();
+    let overlap = brepkit_algo::perf::snapshot().section_fit_points;
+
+    eprintln!("section_fit_points: graze={graze} overlap={overlap}");
+    assert!(
+        overlap > 0,
+        "overlapping-pocket fuse should exercise the sampled section-fit path"
+    );
+    assert!(
+        graze < 600,
+        "grazing-pocket fuse fit {graze} section points — the chain clip regressed"
+    );
+}
