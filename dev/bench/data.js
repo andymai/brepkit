@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786307387346,
+  "lastUpdate": 1786309088109,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27053,6 +27053,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24781794,
             "range": "± 186344",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37f3b115fbd845ca194a8a794232450857276d7c",
+          "message": "docs(roadmap): 4x4 mag no-lip at parity on 3.2.16, label bracket residual isolated (#1510) (#1511)\n\nRoadmap maintenance for the bin-row re-measure requested in the #1488\nclosing comment and filed as #1510.\n\n- The 4x4 mag no-lip row closed at parity on 3.2.16 (396 vs 398ms\nin-suite, 393 vs 400ms cold median, same-session reference run); moved\nby the #1502 splice spatial hash.\n- The 2x2 label bracket row's OPEN entry now carries the stage\nattribution: cold median already ahead (135 vs 152ms), warm gap entirely\nin the boolean stage (83 vs 26ms, label shelf+gusset fuse), next step\noperand capture + native replay.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRecord the 3.2.16 bin-row re‑measure from #1510 in the roadmap. 4x4 mag\nno‑lip is now at parity (moved by #1502), and the 2x2 label bracket\nwarm-path gap is isolated to the boolean stage; next step is operand\ncapture and native replay.\n\n<sup>Written for commit 640ade3aa412f26305fe2270563b36011a03d427.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1511?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T20:55:35Z",
+          "tree_id": "abf14bba0a3dc78ac59e4cadefe59e9f677df951",
+          "url": "https://github.com/andymai/brepkit/commit/37f3b115fbd845ca194a8a794232450857276d7c"
+        },
+        "date": 1786309085313,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 921049,
+            "range": "± 1524",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1007566,
+            "range": "± 1489",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11992,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 664380,
+            "range": "± 878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24823694,
+            "range": "± 63986",
             "unit": "ns/iter"
           }
         ]
