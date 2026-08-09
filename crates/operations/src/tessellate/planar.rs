@@ -357,14 +357,23 @@ pub(super) fn tessellate_planar(
                 );
             }
             EdgeCurve::NurbsCurve(nurbs) => {
+                // Endpoint-trimmed convention (see `sample_edge`): a validated
+                // sub-span samples only the edge's own piece of a shared parent
+                // curve. Sampling the full knot domain traces the whole parent
+                // arc and drags the boundary through the split-away region —
+                // a cap wire then self-crosses and the CDT folds (gh #1499).
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
                 let (u0, u1) = nurbs.domain();
+                let is_subspan = (t0 - u0).abs() > 1e-12 || (t1 - u1).abs() > 1e-12;
                 let n_spans = nurbs
                     .control_points()
                     .len()
                     .saturating_sub(nurbs.degree())
                     .max(1);
                 let coarse_n = (n_spans * 4).clamp(8, 128);
-                let max_dev = measure_max_chord_deviation(nurbs, u0, u1, coarse_n);
+                let max_dev = measure_max_chord_deviation(nurbs, t0, t1, coarse_n);
                 #[allow(clippy::cast_sign_loss)]
                 let n_samples = if max_dev <= deflection {
                     coarse_n
@@ -372,12 +381,18 @@ pub(super) fn tessellate_planar(
                     ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
                 }
                 .clamp(8, 4096);
-                let forward = oe.is_forward()
-                    != super::edge_sampling::nurbs_runs_end_to_start(topo, edge, nurbs)?;
+                // A sub-span is already endpoint-ordered (start→end); only a
+                // full-domain curve may run end→start.
+                let forward = if is_subspan {
+                    oe.is_forward()
+                } else {
+                    oe.is_forward()
+                        != super::edge_sampling::nurbs_runs_end_to_start(topo, edge, nurbs)?
+                };
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| nurbs.evaluate(t),
-                    &|i| u0 + (u1 - u0) * (i as f64) / (n_samples as f64),
+                    &|i| t0 + (t1 - t0) * (i as f64) / (n_samples as f64),
                     n_samples,
                     forward,
                     &mut positions,
