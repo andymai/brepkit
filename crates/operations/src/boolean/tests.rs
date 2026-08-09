@@ -7548,3 +7548,103 @@ fn tangent_graze_section_fit_is_clipped() {
         "grazing-pocket fuse fit {graze} section points — the chain clip regressed"
     );
 }
+
+/// gh #1499: an annular wedge (partial revolve) about the Z axis.
+///
+/// Profile rectangle r0..r1 × z0..z1 in the y=0 plane, revolved by `angle`,
+/// then rotated so its angular span starts at `start_angle`.
+fn make_annular_wedge(
+    topo: &mut Topology,
+    r0: f64,
+    r1: f64,
+    z0: f64,
+    z1: f64,
+    angle: f64,
+    start_angle: f64,
+) -> SolidId {
+    use brepkit_topology::builder::make_polygon_wire;
+
+    let wire = make_polygon_wire(
+        topo,
+        &[
+            Point3::new(r0, 0.0, z0),
+            Point3::new(r1, 0.0, z0),
+            Point3::new(r1, 0.0, z1),
+            Point3::new(r0, 0.0, z1),
+        ],
+        1e-7,
+    )
+    .unwrap();
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: 0.0,
+        },
+    ));
+    let solid = crate::revolve::revolve(
+        topo,
+        face,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        angle,
+    )
+    .unwrap();
+    if start_angle != 0.0 {
+        crate::transform::transform_solid(
+            topo,
+            solid,
+            &brepkit_math::mat::Mat4::rotation_z(start_angle),
+        )
+        .unwrap();
+    }
+    solid
+}
+
+#[test]
+fn cut_wedge_by_thin_radial_strut_is_not_empty() {
+    // gh #1499: the kumiko corner cutter. A wide annular wedge cut by a thin
+    // radial strut that pokes through it (wider radially and axially, but a
+    // fraction of the angular span — 3.4× smaller by volume). The strut can
+    // NOT contain the wedge, yet the trivial-containment shortcut declared
+    // "target fully contained in tool" and returned EmptyResult:
+    //  - neither operand builds an analytic classifier (two different-radius
+    //    cylinders), so containment fell to the AABB-only fallback;
+    //  - `solid_bounding_box` expands partial cylinder faces to the FULL
+    //    circle, so the thin strut's box ballooned to ±r1 and strictly
+    //    contained the wedge's box in all three dims;
+    //  - the `center_outside` witness was disabled because the wedge's AABB
+    //    center sits in its own annular hole.
+    use crate::measure::solid_volume;
+
+    let mut topo = Topology::new();
+    // Faithful to the failing tool call: base vol ≈ 175.7, tool vol ≈ 52.1,
+    // tool AABB ⊋ base AABB by just over 10% in every dim.
+    let base = make_annular_wedge(&mut topo, 2.85, 4.75, 2.7, 13.8, 2.2, 0.0);
+    let tool = make_annular_wedge(&mut topo, 2.8, 5.25, 2.1, 14.4, 0.44, 0.88);
+
+    let base_vol = solid_volume(&topo, base, 0.01).unwrap();
+    let tool_vol = solid_volume(&topo, tool, 0.01).unwrap();
+    assert!(
+        base_vol > tool_vol * 3.0,
+        "precondition: tool ({tool_vol}) must be much smaller than base ({base_vol})"
+    );
+
+    let result = boolean(&mut topo, BooleanOp::Cut, base, tool)
+        .expect("cut must not be trivially empty: the tool cannot contain the base");
+    let cut_vol = solid_volume(&topo, result, 0.01).unwrap();
+
+    // Volume invariant: vol(A−B) + vol(A∩B) = vol(A).
+    let overlap = boolean(&mut topo, BooleanOp::Intersect, base, tool)
+        .expect("operands overlap, intersect must not be empty");
+    let overlap_vol = solid_volume(&topo, overlap, 0.01).unwrap();
+    assert!(
+        overlap_vol > 1.0,
+        "the strut pokes through the wedge, overlap must be substantial, got {overlap_vol}"
+    );
+    assert!(
+        (cut_vol + overlap_vol - base_vol).abs() / base_vol < 0.01,
+        "vol(A−B) + vol(A∩B) = vol(A) violated: {cut_vol} + {overlap_vol} ≠ {base_vol}"
+    );
+}

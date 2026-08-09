@@ -1463,10 +1463,14 @@ fn analytic_cylinder_signed_volume(
             // `EdgeCurve::Circle`. Sample its domain midpoint too, or a partial
             // (sub-2π) band has only its two endpoint angles, `compute_angular_range`
             // falls back to the full 2π, and the band over-counts (gh #968).
+            // Use the endpoint-trimmed sub-span: a boolean-split edge shares its
+            // parent curve, whose full-domain midpoint lies outside the edge and
+            // widens the angular range (gh #1499).
             if !edge.is_closed()
                 && let brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) = edge.curve()
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
             {
-                let (t0, t1) = nc.domain();
+                let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
                 let (u, _) = cyl.project_point(nc.evaluate(f64::midpoint(t0, t1)));
                 u_vals.push(u);
             }
@@ -1494,6 +1498,11 @@ fn analytic_cylinder_signed_volume(
     let (sin1, cos1) = u1.sin_cos();
     let (sin2, cos2) = u2.sin_cos();
 
+    if std::env::var("BK_VOL_TRACE").is_ok() {
+        log::debug!(
+            "VOL_TRACE cyl {face_id:?} u_vals={u_vals:?} u_range=({u1},{u2}) h={h} r={r} ox={ox} oy={oy}"
+        );
+    }
     let vol = (r / 3.0) * h * (ox * (sin2 - sin1) + oy * (-cos2 + cos1) + r * (u2 - u1));
 
     Ok(if face.is_reversed() { -vol } else { vol })
@@ -1749,11 +1758,13 @@ fn analytic_cone_signed_volume(
             }
             // Sample NURBS revolution-band arcs too (see the cylinder case, #968).
             // Skip an arc that degenerates to the apex (v ≈ 0), where u is
-            // undefined.
+            // undefined. Endpoint-trimmed sub-span for boolean-split edges
+            // sharing a parent curve (gh #1499).
             if !edge.is_closed()
                 && let brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) = edge.curve()
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
             {
-                let (t0, t1) = nc.domain();
+                let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
                 let (u, v) = cone.project_point(nc.evaluate(f64::midpoint(t0, t1)));
                 if v.abs() > 1e-9 {
                     u_vals.push(u);
@@ -1997,7 +2008,7 @@ fn analytic_torus_signed_volume(
                         Some(circle.evaluate(mid_t))
                     }
                     brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => {
-                        let (t0, t1) = nc.domain();
+                        let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
                         Some(nc.evaluate(f64::midpoint(t0, t1)))
                     }
                     _ => None,
@@ -2185,6 +2196,14 @@ pub fn volume_from_direct_face_tessellation(
             face_total += a.dot(b.cross(c));
         }
 
+        if std::env::var("BK_VOL_TRACE").is_ok() {
+            log::debug!(
+                "VOL_TRACE direct planar face {:?} -> {} (tris={})",
+                fid,
+                face_total / 6.0,
+                tri_count
+            );
+        }
         total += face_total;
     }
 

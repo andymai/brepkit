@@ -2250,6 +2250,33 @@ fn detect_trivial_relation(
             inside_inner && outside_outer
         };
 
+    // Volume witness for the AABB-only fallback: `inner ⊆ outer` implies
+    // `vol(inner) ≤ vol(outer)`, so a decisively larger inner volume proves
+    // non-containment. This catches what `center_outside` cannot: the AABB
+    // expansion for partial cylinder/cone faces is a conservative full-circle
+    // bound, so a thin angular wedge's box balloons to the whole cylinder
+    // footprint and can "strictly contain" a much bigger solid's box, while
+    // the bigger solid's own AABB center sits in its annular hole and
+    // disables the center witness (gh #1499, the kumiko corner cutter).
+    // Volumes are immune to that inflation. The 1.05 factor absorbs
+    // deflection under-counting on curved faces so a true containment is
+    // never rejected; errors fall through to "no refutation" (shortcut
+    // soundness is then up to the remaining witnesses, as before).
+    let volume_refutes = |topo: &Topology, inner: SolidId, outer: SolidId| -> bool {
+        let defl = |bb: &Option<(Point3, Point3)>| {
+            let Some((lo, hi)) = *bb else { return 1e-3 };
+            let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
+            (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6)
+        };
+        let (Ok(vi), Ok(vo)) = (
+            crate::measure::solid_volume(topo, inner, defl(&aabb_a).min(defl(&aabb_b))),
+            crate::measure::solid_volume(topo, outer, defl(&aabb_a).min(defl(&aabb_b))),
+        ) else {
+            return false;
+        };
+        vi > vo * 1.05
+    };
+
     // Bidirectional vertex check via the analytic classifier — the
     // primary signal for identical/containment classification. A vertex
     // classifying as inside-or-on (None within tolerance band counts
@@ -2282,10 +2309,14 @@ fn detect_trivial_relation(
     // with the `center_outside` witness — sound for every path because it
     // only fires on proven non-containment (see the lemma above).
     let b_in_a = ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
-        || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a)))
+        || (ca.is_none()
+            && aabb_strictly_contains(&aabb_b, &aabb_a)
+            && !volume_refutes(topo, b, a)))
         && !center_outside(topo, b, a, &aabb_b);
     let a_in_b = ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
-        || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b)))
+        || (cb.is_none()
+            && aabb_strictly_contains(&aabb_a, &aabb_b)
+            && !volume_refutes(topo, a, b)))
         && !center_outside(topo, a, b, &aabb_a);
 
     TrivialRelation {
