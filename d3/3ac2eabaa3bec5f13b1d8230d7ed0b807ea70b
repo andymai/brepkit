@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_ebd5d306222845::t_a1d993b904c056 281-291
+STABILITY.md
+  s_ebd5d306222845::t_95fab4156facef 59-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d33ac2eabaa3bec5f13b1d8230d7ed0b807ea70b",
+  "prompts": {},
+  "sessions": {
+    "s_ebd5d306222845": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "38a9d413-25be-4e02-bbe0-cc4e043536bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
