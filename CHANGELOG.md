@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.2.6](https://github.com/andymai/brepkit/compare/v3.2.5...v3.2.6) (2026-08-09)
+
+
+### Bug Fixes
+
+* **operations:** orient CDT face meshes by an area-weighted normal vote ([#1469](https://github.com/andymai/brepkit/issues/1469)) ([a2e029e](https://github.com/andymai/brepkit/commit/a2e029e31e764f1c7f10572c9b96399226622585))
+
+
+### Performance
+
+* **blend:** O(E) sense lookup in orientation propagation ([#1468](https://github.com/andymai/brepkit/issues/1468)) ([8c21365](https://github.com/andymai/brepkit/commit/8c21365539dca93555d1c35321c1024f0d5633cb))
+
 ## [3.2.5](https://github.com/andymai/brepkit/compare/v3.2.4...v3.2.5) (2026-08-08)
 
 
