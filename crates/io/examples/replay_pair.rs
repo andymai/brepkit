@@ -309,14 +309,51 @@ fn main() {
         return;
     }
 
+    println!("-- operations::boolean {op} --");
+    let ops_op = match op.as_str() {
+        "cut" => brepkit_operations::boolean::BooleanOp::Cut,
+        "intersect" => brepkit_operations::boolean::BooleanOp::Intersect,
+        _ => brepkit_operations::boolean::BooleanOp::Fuse,
+    };
+    let before = brepkit_operations::boolean::mesh_fallback_count();
+    let t = std::time::Instant::now();
+    match brepkit_operations::boolean::boolean(&mut topo, ops_op, a, b) {
+        Ok(sid) => {
+            let ms = t.elapsed().as_millis();
+            let fell_back = brepkit_operations::boolean::mesh_fallback_count() > before;
+            describe(
+                &topo,
+                sid,
+                &format!(
+                    "OPS {op} {ms}ms{}",
+                    if fell_back { " [MESH FALLBACK]" } else { "" }
+                ),
+            );
+        }
+        Err(e) => println!("  OPS {op} FAILED in {}ms: {e}", t.elapsed().as_millis()),
+    }
+
     println!("-- raw GFA {op} --");
     let t = std::time::Instant::now();
     match brepkit_algo::gfa::boolean(&mut topo, bop, a, b) {
-        Ok(sid) => describe(
-            &topo,
-            sid,
-            &format!("RAW {op} {}ms", t.elapsed().as_millis()),
-        ),
+        Ok(sid) => {
+            describe(
+                &topo,
+                sid,
+                &format!("RAW {op} {}ms", t.elapsed().as_millis()),
+            );
+            // OUT=<path> serializes the RAW result so region probes can run
+            // on it without the ops-level heals in between.
+            if let Ok(out) = std::env::var("OUT") {
+                match brepkit_io::arena_io::serialize_solid(&topo, sid) {
+                    Ok(bytes) => {
+                        std::fs::write(&out, bytes).unwrap();
+                        println!("  wrote raw result to {out}");
+                    }
+                    Err(e) => println!("  serialize failed: {e}"),
+                }
+            }
+        }
         Err(e) => println!("  RAW {op} FAILED in {}ms: {e}", t.elapsed().as_millis()),
     }
 }
