@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.17](https://github.com/andymai/brepkit/compare/v3.2.16...v3.2.17) (2026-08-09)
+
+
+### Bug Fixes
+
+* **io:** pin the [#1510](https://github.com/andymai/brepkit/issues/1510) label-bracket fuse repro and the probes that found it ([#1512](https://github.com/andymai/brepkit/issues/1512)) ([c59f0db](https://github.com/andymai/brepkit/commit/c59f0db16d8a5ea053639c26cc187676b5284d54))
+
 ## [3.2.16](https://github.com/andymai/brepkit/compare/v3.2.15...v3.2.16) (2026-08-09)
 
 
