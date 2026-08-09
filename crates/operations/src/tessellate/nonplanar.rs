@@ -1938,13 +1938,46 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
 
+    // The CDT's UV winding is internally consistent but can be inverted as
+    // a whole against the surface: a pinched parameterization (a horn torus
+    // corner patch, where the base arc's UV image degenerates) triangulates
+    // cleanly yet winds against the outward normal. Decide ONE flip for the
+    // whole face by an area-weighted vote of geometric-vs-surface normal
+    // agreement, keeping internal consistency (per-triangle flips near the
+    // pinch scatter, where the sampled normal is unreliable). Default
+    // (non-reversed) orientation is emitted; the caller applies the
+    // `is_reversed` flip afterward.
+    let mut vote = 0.0;
+    for &(i0, i1, i2) in &triangles {
+        if i0 < 3 || i1 < 3 || i2 < 3 {
+            continue;
+        }
+        let (p0, p1, p2) = (
+            merged.positions[final_global_ids[i0] as usize],
+            merged.positions[final_global_ids[i1] as usize],
+            merged.positions[final_global_ids[i2] as usize],
+        );
+        let geo = (p1 - p0).cross(p2 - p0);
+        let (uv0, uv1, uv2) = (cdt_verts[i0], cdt_verts[i1], cdt_verts[i2]);
+        let uc = (uv0.x() + uv1.x() + uv2.x()) / 3.0;
+        let vc = (uv0.y() + uv1.y() + uv2.y()) / 3.0;
+        let outward = face_data.surface().normal(uc, vc);
+        vote += geo.dot(outward);
+    }
+    let flip_all = vote < 0.0;
     for (i0, i1, i2) in triangles {
         if i0 < 3 || i1 < 3 || i2 < 3 {
             continue; // Skip super-triangle vertices
         }
-        merged.indices.push(final_global_ids[i0]);
-        merged.indices.push(final_global_ids[i1]);
-        merged.indices.push(final_global_ids[i2]);
+        if flip_all {
+            merged.indices.push(final_global_ids[i0]);
+            merged.indices.push(final_global_ids[i2]);
+            merged.indices.push(final_global_ids[i1]);
+        } else {
+            merged.indices.push(final_global_ids[i0]);
+            merged.indices.push(final_global_ids[i1]);
+            merged.indices.push(final_global_ids[i2]);
+        }
     }
 
     Ok(())
