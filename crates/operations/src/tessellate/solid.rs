@@ -283,6 +283,13 @@ fn tessellate_solid_core(
                     if let Some(pts) = edge_points.get(&edge_idx)
                         && pts.len() < expected_count
                     {
+                        if tess_trace() {
+                            log::debug!(
+                                "sync e{edge_idx}: {} -> {expected_count} demanded by {face_id:?} {}",
+                                pts.len(),
+                                face_data.surface().type_tag()
+                            );
+                        }
                         let (t_start, t_end) = circle_param_range(topo, edge_data, circle)?;
                         let new_pts = brepkit_geometry::sampling::sample_uniform(
                             circle,
