@@ -7,6 +7,17 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasher;
+use std::sync::LazyLock;
+
+/// `BK_SECEDGE=1`: the clipped 3D extent of every section handed to the
+/// splitter — the level at which a section that survived phase FF can still be
+/// clipped to the wrong window (#1510). Read once; these sit on hot paths.
+static TRACE_SECEDGE: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_SECEDGE").is_ok());
+
+/// `BK_CLIPTRACE=1`: per-call chord vs true-arc crossings in
+/// `clip_line_to_face_boundary`, which is what separates a chord-short clip
+/// from a genuinely absent section.
+static TRACE_CLIP: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_CLIPTRACE").is_ok());
 
 /// Quantized 3D position pair for CommonBlock edge matching.
 type CbEdgeKey = ((i64, i64, i64), (i64, i64, i64));
@@ -324,10 +335,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             has_sections,
             sections.len()
         );
-        // `BK_SECEDGE=1`: the clipped 3D extent of every section handed to the
-        // splitter for this face — the level at which a section that survived
-        // phase FF can still be clipped to the wrong window (#1510).
-        if std::env::var("BK_SECEDGE").is_ok() {
+        if *TRACE_SECEDGE {
             for (i, s) in sections.iter().enumerate() {
                 log::debug!(
                     "SECEDGE face={face_id:?} #{i} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
@@ -2853,6 +2861,33 @@ fn clip_line_to_face_boundary(
     // sections — pre-splitting them here breaks its bookkeeping (the groove
     // chain regressed). Hole-free faces have no weave; their concave bites
     // live on the OUTER wire where the outermost-pair heuristic overshoots.
+    if *TRACE_CLIP {
+        let pt = |t: f64| line_start + line_dir * t;
+        log::debug!(
+            "CLIPTRACE face={face_id:?} holed={} line ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) crossings={:?} ext={:?}",
+            !face.inner_wires().is_empty(),
+            line_start.x(),
+            line_start.y(),
+            line_start.z(),
+            line_end.x(),
+            line_end.y(),
+            line_end.z(),
+            crossings
+                .iter()
+                .map(|&t| {
+                    let p = pt(t);
+                    (t, p.x(), p.y())
+                })
+                .collect::<Vec<_>>(),
+            crossings_ext
+                .iter()
+                .map(|&t| {
+                    let p = pt(t);
+                    (t, p.x(), p.y())
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
     let t_intervals: Vec<(f64, f64)> = if face.inner_wires().is_empty()
         && let (Some(frame), Some(poly)) = (plane_frame.as_ref(), poly.as_ref())
     {
@@ -2884,11 +2919,22 @@ fn clip_line_to_face_boundary(
             })
             .collect()
     } else {
-        // Non-plane fallback: the historical outermost pair.
-        vec![(
-            crossings[0].clamp(0.0, 1.0),
-            crossings[crossings.len() - 1].clamp(0.0, 1.0),
-        )]
+        // Non-plane fallback: the historical outermost pair — but over the
+        // TRUE-arc crossings as well as the chord ones. A chord crossing sits
+        // a sagitta inside its arc, so on a face whose boundary corners are
+        // arcs the pair alone stops short of the real boundary and the section
+        // never reaches the face edge (#1510: 39.200 is where the outer corner
+        // chord meets y=40.550; the arc meets it at 40.7495, and a cut ending
+        // at the chord cannot separate the piece beyond it).
+        let outer = crossings
+            .iter()
+            .chain(crossings_ext.iter())
+            .map(|t| t.clamp(0.0, 1.0));
+        let lo = outer
+            .clone()
+            .fold(f64::INFINITY, |a: f64, b| if b < a { b } else { a });
+        let hi = outer.fold(f64::NEG_INFINITY, |a: f64, b| if b > a { b } else { a });
+        vec![(lo, hi)]
     };
 
     let t_tol = tol / line_len;
