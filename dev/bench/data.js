@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786252357665,
+  "lastUpdate": 1786254537850,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26027,6 +26027,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25537224,
             "range": "± 46013",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "652e336b044489fd3aed49e55542ae1cc7a7a645",
+          "message": "ci(publish): publish only from the release event (#1486)\n\n## Why main went red on v3.2.10\n\nEvery release triggers publish.yml twice: the push of the release-please\nmerge commit, and the `release: created` event fired seconds later. When\nrelease-please succeeds fully on the push run, its `release_created`\noutput makes that run publish too, so two publishers race the\nregistries.\n\nOn v3.2.10 the push run lost both races and turned main red:\n- npm: E403 \"cannot publish over 3.2.10\" (the release-event run\npublished first), and the race-condition `npm view` fallback still saw\nnothing due to registry read-after-write lag.\n- crates.io: \"crate version 3.2.10 is already uploaded\" for\nbrepkit-math.\n\nFor 3.2.4 through 3.2.9 the push run stayed green only because\nrelease-please crashed before setting `release_created`, so the push run\nskipped publishing by accident.\n\n## Fix\n\nDrop the `release_created` fallback from both publish jobs.\nrelease-please creates the GitHub release with the bot app token, so the\n`release: created` event always fires (default-token event suppression\ndoes not apply) and that run is the single publisher.\n`workflow_dispatch` stays as the manual escape hatch.\n\nPush runs to main now only run release-please and auto-merge; the\npublish jobs are skipped.\n\n## Not fixed here\n\nThe release-event run itself still fails at `brepkit-topology` with 403\n\"token not valid for crate\": crates.io trusted publishing is configured\nfor math + geometry only. That is #1424 and needs registry-side web UI\nconfig. npm 3.2.10 and math/geometry 3.2.10 are published; re-running\nthe crates job after #1424 finishes the batch.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPublish only from the GitHub Release event (or manual dispatch) to stop\ndouble publishes that race and fail. This makes publishing deterministic\nand prevents npm/crates.io “already published” errors.\n\n- **Bug Fixes**\n- Removed the `release_created` fallback and `needs.release-please` from\nboth publish jobs in `.github/workflows/publish.yml`.\n- Publish now triggers only on `release: created` or\n`workflow_dispatch`; push runs no longer publish.\n- Simplified `TAG_NAME` resolution by dropping\n`needs.release-please.outputs.tag_name`.\n\n<sup>Written for commit 457dc45bca9452590d5e1cb6d3ca4b61e20a0dad.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1486?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T05:46:37Z",
+          "tree_id": "7ab5ef78b0a49e130a76864642134a2462d6b266",
+          "url": "https://github.com/andymai/brepkit/commit/652e336b044489fd3aed49e55542ae1cc7a7a645"
+        },
+        "date": 1786254535738,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960968,
+            "range": "± 4966",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1039955,
+            "range": "± 1215",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12046,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706921,
+            "range": "± 1209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25584641,
+            "range": "± 486219",
             "unit": "ns/iter"
           }
         ]
