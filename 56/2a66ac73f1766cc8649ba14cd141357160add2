@@ -2,6 +2,8 @@ crates/operations/src/pipe.rs
   s_8b449c7ef64a35::t_e7522f22f5b80e 88-95,109,264,387-389,399-402
   s_8b449c7ef64a35::t_4858839586f035 459-485,503-505
   s_8b449c7ef64a35::t_4d173d74507005 127,171,486-502
+.claude/skills/roadmap/SKILL.md
+  s_8b449c7ef64a35::t_5127bee729e98f 143
 ---
 {
   "schema_version": "authorship/3.0.0",
