@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786261190434,
+  "lastUpdate": 1786261806049,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26297,6 +26297,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25577129,
             "range": "± 44880",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa565552b5a7a7f2fb8e24b3507ca6989593e358",
+          "message": "docs(roadmap): prune closed-campaign rot from the skill (#1493)\n\n## Summary\n\nThe roadmap skill had grown to 936 lines (~50k tokens), mostly\npass-by-pass dig logs and multi-thousand-word table rows for campaigns\nthat are closed — violating its own one-line-plus-pointer doctrine (the\n29-pass kumiko log alone was ~370 lines for a case closed in #1302).\n\n## What changed\n\n- Every closed campaign collapsed to a one-liner with its fixture/PR\npointer in the Closed section; dig logs deleted (the detail lives in\nfixture doc comments, git history, and MEMORY.md).\n- Durable content preserved and consolidated: TERMINAL cases, refuted\napproaches (thick-wall exact-corner, pendant-bridge gating,\ncluster-canonical adoption, etc.), recurring traps (plus the\nface-interior sampling rule, the verify-the-binary lesson, the\noperands-first nondeterminism method), tool-side recipes (plus the\nUint32Array capture gotcha and the durable BK_* instrument index).\n- Stale status refreshed: the ready queue now carries the #1488\ntool-side re-measure (kernel root closed in #1490, shipped in 3.2.12);\nthe generator baseline is the 2026-08-07 272-file run; today's closures\n(#1487, #1488 kernel side) recorded; the pinch-shim double-cover moved\nto TERMINAL where it belongs.\n- New explicit rule: closing a case means deleting its dig log, not\nappending to it.\n\n936 → 420 lines (−779/+264).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPruned closed-campaign bloat in `SKILL.md` to restore the\none-line-plus-pointer rule and refresh roadmap status. Cuts the file\nfrom 936 to ~420 lines for faster scanning.\n\n- **Refactors**\n- Collapsed all closed campaigns to one line with a fixture/PR pointer;\ndeleted their dig logs (details live in fixture comments, git history,\nand MEMORY.md).\n- Consolidated durable content into clear sections: TERMINAL cases,\nrefuted approaches, recurring traps, and tool-side recipes; moved\npinch-shim double-cover to TERMINAL.\n- Refreshed status: ready queue adds #1488 tool-side re-measure; kernel\nroot closed in #1490 (shipped in 3.2.12); generator baseline set to the\n2026-08-07 272-file run; recorded closures for #1487 and #1488 (kernel\nside).\n  - New rule: closing a case means deleting its dig log.\n\n<sup>Written for commit 5e4580545ce613d2fba876acaceca501123d122e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1493?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T07:47:37Z",
+          "tree_id": "7d62de80009a51a5c02de1b740ac00f5c2221739",
+          "url": "https://github.com/andymai/brepkit/commit/fa565552b5a7a7f2fb8e24b3507ca6989593e358"
+        },
+        "date": 1786261803915,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 953392,
+            "range": "± 1332",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1031189,
+            "range": "± 930",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11802,
+            "range": "± 293",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706035,
+            "range": "± 13051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25490601,
+            "range": "± 29809",
             "unit": "ns/iter"
           }
         ]
