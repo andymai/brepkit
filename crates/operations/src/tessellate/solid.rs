@@ -761,9 +761,9 @@ fn tessellate_solid_core(
     Ok((merged, tri_faces, all_faces.len()))
 }
 
-/// `BK_TESS_TRACE=1`: log each face's mesher-arm dispatch. Resolved ONCE per
-/// process — the dispatch runs per face and must not pay an env lookup each
-/// call.
+/// `BK_TESS_TRACE` (any value): log each face's mesher-arm dispatch.
+/// Resolved ONCE per process — the dispatch runs per face and must not pay
+/// an env lookup each call.
 fn tess_trace() -> bool {
     static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *TRACE.get_or_init(|| std::env::var("BK_TESS_TRACE").is_ok())
