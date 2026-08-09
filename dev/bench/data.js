@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786259434098,
+  "lastUpdate": 1786259954584,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26135,6 +26135,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25536022,
             "range": "± 83071",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ed3baec96670f6439be3c0443d97660d5577d43",
+          "message": "chore(main): release 3.2.11 (#1491)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.11](https://github.com/andymai/brepkit/compare/v3.2.10...v3.2.11)\n(2026-08-09)\n\n\n### Bug Fixes\n\n* **operations:** cover constraint-recovery Steiner vertices in the CDT\nlift ([#1489](https://github.com/andymai/brepkit/issues/1489))\n([5358552](https://github.com/andymai/brepkit/commit/5358552b7067cd021603972e8e3c9e94b1121149))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.11 improves triangulation robustness by including\nconstraint-recovery Steiner vertices in the CDT lift. This prevents\nmissing coverage in certain operations.\n\n- **Bug Fixes**\n- `brepkit-operations`: cover constraint-recovery Steiner vertices in\nthe CDT lift to ensure full triangulation coverage.\n\n<sup>Written for commit 72e8176c5902658ee96fe91fe31dbbb24fce2d43.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1491?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T07:16:48Z",
+          "tree_id": "2287a733784a2e79e9dc477d066b7981d409bdba",
+          "url": "https://github.com/andymai/brepkit/commit/7ed3baec96670f6439be3c0443d97660d5577d43"
+        },
+        "date": 1786259951828,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960063,
+            "range": "± 4028",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1042520,
+            "range": "± 1603",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11880,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701024,
+            "range": "± 2296",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25585003,
+            "range": "± 86424",
             "unit": "ns/iter"
           }
         ]
