@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786265924299,
+  "lastUpdate": 1786266342504,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26459,6 +26459,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25569302,
             "range": "± 47711",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "02480ad1ece4be0d793fb37b30bfce299e6d9296",
+          "message": "chore(main): release 3.2.13 (#1496)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.13](https://github.com/andymai/brepkit/compare/v3.2.12...v3.2.13)\n(2026-08-09)\n\n\n### Bug Fixes\n\n* **operations:** bail compound_cut batching on fallback-tainted cluster\nfuses ([#1495](https://github.com/andymai/brepkit/issues/1495))\n([e78d905](https://github.com/andymai/brepkit/commit/e78d905cd85cd07b640d90fab8d65aef06a24c73))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.13 bumps workspace versions and includes a bug fix in\n`brepkit-operations` to handle a batching edge case.\n\n- **Bug Fixes**\n- Stop `compound_cut` batching when fallback-tainted cluster fuses are\ndetected to prevent unsafe fallbacks.\n\n- **Dependencies**\n- Bump all `brepkit-*` workspace crates to 3.2.13 and update the release\nmanifest.\n\n<sup>Written for commit d67ac5a3dcc1cbc75bcb019c1232abfa3cf3d749.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1496?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T09:03:14Z",
+          "tree_id": "7a6c4993b676e76d6af27cc5594ad02177a0fdeb",
+          "url": "https://github.com/andymai/brepkit/commit/02480ad1ece4be0d793fb37b30bfce299e6d9296"
+        },
+        "date": 1786266340361,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 933268,
+            "range": "± 14882",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1011262,
+            "range": "± 2006",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11809,
+            "range": "± 122",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 668785,
+            "range": "± 928",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24958671,
+            "range": "± 74506",
             "unit": "ns/iter"
           }
         ]
