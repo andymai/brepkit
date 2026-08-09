@@ -124,7 +124,7 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **#1488 baseplate perf** | KERNEL-SIDE CLOSED, verified on released 3.2.13 (2026-08-09, same-machine stage breakdown, gridfinity-layout-tool#3348 harness): plates went from 4-27x behind to parity-or-faster on 3 of 4 rows (6x4 magnets residual 1.25x, no pathological stage). Two roots: #1490 (grazing plane-cone chains fed the O(n³) fit) and #1495 (edge-tangent PREVIEW pockets made every cluster fuse mesh-fallback; the blob poisoned every later boolean — the non-monotonic corner-clip anomaly was its collateral). Issue closure is Andy's re-run. Guards: `tangent_graze_section_fit_is_clipped`, `compound_cut_edge_tangent_tools_stays_analytic`; repro/probe paths in the memory `project_baseplate-graze-perf` |
+| **Stagnant bin rows: 4x4 mag no-lip 1.72x, 2x2 label bracket 1.59x** | Behind the reference kernel since 3.2.1, unmoved by the #1488 campaign (every other row is parity-or-faster on 3.2.13). Combined tool-side report with per-stage breakdown requested in the #1488 closing comment; wait for that before profiling |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -136,6 +136,14 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **#1488 baseplate perf (CLOSED 2026-08-09 on released 3.2.13, tool-side confirmed)** —
+  4-27x behind became 0.84x aggregate across all 22 scenarios; 4 of 6 plates faster than
+  the reference kernel, 6x4 magnets residual 1.22x with no dominant stage. Two roots: #1490 (below) and
+  #1495 (edge-tangent PREVIEW pockets made every cluster fuse mesh-fallback; the
+  all-planar blob poisoned every later boolean; the non-monotonic corner-clip anomaly
+  and the plain-slower-than-magnets inversion were both its collateral). Guard
+  `compound_cut_edge_tangent_tools_stays_analytic`; full story in the issue thread and
+  memory `project_baseplate-graze-perf`
 - **FF sampled plane-analytic chains fit unclipped (#1488 kernel side)** — grazing
   plane-cone hyperbolas fed ~512 points to the dense O(n³) interpolate per pair; clipped
   to the face-pair AABB overlap, closed loops stay whole-or-dropped (torus-notch canary).
