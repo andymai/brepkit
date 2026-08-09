@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786311103348,
+  "lastUpdate": 1786314523478,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27215,6 +27215,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25547576,
             "range": "± 30614",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "12f85f6ca8a328ef097c2e3b667cd32341f36c35",
+          "message": "fix(algo): clip a holed face's section to the true arc, not its chord (#1510) (#1514)\n\nCloses #1510.\n\n## Root cause\n\n`clip_line_to_face_boundary` collects **chord** crossings of the\nboundary in `crossings` and **true-arc** crossings in `crossings_ext`.\nThe hole-free branch considers both. The holed-face fallback took the\noutermost pair over `crossings` alone — so on a face whose boundary\ncorners are arcs, the section stopped a sagitta short of the real\nboundary.\n\nIn the label-bracket fuse the bin's top face is an annulus (holed) whose\nouter corner arc runs (38, 41.75) → (41.75, 38). That chord is `x + y =\n79.75`, which meets y=40.550 at **x=39.200**, where the true arc meets\nit at **40.7495**. The section therefore never reached the face edge and\ncould not separate the piece beyond it, leaving a sub-face that\nstraddled the bin's boundary — its columns inside the material, its top\nstrip outside. One classification verdict cannot be right for that, the\ndrop verdict won, and the whole back wall vanished.\n\nThis is the roadmap's own \"chord polygons under-covering by a sagitta\"\nclass.\n\n## The fix\n\nTake the outermost pair over the true-arc crossings as well as the chord\nones. It still yields **one** interval, so the whole-section contract\nthat the hole weave is calibrated on — and whose violation regressed the\ngroove chain previously, per the comment there — is unchanged.\n\n## Result on the pinned repro\n\n| | before | after |\n| --- | --- | --- |\n| `operations::boolean` | 34ms, **mesh fallback** | **11ms**, no\nfallback |\n| faces | 121, all planar | 58, **all 8 cylinders kept** |\n| free edges | 10 (open shell) | **0** |\n| unmatched directed half-edges | — | **0** |\n| volume | 15898.021 — *above* the operand sum of 15895.792, which a\nfuse cannot produce | 15892.242 |\n\n`labelbracket_fuse_closes_the_back_wall` is un-ignored and passing, so\nthe `#[ignore]` inventory returns to zero deferred-defect pins (verified\nby regenerating it).\n\n## Verification\n\n- Full workspace suite `--no-fail-fast --exclude brepkit-render`: **2734\npassed, 0 failed**.\n- `cargo test -p brepkit-wasm --lib gridfinity`: 27 passed (the suite\nthat has caught regressions this file's neighbours caused before).\n- Face-splitter foils, by name: d4, honeycomb/pcut, divider-lip,\ngroove-mouth, junction-disc, a1corner, corner-cylinder/cylinder-slot,\nlipband, kumiko, scoop, slotted, oshape, mixed — all pass, zero\nfailures.\n- `approx_census`: no new fallbacks; the only rows that fall back are\nthe known-approximate ones (torus fillet/chamfer walker, offset_face\nSSI, pyramid corner patch, NURBS-loft offset).\n\n## Instruments added\n\n- `BK_SECEDGE` (new) — per-face clipped section extents. `BK_FF_DUMP`\nshows what phase FF computed; it cannot show what survives the per-face\nclip, and here those disagreed, which is why the section looked healthy\nwhile the split was already wrong.\n- `BK_CLIP` (existing, extended) — already dumped this call's chord and\ntrue-arc crossings, so the second env var I first added was duplication\nand is gone. It now also maps each crossing to a 3D point and reports\nwhether the face is holed; the raw `t` values alone do not show that a\nclip stopped at 39.200 where the boundary is at 40.7495, which is what\nmade this legible.\n\nBoth resolve through a `LazyLock` read once per process rather than per\ncall, since they sit on hot paths.\n\n## On the outermost-pair warning in this function\n\nThe comment below the change warns that outermost-pair is only right\nwhen arcs bulge **outward**, and that an **inward**-bulging arc (a\nsocket-bite circle carving the face) makes chord crossings overshoot the\ntrue material. This change is safe against that case: for an inward arc\nthe true-arc crossings lie *inside* the chord ones, so the min/max over\nthe union is still the chord pair and behaviour is unchanged. It only\nextends where the arc bulges outward, which is where the chord was\nshort.\n\n`crossings` is already sorted before this branch, so replacing\n`crossings[0]`/`crossings[last]` with min/max is equivalent on that set;\nthe only behavioural change is the inclusion of `crossings_ext`. The\nguard above (`crossings.len() < 2 && !single_crossing_ok`, where\n`single_crossing_ok` requires a hole-free plane) means the fold is never\nempty on this path.\n\n## Not verified here\n\nTool-side impact. `wasm-pack` is broken in this sandbox (missing\n`libbz2.so.1.0`), so no local overlay is possible; this needs the normal\nrelease path and a tool-side re-measure of the label-bracket row on the\npublished version.",
+          "timestamp": "2026-08-09T22:26:15Z",
+          "tree_id": "9844eb0f7d9720822c72ac0260e126fc9ab37e0a",
+          "url": "https://github.com/andymai/brepkit/commit/12f85f6ca8a328ef097c2e3b667cd32341f36c35"
+        },
+        "date": 1786314521220,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 955131,
+            "range": "± 26598",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1032530,
+            "range": "± 28611",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11798,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704985,
+            "range": "± 1910",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25325166,
+            "range": "± 43256",
             "unit": "ns/iter"
           }
         ]
