@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786301317206,
+  "lastUpdate": 1786305962765,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26945,6 +26945,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26767706,
             "range": "± 63781",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f8aef24c9b7db7b1a714510e1745ef993ee11c36",
+          "message": "chore(main): release 3.2.16 (#1507)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.16](https://github.com/andymai/brepkit/compare/v3.2.15...v3.2.16)\n(2026-08-09)\n\n\n### Bug Fixes\n\n* **operations:** make the tessellation phase timer a wasm no-op\n([#1506](https://github.com/andymai/brepkit/issues/1506))\n([b04e0bf](https://github.com/andymai/brepkit/commit/b04e0bfda9725b52fe81064fffe5263e83343d9c))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.16. In WASM builds, the tessellation phase timer is now a\nno-op to remove overhead and avoid timing issues; native builds are\nunaffected.\n\n<sup>Written for commit caa1957eb6c2fc44f38861443f6ff1fd3fafe987.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1507?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T20:03:38Z",
+          "tree_id": "57e35bb7e7f29985ea87d700b9437989538bf54a",
+          "url": "https://github.com/andymai/brepkit/commit/f8aef24c9b7db7b1a714510e1745ef993ee11c36"
+        },
+        "date": 1786305960585,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 959999,
+            "range": "± 1843",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1037359,
+            "range": "± 3687",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12025,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707825,
+            "range": "± 2354",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25396468,
+            "range": "± 34042",
             "unit": "ns/iter"
           }
         ]
