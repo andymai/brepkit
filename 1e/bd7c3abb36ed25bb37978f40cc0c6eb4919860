@@ -1,0 +1,23 @@
+crates/operations/src/tessellate/tests.rs
+  s_ebd5d306222845::t_0e156bb663c0f9 2266-2267
+  s_ebd5d306222845::t_7f6c35f947b70c 2254-2262,2264-2265,2268-2312
+  s_ebd5d306222845::t_dfae04e4af7aec 2263
+crates/operations/src/tessellate/nonplanar.rs
+  s_ebd5d306222845::t_52cdb9740af40f 1983-1989
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "1ebd7c3abb36ed25bb37978f40cc0c6eb4919860",
+  "prompts": {},
+  "sessions": {
+    "s_ebd5d306222845": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "38a9d413-25be-4e02-bbe0-cc4e043536bf",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
