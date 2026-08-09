@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786239495051,
+  "lastUpdate": 1786239687170,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25541,6 +25541,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25448605,
             "range": "± 125728",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c2f2363f6cac1153bc257462bc28476a33660a60",
+          "message": "docs(roadmap): park the sub-tolerance mesh residual tail (#1477)\n\nDocuments the two remaining sub-export-tolerance mesh residual classes\nafter #1475 and deliberately parks them: case2's nm=75 triple-used edges\nare inherent to the pinch-shim double-cover encoding (two coincident\nface meshes over one region), and the residual boundary counts\n(15/19/20/21/0/3) are thin-wedge sample drops at tangent contacts, below\nexport tolerance with both tool groupedScoop suites 7/7. Also keeps the\nreplay example's non-manifold edge dump used for the attribution.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments and parks the remaining sub-export-tolerance mesh residuals,\nand keeps the non‑manifold edge dump in the replay example for\nattribution. No behavior changes; groupedScoop exports remain green.\n\n- **Docs**\n- Explain the two residual classes and why they’re not pursued: case2’s\ntriple‑used edges are inherent to the pinch‑shim double‑cover; the\nremaining boundary counts (15/19/20/21/0/3) are thin‑wedge sample drops\nat tangent contacts and sit below export tolerance. Both groupedScoop\nsuites pass 7/7.\n\n- **Examples**\n- In `crates/io/examples/replay_fillet_variable.rs`, log non‑manifold\nedges with use count ≥3, including endpoint coordinates, to aid future\nattribution.\n\n<sup>Written for commit e6b3110e810d73b76da226173df0c9b6f7a7beef.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1477?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T01:38:59Z",
+          "tree_id": "5e4191279d38fcfa5a2b2919f2fa2a30a66f086d",
+          "url": "https://github.com/andymai/brepkit/commit/c2f2363f6cac1153bc257462bc28476a33660a60"
+        },
+        "date": 1786239684698,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000104,
+            "range": "± 1182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1084753,
+            "range": "± 15385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12960,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713277,
+            "range": "± 2096",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26801017,
+            "range": "± 35527",
             "unit": "ns/iter"
           }
         ]
