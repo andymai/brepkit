@@ -234,6 +234,35 @@ fn main() {
             .filter(|t| !t.trim().is_empty())
             .map(|t| deserialize_solid(&std::fs::read(t.trim()).unwrap(), &mut topo).unwrap())
             .collect();
+        if std::env::var("TOOLS_SEQ").is_ok() {
+            println!("-- sequential cuts with {} tools --", tools.len());
+            let t = std::time::Instant::now();
+            let mut cur = a;
+            let mut failed = false;
+            for (i, &tool) in tools.iter().enumerate() {
+                match brepkit_operations::boolean::boolean(
+                    &mut topo,
+                    brepkit_operations::boolean::BooleanOp::Cut,
+                    cur,
+                    tool,
+                ) {
+                    Ok(next) => cur = next,
+                    Err(e) => {
+                        println!("  cut {i} FAILED: {e}");
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            if !failed {
+                describe(
+                    &topo,
+                    cur,
+                    &format!("sequential {}ms", t.elapsed().as_millis()),
+                );
+            }
+            return;
+        }
         println!("-- compound_cut with {} tools --", tools.len());
         let t = std::time::Instant::now();
         match brepkit_operations::boolean::compound_cut(

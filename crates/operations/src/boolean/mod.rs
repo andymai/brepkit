@@ -919,6 +919,14 @@ pub fn compound_cut(
         && let Some(clusters) = cluster_tools_by_aabb(topo, tools)
         && !clusters.is_empty()
     {
+        // Tools that merely TOUCH (a plate's edge-tangent preview pockets)
+        // cluster together by AABB, and their union is genuinely non-manifold,
+        // so every pairwise fuse below "succeeds" through the mesh fallback —
+        // the batch then proceeds with a degraded all-planar tool and the cut
+        // grinds against it (11 s and lost cones on a 4x4 baseplate, #1488).
+        // A fallback-tainted merge is a FAILED merge for batching purposes:
+        // the sequential per-tool cuts are exact and never see the tangency.
+        let fallbacks_before = mesh_fallback_count();
         let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
             let fused = fuse_cluster(topo, cluster)?;
             match acc {
@@ -927,6 +935,7 @@ pub fn compound_cut(
             }
         });
         if let Ok(Some(tool)) = merged
+            && mesh_fallback_count() == fallbacks_before
             && let Ok(cut) = boolean(topo, BooleanOp::Cut, target, tool)
         {
             result = cut;
@@ -976,8 +985,25 @@ pub(crate) fn fuse_cluster(
     {
         return Ok(fused);
     }
-    rest.iter()
-        .try_fold(first, |a, &t| boolean(topo, BooleanOp::Fuse, a, t))
+    // A pairwise fuse that degrades to the mesh fallback poisons the whole
+    // batch (see the taint gate in `compound_cut`); bail at the first one
+    // instead of paying the fallback for every remaining pair.
+    rest.iter().try_fold(first, |a, &t| {
+        let before = mesh_fallback_count();
+        let fused = boolean(topo, BooleanOp::Fuse, a, t)?;
+        if mesh_fallback_count() > before {
+            // The degraded fuse is DISCARDED, so its increment must not leak:
+            // export pipelines snapshot-and-diff the counter to refuse
+            // degraded results (#1445), and a probe that never reaches any
+            // result would read as phantom degradation. Unwind exactly our
+            // own call's increment (one per boolean() call, no recursion).
+            MESH_FALLBACK_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "cluster fuse degraded to mesh fallback".to_string(),
+            });
+        }
+        Ok(fused)
+    })
 }
 
 /// Group tools into AABB-overlap clusters (union-find over tolerance-

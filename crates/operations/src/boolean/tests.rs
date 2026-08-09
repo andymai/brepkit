@@ -7350,16 +7350,28 @@ fn mesh_fallback_counter_records_fallbacks() {
 /// corner cones — the #1488 grazing configuration.
 #[cfg(feature = "perf-counters")]
 fn make_plate_pocket(topo: &mut Topology, cx: f64, cy: f64) -> SolidId {
+    make_plate_pocket_profiled(topo, cx, cy, false)
+}
+
+/// `simplified` mirrors the tool's preview cutter (2 sections + through
+/// extension): walls slant from full cell size straight to the bottom inset,
+/// so adjacent pockets touch only along their shared top EDGE — the
+/// non-manifold-union configuration.
+fn make_plate_pocket_profiled(topo: &mut Topology, cx: f64, cy: f64, simplified: bool) -> SolidId {
     let cell = 42.0;
-    let sections = [
-        (1.0, 0.0),
-        (0.0, 0.0),
-        (-0.25, 0.0),
-        (-2.4, 2.15),
-        (-4.2, 2.15),
-        (-5.0, 2.95),
-        (-6.0, 2.95),
-    ];
+    let sections: &[(f64, f64)] = if simplified {
+        &[(1.0, 0.0), (-5.0, 2.95), (-6.0, 2.95)]
+    } else {
+        &[
+            (1.0, 0.0),
+            (0.0, 0.0),
+            (-0.25, 0.0),
+            (-2.4, 2.15),
+            (-4.2, 2.15),
+            (-5.0, 2.95),
+            (-6.0, 2.95),
+        ]
+    };
     let profs: Vec<brepkit_topology::face::FaceId> = sections
         .iter()
         .map(|&(z, inset): &(f64, f64)| {
@@ -7371,7 +7383,6 @@ fn make_plate_pocket(topo: &mut Topology, cx: f64, cy: f64) -> SolidId {
     crate::loft::loft(topo, &profs).unwrap()
 }
 
-#[cfg(feature = "perf-counters")]
 fn make_offset_rounded_rect_face(
     topo: &mut Topology,
     cx: f64,
@@ -7423,6 +7434,81 @@ fn make_offset_rounded_rect_face(
             d: z,
         },
     ))
+}
+
+/// #1488 phase 2 (the app-path 10x): the tool's PREVIEW pocket cutter is a
+/// 2-section loft whose pockets touch only along shared top edges. Their
+/// union is genuinely non-manifold, so `fuse_cluster`'s pairwise fuses all
+/// degraded to the mesh fallback and `compound_cut` batched against an
+/// all-planar blob (11 s and lost cones on the 4x4 plate). A fallback-
+/// tainted merge now bails to the exact sequential cuts.
+#[test]
+fn compound_cut_edge_tangent_tools_stays_analytic() {
+    // The global fallback counter is shared across parallel tests, so a
+    // concurrent test's genuine fallback can land inside this window. A
+    // REAL leak from the discarded probe fuse is deterministic (+1 on every
+    // run); race noise is not — retry up to 3 fresh runs and require one
+    // clean window. Deterministic single-pass under nextest.
+    let mut counter_clean = false;
+    for _ in 0..3 {
+        let mut topo = Topology::new();
+        let slab = crate::primitives::make_box(&mut topo, 84.0, 84.0, 5.0).unwrap();
+        let mut pockets = Vec::new();
+        for i in 0..2 {
+            for j in 0..2 {
+                let p = make_plate_pocket_profiled(
+                    &mut topo,
+                    21.0 + 42.0 * f64::from(i),
+                    21.0 + 42.0 * f64::from(j),
+                    true,
+                );
+                // The pocket loft opens downward from z=+1; the slab occupies
+                // z in [0,5], so shift the pockets to cut from the slab top.
+                crate::transform::transform_solid(
+                    &mut topo,
+                    p,
+                    &brepkit_math::mat::Mat4::translation(0.0, 0.0, 5.0),
+                )
+                .unwrap();
+                pockets.push(p);
+            }
+        }
+
+        let fallbacks_before = super::mesh_fallback_count();
+        let result =
+            super::compound_cut(&mut topo, slab, &pockets, super::BooleanOptions::default())
+                .unwrap();
+        let fallback_delta = super::mesh_fallback_count() - fallbacks_before;
+
+        let face_ids = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        let cones = face_ids
+            .iter()
+            .filter(|&&f| {
+                matches!(
+                    topo.face(f).unwrap().surface(),
+                    brepkit_topology::face::FaceSurface::Cone(_)
+                )
+            })
+            .count();
+        assert!(
+            cones >= 8,
+            "edge-tangent pocket cut lost its analytic cones (got {cones} of {} faces) — \
+             the batch used a mesh-fallback tool",
+            face_ids.len()
+        );
+        let adj = brepkit_topology::adjacency::AdjacencyIndex::build(&topo, result).unwrap();
+        assert_eq!(adj.boundary_edges().len(), 0, "result must be watertight");
+
+        if fallback_delta == 0 {
+            counter_clean = true;
+            break;
+        }
+    }
+    assert!(
+        counter_clean,
+        "fallback counter grew on every attempt: the discarded probe fuse \
+         leaks its increment (export pipelines would read phantom degradation)"
+    );
 }
 
 /// Complexity guard for the #1488 baseplate regression: a wall plane grazing
