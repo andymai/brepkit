@@ -26,9 +26,8 @@ The `#[ignore]` inventory is the load-bearing artifact. Before quoting any
 rg -n -A2 '#\[ignore' crates/    # filter the doc-comment false hits by hand
 ```
 
-**Inventory status (2026-08-09): one deferred-defect pin.**
-`labelbracket_fuse_closes_the_back_wall` (#1510) is a live ready-repro; every other
-`#[ignore]` is an explicit diagnostic or a slow-test marker. Known stale-but-harmless:
+**Inventory status (2026-08-09): CLEAN.** Every remaining `#[ignore]` is an explicit
+diagnostic or a slow-test marker — zero deferred-defect pins. Known stale-but-harmless:
 the `profile_intersect.rs` box-sphere probes (box-sphere shipped analytic in #1006),
 `staircase_fuse_with_cylinders` (~2 min perf run), the two `#696` dovetail entries and
 `diverge_first_cut` (print-only).
@@ -125,7 +124,6 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **Label-bracket fuse opens the shell and mesh-falls-back (#1510)** | ROOT FOUND, unfixed. `fuse(bin, bracket)` returns 10 free edges so the ops layer pays the mesh fallback (121 all-planar vs 57 with 8 cylinders; 95 of the row's 124ms of boolean time). The bracket's SQUARE back corners intrude into the bin's ROUNDED cavity corners, and the cavity cylinder is tangent to y=40.550 at x=+-38, so every section here lies ALONG the annulus's inner boundary rather than crossing it. Phase FF is fine (a "missed graze section" reading was REFUTED). The defect is the PER-FACE clip: `BK_SECEDGE` shows one section clipped to inconsistent windows on the two faces of the pair — the two correct outer windows on the annulus (truncated at +-39.200) but the single WRONG middle window on the back wall, so the wall splits where it must not and not where it must. `clip_line_to_face_boundary` takes per-window midpoint classification only for hole-free faces; the annulus is holed and gets "the historical outermost pair" (the in-code comment records that changing it regressed the groove chain, so any fix wants demand-gating). UNDERIVED: the 39.200 = 38 + 1.2 constant, possibly a second defect. Repro `crates/io/tests/labelbracket_fuse_inmem.rs` (~11ms) |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -137,6 +135,15 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Label-bracket fuse open shell / mesh fallback (CLOSED 2026-08-09, #1510)** —
+  `clip_line_to_face_boundary` kept chord crossings in `crossings` and true-arc ones in
+  `crossings_ext`; the hole-free branch used both, the HOLED-face fallback only the former, so a
+  section on an arc-cornered holed face stopped a sagitta short of the boundary and could not
+  separate the piece beyond it (the bin annulus's outer corner chord meets y=40.550 at 39.200
+  where the arc meets it at 40.7495). 121 all-planar fallback faces in 34ms became 58 keeping all
+  8 cylinders in 11ms, watertight. Fixture `crates/io/tests/labelbracket_fuse_inmem.rs`;
+  instruments `BK_SECEDGE` (per-face clipped section extents) and `BK_CLIPTRACE` (chord vs
+  true-arc crossings) — reach for those first when a section survives FF but the split is wrong.
 - **4x4 mag no-lip bin row (CLOSED 2026-08-09 at parity on 3.2.16, report #1510)** —
   396 vs 398ms in-suite, 393 vs 400ms cold median against a same-session reference run; moved by the
   #1502 splice spatial hash (magnet-hole-circle-heavy tessellation), no bin-targeted work involved.
