@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.7](https://github.com/andymai/brepkit/compare/v3.2.6...v3.2.7) (2026-08-09)
+
+
+### Performance
+
+* **operations:** resolve BK_TESS_TRACE once per process ([#1471](https://github.com/andymai/brepkit/issues/1471)) ([0d25f73](https://github.com/andymai/brepkit/commit/0d25f73bd1946219fee5459c28927f0e14248123))
+
 ## [3.2.6](https://github.com/andymai/brepkit/compare/v3.2.5...v3.2.6) (2026-08-09)
 
 
