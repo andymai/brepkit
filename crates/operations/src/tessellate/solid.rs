@@ -175,16 +175,8 @@ fn tessellate_solid_core(
 
     let all_faces = explorer::solid_faces(topo, solid)?;
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
-    let mut phase_t = std::time::Instant::now();
-    let phase = |label: &str, t: &mut std::time::Instant| {
-        if tess_phases() {
-            log::debug!(
-                "TESS_PHASE {label}: {:.1}ms",
-                t.elapsed().as_secs_f64() * 1e3
-            );
-        }
-        *t = std::time::Instant::now();
-    };
+    let mut phase_t = PhaseTimer::start();
+    let phase = |label: &str, t: &mut PhaseTimer| t.lap(label);
 
     // The map is a std `HashMap`, so sort its keys into ID order before use —
     // keeping all downstream iteration deterministic regardless of
@@ -862,9 +854,45 @@ fn tessellate_solid_core(
 
 /// `BK_TESS_PHASES` (any value): log per-phase wall clock of the solid
 /// tessellation pipeline. Resolved once per process.
+#[cfg(not(target_arch = "wasm32"))]
 fn tess_phases() -> bool {
     static PHASES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PHASES.get_or_init(|| std::env::var("BK_TESS_PHASES").is_ok())
+}
+
+/// Per-phase wall-clock lap timer for `BK_TESS_PHASES` diagnostics.
+///
+/// `std::time::Instant::now()` PANICS on wasm32-unknown-unknown (no time
+/// source), and this runs inside every solid tessellation — the timer must
+/// compile to a no-op there (3.2.15 aborted every wasm solid tessellation
+/// through this call).
+struct PhaseTimer {
+    #[cfg(not(target_arch = "wasm32"))]
+    t: std::time::Instant,
+}
+
+impl PhaseTimer {
+    fn start() -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            t: std::time::Instant::now(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn lap(&mut self, label: &str) {
+        if tess_phases() {
+            log::debug!(
+                "TESS_PHASE {label}: {:.1}ms",
+                self.t.elapsed().as_secs_f64() * 1e3
+            );
+        }
+        self.t = std::time::Instant::now();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unused_self)]
+    fn lap(&mut self, _label: &str) {}
 }
 
 /// `BK_TESS_TRACE` (any value): log each face's mesher-arm dispatch.
