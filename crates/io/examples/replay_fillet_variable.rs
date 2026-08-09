@@ -151,6 +151,15 @@ fn census(topo: &Topology, solid: SolidId, label: &str) {
                             )
                         })
                         .collect();
+                    for (&(a, b), &c) in &edge_uses {
+                        if c >= 3 {
+                            let (pa, pb) = (pos(a), pos(b));
+                            println!(
+                                "  NM x{c} [{a},{b}] ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
+                                pa.0, pa.1, pa.2, pb.0, pb.1, pb.2
+                            );
+                        }
+                    }
                     let mut directed: HashMap<(usize, usize), usize> = HashMap::new();
                     for t in mesh.indices.chunks_exact(3) {
                         let t = [t[0] as usize, t[1] as usize, t[2] as usize];
