@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786299032475,
+  "lastUpdate": 1786299439465,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26675,6 +26675,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26788874,
             "range": "± 40224",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "63e6ba39a17ba41a699fc06aa7a57278c324674c",
+          "message": "chore(main): release 3.2.14 (#1503)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.14](https://github.com/andymai/brepkit/compare/v3.2.13...v3.2.14)\n(2026-08-09)\n\n\n### Bug Fixes\n\n* **operations:** false trivial-containment on thin revolved cutters +\nuntrimmed-arc volume misreads\n([#1501](https://github.com/andymai/brepkit/issues/1501))\n([ca8c1ad](https://github.com/andymai/brepkit/commit/ca8c1ad35e406e4510c20a889b63977afb2c360f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPatch release 3.2.14 fixes incorrect trivial containment on thin\nrevolved cutters and wrong volume reads for untrimmed arcs in\n`brepkit-operations`. Also bumps all `brepkit-*` workspace crates to\n`3.2.14`.\n\n<sup>Written for commit 8c095fd421559f3294567e86a6c2ecc53c9ee1d8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1503?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T18:14:50Z",
+          "tree_id": "cab1cae369a95cefa69c4332b087c98ce9094384",
+          "url": "https://github.com/andymai/brepkit/commit/63e6ba39a17ba41a699fc06aa7a57278c324674c"
+        },
+        "date": 1786299437265,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960729,
+            "range": "± 4130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1042745,
+            "range": "± 3984",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11978,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 705105,
+            "range": "± 6389",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25611346,
+            "range": "± 248044",
             "unit": "ns/iter"
           }
         ]
