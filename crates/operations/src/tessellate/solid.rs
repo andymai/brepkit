@@ -1146,6 +1146,14 @@ pub(super) fn tessellate_face_with_shared_edges(
         }
     }
 
+    if tess_trace() {
+        log::debug!(
+            "tess face {face_id:?} {} tris {}..{}",
+            face_data.surface().type_tag(),
+            idx_start / 3,
+            merged.indices.len() / 3
+        );
+    }
     if is_reversed {
         let idx_end = merged.indices.len();
         let tri_count = (idx_end - idx_start) / 3;
