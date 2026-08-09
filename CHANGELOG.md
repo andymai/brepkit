@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.12](https://github.com/andymai/brepkit/compare/v3.2.11...v3.2.12) (2026-08-09)
+
+
+### Performance
+
+* **algo:** clip sampled plane-analytic section chains to the face-pair overlap ([#1490](https://github.com/andymai/brepkit/issues/1490)) ([c295975](https://github.com/andymai/brepkit/commit/c2959752573233a95b20bf8efbc0ca57099acf51))
+
 ## [3.2.11](https://github.com/andymai/brepkit/compare/v3.2.10...v3.2.11) (2026-08-09)
 
 
