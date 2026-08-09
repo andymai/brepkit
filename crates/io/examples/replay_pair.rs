@@ -271,11 +271,36 @@ fn main() {
             &tools,
             brepkit_operations::boolean::BooleanOptions::default(),
         ) {
-            Ok(sid) => describe(
-                &topo,
-                sid,
-                &format!("compound_cut {}ms", t.elapsed().as_millis()),
-            ),
+            Ok(sid) => {
+                describe(
+                    &topo,
+                    sid,
+                    &format!("compound_cut {}ms", t.elapsed().as_millis()),
+                );
+                // CORNER=<path> follows with an intersect against the given
+                // solid (the baseplate corner-rounding step of #1488).
+                if let Ok(cpath) = std::env::var("CORNER") {
+                    let ctool =
+                        deserialize_solid(&std::fs::read(&cpath).unwrap(), &mut topo).unwrap();
+                    let t2 = std::time::Instant::now();
+                    match brepkit_operations::boolean::boolean(
+                        &mut topo,
+                        brepkit_operations::boolean::BooleanOp::Intersect,
+                        sid,
+                        ctool,
+                    ) {
+                        Ok(rid) => describe(
+                            &topo,
+                            rid,
+                            &format!("corner intersect {}ms", t2.elapsed().as_millis()),
+                        ),
+                        Err(e) => println!(
+                            "  corner intersect FAILED in {}ms: {e}",
+                            t2.elapsed().as_millis()
+                        ),
+                    }
+                }
+            }
             Err(e) => println!(
                 "  compound_cut FAILED in {}ms: {e}",
                 t.elapsed().as_millis()
