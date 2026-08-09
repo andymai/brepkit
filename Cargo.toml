@@ -12,7 +12,7 @@ repository = "https://github.com/andymai/brepkit"
 rust-version = "1.88"
 # Every crate inherits this via `version.workspace = true`. release-please
 # rewrites it, and the `[workspace.dependencies]` versions below, in lockstep.
-version = "3.2.8"
+version = "3.2.9"
 
 [workspace.dependencies]
 # Math
@@ -53,17 +53,17 @@ zip = {version = "8", default-features = false, features = ["deflate"]}
 
 # Workspace crates. The `version` is what consumers resolve from crates.io;
 # `path` only overrides it for in-workspace builds and is stripped on publish.
-brepkit-algo = {path = "crates/algo", version = "3.2.8"}
-brepkit-blend = {path = "crates/blend", version = "3.2.8"}
-brepkit-check = {path = "crates/check", version = "3.2.8"}
-brepkit-geometry = {path = "crates/geometry", version = "3.2.8"}
-brepkit-heal = {path = "crates/heal", version = "3.2.8"}
-brepkit-io = {path = "crates/io", version = "3.2.8"}
-brepkit-math = {path = "crates/math", version = "3.2.8"}
-brepkit-offset = {path = "crates/offset", version = "3.2.8"}
-brepkit-operations = {path = "crates/operations", version = "3.2.8"}
-brepkit-sketch = {path = "crates/sketch", version = "3.2.8"}
-brepkit-topology = {path = "crates/topology", version = "3.2.8"}
+brepkit-algo = {path = "crates/algo", version = "3.2.9"}
+brepkit-blend = {path = "crates/blend", version = "3.2.9"}
+brepkit-check = {path = "crates/check", version = "3.2.9"}
+brepkit-geometry = {path = "crates/geometry", version = "3.2.9"}
+brepkit-heal = {path = "crates/heal", version = "3.2.9"}
+brepkit-io = {path = "crates/io", version = "3.2.9"}
+brepkit-math = {path = "crates/math", version = "3.2.9"}
+brepkit-offset = {path = "crates/offset", version = "3.2.9"}
+brepkit-operations = {path = "crates/operations", version = "3.2.9"}
+brepkit-sketch = {path = "crates/sketch", version = "3.2.9"}
+brepkit-topology = {path = "crates/topology", version = "3.2.9"}
 
 [workspace.lints.rust]
 missing_docs = "warn"

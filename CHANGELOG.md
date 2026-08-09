@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.9](https://github.com/andymai/brepkit/compare/v3.2.8...v3.2.9) (2026-08-09)
+
+
+### Performance
+
+* **operations:** tolerance-driven display tessellation for developable faces ([#1478](https://github.com/andymai/brepkit/issues/1478)) ([2ecfced](https://github.com/andymai/brepkit/commit/2ecfced115c9a4c9c52e0d42c94d23d2523da5ed))
+
 ## [3.2.8](https://github.com/andymai/brepkit/compare/v3.2.7...v3.2.8) (2026-08-09)
 
 
