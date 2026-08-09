@@ -2268,9 +2268,10 @@ fn detect_trivial_relation(
             let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
             (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6)
         };
+        let d = defl(&aabb_a).min(defl(&aabb_b));
         let (Ok(vi), Ok(vo)) = (
-            crate::measure::solid_volume(topo, inner, defl(&aabb_a).min(defl(&aabb_b))),
-            crate::measure::solid_volume(topo, outer, defl(&aabb_a).min(defl(&aabb_b))),
+            crate::measure::solid_volume(topo, inner, d),
+            crate::measure::solid_volume(topo, outer, d),
         ) else {
             return false;
         };

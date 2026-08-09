@@ -1160,6 +1160,12 @@ fn volume_tessellation_deflection(topo: &Topology, solid: SolidId, requested: f6
     requested.min((diag * 5e-5).max(1e-9))
 }
 
+/// Whether `BK_VOL_TRACE` diagnostics are enabled, checked once per process.
+fn vol_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("BK_VOL_TRACE").is_ok())
+}
+
 /// Compute the volume of a solid using the signed tetrahedra method
 /// (divergence theorem on a surface tessellation).
 ///
@@ -1179,7 +1185,7 @@ pub fn solid_volume(
 ) -> Result<f64, crate::OperationsError> {
     // Fast path: exact analytic formula for known primitives.
     if let Some(v) = try_analytic_solid_volume(topo, solid) {
-        if std::env::var("BK_VOL_TRACE").is_ok() {
+        if vol_trace_enabled() {
             log::debug!("VOL_TRACE try_analytic -> {v}");
         }
         return Ok(v);
@@ -1188,7 +1194,7 @@ pub fn solid_volume(
     // Fast path: all faces planar with straight edges — exact polygon
     // divergence integral, no tessellation.
     if let Some(v) = all_planar_line_solid_volume(topo, solid) {
-        if std::env::var("BK_VOL_TRACE").is_ok() {
+        if vol_trace_enabled() {
             log::debug!("VOL_TRACE all_planar_line -> {v}");
         }
         return Ok(v);
@@ -1201,7 +1207,7 @@ pub fn solid_volume(
     // tessellation paths below suffer on bored quadrics (e.g. a cylinder
     // drilled through a sphere).
     if let Some(v) = analytic_faces_solid_volume(topo, solid) {
-        if std::env::var("BK_VOL_TRACE").is_ok() {
+        if vol_trace_enabled() {
             log::debug!("VOL_TRACE analytic_faces -> {v}");
         }
         return Ok(v);
@@ -1214,7 +1220,7 @@ pub fn solid_volume(
     // does NOT catch boolean results that merely happen to have arc-bounded
     // planar faces (rounded-rect caps, arc-frame lips).
     if let Some(v) = analytic_revolution_solid_volume(topo, solid) {
-        if std::env::var("BK_VOL_TRACE").is_ok() {
+        if vol_trace_enabled() {
             log::debug!("VOL_TRACE revolution -> {v}");
         }
         return Ok(v);
@@ -1374,7 +1380,7 @@ fn volume_from_per_face_tessellation(
     for &fid in shell.faces() {
         let mesh = tessellate::tessellate(topo, fid, deflection)?;
         let idx = &mesh.indices;
-        if std::env::var("BK_VOL_TRACE").is_ok() {
+        if vol_trace_enabled() {
             log::debug!("VOL_TRACE direct plane face {fid:?} tris={}", idx.len() / 3);
         }
         let pos = &mesh.positions;
@@ -1498,7 +1504,7 @@ fn analytic_cylinder_signed_volume(
     let (sin1, cos1) = u1.sin_cos();
     let (sin2, cos2) = u2.sin_cos();
 
-    if std::env::var("BK_VOL_TRACE").is_ok() {
+    if vol_trace_enabled() {
         log::debug!(
             "VOL_TRACE cyl {face_id:?} u_vals={u_vals:?} u_range=({u1},{u2}) h={h} r={r} ox={ox} oy={oy}"
         );
@@ -2157,7 +2163,7 @@ pub fn volume_from_direct_face_tessellation(
         match face.surface() {
             FaceSurface::Cylinder(_) => {
                 let v = analytic_cylinder_signed_volume(topo, fid)? * 6.0;
-                if std::env::var("BK_VOL_TRACE").is_ok() {
+                if vol_trace_enabled() {
                     log::debug!("VOL_TRACE direct cyl face {:?} -> {}", fid, v / 6.0);
                 }
                 total += v;
@@ -2196,7 +2202,7 @@ pub fn volume_from_direct_face_tessellation(
             face_total += a.dot(b.cross(c));
         }
 
-        if std::env::var("BK_VOL_TRACE").is_ok() {
+        if vol_trace_enabled() {
             log::debug!(
                 "VOL_TRACE direct planar face {:?} -> {} (tris={})",
                 fid,
