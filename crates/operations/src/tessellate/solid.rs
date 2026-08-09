@@ -761,6 +761,14 @@ fn tessellate_solid_core(
     Ok((merged, tri_faces, all_faces.len()))
 }
 
+/// `BK_TESS_TRACE=1`: log each face's mesher-arm dispatch. Resolved ONCE per
+/// process — the dispatch runs per face and must not pay an env lookup each
+/// call.
+fn tess_trace() -> bool {
+    static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACE.get_or_init(|| std::env::var("BK_TESS_TRACE").is_ok())
+}
+
 /// Tessellate a single face, reusing shared edge vertices from the global mesh.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn tessellate_face_with_shared_edges(
@@ -1109,7 +1117,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 point_to_global,
             );
             let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
-            if std::env::var("BK_TESS_TRACE").is_ok() {
+            if tess_trace() {
                 log::debug!(
                     "tess dispatch {face_id:?} {} rev={is_reversed} cdt_ok={cdt_produced_tris}",
                     face_data.surface().type_tag()
