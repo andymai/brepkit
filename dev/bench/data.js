@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786309088109,
+  "lastUpdate": 1786310701381,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27107,6 +27107,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24823694,
             "range": "± 63986",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c59f0db16d8a5ea053639c26cc187676b5284d54",
+          "message": "fix(io): pin the #1510 label-bracket fuse repro and the probes that found it (#1512)\n\nDiagnostic tooling, a pinned repro, and the roadmap entry from the #1510\ndig. No production code — the fix itself is not attempted here.\n\n## What #1510 turned out to be\n\nNot a perf residual. `fuse(bin body, label bracket)` returns a shell\nwith **10 free edges**, so `operations::boolean` rejects the GFA result\nand pays for the mesh fallback: 121 all-planar faces where the operands\ncarry 8 cylinders, and 95ms of that tool row's 124ms of boolean time.\n\nRoot cause is in the issue thread. Briefly: the bracket's **square**\nback corners intrude into the bin's **rounded** cavity corners, and the\ncavity corner cylinder is exactly tangent to the plane y=40.550 at\nx=±38. The z=16.000 split between the bin's top annulus and the\nbracket's back wall therefore exists only for |x| < 38. The complement\nsub-face the splitter builds straddles the bin's boundary — its side\ncolumns are inside the material, its top strip (the tool's 0.01mm\ncoplanar overlap) is outside — so no single classification verdict is\nright for it, and the drop verdict takes the whole back wall.\n\n## Changes\n\n- **`replay_pair`** ran only raw GFA for an operand pair, despite its\ndoc comment claiming both paths. That is exactly where a fallback shows\nup, so fallbacks were invisible: this fuse read as an 11ms success\nnatively while the tool paid 95ms. It now runs `operations::boolean` too\nand flags `[MESH FALLBACK]` off the counter. `OUT=` serializes the raw\nGFA result so probes can read it before the ops-level heals rewrite it.\n- **`region_probe`** lists faces (surface type, reversal flag,\nvertex-hull bbox) filtered to a `BOX`. Run it over both operands and the\nresult with the same box and diff the listings; that is what identified\nthe missing face here in one pass.\n- **`labelbracket_fuse_inmem`** pins the repro (~11ms). The active test\nguards that both captured operands are well-formed going in, so a\nre-capture cannot silently poison the fixture; the ready-repro asserts\nwhat a fix must satisfy and is ignored until one lands.\n- **Roadmap** updated per its own maintenance rule: the open row now\ncarries the root instead of the stale \"capture and replay\" next-step,\nand the `#[ignore]` inventory status is corrected to note the one live\ndeferred-defect pin.",
+          "timestamp": "2026-08-09T21:22:30Z",
+          "tree_id": "fd70c57d333291fcd32e98e0ec945d21844bba65",
+          "url": "https://github.com/andymai/brepkit/commit/c59f0db16d8a5ea053639c26cc187676b5284d54"
+        },
+        "date": 1786310698485,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 769087,
+            "range": "± 1383",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 836574,
+            "range": "± 1252",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10319,
+            "range": "± 111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 554459,
+            "range": "± 1637",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20741812,
+            "range": "± 35435",
             "unit": "ns/iter"
           }
         ]
