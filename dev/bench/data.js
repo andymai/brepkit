@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786267125585,
+  "lastUpdate": 1786287245062,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26567,6 +26567,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20733054,
             "range": "± 196542",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "50096ea7f5967eafc95720dc254efc97ff6a315e",
+          "message": "docs(roadmap): #1488 fully closed on tool-side re-run, bin-row follow-up opened (#1498)\n\nBookkeeping after closing #1488: the tool-side re-run on released 3.2.13\nconfirmed 0.84x aggregate across all 22 scenarios, so the roadmap row\nmoves from OPEN to Closed with both roots (#1490, #1495) and their\nguards recorded.\n\nThe surviving follow-up gets its own OPEN row: bin scenarios 4x4 mag\nno-lip (1.72x) and 2x2 label bracket (1.59x) have been behind since\n3.2.1 and were untouched by this campaign. A combined tool-side report\nwith per-stage breakdown was requested in the #1488 closing comment; the\nrow says to wait for that before profiling.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap: #1488 baseplate perf is fully closed after the\ntool-side re-run on 3.2.13 (0.84x aggregate), with roots (#1490, #1495)\nand guard recorded. Add an OPEN follow-up row for the stagnant bin\nscenarios (4x4 mag no-lip 1.72x, 2x2 label bracket 1.59x), and note\nwe’ll wait for the combined tool-side report before profiling.\n\n<sup>Written for commit 350197cab46263f84060f31cf5d000fc144c664d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1498?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T14:51:40Z",
+          "tree_id": "702aa5d63b497827f26c206aa5644984e4ef94f0",
+          "url": "https://github.com/andymai/brepkit/commit/50096ea7f5967eafc95720dc254efc97ff6a315e"
+        },
+        "date": 1786287242792,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 962027,
+            "range": "± 14544",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1038709,
+            "range": "± 1045",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12166,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709109,
+            "range": "± 3347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25635617,
+            "range": "± 70080",
             "unit": "ns/iter"
           }
         ]
