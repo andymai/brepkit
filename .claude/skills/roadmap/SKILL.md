@@ -124,9 +124,7 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **#1499 kumiko corner cutAll chain** | Kernel side MERGED (#1501: volume witness refutes the AABB-only containment fallback; four untrimmed-parent-curve consumers now use `domain_with_endpoints` — regression `cut_wedge_by_thin_radial_strut_is_not_empty`). Adapter side brepjs#1996 (compound base fans out per child). Verify tool-side: kumikoProfile green on next released kernel + brepjs pin, then close |
-| **#1500 warm re-export 1.37x** | Root: circle T-junction splice scanned the whole edge pool per circle edge, 90% of export tessellation on the fused 6x6 bin. Spatial-hash fix in #1502 (395→48ms native, mesh hash-identical; repro `crates/io/examples/profile_export_tess.rs` + `BK_TESS_PHASES`). Remaining warm cost is one tool-side uncached `fuseWithEvolution` (390ms, noted in the issue). Verify: exportCache warm < the reference's 948ms on released kernel, then close |
-| **Stagnant bin rows: 4x4 mag no-lip 1.72x, 2x2 label bracket 1.59x** | Behind the reference kernel since 3.2.1, unmoved by the #1488 campaign (every other row is parity-or-faster on 3.2.13). Combined tool-side report with per-stage breakdown requested in the #1488 closing comment; wait for that before profiling. The #1502 tessellation fix may move these rows too — re-measure after it releases |
+| **Stagnant bin rows: 4x4 mag no-lip 1.72x, 2x2 label bracket 1.59x** | Behind the reference kernel since 3.2.1, unmoved by the #1488 campaign (every other row is parity-or-faster on 3.2.13). Combined tool-side report with per-stage breakdown requested in the #1488 closing comment; wait for that before profiling. The #1502 tessellation fix may move these rows too — re-measure now that 3.2.16 is out |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -137,6 +135,15 @@ that does not exist yet; without it, stop.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **#1499/#1508 kumiko cutAll chain (CLOSED 2026-08-09 on released 3.2.16 + brepjs 18.124.2, kumikoProfile green)** —
+  false containment EmptyResult (#1501: volume witness; regression `cut_wedge_by_thin_radial_strut_is_not_empty`)
+  + four untrimmed-parent-curve consumers (`domain_with_endpoints`) + brepjs#1996 compound-base fan-out
+  + #1506 wasm `Instant::now()` panic the 3.2.15 diagnostics introduced (wasm CI builds but never runs — tool-side smoke is the only runtime gate).
+- **#1500 warm re-export (CLOSED 2026-08-09 on released 3.2.16: warm 490-503ms vs the reference's 890-906, cold 706-740 vs 1691-1739)** —
+  circle T-junction splice was O(circle-edges × pool-points), 90% of export tessellation; spatial hash in #1502,
+  mesh hash-identical (repro `crates/io/examples/profile_export_tess.rs`, `BK_TESS_PHASES`). Next warm lever if ever needed:
+  the tool's one uncached `fuseWithEvolution` (~390ms, noted in the issue).
 
 - **#1488 baseplate perf (CLOSED 2026-08-09 on released 3.2.13, tool-side confirmed)** —
   4-27x behind became 0.84x aggregate across all 22 scenarios; 4 of 6 plates faster than
