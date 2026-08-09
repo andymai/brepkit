@@ -57,14 +57,14 @@ fn main() {
 
     let faces = solid_faces(&topo, result).unwrap();
     let mut by_type: HashMap<&'static str, (usize, usize)> = HashMap::new();
-    let mut max_faces: Vec<(usize, String)> = Vec::new();
+    let mut max_faces: Vec<(usize, usize, &'static str)> = Vec::new();
     for (i, fid) in faces.iter().enumerate() {
         let tag = topo.face(*fid).unwrap().surface().type_tag();
         let tris = ((face_offsets[i + 1] - face_offsets[i]) / 3) as usize;
         let e = by_type.entry(tag).or_insert((0, 0));
         e.0 += 1;
         e.1 += tris;
-        max_faces.push((tris, format!("{fid:?}:{tag}")));
+        max_faces.push((tris, fid.index(), tag));
     }
     max_faces.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
     let total = mesh.indices.len() / 3;
@@ -75,19 +75,12 @@ fn main() {
         println!("  {tag}: faces={n} tris={t} avg={:.0}", t as f64 / n as f64);
     }
     println!("top faces:");
-    for (t, f) in max_faces.iter().take(8) {
-        println!("  {f} tris={t}");
+    for (t, idx, tag) in max_faces.iter().take(8) {
+        println!("  Id({idx}):{tag} tris={t}");
     }
     // Detail the densest cylinder: distinct vertices and per-boundary-edge
     // sample counts.
-    if let Some((_, label)) = max_faces.first() {
-        let want: usize = label
-            .trim_start_matches("Id(")
-            .split(')')
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap();
+    if let Some(&(_, want, _)) = max_faces.first() {
         for (i, fid) in faces.iter().enumerate() {
             if fid.index() != want {
                 continue;
@@ -97,7 +90,7 @@ fn main() {
             let verts: std::collections::HashSet<u32> =
                 mesh.indices[lo..hi].iter().copied().collect();
             println!(
-                "detail {label}: tris={} verts={}",
+                "detail Id({want}): tris={} verts={}",
                 (hi - lo) / 3,
                 verts.len()
             );
