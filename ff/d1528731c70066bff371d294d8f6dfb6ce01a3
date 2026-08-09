@@ -1,0 +1,14 @@
+.claude/skills/roadmap/SKILL.md
+  h_b755e1950659f4 27-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ffd1528731c70066bff371d294d8f6dfb6ce01a3",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
