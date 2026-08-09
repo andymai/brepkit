@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786236769759,
+  "lastUpdate": 1786238980480,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -25433,6 +25433,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25570727,
             "range": "± 106958",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "52fbb886f0c23967f742da34205074c00ef1c3e9",
+          "message": "fix(operations): give degenerate-locus points their predecessor's u in the CDT unwrap (#1475)\n\n## Root (the dominant sub-export-tolerance mesh residual)\n\nThe grouped-scoop horn-torus corner patches meshed with one-sided open\nstrips along their base arcs. Attribution tracing (per-face triangle\nranges + boundary UV dumps) showed the CDT consumed the shared boundary\npolylines correctly, but its periodic-u unwrap walked the loop the LONG\nway: the patch's boundary passes through the horn PINCH — a point on the\ntorus axis where the ring angle is undefined and projection returns an\narbitrary u — which steered the consecutive unwrap 270 degrees instead\nof 90. The UV loop then failed to close by a full turn and\n`remove_exterior` ate the triangles along the strip.\n\n## Fix\n\nIn the unwrap, a boundary point on the surface's degenerate locus\n(`|major + minor·cos v|` below relative epsilon, torus arm only) takes\nits predecessor's u, so the unwrap steps over it neutrally and the loop\ncloses.\n\n## Measured\n\n- Captured cases' directed mesh boundary half-edges: 89/38/39/59/0/3 →\n15/19/20/21/0/3 (377/193/824/592/0/74 at the start of the campaign).\n- Non-manifold mesh edges on cases 1 and 4: 2/18 → 0/0. Case 2's 75\nremain the pinch-shim double-cover overlap (separate, likely inherent to\nthat encoding).\n- Foils: 1965 passed / 0 failed across the seven crates; clippy clean.\n\nTwo refuted theories from the dig are recorded in the roadmap: the\n\"duplicate identical-position pairs\" reading (a 3-decimal print artifact\ncollapsing mirrored corners) and the planar CDT merge-map keying change\n(zero effect, reverted).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes periodic‑u unwrap on torus corner patches by giving\ndegenerate‑locus points their predecessor’s u and starting the unwrap at\nthe first non‑degenerate point, so UV loops close and boundary strips\naren’t dropped. Adds cached `BK_CDT_TRACE` and extra CDT/tessellation\nlogs.\n\n- **Bug Fixes**\n- Periodic‑u unwrap: degenerate points copy the previous u and the\nunwrap anchor skips degenerate points to avoid long‑way walks; loops now\nclose and `remove_exterior` keeps boundary strips.\n- Results: mesh boundary half‑edges drop 89/38/39/59/0/3 →\n15/19/20/21/0/3; non‑manifold edges in cases 1 and 4 drop to 0.\n- Observability: `BK_CDT_TRACE` logs shared/resampled edges and boundary\nUV→CDT ids (resolved once per process); `tess_trace()` logs per‑face\ntriangle ranges; `replay_fillet_variable` prints triangle indices with\n6‑dec coords.\n\n<sup>Written for commit 98dec750ccf4df6e26fbf6a8fce13c4c4e4cef24.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1475?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T01:27:08Z",
+          "tree_id": "f1838d11353dba4c964fd9ca65ef91e48610b8dd",
+          "url": "https://github.com/andymai/brepkit/commit/52fbb886f0c23967f742da34205074c00ef1c3e9"
+        },
+        "date": 1786238978052,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 964880,
+            "range": "± 1774",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1041126,
+            "range": "± 756",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 15595,
+            "range": "± 563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 708485,
+            "range": "± 23995",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25666117,
+            "range": "± 68585",
             "unit": "ns/iter"
           }
         ]
