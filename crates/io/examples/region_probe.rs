@@ -10,7 +10,12 @@
 //! BOX=xmin,ymin,zmin,xmax,ymax,zmax cargo run --release -p brepkit-io \
 //!   --example region_probe -- a.bin b.bin
 //! ```
-#![allow(clippy::print_stdout, clippy::expect_used, clippy::unwrap_used)]
+#![allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::expect_used,
+    clippy::unwrap_used
+)]
 
 use brepkit_io::arena_io::deserialize_solid;
 use brepkit_math::vec::Point3;
@@ -41,11 +46,22 @@ fn face_bbox(topo: &Topology, fid: brepkit_topology::face::FaceId) -> Option<(Po
 }
 
 fn main() {
-    let filter: Option<Vec<f64>> = std::env::var("BOX").ok().map(|s| {
-        s.split(',')
-            .map(|t| t.trim().parse::<f64>().unwrap())
-            .collect()
-    });
+    let filter: Option<Vec<f64>> = match std::env::var("BOX") {
+        Err(_) => None,
+        Ok(spec) => {
+            let parsed: Result<Vec<f64>, _> =
+                spec.split(',').map(|t| t.trim().parse::<f64>()).collect();
+            match parsed {
+                Ok(v) if v.len() == 6 => Some(v),
+                _ => {
+                    eprintln!(
+                        "BOX must be 6 numbers: xmin,ymin,zmin,xmax,ymax,zmax (got {spec:?})"
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+    };
 
     for path in std::env::args().skip(1) {
         let mut topo = Topology::new();
