@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786260289597,
+  "lastUpdate": 1786261190434,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -26243,6 +26243,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25620968,
             "range": "± 57097",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7b33779b8a3182c41c19dec350d9c8a1368fd456",
+          "message": "chore(main): release 3.2.12 (#1492)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.12](https://github.com/andymai/brepkit/compare/v3.2.11...v3.2.12)\n(2026-08-09)\n\n\n### Performance\n\n* **algo:** clip sampled plane-analytic section chains to the face-pair\noverlap ([#1490](https://github.com/andymai/brepkit/issues/1490))\n([c295975](https://github.com/andymai/brepkit/commit/c2959752573233a95b20bf8efbc0ca57099acf51))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.12 improves sectioning performance by clipping sampled\nplane-analytic section chains to the face-pair overlap.\n\n- **Dependencies**\n  - Bump all `brepkit-*` workspace crates to `3.2.12`.\n\n<sup>Written for commit abfda66bac1209ca60c46e493d2e66c8715f35c7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1492?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-09T07:37:22Z",
+          "tree_id": "5cef4dbca4c5a14f013742579ba4d71edfc6bb70",
+          "url": "https://github.com/andymai/brepkit/commit/7b33779b8a3182c41c19dec350d9c8a1368fd456"
+        },
+        "date": 1786261188292,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 956645,
+            "range": "± 18840",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1038260,
+            "range": "± 2179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11881,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706205,
+            "range": "± 12331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25577129,
+            "range": "± 44880",
             "unit": "ns/iter"
           }
         ]
