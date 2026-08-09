@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.10](https://github.com/andymai/brepkit/compare/v3.2.9...v3.2.10) (2026-08-09)
+
+
+### Bug Fixes
+
+* **operations:** map pipe sampling into the path's domain ([#1483](https://github.com/andymai/brepkit/issues/1483)) ([d0c746a](https://github.com/andymai/brepkit/commit/d0c746ad65ac61f22574bd62281728c4a8883739))
+
 ## [3.2.9](https://github.com/andymai/brepkit/compare/v3.2.8...v3.2.9) (2026-08-09)
 
 
