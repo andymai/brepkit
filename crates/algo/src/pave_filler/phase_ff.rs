@@ -3524,6 +3524,7 @@ fn plane_analytic_intersection(
                 // (#1488). Clip to the segments that can reach the pair's
                 // AABB overlap first (with neighbor padding so boundary
                 // crossings keep local shape support) and fit per run.
+                let lin_tol = brepkit_math::tolerance::Tolerance::new().linear;
                 for pts in clip_chain_to_pair_boxes(&pts, bbox_a, bbox_b) {
                     // A tangential contact can sample as one point repeated N
                     // times (adjacent half-socket corner cylinders touching the
@@ -3534,9 +3535,7 @@ fn plane_analytic_intersection(
                     // interferences are EE/EF/VF territory).
                     let mut pts_dedup: Vec<Point3> = Vec::with_capacity(pts.len());
                     for &p in &pts {
-                        if pts_dedup.last().is_none_or(|&q| {
-                            (p - q).length() > brepkit_math::tolerance::Tolerance::new().linear
-                        }) {
+                        if pts_dedup.last().is_none_or(|&q| (p - q).length() > lin_tol) {
                             pts_dedup.push(p);
                         }
                     }

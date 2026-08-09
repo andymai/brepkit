@@ -116,7 +116,8 @@ impl log::Log for StampLogger {
         };
         if delta_us > 5000 {
             let msg = format!("{}", record.args());
-            let msg = &msg[..msg.len().min(110)];
+            let cut = msg.char_indices().nth(110).map_or(msg.len(), |(i, _)| i);
+            let msg = &msg[..cut];
             println!("[{total_us:>8}us +{delta_us:>7}us] {msg}");
         }
     }
