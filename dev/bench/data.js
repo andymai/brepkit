@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786315132778,
+  "lastUpdate": 1786316199263,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27323,6 +27323,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25594108,
             "range": "± 78967",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8c9c2783404970b92aba3440663b03a08ed89d31",
+          "message": "docs(roadmap): record the tool-side confirmation for #1510 (#1516)\n\nCloses the loop on #1510 with the scenario re-probe the roadmap makes\nmandatory after a GFA change.\n\nOn released 3.2.18 with stock pins and a same-session reference control,\nthe 2x2 label bracket row went from 1.60x slower than the reference to\n**1.74x faster** (104ms to 39ms against its 68ms). It is the only one of\nthe 22 scenarios whose triangle count moved, so the change is surgical.\n\nThe count dropping (1510 to 1072) is the analytic result rather than\nlost geometry, asserted rather than assumed: watertight, **0\nnon-manifold edges against the reference kernel's 147 on the same\nscenario**, volume within 0.03%, and an Euler characteristic that\nmatches the plain 2x2 baseline exactly.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate roadmap doc (`SKILL.md`) to record tool-side confirmation for\n#1510 and fix a stale instrument name. On 3.2.18, the 2x2 label bracket\nrow improved from 104ms to 39ms (1.74x faster than the 68ms reference);\ntriangles dropped 1510→1072 with watertight geometry and 0 non‑manifold\nedges (only scenario with a triangle-count change), and `BK_CLIPTRACE`\nis now `BK_CLIP`.\n\n<sup>Written for commit 17bc27cea6e2f729888e2f11327a51f6c920f6d7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1516?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-09T22:54:29Z",
+          "tree_id": "741e2378d4f36ac6de44393d08d1cfb286798ae7",
+          "url": "https://github.com/andymai/brepkit/commit/8c9c2783404970b92aba3440663b03a08ed89d31"
+        },
+        "date": 1786316196484,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 770544,
+            "range": "± 1281",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 836734,
+            "range": "± 6633",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10614,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 552619,
+            "range": "± 1290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20639460,
+            "range": "± 26137",
             "unit": "ns/iter"
           }
         ]
