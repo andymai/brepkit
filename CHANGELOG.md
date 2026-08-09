@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.18](https://github.com/andymai/brepkit/compare/v3.2.17...v3.2.18) (2026-08-09)
+
+
+### Bug Fixes
+
+* **algo:** clip a holed face's section to the true arc, not its chord ([#1510](https://github.com/andymai/brepkit/issues/1510)) ([#1514](https://github.com/andymai/brepkit/issues/1514)) ([12f85f6](https://github.com/andymai/brepkit/commit/12f85f6ca8a328ef097c2e3b667cd32341f36c35))
+
 ## [3.2.17](https://github.com/andymai/brepkit/compare/v3.2.16...v3.2.17) (2026-08-09)
 
 
