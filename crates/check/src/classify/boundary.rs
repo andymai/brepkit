@@ -118,6 +118,53 @@ pub fn polygon_normal(verts: &[Point3]) -> Vec3 {
     crate::util::polygon_normal(verts)
 }
 
+/// Whether a hit inside the outer wire actually lands in one of the face's
+/// holes.
+///
+/// A ray leaving a solid through the mouth of a pocket passes through the hole
+/// of the ring face around it. Without this test that hole counts as a
+/// crossing, and the extra count flips the parity: an open pocket reads as
+/// solid material.
+fn hit_in_inner_wire_3d(
+    topo: &Topology,
+    face_id: FaceId,
+    hit: Point3,
+    normal: &Vec3,
+) -> Result<bool, CheckError> {
+    for &iw in topo.face(face_id)?.inner_wires() {
+        let hole = crate::util::wire_polygon(topo, iw)?;
+        if hole.len() >= 3 && point_in_polygon_3d(&hit, &hole, normal) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// UV-space counterpart of [`hit_in_inner_wire_3d`] for curved faces.
+fn hit_in_inner_wire_uv<F>(
+    topo: &Topology,
+    face_id: FaceId,
+    hit_u: f64,
+    hit_v: f64,
+    project: &F,
+    v_periodic: bool,
+) -> Result<bool, CheckError>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
+    for &iw in topo.face(face_id)?.inner_wires() {
+        let hole = crate::util::wire_polygon(topo, iw)?;
+        if hole.len() < 3 {
+            continue;
+        }
+        let uv_hole = build_uv_boundary(&hole, project, v_periodic);
+        if point_in_uv_boundary(hit_u, hit_v, &uv_hole, v_periodic) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Count crossings for analytic (non-planar) faces using UV containment.
 ///
 /// Given ray parameter roots (where the ray hits the infinite surface),
@@ -171,7 +218,9 @@ where
         let hit = origin + direction * t;
         let (hit_u, hit_v) = project(hit);
 
-        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, v_periodic) {
+        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, v_periodic)
+            && !hit_in_inner_wire_uv(topo, face_id, hit_u, hit_v, &project, v_periodic)?
+        {
             crossings += 1;
         }
     }
@@ -226,7 +275,9 @@ fn count_3d_polygon_crossings(
             continue;
         }
 
-        if point_in_polygon_3d(&hit, &verts, &normal) {
+        if point_in_polygon_3d(&hit, &verts, &normal)
+            && !hit_in_inner_wire_3d(topo, face_id, hit, &normal)?
+        {
             crossings += 1;
         }
     }
@@ -328,7 +379,9 @@ fn ray_plane_crossings(
         return Ok(0);
     }
 
-    if point_in_polygon_3d(&hit, &verts, &normal) {
+    if point_in_polygon_3d(&hit, &verts, &normal)
+        && !hit_in_inner_wire_3d(topo, face_id, hit, &normal)?
+    {
         Ok(1)
     } else {
         Ok(0)
@@ -360,7 +413,9 @@ fn ray_crossings_nurbs(
 
     let mut crossings = 0u32;
     for (_, hit_u, hit_v) in &hits {
-        if point_in_uv_boundary(*hit_u, *hit_v, &uv_boundary, false) {
+        if point_in_uv_boundary(*hit_u, *hit_v, &uv_boundary, false)
+            && !hit_in_inner_wire_uv(topo, face_id, *hit_u, *hit_v, &project, false)?
+        {
             crossings += 1;
         }
     }

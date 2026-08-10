@@ -272,6 +272,53 @@ fn count_face_ray_crossings(
     }
 }
 
+/// Whether a hit inside the outer wire actually lands in one of the face's
+/// holes.
+///
+/// A ray leaving a solid through the mouth of a pocket passes through the hole
+/// of the ring face around it. Without this test that hole counts as a
+/// crossing, and the extra count flips the parity: an open pocket reads as
+/// solid material.
+fn hit_in_inner_wire_3d(
+    topo: &Topology,
+    face_id: FaceId,
+    hit: Point3,
+    normal: &Vec3,
+) -> Result<bool, OperationsError> {
+    for &iw in topo.face(face_id)?.inner_wires() {
+        let hole = brepkit_check::util::wire_polygon(topo, iw)?;
+        if hole.len() >= 3 && point_in_polygon_3d(&hit, &hole, normal) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// UV-space counterpart of [`hit_in_inner_wire_3d`] for curved faces.
+fn hit_in_inner_wire_uv<F>(
+    topo: &Topology,
+    face_id: FaceId,
+    hit_u: f64,
+    hit_v: f64,
+    project: &F,
+    v_periodic: bool,
+) -> Result<bool, OperationsError>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
+    for &iw in topo.face(face_id)?.inner_wires() {
+        let hole = brepkit_check::util::wire_polygon(topo, iw)?;
+        if hole.len() < 3 {
+            continue;
+        }
+        let uv_hole = build_uv_boundary(&hole, project, v_periodic);
+        if point_in_uv_boundary(hit_u, hit_v, &uv_hole, v_periodic) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Ray-plane intersection with point-in-polygon boundary test.
 fn ray_plane_crossings(
     topo: &Topology,
@@ -302,7 +349,9 @@ fn ray_plane_crossings(
         return Ok(0);
     }
 
-    if point_in_polygon_3d(&hit, &verts, &normal) {
+    if point_in_polygon_3d(&hit, &verts, &normal)
+        && !hit_in_inner_wire_3d(topo, face_id, hit, &normal)?
+    {
         Ok(1)
     } else {
         Ok(0)
@@ -441,7 +490,9 @@ fn count_3d_polygon_crossings(
             continue;
         }
 
-        if point_in_polygon_3d(&hit, &verts, &normal) {
+        if point_in_polygon_3d(&hit, &verts, &normal)
+            && !hit_in_inner_wire_3d(topo, face_id, hit, &normal)?
+        {
             crossings += 1;
         }
     }
@@ -505,7 +556,9 @@ where
         let hit = origin + direction * t;
         let (hit_u, hit_v) = project(hit);
 
-        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, v_periodic) {
+        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, v_periodic)
+            && !hit_in_inner_wire_uv(topo, face_id, hit_u, hit_v, &project, v_periodic)?
+        {
             crossings += 1;
         }
     }
@@ -719,7 +772,9 @@ fn ray_crossings_nurbs(
 
         // Use the UV parameters from the intersection result.
         let (hit_u, hit_v) = hit.param1;
-        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, false) {
+        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, false)
+            && !hit_in_inner_wire_uv(topo, face_id, hit_u, hit_v, &project, false)?
+        {
             crossings += 1;
         }
     }
@@ -854,6 +909,31 @@ mod tests {
 
         let result =
             classify_point(&topo, solid, Point3::new(-5.0, -5.0, -5.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Outside);
+    }
+
+    /// A point floating in an open pocket is outside the solid.
+    ///
+    /// The pocket makes the top face a ring with an inner wire, and the ray
+    /// leaves through the middle of that hole. Counting the hole as a crossing
+    /// flips the parity and reports the empty pocket as solid material.
+    #[test]
+    fn point_in_open_pocket_is_outside() {
+        let mut topo = Topology::new();
+        let plate = make_box(&mut topo, 100.0, 100.0, 10.0).unwrap();
+        let tool = make_box(&mut topo, 60.0, 60.0, 4.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            tool,
+            &brepkit_math::mat::Mat4::translation(20.0, 20.0, 6.0),
+        )
+        .unwrap();
+        let pocketed =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, plate, tool)
+                .unwrap();
+
+        let result =
+            classify_point(&topo, pocketed, Point3::new(50.0, 50.0, 8.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Outside);
     }
 

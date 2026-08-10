@@ -25,60 +25,55 @@
 //!
 //! # The geometry
 //!
+//! Read the lid from its face list (`dump_solid`), not from a mental model of
+//! walls and a ceiling. It is a plate spanning the full outer profile from
+//! z=-0.800 up to z=0.000, with a pocket the size of the x=+-122 / y=+-80
+//! octagon milled up from the bottom at z=-5.793 to a ceiling at z=-0.800.
+//! So inside that octagon there is air below z=-0.800 and solid plate above
+//! it. Volume 44005.4 confirms it; the pocket-filled reading would be ~205000.
+//!
 //! The post is a cylinder of radius 4 centred at (-118.500, 76.500) spanning
-//! z=-2.800..-0.700. It sits at a corner of the lid and pokes out through
-//! BOTH perpendicular walls, x=-122.000 and y=80.000. The lid carries a
-//! horizontal ledge at z=-0.800, so the post's cross-section there is a full
-//! circle of radius 4 that the two walls cut into arcs:
+//! z=-2.800..-0.700, hanging in the pocket at a corner and poking out through
+//! BOTH pocket walls, x=-122.000 and y=80.000. Its cross-section at the
+//! ceiling is a full circle that the two walls cut at four crossings:
 //!
 //! ```text
-//! circle x=-122.000 at y=78.436 and y=74.564
-//! circle y= 80.000  at x=-116.564 and x=-120.436
+//! 61.045  (-116.564, 80.000)    118.955 (-120.436, 80.000)
+//! 151.045 (-122.000, 78.436)    208.955 (-122.000, 74.564)
 //! ```
 //!
-//! The six free edges are exactly those arcs plus the post's z=-0.700 rim.
-//! Each is used by ONE face where it needs two: the ledge plane keeps three
-//! arcs, the post cylinder keeps two, and they are DIFFERENT arcs, so the two
-//! surfaces are split against each other inconsistently rather than one of
-//! them failing to split at all.
+//! Two of the four arcs are exposed (in pocket air): the corner sliver
+//! 118.955..151.045 and the big sector 208.955..61.045 through the seam at 0.
+//! The other two are buried in the wall material.
 //!
-//! # The control, and what it does NOT prove
+//! # What the correct fuse looks like, and where this one diverges
 //!
-//! `lidpost_fuse_post_control.bin` is an earlier post from the same scenario,
-//! fused into the SAME lid. It fuses cleanly: 48 faces, 0 free edges. So posts,
-//! protrusion and this lid are all ruled out as the cause.
+//! The control gives it exactly: 48 faces = the lid's 44, plus the post's
+//! cylinder split into its two exposed sectors, the ceiling split in two, and
+//! the post's bottom cap. The post's top cap and its z=-0.800..-0.700 band are
+//! both buried in the plate and are dropped.
 //!
-//! It is NOT a one-wall case. Measured with `BK_FF_DUMP`, the control post sits
-//! at the opposite corner (+122,-80) and cuts sections against two wall planes
-//! exactly as the failing case does; both produce the SAME section structure,
-//! three duplicate ceiling circles at z=-0.800 plus four wall lines, seven in
-//! all. So neither "two walls" nor the duplicate sections is the discriminant.
+//! Every classification here is right, and `BK_SUBFACE_BOX` shows it: the
+//! ceiling splits into three with the post's footprint correctly dropped, and
+//! the cylinder's two buried wall sectors are correctly dropped. The defect is
+//! the SPLIT. The kept cylinder sub-face spans z=-2.800..-0.700, so it is the
+//! two exposed sectors AND the full-circumference band that sits inside the
+//! plate, as one piece. That piece is not classification-uniform; its interior
+//! sample lands at 150 degrees in the exposed sliver, so the whole thing is
+//! kept and drags the buried band along. The six free edges are that band's
+//! z=-0.700 rim plus the arcs the two surfaces did not share.
 //!
-//! It is also NOT a mirror twin, so do not read it as a one-variable
-//! comparison. The lid is asymmetric between those corners. Sweeping across
-//! the wall with `POINT_IN` at z=-1.800:
+//! `BK_SUBFACE_WIRE` names the mechanism. The cylinder's split at z=-0.800
+//! uses the two arcs the FF phase DROPPED as sections (`BK_FF_DUMP`: "drop
+//! closed-circle arc ... outside face pair", midpoints at 90 and 180 degrees),
+//! and does NOT use the three it kept. The kept arcs go to the ceiling plane
+//! alone, which is why they come out free. So the open question is why the
+//! cylinder is split against the complement of the section set.
 //!
-//! ```text
-//! y=+76.5   x=-121.5 Outside   x=-122.2 Inside    x=-122.54 Inside   x=-123.5 Inside
-//! y=-76.5   x= 121.5 Outside   x= 122.2 Outside   x= 122.54 Outside  x= 123.5 Inside
-//! ```
-//!
-//! Material starts at x=-122.000 on one side and only near x=+123 on the
-//! other, though a wall plane at x=+122.000 exists and does cut sections. That
-//! asymmetry is unexplained and is the next thing to pin down, because it
-//! decides which sub-faces each case is even asking the classifier about.
-//!
-//! The one measured difference is where the cylinder's SEAM falls. Crossing
-//! angles about each post's own centre, seam at 0 degrees:
-//!
-//! ```text
-//! failing  crossings  61.05  118.95  151.05  208.95   seam 0 is OUTSIDE every crossing sector
-//! control  crossings  28.95  331.05  241.05  298.95   seam 0 is INSIDE the x-wall sector (331.05..28.95)
-//! ```
-//!
-//! The spur in the failing result is anchored exactly at that seam, so "the
-//! seam lands in a sector the split has to keep" is the live hypothesis. It is
-//! a hypothesis, not a result.
+//! The control differs only in where the band ends up. Its seam at 0 degrees
+//! falls in a BURIED sector (crossings 28.955, 331.045, 241.045, 298.955), so
+//! the band-carrying piece samples at 14.5 degrees inside the wall, classifies
+//! Inside, and is dropped with the band. Same wrong split, right answer.
 //!
 //! Note `plane_internal_line_loops` logs three "not strictly interior"
 //! rejections here at distances 2.8e-14, 8.9e-16 and exactly 0. Those look
@@ -164,6 +159,43 @@ fn lidpost_operands_are_well_formed() {
     assert_eq!(post_mix.get("plane").copied(), Some(2));
 }
 
+/// The lid is the shape that broke `classify_point` (#1525): a plate over a
+/// pocket that opens downward, so the bottom face carries an inner wire and a
+/// ray leaving through the pocket mouth passes through that hole.
+#[test]
+fn lid_classifies_its_plate_solid_and_its_pocket_empty() {
+    use brepkit_math::vec::Point3;
+    use brepkit_operations::classify::{PointClassification as C, classify_point};
+
+    let mut topo = Topology::new();
+    let lid = load("lidpost_fuse_lid.bin", &mut topo);
+
+    for (p, want, what) in [
+        (
+            Point3::new(0.0, 0.0, -3.0),
+            C::Outside,
+            "middle of the pocket",
+        ),
+        (
+            Point3::new(0.0, 0.0, -0.4),
+            C::Inside,
+            "plate above the ceiling",
+        ),
+        (
+            Point3::new(-124.0, 0.0, -1.8),
+            C::Inside,
+            "wall past x=-122",
+        ),
+        (Point3::new(0.0, -82.0, -1.5), C::Inside, "wall past y=-80"),
+    ] {
+        assert_eq!(
+            classify_point(&topo, lid, p, 0.01, 1e-7).unwrap(),
+            want,
+            "{what} at {p:?}"
+        );
+    }
+}
+
 /// The defect: GFA keeps the analytic surfaces but leaves the post's arcs
 /// single-sided, so the gate rejects the result and the mesh fallback replaces
 /// 44 exact faces with hundreds of flat ones.
@@ -193,15 +225,14 @@ fn lidpost_fuse_is_closed_and_analytic() {
 
 /// Control: the same lid, the corresponding post at the opposite corner.
 ///
-/// It cuts sections against two walls just as the failing case does and
-/// produces the same seven FF sections, yet fuses cleanly. That rules out
-/// posts, protrusion, this lid, the two-wall corner and the duplicate ceiling
-/// sections. It is NOT a mirror twin (see the module docs), so it does not by
-/// itself identify the discriminant. Its job here is as a guard: if this ever
-/// starts failing, the fix under test has broken the working case rather than
-/// repaired the failing one.
+/// It carries the SAME wrong split (see the module docs) and still fuses
+/// cleanly, because there the mis-attached band rides on a sub-face that
+/// classifies Inside and is dropped. Its face mix is the correct answer, so it
+/// doubles as the specification for the failing case. Its job here is as a
+/// guard: if this starts failing, the fix under test has broken the working
+/// case rather than repaired the failing one.
 #[test]
-fn lidpost_single_wall_control_fuses_closed_and_analytic() {
+fn lidpost_control_post_fuses_closed_and_analytic() {
     let mut topo = Topology::new();
     let lid = load("lidpost_fuse_lid.bin", &mut topo);
     let post = load("lidpost_fuse_post_control.bin", &mut topo);
