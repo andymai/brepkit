@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786387417568,
+  "lastUpdate": 1786388632594,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28403,6 +28403,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20733058,
             "range": "± 49278",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5ffdb4a1a30de2903f6b4c2ea4ff2c4bfc08c022",
+          "message": "fix(measure): count cavity shells in volume, area and centre of mass (#1541)\n\n## The defect\n\nTessellation walks `explorer::solid_faces` — outer shell plus inner\n(cavity) shells. Seven measurement paths walked `outer_shell()` alone,\nso they integrated a **different set of faces than the mesh they claim\nto describe**.\n\nThat combination is why it is silent. The mesh of a hollow solid is\ncomplete: closed, manifold, correctly bounded. Every watertightness,\nmanifold and bbox gate passes. Only the number is wrong, and it is wrong\nby exactly the cavity.\n\n## Proof\n\nA 40×40×10 box with an enclosed, off-centre 20×20×4 void:\n\n```\nvolume_from_direct_face_tessellation  ->  16000     (answer: 14400)\n```\n\nThe plain `solid_volume` entry point happened to be right, which is what\nmakes this easy to miss — an analytic fast path above already used\n`solid_faces`, so a naive box-with-a-void probe reports no bug. The\ntessellating paths beneath are reached by anything those fast paths\ndecline, which includes **any solid with an inner wire on a face**.\n\n## Fixed\n\n`operations::measure::volume`\n- `volume_from_direct_face_tessellation`,\n`volume_from_per_face_tessellation`, `solid_volume_from_faces`\n- both centre-of-mass paths (`solid_center_of_mass` and\n`center_of_mass_from_faces`)\n- the `needs_direct_tessellation` predicate, which decided from\nouter-shell faces only\n- `try_analytic_solid_volume` now declines a solid with inner shells\noutright — a closed-form primitive formula describes the outer shell\nalone\n\n`check::properties`\n- `solid_volume`, `solid_area`, `center_of_mass`\n\nSurface area now includes cavity walls, which is the boundary integral\nits own doc comment describes.\n\nThe regression asserts volume, direct-tessellation volume,\n`check::properties` volume, centre of mass and surface area on one\nsolid. The void is off-centre on every axis so the CoM assertion cannot\npass by symmetry.\n\n## New probe\n\n`cargo run --release --example cavity_probe -p brepkit-io -- [<name.bin>\n...]`\n\nReports per-shell signed volume against **each shell's own bounding\nbox**. That ratio is the thing a whole-solid volume cannot give you: a\ncavity missing from the measurement and a cavity present but enclosing\nnothing both read high by the same amount.\n\n## On #1536 — this is not that root\n\nI found this while investigating #1536 and it is worth being explicit\nthat it does not close it. Run on the captured operand:\n\n```\nslotted_nolip_body.bin\n  outer   faces=10   signed=    111351.3  bbox_vol=    111556.0  fill= 99.8%\n  inner0  faces=46   signed=     -5263.1  bbox_vol=     98783.0  fill=  5.3%\n  shell sum             =     106088.2\n  oriented_solid_volume =     106088.2\n```\n\nThe cavity is present, correctly signed, and included — it just encloses\nnothing. A correct one is about −92000, which is exactly the gap between\nbrepkit's 135237 and the reference's 43129. Per-shell sum,\n`oriented_solid_volume` and the fixture's own recorded numbers all agree\nto the digit, so GFA and every volume oracle are exonerated. #1536 stays\nopen against the chain that builds the body operand, one stage earlier\nthan the capture.\n\n## Verification\n\n- `cargo test --workspace --exclude brepkit-render --no-fail-fast`:\n**2745 passed, 0 failed**\n- roadmap skill updated: #1536 row re-pointed at the operand, #1538 row\nsplit, three new entries under Recurring traps\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes volume, area, and center-of-mass to include cavity shells so\nmeasurements match tessellation and are correct for hollow solids. Adds\n`cavity_probe` to report per-shell signed volume and now handles shells\nthat tessellate to nothing.\n\n- **Bug Fixes**\n- All measurement paths now iterate\n`brepkit_topology::explorer::solid_faces` (outer + inner shells) in\n`brepkit_operations` and `brepkit_check`.\n- Updated paths: direct/per-face tessellation volume,\n`solid_volume_from_faces`, both CoM paths, and\n`check::properties::{solid_volume, solid_area, center_of_mass}`.\n- `try_analytic_solid_volume` declines solids with inner shells;\nprimitive formulas describe only the outer shell.\n- The “needs direct tessellation” predicate inspects all faces, not just\nthe outer shell.\n- Regression: box-with-void — volume subtracts the cavity, area includes\ncavity walls, CoM shifts.\n\n- **New Features**\n- New `crates/io` example `cavity_probe`: prints per-shell signed volume\nand each shell’s bbox volume to distinguish missing vs collapsed\ncavities. Usage: `cargo run --release --example cavity_probe -p\nbrepkit-io -- <name.bin> ...`.\n- Robustness: if a shell tessellates to nothing, `cavity_probe` still\nreports it (zero bbox, no panic). Related to #1536 — confirms the\ncaptured body has a collapsed cavity; this PR does not close the issue.\n\n<sup>Written for commit f383dc870d0d1baeb9eee219e2ae0f96426f95c6.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1541?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T12:01:12-07:00",
+          "tree_id": "117e3d6aeba5b1260a1e37e487980d85220c2832",
+          "url": "https://github.com/andymai/brepkit/commit/5ffdb4a1a30de2903f6b4c2ea4ff2c4bfc08c022"
+        },
+        "date": 1786388629281,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1030449,
+            "range": "± 5901",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1076045,
+            "range": "± 3218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13147,
+            "range": "± 59",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713327,
+            "range": "± 2823",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26596100,
+            "range": "± 41600",
             "unit": "ns/iter"
           }
         ]
