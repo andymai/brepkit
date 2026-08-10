@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786352024840,
+  "lastUpdate": 1786352395496,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27539,6 +27539,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25499827,
             "range": "± 68656",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa1ef077e630349985db4c88ba0ac8c7e59c3da5",
+          "message": "chore(main): release 3.2.19 (#1522)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.19](https://github.com/andymai/brepkit/compare/v3.2.18...v3.2.19)\n(2026-08-10)\n\n\n### Bug Fixes\n\n* **math:** bound CDT constraint recovery so a runaway cannot abort the\nkernel ([#1520](https://github.com/andymai/brepkit/issues/1520))\n([87407b9](https://github.com/andymai/brepkit/commit/87407b90f4da5643efde37dba588ba7a3edabb73))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.19 bounds CDT constraint recovery to prevent runaways that\ncould abort the kernel, improving stability in `brepkit-math` and\ndependents. Bumps all workspace crates to 3.2.19.\n\n<sup>Written for commit 8c575d414466863e69b7bc4e919a48ba135265d5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1522?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-10T08:57:53Z",
+          "tree_id": "1a4969e23d3a1da30753d3a2515b36dec9364696",
+          "url": "https://github.com/andymai/brepkit/commit/aa1ef077e630349985db4c88ba0ac8c7e59c3da5"
+        },
+        "date": 1786352393072,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 803405,
+            "range": "± 1281",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 839793,
+            "range": "± 1481",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10199,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 551292,
+            "range": "± 1319",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20704496,
+            "range": "± 22302",
             "unit": "ns/iter"
           }
         ]
