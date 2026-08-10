@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786359804020,
+  "lastUpdate": 1786359960822,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27863,6 +27863,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26725420,
             "range": "± 869856",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bf1b2d003d0305e0a66a9f529cd94d09412ae725",
+          "message": "docs(roadmap): narrow the #1517 root to the post-loop region logic (#1528)\n\nVertex matching was the obvious next suspect on #1517 root (b) and it is\nalready period-aware — `build_wire_loops` quantizes with\n`quantize_uv_periodic(u_period=TAU)`, so the off-by-a-period endpoints\ndo rejoin. The failure is downstream: the walker under-splits\n(`STRACE-LOOP` reports 2 loops for an arrangement that should give 3-4),\nand the sub-faces come out of the post-loop region logic in\n`split_face_2d_impl`.\n\nRecording it so the next pass does not repeat the dig.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nClarifies the #1517 root cause in the roadmap. Confirms vertex matching\nin `build_wire_loops` is already period-aware and narrows the failure to\npost-loop region extraction in `split_face_2d_impl`.\n\n`quantize_uv_periodic(u_period=TAU)` makes connectivity correct; the\nwalker under-splits loops (`STRACE-LOOP`), so debugging should focus\nafter loop building.\n\n<sup>Written for commit b89bdcbe06b5ccf52df83307b66e67f7089c825b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1528?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T04:02:02-07:00",
+          "tree_id": "f45773e6f3a7446710c689fcf95ea87b6eee8a44",
+          "url": "https://github.com/andymai/brepkit/commit/bf1b2d003d0305e0a66a9f529cd94d09412ae725"
+        },
+        "date": 1786359958363,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 962572,
+            "range": "± 25880",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1036893,
+            "range": "± 7107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11832,
+            "range": "± 209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 708254,
+            "range": "± 10158",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25549722,
+            "range": "± 132127",
             "unit": "ns/iter"
           }
         ]
