@@ -205,6 +205,8 @@ fn log_subfaces_in_box(topo: &Topology, subs: &[SubFace], selected: &[bop::Selec
     }
     let (lo, hi) = ([v[0], v[2], v[4]], [v[1], v[3], v[5]]);
     let chosen: std::collections::HashSet<FaceId> = selected.iter().map(|s| s.face_id).collect();
+    let want_wires =
+        std::env::var("BK_SUBFACE_WIRE").is_ok() && log::log_enabled!(log::Level::Debug);
     for sf in subs {
         let Ok(f) = topo.face(sf.face_id) else {
             continue;
@@ -235,7 +237,7 @@ fn log_subfaces_in_box(topo: &Topology, subs: &[SubFace], selected: &[bop::Selec
                 }
             }
         }
-        if touches && std::env::var("BK_SUBFACE_WIRE").is_ok() {
+        if touches && want_wires {
             // The box above reads face VERTICES only, which cannot tell a
             // short arc from the long one sharing its endpoints. The curve
             // midpoint can, and on a periodic wall that difference is the
