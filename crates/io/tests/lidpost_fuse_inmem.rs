@@ -159,6 +159,43 @@ fn lidpost_operands_are_well_formed() {
     assert_eq!(post_mix.get("plane").copied(), Some(2));
 }
 
+/// The lid is the shape that broke `classify_point` (#1525): a plate over a
+/// pocket that opens downward, so the bottom face carries an inner wire and a
+/// ray leaving through the pocket mouth passes through that hole.
+#[test]
+fn lid_classifies_its_plate_solid_and_its_pocket_empty() {
+    use brepkit_math::vec::Point3;
+    use brepkit_operations::classify::{PointClassification as C, classify_point};
+
+    let mut topo = Topology::new();
+    let lid = load("lidpost_fuse_lid.bin", &mut topo);
+
+    for (p, want, what) in [
+        (
+            Point3::new(0.0, 0.0, -3.0),
+            C::Outside,
+            "middle of the pocket",
+        ),
+        (
+            Point3::new(0.0, 0.0, -0.4),
+            C::Inside,
+            "plate above the ceiling",
+        ),
+        (
+            Point3::new(-124.0, 0.0, -1.8),
+            C::Inside,
+            "wall past x=-122",
+        ),
+        (Point3::new(0.0, -82.0, -1.5), C::Inside, "wall past y=-80"),
+    ] {
+        assert_eq!(
+            classify_point(&topo, lid, p, 0.01, 1e-7).unwrap(),
+            want,
+            "{what} at {p:?}"
+        );
+    }
+}
+
 /// The defect: GFA keeps the analytic surfaces but leaves the post's arcs
 /// single-sided, so the gate rejects the result and the mesh fallback replaces
 /// 44 exact faces with hundreds of flat ones.
