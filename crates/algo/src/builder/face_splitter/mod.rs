@@ -3238,6 +3238,7 @@ fn split_cylinder_band_by_arrangement(
     // used only to confirm the cut is rectilinear; the removed rectangles are
     // reconstructed from the generators, whose u/v are exact projections.
     let mut sec_pieces: Vec<(f64, f64, f64)> = Vec::new(); // (u_shift, v_lo, v_hi)
+    let mut sec_rings: Vec<(f64, f64, f64)> = Vec::new(); // (v, u_lo, u_hi)
     for (i, e) in all_edges.iter().enumerate() {
         match &e.curve_3d {
             EdgeCurve::Line => {
@@ -3288,6 +3289,34 @@ fn split_cylinder_band_by_arrangement(
                     e.end_3d,
                     &mut verts,
                 );
+                // A ring section over a sector the generators do NOT bound is a
+                // real cut too: a partner plane that ends inside the band cuts
+                // the arcs where it still exists, not only the sector the tool
+                // removed. Reconstructing from the generator pairs alone leaves
+                // those arcs uncut, and everything above them stays welded to
+                // the material below (the lid magnet-post band, #1517).
+                if i >= n_boundary_edges {
+                    let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                    let mid = e.curve_3d.evaluate_with_endpoints(
+                        0.5_f64.mul_add(t1 - t0, t0),
+                        e.start_3d,
+                        e.end_3d,
+                    );
+                    let (um, _) = proj(mid);
+                    let a = snap_u((u0 - u_s).rem_euclid(TAU));
+                    let b = snap_u((u1 - u_s).rem_euclid(TAU));
+                    let m = (um - u_s).rem_euclid(TAU);
+                    // Endpoints alone leave the arc's side ambiguous; the
+                    // midpoint picks it. An arc running the far way round the
+                    // seam is emitted as its two strip pieces.
+                    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                    if m > lo && m < hi {
+                        sec_rings.push((v0p, lo, hi));
+                    } else {
+                        sec_rings.push((v0p, 0.0, lo));
+                        sec_rings.push((v0p, hi, TAU));
+                    }
+                }
             }
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return None,
         }
@@ -3329,6 +3358,7 @@ fn split_cylinder_band_by_arrangement(
         return None;
     }
 
+    let cov = 1e-6;
     let mut verticals: Vec<(f64, f64, f64)> = Vec::new(); // (u_shift, v_lo, v_hi)
     let mut horizontals: Vec<(f64, f64, f64)> = Vec::new(); // (v, u_lo, u_hi)
 
@@ -3355,11 +3385,18 @@ fn split_cylinder_band_by_arrangement(
         }
     }
 
+    // The ring sections themselves, over whatever sectors they actually cover.
+    // Rings at the rims are already the band frame.
+    for &(v, u_lo, u_hi) in &sec_rings {
+        if v > v_bottom + tol && v < v_top - tol && u_hi - u_lo > cov {
+            horizontals.push((v, u_lo, u_hi));
+        }
+    }
+
     // Rectilinear split: cut each vertical at every horizontal ring's v that its
     // span brackets (and whose u-range covers the generator), and each horizontal
     // at every vertical generator's u interior to its span (whose v-range reaches
     // the ring). Emit undirected sub-segments; dedup collapses duplicates.
-    let cov = 1e-6;
     let mut sub: Vec<((i64, i64), (i64, i64))> = Vec::new();
 
     for &(u, v0, v1) in &verticals {
