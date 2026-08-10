@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786362130063,
+  "lastUpdate": 1786363268142,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28079,6 +28079,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25308328,
             "range": "± 118765",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "46f174f984e9c17100fe7eaa8b7fb462f222b418",
+          "message": "docs(roadmap): record the #1517 root (a) mechanism and the reverted first attempt (#1533)\n\nThe FF mutual-overlap trim, including its exact v-window clip against a\nbanded partner, is gated on `EdgeCurve::Line`. A plane cutting a\ncylinder at an angle gives an ellipse, so it keeps its full curve and is\nthen clipped to the *partner's* boundary instead of the band's — 0.612mm\npast the cylinder's own top on the #1517 corner.\n\nA first fix attempt is recorded as reverted: the clip does close the\n0.687mm gap but the edges stay free, so the partner side is a second\nproblem. Two traps came out of it — a conic re-entering the band needs\nto become two curves (the trim sits in a `filter_map`, and dropping the\nsecond run went non-manifold), and `phase_ff` has two `evaluate`\nconventions in play, which any conic trim has to pin down first.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocument the #1517 root (a) mechanism in the roadmap and why the first\nconic trim attempt was reverted. Explains that `phase_ff` trims only\n`EdgeCurve::Line`, so the plane–cylinder ellipse is clipped to the facet\ninstead of the cylinder (creating the 0.687 mm gap), and records the two\ntraps (split conic runs, mixed `evaluate` conventions) plus the\nconvention check required before any conic trim.\n\n<sup>Written for commit 8f7084a564e5127c5c353aa5d8ae68b60c2205c4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1533?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T04:58:28-07:00",
+          "tree_id": "7176f34048ed2d41952441db2363ec5cb2961362",
+          "url": "https://github.com/andymai/brepkit/commit/46f174f984e9c17100fe7eaa8b7fb462f222b418"
+        },
+        "date": 1786363265565,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 958171,
+            "range": "± 2017",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1039511,
+            "range": "± 23509",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12076,
+            "range": "± 273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709856,
+            "range": "± 1600",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25704242,
+            "range": "± 106982",
             "unit": "ns/iter"
           }
         ]
