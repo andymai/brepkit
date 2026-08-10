@@ -4348,8 +4348,9 @@ fn split_face_2d_impl(
     let is_plane = matches!(surface, FaceSurface::Plane { .. });
     if trace_split {
         log::debug!(
-            "STRACE face={face_id:?} plane={is_plane} sections={}",
-            sections.len()
+            "STRACE face={face_id:?} plane={is_plane} sections={} info={}",
+            sections.len(),
+            info.map_or_else(|| "none".to_string(), |i| format!("{:?}", i.periodicity()))
         );
         let mut rows: Vec<String> = sections
             .iter()
