@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786353802294,
+  "lastUpdate": 1786355613144,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27701,6 +27701,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26921120,
             "range": "± 286688",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "30eb441a5c0c8fd115ddcefcfbcd50de4929b0f1",
+          "message": "docs: correct the #1517 control claim, it is a two-wall corner post too (#1524)\n\nCorrects a wrong claim I published in #1521 and in the #1517 thread,\nbefore anyone builds on it.\n\n## What I got wrong\n\nI described `lidpost_fuse_post_control.bin` as a post \"protruding\nthrough ONE wall instead of two\" and concluded the two-wall corner was\nthe discriminant. `BK_FF_DUMP` says otherwise.\n\nThe control is the **mirror-image corner post** at (+122, -80). It\ncrosses two walls exactly as the failing case does, and both produce the\nsame seven sections:\n\n| | failing | control |\n| --- | --- | --- |\n| ceiling circle at z=-0.800 | 3 (duplicated) | 3 (duplicated) |\n| wall lines | 4 | 4 |\n\nSo neither the two-wall corner nor the duplicated ceiling sections\nseparates the two cases. Both were plausible roots and both are now\nruled out by measurement rather than argument. The test name\n`lidpost_single_wall_control_fuses_closed_and_analytic` is a misnomer; I\nleft the name alone so the merged reference in #1521 still resolves, and\nsaid so in the doc comment.\n\n## What actually differs\n\nCrossing angles measured about each post's own centre, seam at 0\ndegrees:\n\n```\nfailing  crossings  61.05  118.95  151.05  208.95   seam 0 is OUTSIDE every crossing sector\ncontrol  crossings  28.95  331.05  241.05  298.95   seam 0 is INSIDE the x-wall sector (331.05..28.95)\n```\n\nThe spur in the failing result anchors exactly at that seam, so \"the\nseam lands in a sector the split has to keep\" is the live hypothesis.\nRecorded as a hypothesis, not a result.\n\n## Also worth knowing\n\nThe ceiling-cylinder section is stored **three times** in both cases.\nThat is not this bug, but three identical circles on one face pair is\nodd enough to be worth a look on its own.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCorrect the #1517 control-case: the control post is the opposite-corner\ntwo-wall case at (+122, -80), not single-wall or a mirror twin. Update\ndocs/tests to note both cases share the same seven sections, seam\nplacement is the working hypothesis, and `POINT_IN` asymmetry means the\ncontrol is a guard (not a one-variable comparison); no code or test\nbehavior changes.\n\n<sup>Written for commit d8260cfff3863cf7145edbfca56a1fc7385351ff.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1524?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T02:50:57-07:00",
+          "tree_id": "07b82e09a3b2eabfcd069bbc5892c8810a08092f",
+          "url": "https://github.com/andymai/brepkit/commit/30eb441a5c0c8fd115ddcefcfbcd50de4929b0f1"
+        },
+        "date": 1786355610910,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1034731,
+            "range": "± 2917",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1084128,
+            "range": "± 1203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13218,
+            "range": "± 295",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 719218,
+            "range": "± 1048",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26656021,
+            "range": "± 51120",
             "unit": "ns/iter"
           }
         ]
