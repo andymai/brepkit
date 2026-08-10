@@ -2371,22 +2371,23 @@ fn circle_arc_plane_crossings(
     }
     let (phase, delta) = (b.atan2(a), ratio.clamp(-1.0, 1.0).acos());
 
-    // Arc membership: the shorter way round from the start vertex to the end
-    // vertex, which is how every downstream consumer reads an open circle edge.
+    // Arc membership follows the kernel's one convention for an open circular
+    // edge (`EdgeCurve::domain_with_endpoints`): the CCW span from the start
+    // vertex to the end vertex, which is routinely a MAJOR arc. Reading it as
+    // the shorter way round instead is wrong in both directions — it drops
+    // real crossings on the arc AND invents them on the complement, and an
+    // invented crossing splits a section where no face boundary exists.
     let closed = (sp - ep).length() < 1e-9;
-    let ts = circle.project(sp).rem_euclid(TAU);
-    let te = circle.project(ep).rem_euclid(TAU);
-    let fwd = (te - ts).rem_euclid(TAU);
-    let (arc_lo, arc_span) = if fwd <= PI {
-        (ts, fwd)
-    } else {
-        (te, TAU - fwd)
+    let ts = circle.project(sp);
+    let span = {
+        let fwd = (circle.project(ep) - ts).rem_euclid(TAU);
+        if fwd < 1e-12 { TAU } else { fwd }
     };
 
     let mut out = Vec::new();
     for root in [phase + delta, phase - delta] {
         let t = root.rem_euclid(TAU);
-        if !closed && (t - arc_lo).rem_euclid(TAU) > arc_span + 1e-9 {
+        if !closed && (t - ts).rem_euclid(TAU) > span + 1e-9 {
             continue;
         }
         out.push(circle.evaluate(t));
@@ -5105,6 +5106,57 @@ mod tests {
             ])
         };
         (mk(a), mk(b))
+    }
+
+    fn unit_circle_xy() -> brepkit_math::curves::Circle3D {
+        // `new` picks u_axis from a derived frame; pin it to +X so the test can
+        // name parameters and points interchangeably.
+        brepkit_math::curves::Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn major_rim_arc_crosses_its_own_span_not_the_complement() {
+        // A rim arc is an ordinary major arc whenever the band keeps more than
+        // half its circumference. Reading it as the shorter way round fails in
+        // both directions at once, so one plane pins both: y = -0.5 meets the
+        // unit circle at 210° and 330°, and a CCW edge from 0° to 270° spans
+        // the first and not the second.
+        let circle = unit_circle_xy();
+        let hits = circle_arc_plane_crossings(
+            &circle,
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            -0.5,
+        );
+        assert_eq!(hits.len(), 1, "got {hits:?}");
+        let expected = circle.evaluate(std::f64::consts::PI * 7.0 / 6.0);
+        assert!(
+            (hits[0] - expected).length() < 1e-9,
+            "crossing landed on the complement: {:?}",
+            hits[0]
+        );
+    }
+
+    #[test]
+    fn minor_rim_arc_still_discards_the_crossing_beyond_it() {
+        // The guard the span check exists for: the same plane, but an edge
+        // that really does stop short of either root.
+        let circle = unit_circle_xy();
+        let hits = circle_arc_plane_crossings(
+            &circle,
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            -0.5,
+        );
+        assert!(hits.is_empty(), "got {hits:?}");
     }
 
     #[test]
