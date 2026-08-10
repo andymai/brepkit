@@ -48,7 +48,7 @@ pub fn bounding_box(topo: &Topology, solid: SolidId) -> Result<Aabb3, CheckError
 /// Compute the volume of a solid via face integration.
 ///
 /// Uses the divergence theorem: V = (1/3) sum of integral P dot N dA
-/// over all faces of the outer shell.
+/// over every face of the solid, cavity shells included.
 ///
 /// # Errors
 ///
@@ -58,11 +58,8 @@ pub fn solid_volume(
     solid: SolidId,
     options: &PropertiesOptions,
 ) -> Result<f64, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-
     let mut total_volume = 0.0;
-    for &fid in shell.faces() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let contrib = face_integrator::integrate_face(topo, fid, options.gauss_order)?;
         total_volume += contrib.volume;
     }
@@ -71,7 +68,7 @@ pub fn solid_volume(
 
 /// Compute the total surface area of a solid.
 ///
-/// Sums the area of each face in the solid's outer shell.
+/// Sums the area of every face of the solid, cavity shells included.
 ///
 /// # Errors
 ///
@@ -81,11 +78,8 @@ pub fn solid_area(
     solid: SolidId,
     options: &PropertiesOptions,
 ) -> Result<f64, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-
     let mut total_area = 0.0;
-    for &fid in shell.faces() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let contrib = face_integrator::integrate_face(topo, fid, options.gauss_order)?;
         total_area += contrib.area;
     }
@@ -107,15 +101,12 @@ pub fn center_of_mass(
     solid: SolidId,
     options: &PropertiesOptions,
 ) -> Result<Point3, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-
     let mut total_volume = 0.0;
     let mut mx = 0.0;
     let mut my = 0.0;
     let mut mz = 0.0;
 
-    for &fid in shell.faces() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let contrib = face_integrator::integrate_face(topo, fid, options.gauss_order)?;
         total_volume += contrib.volume;
         mx += contrib.volume_moment_x;
