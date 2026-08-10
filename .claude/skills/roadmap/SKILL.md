@@ -124,7 +124,9 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **Tool geometric parity: 137 failed / 2550 passed (#1517)** | First end-to-end head-to-head; prior green numbers for that suite were all on the REFERENCE kernel. Perf LEADS (0.69x aggregate, faster on 24/26, 0 non-manifold scenarios vs the reference's 5). Both roots are now CLOSED (see below): (a) the compartments+scoop graze fuse behind ~45 non-watertight exports, and (b) the lid magnet-post fuse behind the panic and the timeouts. NEXT STEP IS MEASUREMENT, not more digging — run the tool suite against a release carrying both before quoting any failure count. Count is post-brepjs#2012 (compound meshing); the #1517 opening comment quotes the earlier 152/2535. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` in the tool; refresh `.brepkit.snap` baselines first or ~110 stale counts masquerade as defects |
+| **Tool geometric parity (#1517)** | MEASURED 2026-08-10 on released 3.2.22, stock pins, same-day same-catalog control. Generator suite 272 files / 2693 tests: **3.2.18 154 failed, 3.2.22 144 failed**; excluding stale per-kernel snapshots that is **153 -> 130 real**. The issue's old "137 failed / 2550 passed" DOES NOT REPRODUCE (3.2.18 measures 154 today) — the catalog grew, so only a same-day control is trustworthy. Head-to-head matrix: perf **0.63x** aggregate, faster on 24/26, **all 26 closed with 0 non-manifold** vs the reference's 5. Remaining 144 by class: 34 open-shell, **19 compound-capability (#1537, the biggest single lever — drives the ~48-test text cluster)**, 15 timeout, 14 stale snapshot, 12 non-manifold, 2 reentrancy. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` |
+| **#1538 regressions from the band-split fixes** | 2 deterministic open shells (compartments+insert 16 bnd, solid-mode cutout 20 bnd) + 2 timeouts + 1 triangle-count invariant, all introduced between 3.2.18 and 3.2.22. Suspects #1530/#1534. Next step is operand capture + `replay_pair`, NOT another tool run |
+| **#1536 slotted no-lip loses its cavity** | volume 135221 vs the reference's 43129 (3.13x, 92% of its own bbox) yet CLOSED and MANIFOLD, so every watertightness gate passes and only volume catches it. Pre-existing (identical on 3.2.18). Sibling scenarios agree to 0.02% |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -399,7 +401,25 @@ One line each; the fixture/PR carries the story. Newest first.
 ## Tool-side measurement recipes and traps
 
 - **Scenario numbers rot.** Always run the control on the SAME DAY and SAME catalog; a
-  stale baseline has twice nearly produced a false conclusion.
+  stale baseline has twice nearly produced a false conclusion. Confirmed again 2026-08-10:
+  the issue's "137 failed on 3.2.18" re-measured as **154** on the same kernel, because the
+  catalog had grown. Quote a delta between two runs you did yourself, never against a
+  recorded number.
+- **The reference kernel's volume is NOT an oracle where its own mesh is non-manifold.**
+  Three of four volume "failures" in the head-to-head matrix were against reference meshes
+  carrying 970-1809 non-manifold edges (Euler 1230-2375) reading HIGHER than brepkit's clean
+  ones — the double-cover over-count. Check `nonManifoldEdges` on BOTH sides before believing
+  a volume delta.
+- **A per-kernel `.brepkit.snap` triangle count is not a defect signal.** Any correct change
+  to how a face splits moves it. 11 of 16 apparent regressions in the 3.2.22 run were stale
+  baselines; separate them out before counting, or refresh them first.
+- **Measurement worktree recipe** (2026-08-10, worked end to end): `git worktree add
+  .worktrees/<name> origin/main --detach` inside the TOOL repo, `pnpm install`, edit the
+  `brepkit-wasm` pin in its `package.json`, `pnpm install --no-frozen-lockfile`. Verify with
+  `require.resolve('brepkit-wasm', {paths:[require.resolve('brepjs')]})` plus a sha256 of the
+  `.wasm` — resolution THROUGH brepjs is the part that catches a nested copy. Drive
+  `./node_modules/.bin/vitest` directly. `--reporter=basic` is not a vitest 4 reporter and
+  fails as a missing custom module. A full generator run is ~45 min at `--maxWorkers=4`.
 - **Current baseline (2026-08-07, released 2.129.13 era, stock pins): the ENTIRE tool
   generator suite is GREEN — 272 files, 2720 passed, 0 failures.** Compare against a
   fresh same-day run, not old counts (the catalog grows continuously).
