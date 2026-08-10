@@ -1,0 +1,40 @@
+crates/operations/src/classify.rs
+  s_dba4078576a526::t_1690c6d81fc941 936
+  s_dba4078576a526::t_1ff28be0231609 559-561
+  s_dba4078576a526::t_a3e544fa5acf3b 775-777
+  s_dba4078576a526::t_15d2ea8349576a 493-495
+  s_dba4078576a526::t_4439d9a393cb71 275-321
+  s_dba4078576a526::t_3421b06e0e4386 352-354
+  s_dba4078576a526::t_1a4d976bdf93da 915-930,934-935,937-939
+  s_dba4078576a526::t_6639e9b55957a1 931-933
+crates/algo/src/builder/mod.rs
+  s_dba4078576a526::t_6639e9b55957a1 250-252,258-260
+  s_dba4078576a526::t_be9a37894af52e 238-249,253-257,261-277
+crates/check/src/classify/boundary.rs
+  s_dba4078576a526::t_e2f75b59cc3f37 121-167
+  s_dba4078576a526::t_47168ef5ac9268 221-223,278-280,382-384,416-418
+crates/io/tests/lidpost_fuse_inmem.rs
+  s_dba4078576a526::t_d691e45afcf4b5 28-33,35-38,41-42,45-76
+  s_dba4078576a526::t_7c5518507c550b 191-196,198
+.claude/skills/roadmap/SKILL.md
+  s_dba4078576a526::t_4ee8f056636112 130
+  s_dba4078576a526::t_82e9eeb8e705ff 142-150
+  s_dba4078576a526::t_fca4cd45825366 338-341
+  s_dba4078576a526::t_fa0cf582b029e1 419-421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f2529731f426065faa4e44c0de99a111ba6fdc79",
+  "prompts": {},
+  "sessions": {
+    "s_dba4078576a526": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "114b5179-29d7-4d8c-aa0e-c3c6eb914651",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
