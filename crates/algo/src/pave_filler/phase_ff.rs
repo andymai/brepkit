@@ -2361,11 +2361,15 @@ fn circle_arc_plane_crossings(
     if amp <= 1e-12 {
         return Vec::new(); // circle parallel to the plane (or lying in it)
     }
+    // A tangency lands exactly on |ratio| = 1, where rounding can put it a
+    // hair outside and drop a real (doubled) crossing. Admit the epsilon band
+    // and clamp before `acos`; the duplicate root the tangent case yields is
+    // collapsed by the caller's dedup.
     let ratio = -c / amp;
-    if ratio.abs() > 1.0 {
+    if ratio.abs() > 1.0 + 1e-9 {
         return Vec::new();
     }
-    let (phase, delta) = (b.atan2(a), ratio.acos());
+    let (phase, delta) = (b.atan2(a), ratio.clamp(-1.0, 1.0).acos());
 
     // Arc membership: the shorter way round from the start vertex to the end
     // vertex, which is how every downstream consumer reads an open circle edge.
