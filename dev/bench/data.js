@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786324957388,
+  "lastUpdate": 1786329785806,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27431,6 +27431,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24508853,
             "range": "± 437397",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "84f282d9e0be2fdf23bd75ec05b84a682c25726d",
+          "message": "docs(roadmap): record tool parity standing and the two remaining roots (#1519)\n\nFirst end-to-end head-to-head of the tool's generator suite under\nbrepkit (#1517). Previous green numbers for that suite were all taken on\nthe reference kernel, so this is new information.\n\n**Performance leads**: 0.69x aggregate across 26 scenarios, faster on 24\nof them, and 0 non-manifold scenarios against the reference's 5.\n\n**Geometry does not yet**: 137 failed / 2550 passed. Two roots carry the\ntail, both diagnosed with fast pinned repros rather than speculatively\npatched:\n\n- the compartments+scoop graze fuse (~45 non-watertight exports), which\nis orientation-dominant — GFA keeps the analytic faces but emits 123\nunmatched directed half-edges;\n- a hashbrown capacity-overflow panic (1 panic + 4 reentrancy, since a\nwasm trap strands the borrow flag and poisons the kernel).\n\nAlso records the trap that cost me a wrong first read: the tool routes\neach kernel to its own `.brepkit.snap` baseline, and those predate the\n3.2.9 density campaign — refresh them first or ~110 stale triangle\ncounts masquerade as defects.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap to record the tool’s first end-to-end geometric\nparity under `brepkit`, document the two remaining roots, and note the\ncount’s vintage/format. Includes the performance lead (0.69x aggregate;\nfaster in 24/26; 0 non-manifold), current standing (137 failed / 2550\npassed, post-`brepjs#2012`; earlier 152/2535 quoted), repro pointers,\nand a reminder to refresh `.brepkit.snap` baselines.\n\n<sup>Written for commit 9b2f242e0c0db4cd64984033a80f4e904f2a64af.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1519?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T02:40:39Z",
+          "tree_id": "c3a22e7bf3aaf64fbd05d6a7205cab7321fa9960",
+          "url": "https://github.com/andymai/brepkit/commit/84f282d9e0be2fdf23bd75ec05b84a682c25726d"
+        },
+        "date": 1786329783549,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1031165,
+            "range": "± 17279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1077208,
+            "range": "± 1931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13292,
+            "range": "± 215",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713976,
+            "range": "± 1622",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26609382,
+            "range": "± 49690",
             "unit": "ns/iter"
           }
         ]
