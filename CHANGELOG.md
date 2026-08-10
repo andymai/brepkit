@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.22](https://github.com/andymai/brepkit/compare/v3.2.21...v3.2.22) (2026-08-10)
+
+
+### Bug Fixes
+
+* **algo:** cross a band's rim arcs when trimming a faceted-ramp section ([#1534](https://github.com/andymai/brepkit/issues/1534)) ([4970aa9](https://github.com/andymai/brepkit/commit/4970aa9fbfcc76b8f2990443d483c2cb6a6dde70))
+
 ## [3.2.21](https://github.com/andymai/brepkit/compare/v3.2.20...v3.2.21) (2026-08-10)
 
 
