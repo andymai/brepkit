@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786316199263,
+  "lastUpdate": 1786324957388,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27377,6 +27377,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20639460,
             "range": "± 26137",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "789eb44700047eb46d41bfc84181d0243f31f594",
+          "message": "test(io): pin the #1517 compartments+scoop fuse repro and report closure in region_probe (#1518)\n\nFollow-up instrument from the #1517 parity dig. No production code.\n\n`region_probe` listed faces in a region but said nothing about closure,\nso telling a **mesher crack** (B-Rep closed, mesh cracked) from\n**mesh-fallback output** (B-Rep genuinely open) needed a separate run\nand some inference. Those two have completely different owners, so the\nprobe should answer it directly.\n\nIt now prints per solid:\n\n```\nfaces=1995 free=7 over=0 mix={\"plane\": 1995}\n```\n\nAll-planar with free edges on a bin that has a scoop and rounded corners\nis the fallback tell, and that one line is what reframed #1517's 45\nnon-watertight export failures from 45 independent geometry bugs into a\nsingle class: a boolean falls back, and the fallback emits an open shell\nthe export consumes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nExtend `region_probe` to report per-solid closure stats and surface-type\nmix, and pin a reproducible test for the compartments+scoop fuse from\n#1517. Also removes a redundant face traversal in the probe; no\nproduction code affected.\n\n- **New Features**\n- `region_probe` now prints per solid: face count, free-edge uses\n(open), over-edge uses (>2, non-manifold), and surface-type mix; keeps\nexisting face listing and bbox.\n- Added an in-memory test that captures the compartments+scoop fuse\nrepro (#1517). Verifies both operands are closed, reproduces the open\nall-planar shell from fallback, and pins the case.\n\n<sup>Written for commit 7b5792a7866a79a4cb6325faf405fa24e9b44906.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1518?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T01:20:05Z",
+          "tree_id": "068ee219e7d7e451cda8b80b370ed80ae95cab3e",
+          "url": "https://github.com/andymai/brepkit/commit/789eb44700047eb46d41bfc84181d0243f31f594"
+        },
+        "date": 1786324955269,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 922373,
+            "range": "± 19952",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 958454,
+            "range": "± 13819",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11129,
+            "range": "± 176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 656980,
+            "range": "± 17911",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24508853,
+            "range": "± 437397",
             "unit": "ns/iter"
           }
         ]
