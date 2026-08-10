@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786384770024,
+  "lastUpdate": 1786386012365,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28295,6 +28295,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25587591,
             "range": "± 137837",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d3ac6d8b2702b713f13939916c8557b70a3e0b2e",
+          "message": "docs(roadmap): record the measured #1517 state and the measurement traps (#1539)\n\nTool-side measurement on released 3.2.22, stock pins, same-day\nsame-catalog control (full report on #1517).\n\n- Generator suite: 3.2.18 **154 failed**, 3.2.22 **144 failed**;\nexcluding stale per-kernel snapshots, **153 → 130 real**.\n- Head-to-head: **0.63x** aggregate, faster on 24/26, **all 26 closed\nwith 0 non-manifold** vs the reference's 5.\n- The issue's \"137 failed on 3.2.18\" re-measures as 154 on that same\nkernel — the catalog grew.\n\nThree traps recorded, each of which nearly produced a wrong conclusion\nin this run: the reference's volume is not an oracle where its own mesh\nis non-manifold (three of four volume flags were against meshes with\n970–1809 non-manifold edges reading high); a per-kernel `.brepkit.snap`\ntriangle count moves whenever a face splits differently, so 11 of 16\napparent regressions were stale baselines; and the worktree/overlay\nverification recipe that worked end to end.\n\nNew rows for #1536 (slotted bin loses its cavity, silent behind\nwatertightness), #1537 (compound capability, the biggest remaining\nlever), #1538 (regressions I introduced).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to record the measured state of #1517 on released\n3.2.22 and document the traps that skew counts. Also adds concise\nentries for #1536, #1537, and #1538.\n\n- **Details**\n- Measurement highlights: 3.2.18 had 154 failed; 3.2.22 has 144 failed;\nafter removing stale per‑kernel snapshots that’s 153 → 130 real.\nHead‑to‑head: 0.63x aggregate, faster on 24/26, 0 non‑manifold vs the\nreference’s 5.\n- Traps and recipe: the reference’s volume is not trustworthy when its\nmesh is non‑manifold; per‑kernel `.brepkit.snap` triangle counts aren’t\nsignal; verified worktree/overlay flow with `pnpm`, pin `brepkit-wasm`\n(resolved through `brepjs`), and run `vitest`.\n- New rows: #1536 (slotted no‑lip cavity loss, watertight), #1537\n(compound capability is the biggest single lever), #1538 (regressions\nbetween 3.2.18 and 3.2.22; suspects #1530/#1534).\n\n<sup>Written for commit 10c451ba9d07aeb19234a49aad2478ca090dc1aa.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1539?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T11:17:38-07:00",
+          "tree_id": "f21e77192b008cd9187ebfb87116bdad9f6dfaf6",
+          "url": "https://github.com/andymai/brepkit/commit/d3ac6d8b2702b713f13939916c8557b70a3e0b2e"
+        },
+        "date": 1786386009989,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 957583,
+            "range": "± 3787",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1032789,
+            "range": "± 824",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12106,
+            "range": "± 68",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 708404,
+            "range": "± 10376",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25399314,
+            "range": "± 43877",
             "unit": "ns/iter"
           }
         ]
