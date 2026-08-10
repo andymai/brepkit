@@ -1,0 +1,21 @@
+crates/io/tests/lidpost_fuse_inmem.rs
+  s_2f618620b68e41::t_a58a28c5a0646d 89
+  s_2f618620b68e41::t_fe8ad15531c41e 85-88
+  s_2f618620b68e41::t_b7021a7a446017 90-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "3bc995614e43e68992c0e534c5f0fd180d8f3abf",
+  "prompts": {},
+  "sessions": {
+    "s_2f618620b68e41": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3bcb011a-3551-4a7b-9260-b1610f4b7906",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
