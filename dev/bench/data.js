@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786329785806,
+  "lastUpdate": 1786352024840,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27485,6 +27485,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26609382,
             "range": "± 49690",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "87407b90f4da5643efde37dba588ba7a3edabb73",
+          "message": "fix(math): bound CDT constraint recovery so a runaway cannot abort the kernel (#1520)\n\nCloses part of #1517: the `Hash table capacity overflow` panic and the 4\n`recursive use of an object` errors that follow it.\n\n## The defect\n\n`Cdt::recover_edge_depth` has two recursive paths that call into each\nother:\n\n- the **bisection backstop** at the bottom, which correctly recurses\nwith `depth + 1`\n- the **constrained-crossing** branch in the middle, which called\n`recover_edge(v0, mid)`, the depth-0 entry point\n\nSo `MAX_SPLIT_DEPTH` bounded only *consecutive* bisections, and any\ncrossing split reset it. Each level mints a vertex and inserts two\nsub-constraints into `constraints: DetHashSet` and `dup_grid: HashMap`,\nso a corridor that keeps producing crossings grows all three without a\nstructural bound.\n\n## Why it presents the way it does\n\nNatively (64-bit `usize`) an unbounded walk reads as a hang, which fits\nthe 14 timeouts in the issue. On wasm32 the 32-bit `usize` puts a hash\ntable past its maximum long before the heap fills, and hashbrown aborts:\n\n```\n[brepkit] panic: panicked at hashbrown-0.16.1/src/raw/mod.rs:37:40:\nHash table capacity overflow\n```\n\nwasm32 is `panic = abort`, so the trap strands the wasm-bindgen borrow\nflag on `BrepKernel` and every later call in that worker throws\n`recursive use of an object detected`. That is the 1 panic + 4\nreentrancy errors as a single root, exactly as the issue predicted.\n\n## The fix\n\nBound both dimensions, since they fail differently:\n\n| Bound | Guards | Value |\n|---|---|---|\n| `MAX_RECOVERY_LEVEL` | recursion depth, i.e. the wasm stack (1 MB\ndefault) | 256 |\n| `MAX_RECOVERY_INSERTS` | recovery-minted points per triangulation,\ni.e. hash growth | 16384 |\n\nExceeding either returns `ConvergenceFailure`, so a runaway now fails\none face instead of aborting the kernel. A crossing split still resets\nthe *bisection* budget, since it is real geometric progress, but it now\ncounts against the recursion level.\n\n## Calibration\n\nMeasured, not guessed:\n\n- recovery mints **0** points across the 823 `brepkit-operations` tests\nand the CDT unit tests, so neither bound is anywhere near a healthy path\n- a legitimate crossing set costs **one point per crossing pair**: the\nnew test's 32-chord fan mints exactly 496 = C(32,2), so the budget\nleaves room for ~180 mutually crossing constraints\n\nThe new test also documents a trap worth knowing: a fan of chords\nthrough a common point mints only **1** point, because every crossing\nwelds onto the same vertex. The chords have to be in general position to\nexercise recovery at all.\n\n## Verification\n\n- `brepkit-math` lib: 465 passed\n- `brepkit-math` CDT: 21 passed (20 before)\n- `brepkit-operations` lib: 823 passed\n- clippy `-D warnings` clean on `brepkit-math --all-targets`\n\n## What this does not do\n\nIt does not make the runaway geometry tessellate correctly, and I have\nno native repro of the triggering face (the panic is wasm-only in effect\nand `wasm-pack` is broken locally). It converts a kernel-wide abort into\na local, observable error, which is also what makes the underlying\ngeometry root findable natively next time.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBounds CDT constraint recovery to prevent unbounded recursion and\ninserts that caused `hashbrown` capacity overflows on `wasm32` and\nnative timeouts. Runaways now return a local ConvergenceFailure instead\nof aborting the kernel (part of #1517).\n\n- **Bug Fixes**\n- Added `MAX_RECOVERY_LEVEL = 256` (recursion cap) and\n`MAX_RECOVERY_INSERTS = 16384` (insert budget).\n- Tracked `recovery_inserts` and added `charged_insert(...)` to enforce\nthe budget; only newly minted vertices are charged (welds are free).\n- Crossing splits reset only the bisection depth; they still increment\nthe overall recursion level.\n- Return `ConvergenceFailure` when either limit is hit, avoiding “Hash\ntable capacity overflow” and the follow-on “recursive use of an object”\nerrors (#1517).\n- Added a dense crossing-fan test (32 chords) to assert budgets hold and\nexercise recovery; test suites remain green.\n  - Recorded the containment in the roadmap under #1517 root b.\n\n<sup>Written for commit 9385b69c06dcbe9a106ed5f2512b09284e003058.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1520?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T01:51:12-07:00",
+          "tree_id": "d1441dc808672ff0633f6566f5e8f4585cf3b2b1",
+          "url": "https://github.com/andymai/brepkit/commit/87407b90f4da5643efde37dba588ba7a3edabb73"
+        },
+        "date": 1786352022495,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 953754,
+            "range": "± 84907",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1036233,
+            "range": "± 2744",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12093,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703755,
+            "range": "± 2058",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25499827,
+            "range": "± 68656",
             "unit": "ns/iter"
           }
         ]
