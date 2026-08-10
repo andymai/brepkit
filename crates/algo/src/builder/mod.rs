@@ -235,6 +235,46 @@ fn log_subfaces_in_box(topo: &Topology, subs: &[SubFace], selected: &[bop::Selec
                 }
             }
         }
+        if touches && std::env::var("BK_SUBFACE_WIRE").is_ok() {
+            // The box above reads face VERTICES only, which cannot tell a
+            // short arc from the long one sharing its endpoints. The curve
+            // midpoint can, and on a periodic wall that difference is the
+            // whole diagnosis.
+            for (wi, wid) in std::iter::once(f.outer_wire())
+                .chain(f.inner_wires().iter().copied())
+                .enumerate()
+            {
+                let Ok(w) = topo.wire(wid) else { continue };
+                let mut parts = Vec::new();
+                for oe in w.edges() {
+                    let Ok(e) = topo.edge(oe.edge()) else {
+                        continue;
+                    };
+                    let (Ok(sv), Ok(ev)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+                        continue;
+                    };
+                    let (sp, ep) = (sv.point(), ev.point());
+                    let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+                    let mid =
+                        e.curve()
+                            .evaluate_with_endpoints(0.5_f64.mul_add(t1 - t0, t0), sp, ep);
+                    parts.push(format!(
+                        "e{}({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2})mid({:.2},{:.2},{:.2})",
+                        oe.edge().index(),
+                        sp.x(),
+                        sp.y(),
+                        sp.z(),
+                        ep.x(),
+                        ep.y(),
+                        ep.z(),
+                        mid.x(),
+                        mid.y(),
+                        mid.z()
+                    ));
+                }
+                log::debug!("SUBWIRE {:?} w{wi} {}", sf.face_id, parts.join(" "));
+            }
+        }
         if touches {
             log::debug!(
                 "SUBFACE {:?} {} rev={} src={:?} class={:?} rank={:?} selected={} ip={} x[{:.3},{:.3}] y[{:.3},{:.3}] z[{:.3},{:.3}]",
