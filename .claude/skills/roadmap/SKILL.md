@@ -26,9 +26,8 @@ The `#[ignore]` inventory is the load-bearing artifact. Before quoting any
 rg -n -A2 '#\[ignore' crates/    # filter the doc-comment false hits by hand
 ```
 
-**Inventory status (2026-08-10): ONE deferred-defect pin.**
-`compartscoop_fuse_inmem::compartscoop_fuse_is_closed` (#1517 root a, see OPEN). Every
-other `#[ignore]` is an explicit diagnostic or a slow-test marker. Known stale-but-harmless:
+**Inventory status (2026-08-10): ZERO deferred-defect pins.**
+Every remaining `#[ignore]` is an explicit diagnostic or a slow-test marker. Known stale-but-harmless:
 the `profile_intersect.rs` box-sphere probes (box-sphere shipped analytic in #1006),
 `staircase_fuse_with_cylinders` (~2 min perf run), the two `#696` dovetail entries and
 `diverge_first_cut` (print-only).
@@ -125,8 +124,7 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **Tool geometric parity: 137 failed / 2550 passed (#1517)** | First end-to-end head-to-head; prior green numbers for that suite were all on the REFERENCE kernel. Perf LEADS (0.69x aggregate, faster on 24/26, 0 non-manifold scenarios vs the reference's 5). Two roots carry the tail: (a) the compartments+scoop graze fuse behind ~45 non-watertight exports, and (b) the lid magnet-post fuse behind the panic and the timeouts (CLOSED, see below). Re-measure the tool suite on a release carrying the root-b fix before quoting the failure count again. Count is post-brepjs#2012 (compound meshing); the #1517 opening comment quotes the earlier 152/2535. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` in the tool; refresh `.brepkit.snap` baselines first or ~110 stale counts masquerade as defects |
-| **Compartments+scoop graze fuse (#1517 root a)** | Raw GFA keeps the analytic faces (12 cone/22 cyl) but leaves 34 free edges (over=0), so the gate rejects and the mesh fallback emits an OPEN shell behind ~45 non-watertight exports. Re-measured 2026-08-10, unchanged by #1526/#1530. All 34 sit in the two FRONT CORNERS, 17 per side and exact mirror images, where BOTH operands carry a chorded scoop front wall and those walls are COINCIDENT — that is the source of the 7 within-rank SD duplicates, and it is visible directly: body Id(120)/divider Id(165), Id(121)/Id(164), Id(122)/Id(163) (mirrored Id(137)/Id(166), Id(138)/Id(167)) receive IDENTICAL `BK_SECEDGE` and `BK_CLIP` lines. MECHANISM (2026-08-10): the body's corner is a cylinder Id(101) (z=1.200..**13.300**) topped by a cone Id(80) (z=13.300..14.700), and divider facet Id(121) (z=12.879..13.912) STRADDLES that junction. `phase_ff`'s mutual-overlap trim — including its exact v-window clip against a banded partner — is gated on `if !matches!(raw.curve, EdgeCurve::Line) { return Some(raw); }`, so a plane cutting a cylinder at an angle keeps its FULL ellipse (`BK_FF_DUMP` bb z=-7.67..23.22). It is then clipped to the FACET's boundary instead of the cylinder's, landing at z=13.912 — 0.612 past the cylinder's own top — so the two faces bound the same region along different curves. FIRST ATTEMPT (reverted, see the #1517 thread): the conic band clip DOES close the 0.687mm gap, but the edges stay free — the partner cylinder face still does not keep the matching curve, so this is one of at least two problems. Two traps: keeping the longest in-band run gives 34->27 free but over 0->2, because a conic that re-enters the band must become TWO curves and the trim sits in a `filter_map`; and trimming only the unambiguous single-run case gives 34->**36**, worse than baseline, which points at the sinusoid sampling — `phase_ff` has two `evaluate` conventions in play (`ParametricCurve::evaluate` vs `evaluate_with_endpoints`) and `RawCurve::t_range` follows the former. VERIFY THE CONVENTION BEFORE WRITING ANY CONIC TRIM. `clip_line_to_face_boundary` is NOT involved (every `BK_CLIP` call is at the inner divider walls x=+-0.400). The old 'ORIENTATION-dominant / 123 unmatched half-edges' framing came from a pass that predates the #1525 classifier fix — re-derive it before relying on it. Repro `crates/io/tests/compartscoop_fuse_inmem.rs` (42ms raw fuse) |
+| **Tool geometric parity: 137 failed / 2550 passed (#1517)** | First end-to-end head-to-head; prior green numbers for that suite were all on the REFERENCE kernel. Perf LEADS (0.69x aggregate, faster on 24/26, 0 non-manifold scenarios vs the reference's 5). Both roots are now CLOSED (see below): (a) the compartments+scoop graze fuse behind ~45 non-watertight exports, and (b) the lid magnet-post fuse behind the panic and the timeouts. NEXT STEP IS MEASUREMENT, not more digging — run the tool suite against a release carrying both before quoting any failure count. Count is post-brepjs#2012 (compound meshing); the #1517 opening comment quotes the earlier 152/2535. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` in the tool; refresh `.brepkit.snap` baselines first or ~110 stale counts masquerade as defects |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -138,6 +136,23 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Compartments+scoop graze fuse (CLOSED 2026-08-10, #1517 root a)** —
+  a thin planar tread meeting a corner cylinder takes a dedicated path,
+  `trim_ellipse_to_boundary_crossings`, because the in-both arc is a sub-millimetre
+  sliver the generic sampled filters drop. It crossed only `EdgeCurve::Line` boundary
+  edges, so it split the section at the tread's boundary lines and the analytic face's
+  SEAM lines but never at its RIM arcs. Nothing split the section where the band ends,
+  and the single over-long arc kept its midpoint inside the extent's boundary margin, so
+  the whole thing survived: tread and cylinder then bounded the same region along curves
+  0.687mm apart and the shell came back open (34 free edges, ~45 non-watertight exports).
+  Crossing the rim arcs too splits it at the rim and the existing midpoint test drops the
+  rest — no keep/drop logic changed. 178 faces, 12 cone / 24 cyl, 0 free. Fixture
+  `crates/io/tests/compartscoop_fuse_inmem.rs`, pin un-ignored. REFUTED on the way: the
+  "orientation-dominant / 145 same-sense pairs" framing (predated the #1525 classifier
+  fix), same-domain (the coincident scoop walls are real but not the cause), and
+  `clip_line_to_face_boundary`. Also refuted: adding a conic band clip in the FF
+  mutual-overlap trim — it closes the gap but the edges stay free, because the section
+  never reached that clip at all. `BK_RESTRICT=1` is what showed the bypass.
 - **Lid magnet-post corner fuse (CLOSED 2026-08-10, #1517 root b)** —
   `split_cylinder_band_by_arrangement` reconstructed the cut from the vertical wall
   generators alone, pairing them from the seam into removed rectangles, and used the ring
@@ -429,7 +444,9 @@ One line each; the fixture/PR carries the story. Newest first.
   received-10x-above is a defect.
 - **Durable native probes/instruments** (env-gated, grep for them before writing new
   ones): `BK_FF_DUMP` / `BK_FF_TRACE` / `BK_RAWC` (phase_ff), `BK_SD_SETS`
-  (same_domain), `BK_OPEN_SHELL` / `BK_SHELLS` (builder_solid shell grouping),
+  (same_domain), `BK_RESTRICT` (phase_ff — the in-both window each section is trimmed to, and
+  crucially whether a section reached that clip at all: a special-case emitter that bypasses
+  it looks exactly like a window computed wrong), `BK_OPEN_SHELL` / `BK_SHELLS` (builder_solid shell grouping),
   `BK_SUBFACE_SRC` / `BK_SUBFACE_BOX` (builder — note BOX tests face VERTICES only) and
   `BK_SUBFACE_WIRE` (adds each sub-face's wire with per-edge curve MIDPOINTS, the only way
   to tell a short arc from the long one sharing its endpoints on a periodic wall),
