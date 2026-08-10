@@ -28,12 +28,9 @@ use brepkit_topology::explorer::solid_faces;
 /// Edge-use census: 1 use = free boundary (open shell), 3+ = non-manifold.
 /// Reported per solid because a mesh-level crack and an open B-Rep look
 /// identical downstream but have completely different owners.
-fn edge_use_counts(topo: &Topology, sid: brepkit_topology::solid::SolidId) -> (usize, usize) {
+fn edge_use_counts(topo: &Topology, faces: &[brepkit_topology::face::FaceId]) -> (usize, usize) {
     let mut uses: HashMap<EdgeId, usize> = HashMap::new();
-    let Ok(faces) = solid_faces(topo, sid) else {
-        return (0, 0);
-    };
-    for fid in faces {
+    for &fid in faces {
         let Ok(face) = topo.face(fid) else { continue };
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             let Ok(w) = topo.wire(wid) else { continue };
@@ -110,7 +107,7 @@ fn main() {
                 );
             }
         }
-        let (free, over) = edge_use_counts(&topo, sid);
+        let (free, over) = edge_use_counts(&topo, &faces);
         let mut mix: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
         for &fid in &faces {
             if let Ok(f) = topo.face(fid) {
