@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786359960822,
+  "lastUpdate": 1786361352516,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27917,6 +27917,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25549722,
             "range": "± 132127",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "76eb71f75bd77592b876463b596ab052e5e3bac3",
+          "message": "fix(algo): cut a cylinder band at the ring sections, not only at the notch (#1530)\n\nCloses the crash and the 14 scenario timeouts on #1517 (root b).\n\n## The defect\n\nA partner plane that *ends inside* a cylindrical band cuts the band's\narcs where it still exists. `split_cylinder_band_by_arrangement`\nreconstructed the cut from the vertical wall generators alone — pairing\nthem from the seam into removed rectangles — and used the ring sections\nonly to confirm the cut was rectilinear. That models a box notch, where\nthe removed sector is the only place a horizontal cut exists.\n\nSo the sectors the notch **keeps** were never capped, and everything\nabove them stayed welded to the material below.\n\nOn the lid magnet-post fuse that meant one sub-face spanning the full\nband height, z=-2.800..-0.700 — the two exposed sectors *and* the\nfull-circumference band that sits inside the lid plate, as one piece.\nNot classification-uniform: its interior sample landed at 150° in the\nexposed sliver, so the whole thing was kept, dragging a buried band\nalong, and the band's rim plus the arcs the two surfaces did not share\ncame out as six free edges.\n\nThat rejected the fuse (euler=-1), fell back to mesh, turned 44 exact\nfaces into 305 flat ones, and the next ~24 post fuses compounded the\nblob to 8852 faces until call 248 never returned and the kernel aborted.\n\n## The fix\n\nThe ring sections become horizontals too, with their u-range taken from\nthe exact 3D projection (not the stored pcurve UV, which the function\nalready distrusts) and the arc midpoint choosing which side of the\nendpoints the arc runs. An arc running the far way round the seam is\nemitted as its two strip pieces.\n\n```\nbefore   F=47  mix=[(cone,4),(cylinder,17),(plane,26)]  free=6   -> rejected -> 305-face mesh blob\nafter    F=49  mix=[(cone,4),(cylinder,19),(plane,26)]  free=0   exact, watertight\n```\n\n## What ruled out everything else\n\n- `BK_SECEDGE` — the ceiling plane and the post cylinder are handed the\n*same* three arcs, and they are the correct exposed ones. FF and the\nsection set exonerated.\n- `BK_SUBFACE_BOX` — every sub-face classification is right.\n- `BK_SUBFACE_WIRE` — the kept piece's wire caps the buried sectors at\nz=-0.800 and runs the seam from z=-2.800 straight to z=-0.700 with no\nvertex between.\n- `build_wire_loops` already quantizes periodically, so vertex matching\nwas not it either.\n\nThe control post at the opposite corner was passing on the same wrong\nsplit: its seam falls in a buried sector, so the band-carrying piece\nsampled inside the wall, classified Inside, and was dropped along with\nthe band. It stays in the fixture as a guard, and its result is\nunchanged (48 faces, 0 free).\n\n## Verification\n\n- `crates/io/tests/lidpost_fuse_inmem.rs` pin **un-ignored**; the\ndeferred-defect inventory is down to root (a) alone\n- `cargo test --workspace --exclude brepkit-render --no-fail-fast`:\n**2740 passed, 0 failed** — the whole face-splitter foil set (d4\ngridfinity, honeycomb, divider-lip, groove-mouth, junction-disc,\ncylinder-slot, a1corner) included\n- `approx_census`: no new fallbacks\n- clippy clean\n\nRoot (a), the compartments+scoop graze fuse, is a different mechanism\nand still fails — verified, and its pin stays.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes cylinder band splitting by cutting at the ring sections, not just\nat the notch. This removes the 6 free edges in the lid magnet‑post fuse\nand eliminates the crash/timeouts in #1517 (root b).\n\n- **Bug Fixes**\n- Updated `split_cylinder_band_by_arrangement` to treat ring sections as\nhorizontals, using u‑ranges from exact 3D projection and the arc\nmidpoint to pick the side; seam‑spanning arcs are split into two pieces.\n- Keeps the existing rectilinear split logic; only adds the missing\nring-driven cuts inside the band.\n- Result: lid fuse goes from 47 faces / 6 free edges (mesh fallback\ncascade) to 49 faces / 0 free, exact and watertight. The previously\nignored test pin is now active; no new fallbacks; full suite passes.\n\n<sup>Written for commit 42c5c9ca364147eb3a5cec04043c1d0f9bea66b0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1530?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T04:26:37-07:00",
+          "tree_id": "8c1264052113537b1f2bb02997980041c9423a02",
+          "url": "https://github.com/andymai/brepkit/commit/76eb71f75bd77592b876463b596ab052e5e3bac3"
+        },
+        "date": 1786361350158,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 953236,
+            "range": "± 1818",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1033195,
+            "range": "± 22923",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11918,
+            "range": "± 204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713920,
+            "range": "± 2030",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25468177,
+            "range": "± 69802",
             "unit": "ns/iter"
           }
         ]
