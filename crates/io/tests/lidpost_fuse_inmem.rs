@@ -42,13 +42,29 @@
 //! surfaces are split against each other inconsistently rather than one of
 //! them failing to split at all.
 //!
-//! # The control pins the discriminant
+//! # The control, and what it does NOT prove
 //!
 //! `lidpost_fuse_post_control.bin` is an earlier post from the same scenario,
-//! fused into the SAME lid, protruding through ONE wall instead of two. It
-//! fuses cleanly: 48 faces, 0 free edges, volume up by the protruding cap. So
-//! the defect is the corner specifically, not posts, not protrusion, and not
-//! this lid. That is the one variable to hold onto when working the fix.
+//! fused into the SAME lid. It fuses cleanly: 48 faces, 0 free edges. So posts,
+//! protrusion and this lid are all ruled out as the cause.
+//!
+//! It is NOT a one-wall case. Measured with `BK_FF_DUMP`, the control is the
+//! mirror-image corner post at (+122,-80) and crosses two walls exactly as the
+//! failing case does, and both produce the SAME section structure: three
+//! duplicate ceiling circles at z=-0.800 plus four wall lines, seven in all.
+//! So neither "two walls" nor the duplicate sections is the discriminant.
+//!
+//! The one measured difference is where the cylinder's SEAM falls. Crossing
+//! angles about each post's own centre, seam at 0 degrees:
+//!
+//! ```text
+//! failing  crossings  61.05  118.95  151.05  208.95   seam 0 is OUTSIDE every crossing sector
+//! control  crossings  28.95  331.05  241.05  298.95   seam 0 is INSIDE the x-wall sector (331.05..28.95)
+//! ```
+//!
+//! The spur in the failing result is anchored exactly at that seam, so "the
+//! seam lands in a sector the split has to keep" is the live hypothesis. It is
+//! a hypothesis, not a result.
 //!
 //! Note `plane_internal_line_loops` logs three "not strictly interior"
 //! rejections here at distances 2.8e-14, 8.9e-16 and exactly 0. Those look
@@ -161,12 +177,13 @@ fn lidpost_fuse_is_closed_and_analytic() {
     );
 }
 
-/// Control: the same lid, an earlier post protruding through ONE wall.
+/// Control: the same lid, the mirror-image corner post at (+122,-80).
 ///
-/// This is the one-variable comparison for the case above. It fuses cleanly,
-/// which rules out posts, protrusion and this lid as the cause and leaves the
-/// two-wall corner as the discriminant. If this ever starts failing, the fix
-/// under test has broken the ordinary case, not repaired the corner one.
+/// It crosses two walls just as the failing case does and produces the same
+/// seven FF sections, yet fuses cleanly. So it rules out posts, protrusion,
+/// this lid, the two-wall corner and the duplicate ceiling sections. If this
+/// ever starts failing, the fix under test has broken the working case rather
+/// than repaired the failing one.
 #[test]
 fn lidpost_single_wall_control_fuses_closed_and_analytic() {
     let mut topo = Topology::new();
