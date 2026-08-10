@@ -1,6 +1,6 @@
-//! Captured-operand READY-REPRO for the lid retention-magnet post fuse (#1517).
+//! Captured-operand regression for the lid retention-magnet post fuse (#1517).
 //!
-//! This one boolean is the root of the tool's runaway cluster: the crash the
+//! This one boolean was the root of the tool's runaway cluster: the crash the
 //! issue records as `Hash table capacity overflow` plus the 14 scenario
 //! timeouts. It reproduces in ~5ms here against ~12 minutes in the tool.
 //!
@@ -18,10 +18,10 @@
 //! call  248  fuse(blob, post) never returns
 //! ```
 //!
-//! So the runaway is not a loop with a missing exit: it is one boolean losing
-//! its analytic surfaces, and then two dozen more booleans paying compound
-//! interest on the debris. Fixing the fuse below removes the blob, and with it
-//! both the crash and the timeouts.
+//! So the runaway was not a loop with a missing exit: it was one boolean
+//! losing its analytic surfaces, and then two dozen more booleans paying
+//! compound interest on the debris. That fuse now returns
+//! F=49 mix=[(cone,4),(cylinder,19),(plane,26)] with 0 free edges.
 //!
 //! # The geometry
 //!
@@ -46,34 +46,27 @@
 //! 118.955..151.045 and the big sector 208.955..61.045 through the seam at 0.
 //! The other two are buried in the wall material.
 //!
-//! # What the correct fuse looks like, and where this one diverges
+//! # The root
 //!
-//! The control gives it exactly: 48 faces = the lid's 44, plus the post's
-//! cylinder split into its two exposed sectors, the ceiling split in two, and
-//! the post's bottom cap. The post's top cap and its z=-0.800..-0.700 band are
-//! both buried in the plate and are dropped.
+//! Both operands are clean, the FF sections are right, and every sub-face
+//! classification is right. What was wrong was the SPLIT, in
+//! `split_cylinder_band_by_arrangement`: it reconstructed the cut from the
+//! vertical wall generators alone, pairing them from the seam into removed
+//! rectangles, and used the ring sections only to confirm the cut was
+//! rectilinear. That models a box notch, where the removed sector is the only
+//! place a horizontal cut exists. Here the ceiling plane ends inside the band
+//! and cuts the arcs where it still exists — the two EXPOSED sectors — so
+//! nothing capped them at z=-0.800 and the band from there up to the post's
+//! z=-0.700 rim stayed welded to material that is outside the lid. The kept
+//! piece spanned z=-2.800..-0.700 and was not classification-uniform: its
+//! interior sample landed at 150 degrees in the exposed sliver, so it was kept
+//! and dragged the buried band along, leaving that band's rim and the arcs the
+//! two surfaces did not share as six free edges.
 //!
-//! Every classification here is right, and `BK_SUBFACE_BOX` shows it: the
-//! ceiling splits into three with the post's footprint correctly dropped, and
-//! the cylinder's two buried wall sectors are correctly dropped. The defect is
-//! the SPLIT. The kept cylinder sub-face spans z=-2.800..-0.700, so it is the
-//! two exposed sectors AND the full-circumference band that sits inside the
-//! plate, as one piece. That piece is not classification-uniform; its interior
-//! sample lands at 150 degrees in the exposed sliver, so the whole thing is
-//! kept and drags the buried band along. The six free edges are that band's
-//! z=-0.700 rim plus the arcs the two surfaces did not share.
-//!
-//! `BK_SUBFACE_WIRE` names the mechanism. The cylinder's split at z=-0.800
-//! uses the two arcs the FF phase DROPPED as sections (`BK_FF_DUMP`: "drop
-//! closed-circle arc ... outside face pair", midpoints at 90 and 180 degrees),
-//! and does NOT use the three it kept. The kept arcs go to the ceiling plane
-//! alone, which is why they come out free. So the open question is why the
-//! cylinder is split against the complement of the section set.
-//!
-//! The control differs only in where the band ends up. Its seam at 0 degrees
-//! falls in a BURIED sector (crossings 28.955, 331.045, 241.045, 298.955), so
-//! the band-carrying piece samples at 14.5 degrees inside the wall, classifies
-//! Inside, and is dropped with the band. Same wrong split, right answer.
+//! The control passed on the same wrong split for a reason worth keeping: its
+//! seam at 0 degrees falls in a BURIED sector (crossings 28.955, 331.045,
+//! 241.045, 298.955), so the band-carrying piece sampled at 14.5 degrees
+//! inside the wall, classified Inside, and was dropped along with the band.
 //!
 //! Note `plane_internal_line_loops` logs three "not strictly interior"
 //! rejections here at distances 2.8e-14, 8.9e-16 and exactly 0. Those look
@@ -196,14 +189,9 @@ fn lid_classifies_its_plate_solid_and_its_pocket_empty() {
     }
 }
 
-/// The defect: GFA keeps the analytic surfaces but leaves the post's arcs
-/// single-sided, so the gate rejects the result and the mesh fallback replaces
-/// 44 exact faces with hundreds of flat ones.
-///
-/// Un-ignore when the fuse closes. The assertions below are the acceptance
-/// bar, not a description of current behaviour.
+/// The fuse stays exact and closed, so nothing downstream ever reaches the
+/// mesh fallback that used to turn 44 faces into 305 and compound from there.
 #[test]
-#[ignore = "#1517: post straddling a lid corner leaves 6 free edges, forcing the mesh fallback"]
 fn lidpost_fuse_is_closed_and_analytic() {
     let mut topo = Topology::new();
     let lid = load("lidpost_fuse_lid.bin", &mut topo);
