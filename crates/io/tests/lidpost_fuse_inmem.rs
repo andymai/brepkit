@@ -82,7 +82,13 @@ fn edge_use_counts(topo: &Topology, solid: SolidId) -> HashMap<EdgeId, usize> {
     for fid in solid_faces(topo, solid).unwrap() {
         let face = topo.face(fid).unwrap();
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            let Ok(wire) = topo.wire(wid) else { continue };
+            // Resolve rather than skip: this count is the evidence that the
+            // operands are well-formed, and a wire that fails to resolve would
+            // otherwise drop its edges and report a clean zero on broken
+            // topology.
+            let wire = topo
+                .wire(wid)
+                .expect("unresolvable wire in captured operand");
             for oe in wire.edges() {
                 *uses.entry(oe.edge()).or_default() += 1;
             }
