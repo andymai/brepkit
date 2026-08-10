@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786352395496,
+  "lastUpdate": 1786353279797,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27593,6 +27593,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20704496,
             "range": "± 22302",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ff4f2a5f7015ea1509069527a5d1c30852fbd001",
+          "message": "test(io): pin the #1517 lid magnet-post fuse, the root of the crash and the timeouts (#1521)\n\nDiagnoses #1517 root (b). No kernel change here: this pins the repro and\nrecords the chain, because the fix is a face-splitter change and the\nroadmap says not to guess at one without a foil set.\n\n## The crash and the 14 timeouts are one root\n\nI traced every kernel call in the `lidRetentionMagnets` scenario and\nserialised each boolean's operands. The result is not a loop with a\nmissing exit:\n\n```\ncall ~180  fuse(lid, post)  A: F=44  [(cone,4),(cylinder,16),(plane,24)]\n                            B: F=3   [(cylinder,1),(plane,2)]\n           raw GFA          F=47 [(cone,4),(cylinder,17),(plane,26)] free=6\n           -> gate rejects (euler=-1, 13 boundary edges) -> mesh fallback\n           -> F=305 [(plane,305)]\ncall ~190+ each further post fuses into the all-planar blob\n           -> 8852 faces, all flat, by call 278\ncall  248  fuse(blob, post) never returns; ~12 min later the kernel aborts\n```\n\nOne boolean loses its analytic surfaces, and two dozen later booleans\npay compound interest on the debris. Whether a given test reports a\ntimeout or the abort just depends on which limit arrives first.\n\n## The geometry\n\nThe post is a cylinder of radius 4 centred at (-118.500, 76.500),\nspanning z=-2.800..-0.700. It sits at a lid corner and pokes out through\n**both** perpendicular walls, x=-122.000 and y=80.000. The lid has a\nhorizontal ledge at z=-0.800, so the post's cross-section there is a\nfull circle that the walls cut into arcs:\n\n```\ncircle x=-122.000 at y=78.436 and y=74.564\ncircle y= 80.000  at x=-116.564 and x=-120.436\n```\n\nThe six free edges are exactly those arcs plus the post's z=-0.700 rim.\nThe telling part: the ledge plane keeps three arcs and the post cylinder\nkeeps two, and they are **different** arcs of the same circle. So this\nis not one surface failing to split. The two are split against each\nother inconsistently.\n\n## Red herring, recorded so the next pass does not chase it\n\n`plane_internal_line_loops` logs three rejections here:\n\n```\nendpoint ... not strictly interior (dist 0.000000000000028424365601609406)\nendpoint ... not strictly interior (dist 0.0000000000000008881784197001252)\nendpoint ... not strictly interior (dist 0)\n```\n\nDistances of 2.8e-14, 8.9e-16 and exactly zero against a 1e-5 margin\nlook like a strictness bug. They are not: those sections genuinely touch\nthe face boundary, so declining to treat them as an *internal* loop is\ncorrect.\n\n## What this PR adds\n\n- `crates/io/tests/lidpost_fuse_inmem.rs` with the captured operands.\n**5 ms**, against ~12 minutes in the tool.\n- `lidpost_operands_are_well_formed` (active) guards both inputs so a\nfuture failure cannot be blamed on a poisoned capture\n- `lidpost_fuse_is_closed_and_analytic` (ignored) is the acceptance bar\n- Roadmap: root (b) rewritten with the real mechanism, and the\n`#[ignore]` inventory updated, since this adds the first deferred-defect\npin since it was last declared clean\n\n## Reproducing\n\n```sh\ncargo test -p brepkit-io --test lidpost_fuse_inmem\nA=crates/io/tests/data/lidpost_fuse_lid.bin B=crates/io/tests/data/lidpost_fuse_post.bin \\\n  OP=fuse FREE_EDGES=1 RUST_LOG=debug cargo run --release -p brepkit-io --example replay_pair\n```\n\n## Method note\n\nLocal wasm builds were recorded as blocked (`wasm-pack` failing on a\nmissing `libbz2.so.1.0`). Only the SONAME alias is missing;\n`/usr/lib64/libbz2.so.1.0.8` is present, so a symlink on\n`LD_LIBRARY_PATH` plus the pinned `wasm-bindgen-cli` restores the loop.\nThat is what made this tractable: kernel change to tool-side answer in\n~10 minutes instead of a release cycle.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins a fast in-memory repro for the lid magnet‑post corner fuse in\n#1517, the single root behind the crash and the 14 timeouts. Adds\nfixtures, an ignored acceptance test, a passing single‑wall control, and\nhardens the operand guard; no kernel changes.\n\n- **New Features**\n- Added `crates/io/tests/lidpost_fuse_inmem.rs` with an active\nwell‑formedness check that resolves wires (prevents false “clean” counts\non broken topology), an ignored acceptance test\n(`lidpost_fuse_is_closed_and_analytic`), and a control\n(`lidpost_single_wall_control_fuses_closed_and_analytic`).\n- Added fixtures: `crates/io/tests/data/lidpost_fuse_lid.bin`,\n`crates/io/tests/data/lidpost_fuse_post.bin`,\n`crates/io/tests/data/lidpost_fuse_post_control.bin`.\n- Updated `.claude/skills/roadmap/SKILL.md` to mark the deferred‑defect\npin and document #1517 root as the lid magnet‑post corner fuse.\n\n<sup>Written for commit 3bc995614e43e68992c0e534c5f0fd180d8f3abf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1521?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T02:11:56-07:00",
+          "tree_id": "b09513d9841025a03396607eb2847bc5555d17bb",
+          "url": "https://github.com/andymai/brepkit/commit/ff4f2a5f7015ea1509069527a5d1c30852fbd001"
+        },
+        "date": 1786353276460,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 955873,
+            "range": "± 2491",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1032685,
+            "range": "± 3078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11903,
+            "range": "± 262",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709746,
+            "range": "± 1402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25795456,
+            "range": "± 132177",
             "unit": "ns/iter"
           }
         ]
