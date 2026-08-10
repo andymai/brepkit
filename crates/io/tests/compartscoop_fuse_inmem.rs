@@ -2,10 +2,11 @@
 //!
 //! This one boolean is the root of the tool's largest parity cluster: ~45
 //! "export mesh is not watertight" failures across unrelated features. The
-//! chain is `fuse(scooped bin body, compartment divider assembly)` ->  GFA is
+//! chain was `fuse(scooped bin body, compartment divider assembly)` ->  GFA
 //! rejected -> `operations::boolean` pays for the mesh fallback -> the fallback
 //! emits an OPEN shell (650 all-planar faces, 4 free edges) -> every downstream
-//! op and the export inherit it.
+//! op and the export inherit it. The fuse now returns 178 faces,
+//! 12 cone / 24 cylinder / 142 plane, 0 free edges.
 //!
 //! Both operands are well-formed going in, which is what makes this a genuine
 //! engine defect rather than a poisoned capture:
@@ -15,11 +16,26 @@
 //! B: F=110 mix=[(plane,110)]                          free=0 over=0 vol=9471.817
 //! ```
 //!
-//! Raw GFA on those produces 34 boundary edges, 145 shared edges with
-//! inconsistent face orientations, and Euler -5. The orientation count is the
-//! striking part: 145 same-sense pairs on a fuse whose inputs are both clean
-//! points at the assembler's face-orientation emission rather than at the
-//! intersection phases.
+//! # The root
+//!
+//! The body's front corner is a cylinder (z=1.200..**13.300**) topped by a
+//! cone, and the divider's chorded scoop wall has a facet spanning
+//! z=12.879..13.912 — so the facet straddles that junction.
+//!
+//! A thin planar tread meeting a corner cylinder takes a dedicated path,
+//! `trim_ellipse_to_boundary_crossings`, because the in-both arc is a
+//! sub-millimetre sliver the generic sampled filters drop. That path split the
+//! section at the tread's boundary lines and at the analytic face's SEAM
+//! lines, but not at its RIM arcs — it only crossed `EdgeCurve::Line` boundary
+//! edges. So nothing split the section at z=13.300 where the cylinder ends,
+//! and the single over-long arc reaching to z=13.912 kept its midpoint
+//! (z~13.40) inside the extent's 0.121 boundary margin, so the whole thing
+//! survived. The tread then bounded the region along one curve and the
+//! cylinder along another, 0.687mm apart on the tread's top edge, and the
+//! shell came back open.
+//!
+//! Crossing the rim arcs too splits the section at z=13.300, and the existing
+//! midpoint test drops the piece above it with no other change.
 //!
 //! Bisection from the tool: compartments alone and scoop alone both export
 //! watertight; only the combination fails. The sibling cluster (0.4mm walls,
@@ -88,7 +104,6 @@ fn compartscoop_operands_are_well_formed() {
 }
 
 #[test]
-#[ignore = "#1517: fuse(scooped body, dividers) emits 34 free edges and 145 same-sense pairs, forcing the mesh fallback that opens the export"]
 fn compartscoop_fuse_is_closed() {
     let mut topo = Topology::new();
     let body = load("compartscoop_fuse_body.bin", &mut topo);
