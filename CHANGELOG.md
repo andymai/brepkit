@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.20](https://github.com/andymai/brepkit/compare/v3.2.19...v3.2.20) (2026-08-10)
+
+
+### Bug Fixes
+
+* **check:** count a ray hit in a face hole as no crossing ([#1526](https://github.com/andymai/brepkit/issues/1526)) ([fce8068](https://github.com/andymai/brepkit/commit/fce80681d6c525ef817e24e85bce5fe0925c3611))
+
 ## [3.2.19](https://github.com/andymai/brepkit/compare/v3.2.18...v3.2.19) (2026-08-10)
 
 
