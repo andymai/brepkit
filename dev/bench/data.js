@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786386012365,
+  "lastUpdate": 1786387417568,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28349,6 +28349,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25399314,
             "range": "± 43877",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ed8dfc798866b462ecba9587d4cc078674cbaa39",
+          "message": "fix(algo): span a rim arc the way the kernel defines it, not the short way (#1540)\n\nCloses the two deterministic open shells on #1538.\n\n## The defect\n\n`circle_arc_plane_crossings`, added in #1534 so a faceted-ramp section\nis split at a band's rim, decided which part of the circle a boundary\nedge covers by taking the **shorter way round** between its vertices.\n\nThe kernel has one definition of that and it is not this one.\n`EdgeCurve::domain_with_endpoints` (`crates/topology/src/edge.rs:85`)\nreads an open circle edge as the **CCW span from start vertex to end\nvertex**:\n\n```rust\nlet a0 = c.project(start);\nlet delta = (c.project(end) - a0).rem_euclid(TAU);\n(a0, a0 + delta)\n```\n\nThat is a major arc whenever a band keeps more than half its\ncircumference, which is the common case, not the exotic one.\n\nOn a major arc the two readings are exact complements, so the predicate\ndoes not merely lose crossings — it **swaps the accept and reject\nsets**. It discards the crossings that lie on the edge and returns ones\nthat lie where the edge never goes.\n\nThat direction is the damaging one. A missing crossing reproduces the\npre-#1534 behaviour: the section stays over-long. A returned crossing\nsplits the section at a point that **no face boundary passes through**,\nand the existing midpoint keep/drop test then discards a piece that\nshould have been kept. The result is free edges — the 16- and\n20-boundary-edge open shells reported on #1538.\n\n## The fix\n\nUse the kernel's span. Three lines.\n\n## Verification\n\nThe regression pins both halves with a single plane: `y = -0.5` meets\nthe unit circle at 210° and 330°, and a CCW edge from 0° to 270° spans\nthe first and not the second. Reverted to the old logic the test reports\n\n```\ncrossing landed on the complement: Position([0.866, -0.500, 0.0])\n```\n\n— the 330° point, with the real 210° one dropped.\n\n- `cargo test --workspace --exclude brepkit-render --no-fail-fast`:\n**2744 passed, 0 failed**\n- The full face-splitter foil set is in that run, including the three\nfixtures #1530 and #1534 were written for:\n`compartscoop_fuse_is_closed`, `lidpost_fuse_is_closed_and_analytic`,\n`labelbracket_fuse_closes_the_back_wall` — all still close.\n\n## Not covered here\n\n#1538 also lists two timeouts and a triangle-count change. The\nopen-shell to mesh-fallback cascade is a plausible route to those\ntimeouts, but I have not measured it tool-side, so I am not claiming\nthem. The issue stays open for that half.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes rim-arc span to match the kernel’s rule (CCW from start to end),\nnot the short way. This corrects plane/circle crossing selection,\npreventing false splits and closing the two deterministic open shells in\n#1538.\n\n- **Bug Fixes**\n- Use the kernel’s `EdgeCurve::domain_with_endpoints` span (CCW\nstart→end), treating near-zero as a full circle.\n  - Check roots against that span; handle closed arcs correctly.\n- Add regression tests for major and minor rim arcs to prove correct\ncrossing selection.\n\n<sup>Written for commit e30c57b2293fe00762c4997e28a207ac1c952d8d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1540?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T18:41:25Z",
+          "tree_id": "a722149ef13fa7f9f1c789d69a9e18bbb0aee358",
+          "url": "https://github.com/andymai/brepkit/commit/ed8dfc798866b462ecba9587d4cc078674cbaa39"
+        },
+        "date": 1786387414372,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 770475,
+            "range": "± 1044",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 837450,
+            "range": "± 6027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10319,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 555693,
+            "range": "± 1358",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20733058,
+            "range": "± 49278",
             "unit": "ns/iter"
           }
         ]
