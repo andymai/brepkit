@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.19](https://github.com/andymai/brepkit/compare/v3.2.18...v3.2.19) (2026-08-10)
+
+
+### Bug Fixes
+
+* **math:** bound CDT constraint recovery so a runaway cannot abort the kernel ([#1520](https://github.com/andymai/brepkit/issues/1520)) ([87407b9](https://github.com/andymai/brepkit/commit/87407b90f4da5643efde37dba588ba7a3edabb73))
+
 ## [3.2.18](https://github.com/andymai/brepkit/compare/v3.2.17...v3.2.18) (2026-08-09)
 
 
