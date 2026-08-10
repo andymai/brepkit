@@ -184,6 +184,12 @@ impl Cdt {
     }
 
     /// `insert_point` charged against the recovery budget.
+    ///
+    /// Only a genuinely new vertex is charged. `insert_point` welds onto an
+    /// existing vertex within `DUP_TOL` and returns its index, which grows
+    /// nothing, and the budget exists to bound growth. A recovery that only
+    /// ever welds makes no progress either, but `MAX_RECOVERY_LEVEL` is what
+    /// stops that.
     fn charged_insert(
         &mut self,
         p: crate::vec::Point2,
@@ -192,8 +198,12 @@ impl Cdt {
         if self.recovery_inserts >= super::MAX_RECOVERY_INSERTS {
             return Err(MathError::ConvergenceFailure { iterations });
         }
-        self.recovery_inserts += 1;
-        self.insert_point(p)
+        let before = self.vertices.len();
+        let vi = self.insert_point(p)?;
+        if self.vertices.len() > before {
+            self.recovery_inserts += 1;
+        }
+        Ok(vi)
     }
 
     /// Check if an edge between v0 and v1 exists in the triangulation.
