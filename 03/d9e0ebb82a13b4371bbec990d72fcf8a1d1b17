@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_2f618620b68e41::t_4ece1fe2ad2f1b 130
+crates/io/tests/lidpost_fuse_inmem.rs
+  s_2f618620b68e41::t_7e8b66896f2968 45,48-67,180,182-186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "03d9e0ebb82a13b4371bbec990d72fcf8a1d1b17",
+  "prompts": {},
+  "sessions": {
+    "s_2f618620b68e41": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3bcb011a-3551-4a7b-9260-b1610f4b7906",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
