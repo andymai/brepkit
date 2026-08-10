@@ -1,0 +1,25 @@
+crates/io/tests/compartscoop_fuse_inmem.rs
+  s_dba4078576a526::t_f508e7f208ad57 5,8-9,19-38
+.claude/skills/roadmap/SKILL.md
+  s_dba4078576a526::t_0d7822385235d3 29-30,127,139-155,447-449
+crates/algo/src/pave_filler/phase_ff.rs
+  s_dba4078576a526::t_c46289f41b2e54 1291-1295,1361,2224-2246,2333-2383
+  s_dba4078576a526::t_f11ffd1935c3ee 1362-1367
+  s_dba4078576a526::t_f6ab569e6283c1 2384-2392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "30bb1e2e0144d9da0bbd8b2688f93ce65a664636",
+  "prompts": {},
+  "sessions": {
+    "s_dba4078576a526": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "114b5179-29d7-4d8c-aa0e-c3c6eb914651",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
