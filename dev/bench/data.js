@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786355613144,
+  "lastUpdate": 1786359387855,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27755,6 +27755,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26656021,
             "range": "± 51120",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fce80681d6c525ef817e24e85bce5fe0925c3611",
+          "message": "fix(check): count a ray hit in a face hole as no crossing (#1526)\n\nCloses #1525.\n\nA point floating in an open pocket classified as solid material.\n\n`classify_point` compared each ray hit against the face's **outer wire\nonly**, so a ray leaving through the mouth of a pocket counted the ring\nface around it, and the extra count flipped the parity. A plain\nthrough-hole is parity-invisible (the ray passes through matching holes\non both sides), which is why this survived; it bites on a blind pocket,\nor on a hole filled by a coplanar neighbour face. The wrong answer is\ndeflection-independent, so no probe setting exposes it.\n\nBoth copies of the classifier carried it (`brepkit-check` and the\n`brepkit-operations` one behind the WASM `classifyPoint` binding), in\nall four crossing counters: plane, 3D polygon, analytic UV, NURBS.\n\nRegression:\n`operations::classify::tests::point_in_open_pocket_is_outside` — a\n100x100x10 plate with a 60x60x4 pocket, sampled in the middle of the\npocket. Reads `Inside` before, `Outside` after.\n\n### Why this surfaced\n\nThe `POINT_IN` mode of `replay_pair` runs this classifier, and on the\n#1517 lid it reported the solid plate as empty and the open pocket as\nsolid. Two roadmap claims about that case were built on those readings\nand are retracted in this PR:\n\n- the \"unexplained asymmetry\" between the two lid corners\n- \"the two sectors the cylinder keeps both classify INSIDE, so they\nshould have been dropped\" — with the fix, all of that fuse's\nclassifications are correct and the defect is the **split**: the kept\ncylinder sub-face spans z=-2.800..-0.700, i.e. the exposed sectors and\nthe band buried in the lid plate as one non-uniform piece.\n\n`crates/io/tests/lidpost_fuse_inmem.rs` and the roadmap skill are\nupdated with the corrected diagnosis.\n\n### Also\n\n`BK_SUBFACE_WIRE` prints each sub-face's wire with per-edge curve\n**midpoints**. `BK_SUBFACE_BOX` reads face vertices only and so cannot\ntell a short arc from the long one sharing its endpoints — which is\nexactly what the lid post fuse turns on.\n\n### Verification\n\n- `cargo test --workspace --exclude brepkit-render --no-fail-fast`: 2739\npassed, 0 failed (gridfinity wasm suite included)\n- `cargo clippy -p brepkit-check -p brepkit-operations -p brepkit-algo\n--all-targets -- -D warnings`: clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix point classification to ignore ray hits that land inside a face’s\ninner wires (holes). This prevents open pockets from being misread as\nsolid across `brepkit-check` and `brepkit-operations` (plane, 3D\npolygon, analytic UV, NURBS).\n\n- **Bug Fixes**\n- Treat hits inside inner wires as no crossing; updates all crossing\ncounters in both `brepkit-check` and `brepkit-operations` (including the\nWASM `classifyPoint` path).\n- Tests: add regression\n`operations::classify::tests::point_in_open_pocket_is_outside`; pin the\nreported lid case with\n`io::lidpost_fuse_inmem::lid_classifies_its_plate_solid_and_its_pocket_empty`;\nrename the control guard to\n`lidpost_control_post_fuses_closed_and_analytic`; update roadmap notes.\n\n- **New Features**\n- Add `BK_SUBFACE_WIRE` diagnostic (in `brepkit-algo`) to log sub-face\nwires with per-edge curve midpoints; skip building the dump when debug\nlogging is off to avoid overhead.\n- Face-split `STRACE` now reports surface periodicity to clarify\narrangement dumps on periodic surfaces.\n\n<sup>Written for commit a30bcf3591bfb0f1b6575ae2450b31683f727d22.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1526?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T03:53:51-07:00",
+          "tree_id": "a7e807c17b6392fd3a0894e3958129deda2c39b0",
+          "url": "https://github.com/andymai/brepkit/commit/fce80681d6c525ef817e24e85bce5fe0925c3611"
+        },
+        "date": 1786359385215,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 998112,
+            "range": "± 2065",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1084489,
+            "range": "± 1236",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13205,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 720552,
+            "range": "± 2047",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26588036,
+            "range": "± 37726",
             "unit": "ns/iter"
           }
         ]
