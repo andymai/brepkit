@@ -1,0 +1,35 @@
+crates/math/src/cdt/mod.rs
+  s_2f618620b68e41::t_4929ffdd86eaef 206
+  s_2f618620b68e41::t_6fa830a04a02d1 135-141
+  s_2f618620b68e41::t_b63dfeb6afd409 120-130,133-134
+  s_2f618620b68e41::t_b630b3c0c1514c 142
+crates/math/src/cdt/constraints.rs
+  s_2f618620b68e41::t_9ecac470bc52ca 8-17,25
+  s_2f618620b68e41::t_31b64b7c8cd020 104-111,113
+  s_2f618620b68e41::t_75747e61a23db4 179,181
+  s_2f618620b68e41::t_41e79c53218c80 90
+  s_2f618620b68e41::t_98c47493f0fbde 173,186-196
+  s_2f618620b68e41::t_b94efd838bdb4f 44-50,55-59
+  s_2f618620b68e41::t_d157b9dd39e240 197-198
+crates/math/src/cdt/tests.rs
+  s_2f618620b68e41::t_adf38d14ca1c27 831,838,840-843,845-846,849-852,857,860-861,867-868,878,882,884-886
+  s_2f618620b68e41::t_015fc102548dec 853-856,858
+  s_2f618620b68e41::t_6fa830a04a02d1 879-881,883
+  s_2f618620b68e41::t_dcffe091bb0896 830,832-837,839,844,847-848,859,862-866,869-877,887-888
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "dc3fca10abe110c93fd4db91abd51a2b5837cad7",
+  "prompts": {},
+  "sessions": {
+    "s_2f618620b68e41": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3bcb011a-3551-4a7b-9260-b1610f4b7906",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
