@@ -42,6 +42,14 @@
 //! surfaces are split against each other inconsistently rather than one of
 //! them failing to split at all.
 //!
+//! # The control pins the discriminant
+//!
+//! `lidpost_fuse_post_control.bin` is an earlier post from the same scenario,
+//! fused into the SAME lid, protruding through ONE wall instead of two. It
+//! fuses cleanly: 48 faces, 0 free edges, volume up by the protruding cap. So
+//! the defect is the corner specifically, not posts, not protrusion, and not
+//! this lid. That is the one variable to hold onto when working the fix.
+//!
 //! Note `plane_internal_line_loops` logs three "not strictly interior"
 //! rejections here at distances 2.8e-14, 8.9e-16 and exactly 0. Those look
 //! like a tolerance bug but are not the defect: the sections genuinely touch
@@ -145,4 +153,29 @@ fn lidpost_fuse_is_closed_and_analytic() {
         mix.get("cylinder").copied().unwrap_or(0) >= 16 && mix.get("cone").copied() == Some(4),
         "fuse lost analytic surfaces: {mix:?}"
     );
+}
+
+/// Control: the same lid, an earlier post protruding through ONE wall.
+///
+/// This is the one-variable comparison for the case above. It fuses cleanly,
+/// which rules out posts, protrusion and this lid as the cause and leaves the
+/// two-wall corner as the discriminant. If this ever starts failing, the fix
+/// under test has broken the ordinary case, not repaired the corner one.
+#[test]
+fn lidpost_single_wall_control_fuses_closed_and_analytic() {
+    let mut topo = Topology::new();
+    let lid = load("lidpost_fuse_lid.bin", &mut topo);
+    let post = load("lidpost_fuse_post_control.bin", &mut topo);
+
+    let result = brepkit_algo::gfa::boolean(&mut topo, AlgoOp::Fuse, lid, post).unwrap();
+
+    assert_eq!(
+        free_edge_count(&topo, result),
+        0,
+        "control fuse left free edges"
+    );
+    let mix = surface_mix(&topo, result);
+    assert_eq!(mix.get("cone").copied(), Some(4));
+    assert_eq!(mix.get("cylinder").copied(), Some(18));
+    assert_eq!(mix.get("plane").copied(), Some(26));
 }
