@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.21](https://github.com/andymai/brepkit/compare/v3.2.20...v3.2.21) (2026-08-10)
+
+
+### Bug Fixes
+
+* **algo:** cut a cylinder band at the ring sections, not only at the notch ([#1530](https://github.com/andymai/brepkit/issues/1530)) ([76eb71f](https://github.com/andymai/brepkit/commit/76eb71f75bd77592b876463b596ab052e5e3bac3))
+
 ## [3.2.20](https://github.com/andymai/brepkit/compare/v3.2.19...v3.2.20) (2026-08-10)
 
 
