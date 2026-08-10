@@ -17,10 +17,33 @@
     clippy::unwrap_used
 )]
 
+use std::collections::HashMap;
+
 use brepkit_io::arena_io::deserialize_solid;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeId;
 use brepkit_topology::explorer::solid_faces;
+
+/// Edge-use census: 1 use = free boundary (open shell), 3+ = non-manifold.
+/// Reported per solid because a mesh-level crack and an open B-Rep look
+/// identical downstream but have completely different owners.
+fn edge_use_counts(topo: &Topology, faces: &[brepkit_topology::face::FaceId]) -> (usize, usize) {
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+    for &fid in faces {
+        let Ok(face) = topo.face(fid) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(w) = topo.wire(wid) else { continue };
+            for oe in w.edges() {
+                *uses.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    (
+        uses.values().filter(|&&c| c == 1).count(),
+        uses.values().filter(|&&c| c > 2).count(),
+    )
+}
 
 fn face_bbox(topo: &Topology, fid: brepkit_topology::face::FaceId) -> Option<(Point3, Point3)> {
     let face = topo.face(fid).ok()?;
@@ -84,6 +107,17 @@ fn main() {
                 );
             }
         }
+        let (free, over) = edge_use_counts(&topo, &faces);
+        let mut mix: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+        for &fid in &faces {
+            if let Ok(f) = topo.face(fid) {
+                *mix.entry(f.surface().type_tag()).or_default() += 1;
+            }
+        }
+        println!(
+            "   faces={} free={free} over={over} mix={mix:?}",
+            faces.len()
+        );
         println!(
             "   bbox ({:.3},{:.3},{:.3})..({:.3},{:.3},{:.3})",
             lo_all.x(),
