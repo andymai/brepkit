@@ -784,6 +784,11 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     use std::f64::consts::PI;
 
     let solid_data = topo.solid(solid).ok()?;
+    // A closed-form primitive formula describes the outer shell alone, so a
+    // solid carrying a cavity has to go the long way round.
+    if !solid_data.inner_shells().is_empty() {
+        return None;
+    }
     let shell = topo.shell(solid_data.outer_shell()).ok()?;
 
     let mut sphere_r: Option<f64> = None;
@@ -1279,16 +1284,14 @@ pub fn solid_volume(
     // use direct per-face tessellation with signed-volume summation.
     // tessellate() handles face reversal (flips winding + normals), so raw
     // signed tets are correct even without a globally watertight mesh.
-    let needs_direct_tessellation = {
-        let s = topo.solid(solid)?;
-        let sh = topo.shell(s.outer_shell())?;
-        sh.faces().iter().any(|&fid| {
+    let needs_direct_tessellation = brepkit_topology::explorer::solid_faces(topo, solid)?
+        .into_iter()
+        .any(|fid| {
             topo.face(fid).is_ok_and(|f| {
                 !f.inner_wires().is_empty()
                     || (f.is_reversed() && !matches!(f.surface(), FaceSurface::Plane { .. }))
             })
-        })
-    };
+        });
     if needs_direct_tessellation {
         return volume_from_direct_face_tessellation(topo, solid, deflection);
     }
@@ -1373,11 +1376,8 @@ fn volume_from_per_face_tessellation(
     solid: SolidId,
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-
     let mut total: f64 = 0.0;
-    for &fid in shell.faces() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let mesh = tessellate::tessellate(topo, fid, deflection)?;
         let idx = &mesh.indices;
         if vol_trace_enabled() {
@@ -2152,11 +2152,8 @@ pub fn volume_from_direct_face_tessellation(
     solid: SolidId,
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-
     let mut total: f64 = 0.0;
-    for &fid in shell.faces() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let face = topo.face(fid)?;
 
         // Use exact analytical volume for analytic surface faces.
@@ -2235,13 +2232,10 @@ pub fn solid_volume_from_faces(
     use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::face::FaceSurface;
 
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-
     let mut total = 0.0;
     let mut all_planar_triangles = true;
 
-    for &fid in shell.faces() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let face = topo.face(fid)?;
 
         // Only use the fast path for planar faces with exactly 3 line edges.
@@ -2314,15 +2308,12 @@ pub fn solid_center_of_mass(
 
     // tessellate() already handles face reversal (flips winding),
     // so signed tetrahedra sum is correct without winding heuristics.
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-
     let mut total_vol: f64 = 0.0;
     let mut cx = 0.0;
     let mut cy = 0.0;
     let mut cz = 0.0;
 
-    for &fid in shell.faces() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let mesh = tessellate::tessellate(topo, fid, deflection)?;
         let idx = &mesh.indices;
         let pos = &mesh.positions;
@@ -2371,15 +2362,12 @@ fn center_of_mass_from_faces(
     use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::face::FaceSurface;
 
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-
     let mut total_vol = 0.0;
     let mut cx = 0.0;
     let mut cy = 0.0;
     let mut cz = 0.0;
 
-    for &fid in shell.faces() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let face = topo.face(fid)?;
         if !matches!(face.surface(), FaceSurface::Plane { .. }) {
             return Err(crate::OperationsError::InvalidInput {
@@ -2438,6 +2426,70 @@ mod regression_tests {
     use super::*;
     use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
     use brepkit_topology::face::FaceSurface;
+
+    /// A fully enclosed void makes the cavity a SEPARATE inner shell, which a
+    /// volume path walking `outer_shell()` alone silently skips — the result is
+    /// closed, manifold and correctly bounded, so only the volume shows it.
+    #[test]
+    fn enclosed_cavity_is_subtracted_from_solid_volume() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let outer = crate::primitives::make_box(&mut topo, 40.0, 40.0, 10.0).unwrap();
+        // Off-centre on every axis, so the cavity moves the centre of mass too
+        // and a CoM that ignores it cannot pass by symmetry.
+        let void = crate::primitives::make_box(&mut topo, 20.0, 20.0, 4.0).unwrap();
+        crate::transform::transform_solid(&mut topo, void, &Mat4::translation(5.0, 5.0, 2.0))
+            .unwrap();
+        let hollow =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, outer, void)
+                .unwrap();
+
+        assert_eq!(
+            topo.solid(hollow).unwrap().inner_shells().len(),
+            1,
+            "the enclosed void must come back as an inner shell"
+        );
+
+        let v = solid_volume(&topo, hollow, 0.05).unwrap();
+        assert!(
+            (v - 14_400.0).abs() < 1.0,
+            "40x40x10 minus an enclosed 20x20x4 void is 14400, got {v}"
+        );
+
+        // The tessellating paths are reached whenever the analytic ones above
+        // decline, so they need the cavity too — they are not a slower route to
+        // the same answer if they integrate a different set of faces.
+        let direct = volume_from_direct_face_tessellation(&topo, hollow, 0.05).unwrap();
+        assert!(
+            (direct - 14_400.0).abs() < 1.0,
+            "direct face tessellation must see the cavity, got {direct}"
+        );
+
+        // `check` measures the same solid through its own accumulator.
+        let opts = brepkit_check::properties::PropertiesOptions::default();
+        let checked = brepkit_check::properties::solid_volume(&topo, hollow, &opts).unwrap();
+        assert!(
+            (checked - 14_400.0).abs() < 1.0,
+            "check::properties must see the cavity, got {checked}"
+        );
+
+        // 16000 at (20,20,5) minus 1600 at (15,15,4).
+        let com = solid_center_of_mass(&topo, hollow, 0.05).unwrap();
+        let want = Point3::new(20.555_555, 20.555_555, 5.111_111);
+        assert!(
+            (com - want).length() < 1e-3,
+            "centre of mass must shift with the cavity, got {com:?}"
+        );
+
+        // Surface area is the whole boundary, cavity walls included:
+        // 2*40*40 + 4*40*10 = 4800 outside, 2*20*20 + 4*20*4 = 1120 inside.
+        let area = brepkit_check::properties::solid_area(&topo, hollow, &opts).unwrap();
+        assert!(
+            (area - 5920.0).abs() < 1.0,
+            "surface area must include the cavity walls, got {area}"
+        );
+    }
 
     fn unit_square_extrude_volume() -> (f64, bool) {
         let mut topo = Topology::new();

@@ -124,9 +124,9 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **Tool geometric parity (#1517)** | MEASURED 2026-08-10 on released 3.2.22, stock pins, same-day same-catalog control. Generator suite 272 files / 2693 tests: **3.2.18 154 failed, 3.2.22 144 failed**; excluding stale per-kernel snapshots that is **153 -> 130 real**. The issue's old "137 failed / 2550 passed" DOES NOT REPRODUCE (3.2.18 measures 154 today) — the catalog grew, so only a same-day control is trustworthy. Head-to-head matrix: perf **0.63x** aggregate, faster on 24/26, **all 26 closed with 0 non-manifold** vs the reference's 5. Remaining 144 by class: 34 open-shell, **19 compound-capability (#1537, the biggest single lever — drives the ~48-test text cluster)**, 15 timeout, 14 stale snapshot, 12 non-manifold, 2 reentrancy. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` |
-| **#1538 regressions from the band-split fixes** | 2 deterministic open shells (compartments+insert 16 bnd, solid-mode cutout 20 bnd) + 2 timeouts + 1 triangle-count invariant, all introduced between 3.2.18 and 3.2.22. Suspects #1530/#1534. Next step is operand capture + `replay_pair`, NOT another tool run |
-| **#1536 slotted no-lip loses its cavity** | volume 135221 vs the reference's 43129 (3.13x, 92% of its own bbox) yet CLOSED and MANIFOLD, so every watertightness gate passes and only volume catches it. Pre-existing (identical on 3.2.18). Sibling scenarios agree to 0.02% |
+| **Tool geometric parity (#1517)** | MEASURED 2026-08-10 on released 3.2.22, stock pins, same-day same-catalog control. Generator suite 272 files / 2693 tests: **3.2.18 154 failed, 3.2.22 144 failed**; excluding stale per-kernel snapshots that is **153 -> 130 real**. The issue's old "137 failed / 2550 passed" DOES NOT REPRODUCE (3.2.18 measures 154 today) — the catalog grew, so only a same-day control is trustworthy. Head-to-head matrix: perf **0.63x** aggregate, faster on 24/26, **all 26 closed with 0 non-manifold** vs the reference's 5. Remaining 144 by class: 34 open-shell, **19 compound-capability (#1537 — 17 of them are the tool's stale `brepjs` pin at 18.124.2, fixed in brepjs 18.124.7; only the 2 compound-base `fuse` calls are a live gap, and it is brepjs-side)**, 15 timeout, 14 stale snapshot, 12 non-manifold, 2 reentrancy. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` |
+| **#1538 regressions from the band-split fixes** | Open-shell half CLOSED by #1540 (see Closed). Still open: 2 timeouts + 1 triangle-count invariant. The open-shell to mesh-fallback cascade is a plausible route to the timeouts but is NOT measured; #1530's ring-section horizontals are the other suspect (3.2.21 was already slow). Next step is a tool-side re-measure on a kernel carrying #1540, NOT another native dig |
+| **#1536 slotted no-lip loses its cavity** | LOCALIZED 2026-08-10 to the BODY OPERAND, not the fuse and not the measurement. `cavity_probe` on `slotted_nolip_body.bin`: outer shell +111351 (99.8% of its bbox), inner shell **-5263 against a 98783 bbox — 5.3% fill**. The cavity is present and correctly signed, it just encloses nothing; a correct one is ~-92000, exactly the 135237-vs-43129 gap. So GFA and every volume oracle are exonerated (per-shell sum, `oriented_solid_volume` and the fixture's own recorded numbers all agree). Next step is capturing one stage EARLIER than `crates/io/tests/data/slotted_nolip_body.bin` — the shell/cut chain that builds the body |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -138,6 +138,17 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Rim-arc crossings took the short way round (CLOSED 2026-08-10, #1540, the #1538 open shells)** —
+  `circle_arc_plane_crossings` (added by #1534) decided which part of a circle a
+  boundary edge covers by taking the SHORTER way between its vertices. The kernel has
+  one definition and it is not that: `EdgeCurve::domain_with_endpoints` reads an open
+  circle edge as the CCW span start->end, a MAJOR arc whenever a band keeps more than
+  half its circumference. On a major arc the two readings are complements, so the
+  predicate swaps its accept and reject sets — it drops the crossings on the edge and
+  returns ones where the edge never goes. The invented crossing is the damaging half:
+  it splits a section where no face boundary passes, and the existing midpoint test then
+  drops a piece that should have been kept. Regressions
+  `phase_ff::tests::{major,minor}_rim_arc_*`. Durable lesson in Recurring traps.
 - **Compartments+scoop graze fuse (CLOSED 2026-08-10, #1517 root a)** —
   a thin planar tread meeting a corner cylinder takes a dedicated path,
   `trim_ellipse_to_boundary_crossings`, because the in-both arc is a sub-millimetre
@@ -347,6 +358,20 @@ One line each; the fixture/PR carries the story. Newest first.
 
 ## Recurring traps (the distilled, expensive lessons)
 
+- **A circular edge has ONE canonical span and it is not the short one.**
+  `EdgeCurve::domain_with_endpoints` is the CCW range from start vertex to end vertex,
+  routinely a major arc. Any new "which part of the circle does this edge cover" test
+  must call it or reproduce it exactly (#1540). Taking the short way does not merely
+  lose crossings, it invents them on the complement.
+- **A whole-solid volume cannot tell a MISSING cavity from a COLLAPSED one** — both read
+  high by the same amount. Print per-shell signed volume against each shell's own bbox
+  (`cargo run --release --example cavity_probe -p brepkit-io`) before blaming either the
+  boolean or the measurement (#1536).
+- **Measurement and tessellation walk different face sets.** Tessellation uses
+  `explorer::solid_faces` (outer + inner shells) so the MESH is complete, while several
+  volume/area/CoM paths walked `outer_shell()` alone — closed, manifold and correctly
+  bounded, with the cavity silently absent from the number. Fixed for volume, area and
+  centre of mass; when adding a solid-scoped measurement, use `solid_faces`.
 - **Marched/fitted section geometry is good to ~1e-6; every exact-tol (1e-7) gate it
   meets needs a weld-scale (100·tol) band.** Four separate gaps in one family were this.
 - **A sampled proxy gated at an exactness tolerance** is the single most common defect
