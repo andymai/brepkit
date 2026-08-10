@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786353279797,
+  "lastUpdate": 1786353802294,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -27647,6 +27647,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25795456,
             "range": "± 132177",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e2fd45f30304d5aa8b287dc55cc1896cefcfe77",
+          "message": "docs(roadmap): record the wire spur and the classifier disagreement for #1517 root b (#1523)\n\nRoadmap maintenance for the corner-fuse work in #1521 and the\nmeasurements in the #1517 thread.\n\nThree things the next pass needs and would otherwise have to rediscover:\n\n- **The next lead.** The post cylinder's outer wire carries a spur: two\nedges appear twice in the same wire with the post's full z=-0.700 rim\ncircle at the tip, and that rim is one of the six free edges. Walls,\nbottom cap and ceiling all trim correctly, so this is one face going\nwrong rather than the whole split.\n- **A measured contradiction.** The two sectors the cylinder keeps up to\nz=-0.800 both classify *inside* the lid, so a fuse should have dropped\nthem, and the bottom cap of the same post is trimmed the other way.\n- **A trap.** Reasoning about this lid from its wall and ceiling faces\ngives the wrong answer. A point inside the x=±122 / y=±80 rectangle\nstill classifies inside the solid, so verdicts have to come from\n`POINT_IN`, not from reading the face list. Two of my own inferences\ndied on this; recording it so the next one doesn't.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap entry for the lid magnet-post corner fuse (#1517\nroot b) to capture the next lead: the post cylinder’s outer wire has a\nspur (duplicate edges at the z=-0.700 rim), and two kept sectors up to\nz=-0.800 classify inside the lid, contradicting the trim. Notes the trap\nto reason via `POINT_IN` (not face lists) and links the spur’s seam\nanchor to the free-edge set to guide the next pass.\n\n<sup>Written for commit 4ecbe717d2cb989a5c2b8d3b8b10c71cbcf7be3b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1523?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T02:20:48-07:00",
+          "tree_id": "60e28ca5b37cd90420919f3498c29480696ce1f4",
+          "url": "https://github.com/andymai/brepkit/commit/9e2fd45f30304d5aa8b287dc55cc1896cefcfe77"
+        },
+        "date": 1786353799809,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 999852,
+            "range": "± 1918",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1087033,
+            "range": "± 67299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13251,
+            "range": "± 581",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 719822,
+            "range": "± 1917",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26921120,
+            "range": "± 286688",
             "unit": "ns/iter"
           }
         ]
