@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786375491934,
+  "lastUpdate": 1786375947825,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28187,6 +28187,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25373485,
             "range": "± 345943",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "40c29e27d3036e4ef00102b656840ff2b743988e",
+          "message": "chore(main): release 3.2.22 (#1535)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.22](https://github.com/andymai/brepkit/compare/v3.2.21...v3.2.22)\n(2026-08-10)\n\n\n### Bug Fixes\n\n* **algo:** cross a band's rim arcs when trimming a faceted-ramp section\n([#1534](https://github.com/andymai/brepkit/issues/1534))\n([4970aa9](https://github.com/andymai/brepkit/commit/4970aa9fbfcc76b8f2990443d483c2cb6a6dde70))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.22 with a fix for trimming faceted-ramp sections by\ncorrectly crossing a band’s rim arcs. Also bumps all workspace crates to\n3.2.22 and updates the changelog.\n\n- **Bug Fixes**\n- Correct arc crossing in band rims during faceted-ramp trimming in\n`brepkit-algo`.\n\n<sup>Written for commit 261ecf49e363ae0d1dadbd9c9f42d74c6a571df8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1535?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-10T15:29:05Z",
+          "tree_id": "e726f19a6c2972b056829ed7afe780757d81adb0",
+          "url": "https://github.com/andymai/brepkit/commit/40c29e27d3036e4ef00102b656840ff2b743988e"
+        },
+        "date": 1786375944062,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 997074,
+            "range": "± 9870",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1080838,
+            "range": "± 2728",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13090,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 716797,
+            "range": "± 1298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26506762,
+            "range": "± 159198",
             "unit": "ns/iter"
           }
         ]
