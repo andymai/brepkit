@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786363268142,
+  "lastUpdate": 1786375491934,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28133,6 +28133,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25704242,
             "range": "± 106982",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4970aa9fbfcc76b8f2990443d483c2cb6a6dde70",
+          "message": "fix(algo): cross a band's rim arcs when trimming a faceted-ramp section (#1534)\n\nCloses the last root on #1517 (root a) — the ~45 non-watertight exports.\n\n## The defect\n\nA thin planar tread meeting a corner cylinder takes a dedicated path,\n`trim_ellipse_to_boundary_crossings`, because the in-both arc is a\nsub-millimetre sliver that the generic sampled filters drop. That path\ncollects exact crossings from the tread's boundary lines and from the\nanalytic face's **seam** lines — but its loop over the analytic face's\nboundary reads\n\n```rust\nif !matches!(edge.curve(), EdgeCurve::Line) { continue; }\n```\n\nso it never crosses the band's **rim** arcs, which is where the face\nactually ends.\n\nOn the compartments+scoop fuse the body's front corner is a cylinder\nending at z=13.300 and the divider's chorded scoop wall has a facet\nspanning z=12.879..13.912, straddling that junction. Nothing split the\nsection at z=13.300, and the single over-long arc reaching to z=13.912\nkept its midpoint (z≈13.40) inside the extent's 0.121 boundary margin —\nso the whole thing survived. The tread then bounded the region along one\ncurve and the cylinder along another, **0.687mm apart** on the tread's\ntop edge, and the shell came back open.\n\n## The fix\n\nCross the rim arcs too. `normal·evaluate(t)` is a sinusoid in the\ncircle's own parameter, so three evaluations pin it exactly and the\ncrossings are a closed-form `a cos t + b sin t = c` solve; points\noutside the arc actually spanned by the edge are discarded, and the\ncaller re-validates every crossing against the section curve.\n\nThat splits the section at the rim, and **the existing midpoint test\ndrops the piece beyond it** — no keep/drop logic changed.\n\n```\nbefore   F=176  free=34  (rejected -> mesh fallback -> 650 all-planar faces, open shell)\nafter    F=178  mix=[(cone,12),(cylinder,24),(plane,142)]  free=0  over=0\n```\n\n## Refuted along the way\n\n- **\"Orientation-dominant, 145 same-sense pairs\"** — that framing\npredated the #1525 classifier fix and did not survive re-derivation.\n- **Same-domain** — the coincident scoop walls are real (three face\npairs receive identical section lists, which is where the 7 within-rank\nduplicates come from), but they are not what leaves the boundary open.\n- **`clip_line_to_face_boundary`** — every one of its calls is at the\ninner divider walls.\n- **Adding a conic band clip to the FF mutual-overlap trim** (my first\nattempt, in the issue thread) — it does close the 0.687mm gap, but the\nedges stay free, because the section never reaches that clip at all.\n`BK_RESTRICT=1`, added here, is what showed the bypass: no trace line\never appeared for the pair.\n\n## Verification\n\n- `compartscoop_fuse_inmem::compartscoop_fuse_is_closed` **un-ignored**\n— the deferred-defect `#[ignore]` inventory is now **zero**\n- `cargo test --workspace --exclude brepkit-render --no-fail-fast`:\n**2741 passed, 0 failed**, full face-splitter foil set included\n- `approx_census`: no new fallbacks\n- clippy clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes faceted-ramp section trimming by crossing rim arcs so sections\nsplit at the analytic face boundary and the shell closes. Also handles\nrim tangencies robustly. Resolves the ~45 non‑watertight exports\nreported in #1517.\n\n- **Bug Fixes**\n- `trim_ellipse_to_boundary_crossings` now crosses rim\n`EdgeCurve::Circle` arcs, not just boundary lines and seams.\n- Added closed-form plane/arc solve `circle_arc_plane_crossings`,\ndiscarding points outside the spanned arc.\n- Admits rim-arc tangency by clamping the acos input (epsilon band) to\navoid dropping real doubled crossings.\n- Fuse result: 178 faces (12 cone / 24 cylinder / 142 plane), 0 free\nedges.\n\n- **New Features**\n- `BK_RESTRICT=1` debug trace to log the in-both clip window and whether\na section reached the clip.\n\n<sup>Written for commit fd29315c247df3bb8eb90f22dc2df6b1699ee931.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1534?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T08:22:07-07:00",
+          "tree_id": "99418dd6f00583c0b0ebb1a47e2bc81862705876",
+          "url": "https://github.com/andymai/brepkit/commit/4970aa9fbfcc76b8f2990443d483c2cb6a6dde70"
+        },
+        "date": 1786375488945,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 954222,
+            "range": "± 1867",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1034154,
+            "range": "± 1589",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12001,
+            "range": "± 166",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706918,
+            "range": "± 2016",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25373485,
+            "range": "± 345943",
             "unit": "ns/iter"
           }
         ]
