@@ -91,7 +91,7 @@ jobs:
       # rust-toolchain.toml provides the pinned Rust version + wasm32 target
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
-      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.62.30
+      - uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2.62.30
         with:
           tool: wasm-pack
 
@@ -204,7 +204,7 @@ jobs:
       # workflow's OIDC identity, so there is no long-lived registry secret to
       # rotate or leak. Configured on crates.io per crate under Settings ->
       # Trusted Publishing.
-      - uses: rust-lang/crates-io-auth-action@e919bc7605cde86df457cf5b93c5e103838bd879 # v1.0.1
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: auth
 
       # Same script a human runs to bootstrap a new crate name, so the release
