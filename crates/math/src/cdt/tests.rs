@@ -827,3 +827,62 @@ fn cdt_collinear_constraint_splitting() {
     let tris = cdt.triangles();
     assert!(!tris.is_empty());
 }
+
+/// Constraint recovery must stay inside its budget on a dense crossing set.
+///
+/// Crossing splits and bisections recurse into each other, and each level mints
+/// a vertex plus two sub-constraints into `constraints` and `dup_grid`. With no
+/// bound on the pair, a corridor that keeps producing crossings grows those
+/// hash containers without limit: natively that reads as a hang, and on wasm32
+/// the 32-bit `usize` puts a table past its maximum first and hashbrown aborts
+/// the whole kernel with "Hash table capacity overflow" (#1517).
+///
+/// Two opposed fans put every pair of constraints in general position, so all
+/// `n*(n-1)/2` crossings are distinct rather than welding onto one another, and
+/// the last-ULP endpoint jitter makes the split sub-chords deviate from their
+/// parent line, the shape that turns one crossing into several.
+#[test]
+fn cdt_crossing_fan_stays_inside_the_recovery_budget() {
+    let n = 32;
+    let mut cdt = Cdt::new((Point2::new(-60.0, -60.0), Point2::new(60.0, 60.0)));
+
+    let ids: Vec<(usize, usize)> = (0..n)
+        .map(|i| {
+            let t = (i as f64) / ((n - 1) as f64);
+            let jitter = 1e-13 * ((i % 7) as f64 - 3.0);
+            // The right ends move quadratically against the left ends' linear
+            // sweep, so no two chords share a midpoint and the whole family
+            // avoids becoming a pencil through one point (whose crossings
+            // would all weld onto a single vertex).
+            let left = Point2::new(-50.0, 80.0f64.mul_add(t, -40.0) + jitter);
+            let right = Point2::new(50.0, 80.0f64.mul_add(-(t * t), 40.0) - jitter);
+            (
+                cdt.insert_point(left).unwrap(),
+                cdt.insert_point(right).unwrap(),
+            )
+        })
+        .collect();
+
+    // Every constraint either recovers or reports ConvergenceFailure. Neither
+    // outcome may come from an unbounded walk, which is what the budget pins:
+    // without it a runaway grows `vertices` until the process dies.
+    for &(a, b) in &ids {
+        let _ = cdt.insert_constraint(a, b);
+        assert!(
+            cdt.recovery_inserts <= MAX_RECOVERY_INSERTS,
+            "recovery minted {} points, over the {MAX_RECOVERY_INSERTS} budget",
+            cdt.recovery_inserts
+        );
+    }
+
+    // The fan really does drive recovery, so the budget above is guarding a
+    // live path rather than a dead one. It mints one point per crossing pair
+    // (496 for these 32 chords), which is what makes a legitimate crossing set
+    // quadratic in the constraint count but still far short of the budget.
+    assert!(
+        cdt.recovery_inserts > 100,
+        "expected the fan to exercise crossing recovery, got {}",
+        cdt.recovery_inserts
+    );
+    assert!(!cdt.triangles().is_empty());
+}

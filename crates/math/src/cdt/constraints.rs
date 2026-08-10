@@ -5,6 +5,16 @@ use super::{Cdt, segment_intersection_point, segments_properly_intersect, sorted
 
 const MAX_SPLIT_DEPTH: usize = 16;
 
+/// Cap on total recovery recursion, counting crossing splits and bisections
+/// alike.
+///
+/// `MAX_SPLIT_DEPTH` only bounds consecutive bisections; a crossing split is
+/// real progress and resets it, so the two recursions together have no depth
+/// bound of their own. Recovery inserts nothing in the healthy suite, so this
+/// only binds on a runaway, where it keeps the recursion off the wasm stack
+/// (1 MB by default) before the insert budget would.
+const MAX_RECOVERY_LEVEL: usize = 256;
+
 impl Cdt {
     /// Recover a constraint edge (v0, v1) by flipping intersecting edges.
     ///
@@ -12,7 +22,7 @@ impl Cdt {
     /// segment and flip them until the constraint edge exists.
     #[allow(clippy::too_many_lines)]
     pub(super) fn recover_edge(&mut self, v0: usize, v1: usize) -> Result<(), MathError> {
-        self.recover_edge_depth(v0, v1, 0)
+        self.recover_edge_depth(v0, v1, 0, 0)
     }
 
     /// [`Cdt::recover_edge`] with a Steiner-split depth budget.
@@ -31,11 +41,22 @@ impl Cdt {
     /// sub-pairs are registered as constraints (the original pair never
     /// becomes an edge).
     #[allow(clippy::too_many_lines)]
-    fn recover_edge_depth(&mut self, v0: usize, v1: usize, depth: usize) -> Result<(), MathError> {
+    fn recover_edge_depth(
+        &mut self,
+        v0: usize,
+        v1: usize,
+        depth: usize,
+        level: usize,
+    ) -> Result<(), MathError> {
         if v0 == v1 {
             return Ok(());
         }
         let max_iter = self.triangles.len() * 4 + 100;
+        if level >= MAX_RECOVERY_LEVEL {
+            return Err(MathError::ConvergenceFailure {
+                iterations: max_iter,
+            });
+        }
 
         for _ in 0..max_iter {
             if self.edge_exists(v0, v1) {
@@ -66,7 +87,7 @@ impl Cdt {
                         // the flip loop and dead-ends in the bisect backstop
                         // (its midpoint snaps straight back to the vertex), so
                         // every recursion and constraint below is guarded.
-                        let mid = self.insert_point(mid_pt)?;
+                        let mid = self.charged_insert(mid_pt, max_iter)?;
                         if mid != e0 && mid != e1 {
                             // Replace old constraint (e0,e1) with two sub-constraints.
                             self.constraints.remove(&sorted_pair(e0, e1));
@@ -80,10 +101,16 @@ impl Cdt {
                             // this segment. Retry the flip loop.
                             continue;
                         }
-                        // Recover the two halves of the original edge.
-                        self.recover_edge(v0, mid)?;
+                        // Recover the two halves of the original edge. A
+                        // crossing split is real progress, so it resets the
+                        // bisection budget, but it still counts against the
+                        // recursion level: each one mints a point and two
+                        // sub-constraints, and a corridor that keeps producing
+                        // crossings otherwise branches with nothing to stop it
+                        // (#1517).
+                        self.recover_edge_depth(v0, mid, 0, level + 1)?;
                         self.constraints.insert(sorted_pair(v0, mid));
-                        self.recover_edge(mid, v1)?;
+                        self.recover_edge_depth(mid, v1, 0, level + 1)?;
                         self.constraints.insert(sorted_pair(mid, v1));
                         return Ok(());
                     }
@@ -143,17 +170,30 @@ impl Cdt {
         let p1 = self.vertices[v1];
         let mid_pt =
             crate::vec::Point2::new(f64::midpoint(p0.x(), p1.x()), f64::midpoint(p0.y(), p1.y()));
-        let mid = self.insert_point(mid_pt)?;
+        let mid = self.charged_insert(mid_pt, max_iter)?;
         if mid == v0 || mid == v1 {
             return Err(MathError::ConvergenceFailure {
                 iterations: max_iter,
             });
         }
-        self.recover_edge_depth(v0, mid, depth + 1)?;
+        self.recover_edge_depth(v0, mid, depth + 1, level + 1)?;
         self.constraints.insert(sorted_pair(v0, mid));
-        self.recover_edge_depth(mid, v1, depth + 1)?;
+        self.recover_edge_depth(mid, v1, depth + 1, level + 1)?;
         self.constraints.insert(sorted_pair(mid, v1));
         Ok(())
+    }
+
+    /// `insert_point` charged against the recovery budget.
+    fn charged_insert(
+        &mut self,
+        p: crate::vec::Point2,
+        iterations: usize,
+    ) -> Result<usize, MathError> {
+        if self.recovery_inserts >= super::MAX_RECOVERY_INSERTS {
+            return Err(MathError::ConvergenceFailure { iterations });
+        }
+        self.recovery_inserts += 1;
+        self.insert_point(p)
     }
 
     /// Check if an edge between v0 and v1 exists in the triangulation.

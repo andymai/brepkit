@@ -117,7 +117,28 @@ pub struct Cdt {
     /// Vertex → one incident triangle index for O(1) edge lookups.
     /// Updated on triangle creation/removal.
     vertex_tri: Vec<usize>,
+    /// Points minted by constraint recovery (crossing splits and bisection
+    /// backstops), as opposed to points the caller inserted.
+    ///
+    /// Recovery is mutually recursive and each level can mint a point and two
+    /// sub-constraints, so a pathological corridor grows `vertices`,
+    /// `constraints` and `dup_grid` without a structural bound. Natively that
+    /// reads as a hang; on wasm32 the 32-bit `usize` puts a hash table past
+    /// its maximum first and hashbrown aborts the whole kernel with
+    /// "Hash table capacity overflow" (#1517). The budget below turns that
+    /// into a local `ConvergenceFailure`.
+    recovery_inserts: usize,
 }
+
+/// Cap on points constraint recovery may mint for one triangulation.
+///
+/// A legitimate crossing set costs one point per crossing pair, so this leaves
+/// room for ~180 mutually crossing constraints in one triangulation. Face
+/// boundaries do not cross by construction and recovery mints nothing at all
+/// across the 823 `brepkit-operations` tests, so in practice this only binds on
+/// a runaway corridor. Raise it only with a measurement showing a legitimate
+/// face that needs more.
+const MAX_RECOVERY_INSERTS: usize = 16_384;
 
 /// Duplicate point detection tolerance.
 ///
@@ -182,6 +203,7 @@ impl Cdt {
             dup_grid: std::collections::HashMap::new(),
             last_located: 0,
             vertex_tri,
+            recovery_inserts: 0,
         }
     }
 
