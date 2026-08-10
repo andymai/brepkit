@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786361753063,
+  "lastUpdate": 1786362130063,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28025,6 +28025,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17791531,
             "range": "± 819004",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eed95684c89fc26de4fb9e43b4a562c049ffa87d",
+          "message": "docs(roadmap): replace the #1517 root (a) framing with measurements (#1532)\n\nRe-measured root (a) on the current kernel (unchanged by #1526 and\n#1530) and replaced the roadmap row with what is actually observable.\n\n- All 34 free edges sit in the two **front corners**, 17 per side, exact\nmirror images.\n- Both operands carry a chorded scoop front wall and those walls are\n**coincident** — the source of the 7 within-rank SD duplicates, and\ndirectly visible: body `Id(120)`/divider `Id(165)`, `Id(121)`/`Id(164)`,\n`Id(122)`/`Id(163)` (mirrored `Id(137)`/`Id(166)`, `Id(138)`/`Id(167)`)\nreceive identical `BK_SECEDGE` and `BK_CLIP` lines.\n- **The measurement to start from:** on facet `Id(121)` two sections\nthat must form one continuous trim boundary both land on the facet's top\nedge (y=-39.013, z=13.912) but **0.687mm apart**, at x=39.653 and\nx=40.340 — and the line between them is itself one of the free edges.\nFar too large for the marched-section 1e-6 band, so not a tolerance gap.\n- The two surfaces also disagree in *representation* there: the plane\nfacets keep exact `ellipse` edges, the corner cone keeps `nurbs_curve` +\n`circle` between the same vertices.\n- `clip_line_to_face_boundary` is ruled out — every `BK_CLIP` call is at\nthe inner divider walls, x=±0.400.\n\nThe previous \"ORIENTATION-dominant / 123 unmatched directed half-edges\"\nframing came from a pass that predates the #1525 classifier fix, so the\nrow now says to re-derive it before relying on it.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdate the roadmap entry for #1517 root (a) to replace the old\norientation-based framing with concrete measurements from the current\nkernel. It documents 34 free edges confined to the two front corners\nfrom coincident chorded scoop walls, including a 0.687 mm gap on facet\nId(121), unchanged by #1526/#1530.\n\n<sup>Written for commit 56f095bb0ff0cde239e04852a742fbdf1d6163d7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1532?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-10T04:39:49-07:00",
+          "tree_id": "895a5c1a017664f720cb7f8cdc519bb5a0447177",
+          "url": "https://github.com/andymai/brepkit/commit/eed95684c89fc26de4fb9e43b4a562c049ffa87d"
+        },
+        "date": 1786362127730,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 951988,
+            "range": "± 17984",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1035629,
+            "range": "± 12968",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11879,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 705339,
+            "range": "± 1146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25308328,
+            "range": "± 118765",
             "unit": "ns/iter"
           }
         ]
