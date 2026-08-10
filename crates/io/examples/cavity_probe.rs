@@ -43,7 +43,14 @@ fn shell_signed_volume(topo: &Topology, shell: ShellId, defl: f64) -> (f64, Aabb
             pts.extend_from_slice(&[a, b, c]);
         }
     }
-    (total / 6.0, Aabb3::from_points(pts), faces.len())
+    // A shell whose faces all tessellate to nothing still has a signed volume
+    // and a face count worth printing, so an empty point set is a zero bbox
+    // rather than a panic.
+    let bb = Aabb3::try_from_points(pts).unwrap_or(Aabb3 {
+        min: origin,
+        max: origin,
+    });
+    (total / 6.0, bb, faces.len())
 }
 
 fn report(topo: &Topology, sid: SolidId, name: &str) {
