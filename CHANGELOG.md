@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.29](https://github.com/andymai/brepkit/compare/v3.2.28...v3.2.29) (2026-08-12)
+
+
+### Bug Fixes
+
+* **operations:** rewind mis-wound extrude profiles before building ([#1554](https://github.com/andymai/brepkit/issues/1554)) ([723dad7](https://github.com/andymai/brepkit/commit/723dad71fd39a5b09fd10e820f7705a3aa63ce05))
+
 ## [3.2.28](https://github.com/andymai/brepkit/compare/v3.2.27...v3.2.28) (2026-08-12)
 
 
