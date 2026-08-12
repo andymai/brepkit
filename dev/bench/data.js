@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786543867132,
+  "lastUpdate": 1786546639441,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29321,6 +29321,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25672830,
             "range": "± 1704613",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bca0b8debaaf5f712c8e5deacebd934227d64184",
+          "message": "docs(roadmap): circleinsert fuse mechanism found; log doubled-face groups (#1558)\n\n## Summary\n\nThe circleinsert socket-fuse dig reached its mechanism:\n`remove_doubled_faces` (builder_solid Step 0b2) eats the corner\ncone∩cylinder lens pieces. After `merge_duplicate_edges`, the\ncylinder-side and cone-side lens faces reference the identical two edge\nentities, and the pass groups by edge-ID multiset alone — its \"identical\nboundary ⇒ zero volume ⇒ cancel\" soundness argument silently assumes the\nfaces share a surface. A two-edge lens between two different quadrics\nhas the same boundary, real enclosed volume, and two legitimate boundary\nfaces; dropping all of them cascades into the fuse's 84-edge free ring\n(measured: 227 selected → 11 dropped in 4 groups → shells [214,1,1]).\n\nTwo more layers stack on it (recorded in the roadmap for the fix): the\nsplitter emits duplicate lens sub-faces, and classification selects both\nsurfaces' lens pieces.\n\nChanges: the pass logs each doubled group at debug level (9 lines,\nguarded by log_enabled), plus the roadmap entry update. No behavior\nchange.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds debug logging in `remove_doubled_faces` to trace doubled-face\ngroups during solid building; updates the roadmap with the identified\ncircleinsert socket-fuse mechanism. No behavior change.\n\n- Logs each group of faces dropped by identical edge-ID multiset\n(post-`merge_duplicate_edges`) as: \"remove_doubled_faces: group <ids>\";\noutput is gated by debug level (`RUST_LOG=debug`).\n- Roadmap (`#1538`) documents that cone∩cylinder lens faces from\ndifferent surfaces can share the same two edges, making the current\ngrouping unsafe; follow-ups will gate by same-surface and address\nduplicate lens sub-faces and classification.\n\n<sup>Written for commit 5b701ecf0672d28ec333d84a4395ed95b2c36d8d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1558?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T07:54:45-07:00",
+          "tree_id": "bb3b6b71df4e24d5c2a35c17c86f17c46a015916",
+          "url": "https://github.com/andymai/brepkit/commit/bca0b8debaaf5f712c8e5deacebd934227d64184"
+        },
+        "date": 1786546635791,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1002331,
+            "range": "± 33466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1086927,
+            "range": "± 1470",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13155,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 717900,
+            "range": "± 1030",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26660944,
+            "range": "± 47059",
             "unit": "ns/iter"
           }
         ]
