@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.28](https://github.com/andymai/brepkit/compare/v3.2.27...v3.2.28) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** nest contained free loops as holes in the synthesized cap ([#1552](https://github.com/andymai/brepkit/issues/1552)) ([ad1afac](https://github.com/andymai/brepkit/commit/ad1afac3c86faa078559a63773dddb46232ee16c))
+
 ## [3.2.27](https://github.com/andymai/brepkit/compare/v3.2.26...v3.2.27) (2026-08-12)
 
 
