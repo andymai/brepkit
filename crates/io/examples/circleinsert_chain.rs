@@ -154,4 +154,38 @@ fn main() {
         brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, body, sockets)
             .unwrap();
     report(&topo, fused, "socket fuse");
+
+    // `CHANNEL_EDGE=1`: every result edge lying on the -x channel line
+    // (y ~= 2.4, z ~= 1.2), with owners and full-precision endpoints — the
+    // instrument for "who owns the other side of the freed slab edge".
+    if std::env::var("CHANNEL_EDGE").is_ok() {
+        for fid in solid_faces(&topo, fused).unwrap() {
+            let face = topo.face(fid).unwrap();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid).unwrap().edges() {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    let a = topo.vertex(e.start()).unwrap().point();
+                    let b = topo.vertex(e.end()).unwrap().point();
+                    let on = |p: brepkit_math::vec::Point3| {
+                        (p.y() - 2.4).abs() < 1e-3 && (p.z() - 1.2).abs() < 1e-3 && p.x() < -4.0
+                    };
+                    if on(a) && on(b) {
+                        println!(
+                            "CHANNEL {fid:?}:{} {:?} fwd={} ({:.9},{:.9},{:.9})->({:.9},{:.9},{:.9})",
+                            face.surface().type_tag(),
+                            oe.edge(),
+                            oe.is_forward(),
+                            a.x(),
+                            a.y(),
+                            a.z(),
+                            b.x(),
+                            b.y(),
+                            b.z()
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
