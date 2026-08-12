@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786509686246,
+  "lastUpdate": 1786510783174,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28565,6 +28565,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25402395,
             "range": "± 265416",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6ab89b669d01e354e3647c1d203a84eb48485ecd",
+          "message": "fix(algo): gate split-hole attachment on area dominance (#1544)\n\nCloses the kernel side of #1536 (2x2 slotted no-lip bin loses its\ncavity, volume 3.13x, silent because closed and manifold).\n\n## Root cause\n\nThe face splitter's simple hole matching\n(`builder/face_splitter/mod.rs`) attaches each hole loop to the first\nsub-face whose outer polygon contains the hole's **first vertex**.\nSplitting a shelled bin's rim annulus by a woven wall-slot notch, the\nnotched cavity-mouth loop's trace starts at a corner it **shares** with\nthe tiny notch rectangle; the strict ray-cast reads that on-corner probe\nas inside, and first-match order hands the 6,577-area mouth to the\n1.26-area notch. The annulus loses its hole (emitted as a full disc) and\nthe mouth re-emerges as a same-sense coincident ceiling. Every\nwatertightness gate passes; only volume catches it.\n\nArc-cornered rims only: an all-line rim traces the mouth loop from a\ndifferent first vertex, which is why the plain sibling bins were exact\nwhile every slotted variant lost its cavity (measured: plain-rect\ncontrol at full bin dimensions correct, rounded reproduces).\n\n## Fix\n\nA hole cannot be carried by a region smaller than itself — skip attach\ncandidates smaller than the hole (area sampled arc-true via the plane\nframe). This is the one containment invariant a point probe cannot fake.\nThe documented BoundaryCoincident calibrations are untouched: those\nholes attach to the larger surrounding region, which passes the gate;\nthe last-resort fallback still never drops a hole.\n\n## Verification\n\n- New regression `crates/operations/tests/shelled_bin_slot_cut.rs`:\nshelled rounded bin + 6 slot cuts stays a single open-pocket shell,\nwatertight, volume = shell − slots (0.32s).\n- Repro instrument `crates/operations/examples/slot_cut_probe.rs`\n(modes: seq / compound / min / rectfull / roundone, `BK_RAW_GFA=1` to\nbypass the ops shortcuts), plus\n`crates/io/examples/shell_face_census.rs` (per-face signed-volume census\nthat makes a same-sense doubled cover visible at a glance).\n- Before: one slot cut on the shelled rounded bin gave 108,706 (full-box\nouter +146,499 with an up-facing cavity ceiling in an inner shell).\nAfter: 16,687.0 = shell − slot exactly; the 6-slot chain 16,562.6,\nidentical across raw GFA, sequential cuts and `compound_cut`, zero mesh\nfallbacks.\n- Full workspace 2739/2739 passed (render excluded per the known\nSIGSEGV), including all splitter foil fixtures and `brepkit-wasm --lib\ngridfinity` 27/27.\n\nTool-side confirmation (parity-matrix slotted row reading ~43,129)\nhappens after release; #1536 stays open until then.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes hole attachment in the face splitter by gating on area dominance\nso a hole never attaches to a smaller region. This stops rim‑mouth loops\nfrom snapping to tiny slot notches and closing the bin pocket; the\nslotted no‑lip bin now reports the correct cavity (addresses #1536).\n\n- **Bug Fixes**\n- Added an area-based filter to simple hole matching in\n`builder/face_splitter/mod.rs`; skip sub-faces whose outer area is\nsmaller than the hole (arc-true area via the plane frame).\n- Kept existing `BoundaryCoincident` behavior; fallback is now\ndeterministic and single-pass: pick the first area-passing candidate,\nelse the largest non-twin by precomputed area (ordered via `total_cmp`),\nso holes are never dropped.\n- Added regression test for a shelled rounded bin with 6 slots and two\nexamples to inspect per-face volume and slot-cut behavior; result stays\nwatertight and volume equals shell minus slots.\n\n<sup>Written for commit 449fe4ebaf423930539fc97c00c2ab66e7f5da78.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1544?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T04:57:15Z",
+          "tree_id": "3a21ef41ea67034bf06cce2bb93d4aaf286e497d",
+          "url": "https://github.com/andymai/brepkit/commit/6ab89b669d01e354e3647c1d203a84eb48485ecd"
+        },
+        "date": 1786510780823,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 966915,
+            "range": "± 11001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1044975,
+            "range": "± 33500",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11949,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713976,
+            "range": "± 1100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25592770,
+            "range": "± 58635",
             "unit": "ns/iter"
           }
         ]
