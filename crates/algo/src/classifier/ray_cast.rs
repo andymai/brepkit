@@ -23,6 +23,12 @@ enum FaceGeom {
     Planar {
         verts: Vec<Point3>,
         holes: Vec<Vec<Point3>>,
+        /// Holes whose wire is circular, kept ANALYTIC (center, radius): a
+        /// chord-sampled hole polygon under-covers the true circle by its
+        /// sagitta, and a ray passing through that band counts a phantom
+        /// crossing while reading clean (the circleinsert pocket-mouth
+        /// sample: a hit 0.03 inside the r=10 pocket rim, sagitta ~0.09).
+        circle_holes: Vec<(Point3, f64)>,
         normal: Vec3,
         d: f64,
     },
@@ -240,8 +246,22 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
         for (i, ray_dir) in dirs.iter().enumerate() {
             let mut crossings = 0i32;
             let mut suspicious = false;
-            for geom in face_data {
+            for (gi, geom) in face_data.iter().enumerate() {
                 let (c, s) = ray_geom_crossings(point, *ray_dir, geom, tol);
+                if traced && (c != 0 || s) {
+                    let tag = match geom {
+                        FaceGeom::Planar { verts, .. } => format!("planar[{}v]", verts.len()),
+                        FaceGeom::Cylinder { .. } => "cylinder".to_string(),
+                        FaceGeom::Cone { .. } => "cone".to_string(),
+                        FaceGeom::Torus { .. } => "torus".to_string(),
+                    };
+                    log::debug!(
+                        "RAYHIT {label} dir=({:.3},{:.3},{:.3}) geom#{gi} {tag} c={c} susp={s}",
+                        ray_dir.x(),
+                        ray_dir.y(),
+                        ray_dir.z()
+                    );
+                }
                 crossings += c;
                 suspicious |= s;
             }
@@ -650,7 +670,34 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
         }
 
         let mut holes = Vec::with_capacity(face.inner_wires().len());
+        let mut circle_holes: Vec<(Point3, f64)> = Vec::new();
         for &iw in face.inner_wires() {
+            // A hole whose edges all lie on ONE circle stays analytic.
+            let circular: Option<(Point3, f64)> = (|| {
+                let wire = topo.wire(iw).ok()?;
+                let mut c: Option<(Point3, f64)> = None;
+                for oe in wire.edges() {
+                    let edge = topo.edge(oe.edge()).ok()?;
+                    let brepkit_topology::edge::EdgeCurve::Circle(circ) = edge.curve() else {
+                        return None;
+                    };
+                    match &c {
+                        None => c = Some((circ.center(), circ.radius())),
+                        Some((cc, cr)) => {
+                            if (circ.center() - *cc).length() > 1e-6
+                                || (circ.radius() - cr).abs() > 1e-6
+                            {
+                                return None;
+                            }
+                        }
+                    }
+                }
+                c
+            })();
+            if let Some(ch) = circular {
+                circle_holes.push(ch);
+                continue;
+            }
             let hole = wire_polygon(topo, iw)?;
             if hole.len() >= 3 {
                 holes.push(hole);
@@ -673,6 +720,7 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
         result.push(FaceGeom::Planar {
             verts,
             holes,
+            circle_holes,
             normal,
             d,
         });
@@ -738,9 +786,19 @@ fn ray_geom_crossings(
         FaceGeom::Planar {
             verts,
             holes,
+            circle_holes,
             normal,
             d,
-        } => ray_face_crossing(origin, ray_dir, verts, holes, *normal, *d, tol),
+        } => ray_face_crossing(
+            origin,
+            ray_dir,
+            verts,
+            holes,
+            circle_holes,
+            *normal,
+            *d,
+            tol,
+        ),
         FaceGeom::Cylinder {
             surface,
             v_min,
@@ -773,11 +831,13 @@ fn ray_geom_crossings(
 /// Returns +1 for a crossing, 0 for no intersection. Hits inside a hole
 /// polygon do not count.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn ray_face_crossing(
     origin: Point3,
     ray_dir: Vec3,
     verts: &[Point3],
     holes: &[Vec<Point3>],
+    circle_holes: &[(Point3, f64)],
     normal: Vec3,
     d: f64,
     tol: Tolerance,
@@ -804,11 +864,17 @@ fn ray_face_crossing(
     let boundary_graze = dist_to_polygon_boundary(hit, verts) <= near
         || holes
             .iter()
-            .any(|h| dist_to_polygon_boundary(hit, h) <= near);
+            .any(|h| dist_to_polygon_boundary(hit, h) <= near)
+        || circle_holes
+            .iter()
+            .any(|(c, r)| ((hit - *c).length() - r).abs() <= near);
     if !point_in_face_3d(hit, verts, &normal) {
         return (0, boundary_graze);
     }
     if holes.iter().any(|h| point_in_face_3d(hit, h, &normal)) {
+        return (0, boundary_graze);
+    }
+    if circle_holes.iter().any(|(c, r)| (hit - *c).length() < *r) {
         return (0, boundary_graze);
     }
     (1, boundary_graze)

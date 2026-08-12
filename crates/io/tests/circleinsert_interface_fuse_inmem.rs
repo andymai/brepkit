@@ -99,7 +99,6 @@ fn circleinsert_pocket_cut_is_strictly_valid() {
 }
 
 #[test]
-#[ignore = "open residue: with BOTH operands validation-clean the socket fuse still emits 84 free edges around the pocket mouth (z=0/1.2 rim arcs and inter-feet gap channels) plus 4 over-shared bin corner arcs at z=5; native repro `cargo run --release -p brepkit-io --example circleinsert_chain` (FREE_EDGES=1 dumps owners); see #1538"]
 fn circleinsert_socket_fuse_is_strictly_valid() {
     let mut topo = Topology::new();
     let base = load("circleinsert_base.bin", &mut topo);
