@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786568127302,
+  "lastUpdate": 1786578305514,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29753,6 +29753,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25342717,
             "range": "± 59851",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d2b84cf6133eb5c46ea74a202dca9369923c144d",
+          "message": "fix(algo): test circular holes analytically in the ray-cast classifier (#1567)\n\n## Summary\n\nThe last residue of the #1538 circleinsert socket fuse was a phantom ray\ncrossing: the ray-cast classifier's holed-plane test uses chord-sampled\nhole polygons, and a generic ray's crossing landed 0.03 inside the true\nr=10 pocket circle but outside the sampled polygon (sagitta ≈0.09, graze\nband 1e-6) — a miscount that self-reported clean and flipped one\nquadrant's pad piece to Inside, dropping it and leaving a 4-edge open\nsliver.\n\n`FaceGeom::Planar` now carries holes whose wire lies on a single circle\nas analytic (center, radius) pairs, tested exactly for both containment\nand graze. Non-circular holes keep the polygon path, and NO verdict\nlogic changes — the calibrated conflict/re-cast machinery is untouched\n(the honeycomb landscape that vetoed four vote-layer rule variants\npasses 4/4).\n\n## Result\n\n- circleinsert chain: free **4 → 0**, over 0 — the socket fuse validates\nstrictly end to end, and the long-ignored pin\n`circleinsert_socket_fuse_is_strictly_valid` is ACTIVATED.\n- With #1559 (3.2.30) and #1563 (3.2.31), the full #1538 arc this\nsession: free 84 / over 4 → **0 / 0**.\n- Full workspace suite green (render excluded per the known SIGSEGV);\nwasm gridfinity included.\n\nAlso includes the per-geom RAYHIT trace (BK_RAY_POINT-gated) that found\nthe phantom, and the roadmap close.\n\nCloses the circleinsert chain of #1538.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes phantom ray crossings in the ray-cast classifier by testing\ncircular holes analytically on true planar faces. Previously,\npolygon-sampled circles under-covered the hole and rays in the sagitta\nband counted as face hits; now coplanar circular holes stay as (center,\nradius) and we test containment and graze exactly. Verdict logic is\nunchanged.\n\n- Adds `circle_holes` to `FaceGeom::Planar`; `collect_face_geoms`\nextracts analytic circular holes only when the face surface is a Plane\nand all inner-wire edges are the same circle whose normal is parallel to\nthe plane (center/radius match within 1e-6). Otherwise holes remain\npolygons.\n- Extends `ray_face_crossing` to reject hits inside analytic circles and\nmark grazes on circle rims using the existing tolerance band.\n- Adds optional per-geom `RAYHIT` debug tracing (gated by\n`BK_RAY_POINT`); no runtime behavior change when disabled.\n- Unignores `circleinsert_socket_fuse_is_strictly_valid`; the\ncircleinsert chain validates strictly.\n\n<sup>Written for commit cb19fbcbec337130e4aec046982da0e0a8f39396.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1567?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T23:42:31Z",
+          "tree_id": "822b727cea13de529622e9cf0c9479f3cfa0494a",
+          "url": "https://github.com/andymai/brepkit/commit/d2b84cf6133eb5c46ea74a202dca9369923c144d"
+        },
+        "date": 1786578301938,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 967071,
+            "range": "± 15733",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1044662,
+            "range": "± 36350",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12057,
+            "range": "± 61",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 716046,
+            "range": "± 4228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25507719,
+            "range": "± 59876",
             "unit": "ns/iter"
           }
         ]
