@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786551101296,
+  "lastUpdate": 1786554712312,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29483,6 +29483,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27204433,
             "range": "± 116838",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4eccabd11264c743ce0153618b3b7564ac55bb52",
+          "message": "docs(roadmap): corner columns closed by #1559; channel-ring mechanism mapped (#1561)\n\nRecords the #1559 close (open-curve windowing: free 84→56, over 4→0,\nsingle clean shell) and the measured mechanism of the remaining 56-edge\nchannel ring: fence lines overshoot into the pocket hole by design (the\nholed-face clip is calibrated on whole sections), the ring chains dangle\ninside the hole, and `plane_internal_line_loops` bails on its\ndegree/interior gates. Names the two fix options and their calibration\nrisks. Docs only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments that the circleinsert corner-column free edges are closed by\n#1559 and maps the remaining 56‑edge channel ring, so reviewers can\nfocus follow‑ups on the holed‑slab loop routing. Previously: 84 free + 4\nover‑shared edges; now: 56 free, 0 over‑shared, one clean 214‑face\nshell. Docs only.\n\n- Updates the `#1538` tail entry to record the open‑curve windowing fix\nin `emit_curve_windows` (windows open marched sections between two\nnon‑plane faces) and the resulting cleanup; notes that the\n`remove_doubled_faces` same‑surface gate is unexercised here.\n- Details the remaining mechanism: fence lines on holed slab faces\novershoot by design (`clip_line_to_face_boundary` uses outer wire only),\nchains dangle inside the pocket, `plane_internal_line_loops` rejects on\ndegree/interior gates; proposes two fix options (hole‑rim expansion in\nthe internal‑loops path or inner‑wire‑only pre‑clipping) and the\ncalibration risks.\n\n<sup>Written for commit 61cae09e1f92db4f40fe8ba747575aa5f94b77ee.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1561?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T10:09:17-07:00",
+          "tree_id": "983d9acf0090ecc35f9327767ae6851374aa249e",
+          "url": "https://github.com/andymai/brepkit/commit/4eccabd11264c743ce0153618b3b7564ac55bb52"
+        },
+        "date": 1786554709813,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 964923,
+            "range": "± 4209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046793,
+            "range": "± 31471",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12203,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709577,
+            "range": "± 2345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25546373,
+            "range": "± 115384",
             "unit": "ns/iter"
           }
         ]
