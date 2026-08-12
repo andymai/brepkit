@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786525701700,
+  "lastUpdate": 1786527896474,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28997,6 +28997,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25582516,
             "range": "± 207090",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ad1afac3c86faa078559a63773dddb46232ee16c",
+          "message": "fix(algo): nest contained free loops as holes in the synthesized cap (#1552)\n\nCloses the deep-cutout line-edge residue — the last pinned kernel defect\nfrom the #1538 interface-family dig.\n\n## Root cause\n\nThe 9 same-direction shared edges were never a winding-emission bug.\nOperand A's bottom is a **legitimate two-face coplanar tiling** (outer\nannulus with a hole + inner disc filling it, the solid-mode bin's\nshell/fill fuse interface). The SD Cut+same-orientation branch drops\nboth the annulus and the tool cap (SD had paired the whole annulus with\na 2.55mm corner sliver of the cap), freeing TWO closed edge loops on the\nz=0 plane: the outer ring and the surviving disc's outline.\n`cap_partial_overlap_free_loops` capped each independently — a hole-less\nfull disc plus a **same-sense duplicate exactly covering the kept\nface**. No census sees that, and volume cannot either: the doubled face\nlies on a plane through the origin, contributing zero flux. The\nscenario's socket fuse then inherited 27 free edges.\n\n## Fix\n\nFree loops sharing a cap plane are containment-nested: a contained loop\nbecomes the container cap's hole, wound opposite. Containment uses\n**arc-true sampled boundary polygons** — two traps dodged on the way,\nboth roadmap classics: a vertex-only polygon misses the sagitta bulge at\nrounded corners (this case's bite corner sits exactly in it), and a\nreverse-traversed arc must sample its stored span reversed, not the\nswapped-endpoint complement (#1540's lesson).\n\n## Verification\n\n- The deep-cutout chain is exact end-to-end: cut validates strictly,\nsocket fuse watertight with 61 analytic faces (was free=27 + mesh\nfallback).\n- Both formerly-ignored pins in `deepcutout_cut_inmem.rs` are active;\n`deepcutout_result_body.bin` refreshed to the current kernel's own\noutput.\n- The captured circleinsert fuse repro stays ignored, re-framed: its\nbody operand is pre-fix kernel output with baked-in winding errors and\nwants a fresh capture on a released kernel.\n- Full workspace 2745/2745, wasm gridfinity 27/27.\n- New instrument: `BK_CAP_TRACE`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes planar cap synthesis by nesting free-edge loops on the same plane\nso inner loops become holes using an even-odd rule, preventing\ncoincident duplicate faces and same-direction shared edges. Deep-cutout\ncut and socket fuse now validate strictly and are watertight.\n\n- **Bug Fixes**\n- Nest contained loops as holes with opposite winding when building caps\non one plane; apply even-odd depth (depth-even loops are caps; their\ndirect children are holes); no independent hole-less caps.\n- Use arc-true sampled loop polygons for containment, and reverse the\nstored arc span on reverse traversal.\n- Re-enabled deepcutout strict validations; refreshed\n`crates/io/tests/data/deepcutout_result_body.bin`; socket fuse is\nwatertight (61 analytic faces).\n- Kept the circleinsert fuse repro ignored; its captured body predates\nwinding fixes and needs a fresh capture on a released kernel.\n- Added `BK_CAP_TRACE` for cap loop/plane/nesting debug (read once per\ncall); minor audits improved (`inner_wires` counts, edge-use census).\n\n<sup>Written for commit 981a7818d5a8b483348f55e9d55f75118f30cd37.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1552?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T09:42:33Z",
+          "tree_id": "cf53396004f60a7d34bce2e437c80941da5246e7",
+          "url": "https://github.com/andymai/brepkit/commit/ad1afac3c86faa078559a63773dddb46232ee16c"
+        },
+        "date": 1786527894342,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 950722,
+            "range": "± 791",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1029725,
+            "range": "± 7492",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11890,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703354,
+            "range": "± 3027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25334568,
+            "range": "± 363658",
             "unit": "ns/iter"
           }
         ]
