@@ -125,7 +125,7 @@ that does not exist yet; without it, stop.
 | Item | Status / next step |
 |---|---|
 | **Tool geometric parity (#1517)** | MEASURED 2026-08-10 on released 3.2.22, stock pins, same-day same-catalog control. Generator suite 272 files / 2693 tests: **3.2.18 154 failed, 3.2.22 144 failed**; excluding stale per-kernel snapshots that is **153 -> 130 real**. The issue's old "137 failed / 2550 passed" DOES NOT REPRODUCE (3.2.18 measures 154 today) — the catalog grew, so only a same-day control is trustworthy. Head-to-head matrix: perf **0.63x** aggregate, faster on 24/26, **all 26 closed with 0 non-manifold** vs the reference's 5. Remaining 144 by class: 34 open-shell, **19 compound-capability (#1537 — 17 of them are the tool's stale `brepjs` pin at 18.124.2, fixed in brepjs 18.124.7; only the 2 compound-base `fuse` calls are a live gap, and it is brepjs-side)**, 15 timeout, 14 stale snapshot, 12 non-manifold, 2 reentrancy. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` |
-| **#1538 tail: the coplanar-interface holed-cap fuse family** | RE-MEASURED 2026-08-12 on 3.2.24 + brepjs 18.124.8 (worktree `pinbump-3223`, both pins bumped, patch re-targeted). FIXED tool-side: label-tab split timeout, the text cluster (30/30), slotted cavity (#1536). STILL FAILING: `edgeCases` circle-insert / deep-cutout / cornerRadius, `combinedFeatures` compartments+insert (22 bnd) and the 26-minute 4x4 label-bracket+half-sockets row, lid text timeouts. Deep-cutout cut root FIXED (expand_edge, see Closed). The remaining family: FUSE across a coplanar interface whose face carries a HOLE (circle pocket mouth at z=5, through-cut at z=0) emits 27-60 free edges — ready-repros `circleinsert_interface_fuse_inmem.rs` + `deepcutout_cut_inmem.rs` (ignored strict pins; captured operands in tests/data). Winding residue: the pocket cuts mint 8-9 same-direction shared edges (validator sees them, free/over census does not). The `radius` case's booleans all replay clean — its failure is in uncaptured traffic (executeBatch) or meshing; capture that next. Probe: `__kernel-tests__/edgeCaseCapture.test.ts` in the worktree (untracked, budget to re-write) |
+| **#1538 tail: the coplanar-interface family, DECOMPOSED** | Dug 2026-08-12 with synthetic clean-input probes (`interface_fuse_probe.rs`): the family is WINDING emitters, not one fuse defect. THREE ROOTS FIXED (see Closed: "Closed-edge winding direction"): internal-loops frame-area inversion on down-facing planes, merge never flipping closed edges, CB rebuild degenerating to forward=true on closed rims. Rect and circle through-hole chains (cut + interface fuse) now strictly valid end-to-end. REMAINING sub-classes, each pinned: (a) coincident-cap pocket rim, 1 edge, cylinder-band rim emission suspect (`interface_fuse_winding.rs` ignored pin); (b) deepcutout 9 same-direction LINE edges (`deepcutout_cut_inmem.rs` strict pin); (c) captured circleinsert fuse free=60, arc-cornered (`circleinsert_interface_fuse_inmem.rs`); (d) the 26-min 4x4 label-bracket row, unattributed; (e) the tool's `cornerRadius` scenario — booleans replay clean, capture executeBatch traffic next |
 | **Tool pin bump** | gridfinity-layout-tool#3441 open: brepjs 18.124.8 + brepkit-wasm 3.2.24, intersectCurves patch re-targeted. #1536 CLOSED on the 3.2.24 re-measure (slotted row 43119.91 vs reference 43129, Euler 10, 24ms; full 26-row matrix 0 bnd / 0 nm) |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
@@ -138,7 +138,20 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **Kept-face wire imaging emitted CommonBlock sub-edges backwards (FIXED 2026-08-12)** —
+- **Closed-edge winding direction, three emitters (FIXED 2026-08-12, the #1538 interface family's core)** —
+  synthetic clean-input probes (`crates/operations/examples/interface_fuse_probe.rs`)
+  showed even cut(box, box) through-hole mints same-direction shared edges. Three
+  independent roots, all invisible to the free/over census: (1) the internal-loops
+  splitter normalized disc/hole winding via a signed area in the surface's own
+  parameterization, inverted vs the local frame on a DOWN-facing plane
+  (`special_cases.rs`, now frame-projected 3D areas); (2) `merge_duplicate_edges`
+  "never flip closed edges" — two coincident circles can parameterize opposite ways
+  (quarter-point comparison added; this is the merge's orientation MAP, not the
+  terminal merge-key); (3) `rebuild_face_with_cb_edges` collapsed to forward=true
+  for a closed rim swapped to its CommonBlock circle (same comparison). Regressions
+  `crates/operations/tests/interface_fuse_winding.rs` (rect + circle chains strictly
+  valid; coincident-cap pocket pinned ignored). The probe's BK_WINDING=1/2 prints
+  per-edge effective directions with owning faces — the fast winding instrument.
   `expand_edge` (fill_images_faces) assumed every image sub-edge of a split boundary
   edge is minted in the parent's direction, but a CommonBlock split_edge is shared
   with the coincident partner solid and keeps THAT solid's direction. A deep corner
