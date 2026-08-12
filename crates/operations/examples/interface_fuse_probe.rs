@@ -109,6 +109,59 @@ fn report(topo: &Topology, sid: SolidId, label: &str) {
     );
 }
 
+fn rounded_rect_plate(topo: &mut Topology, w: f64, r: f64, z0: f64, h: f64) -> SolidId {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    let hw = w / 2.0;
+    let c = hw - r;
+    let t = 1e-7;
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let v = |topo: &mut Topology, x: f64, y: f64| {
+        topo.add_vertex(Vertex::new(Point3::new(x, y, z0), t))
+    };
+    let v0 = v(topo, hw, -c);
+    let v1 = v(topo, hw, c);
+    let v2 = v(topo, c, hw);
+    let v3 = v(topo, -c, hw);
+    let v4 = v(topo, -hw, c);
+    let v5 = v(topo, -hw, -c);
+    let v6 = v(topo, -c, -hw);
+    let v7 = v(topo, c, -hw);
+    let arc = |topo: &mut Topology, a, b, cx: f64, cy: f64| {
+        let circle = Circle3D::new(Point3::new(cx, cy, z0), z, r).unwrap();
+        topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)))
+    };
+    let edges = [
+        topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line)),
+        arc(topo, v1, v2, c, c),
+        topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line)),
+        arc(topo, v3, v4, -c, c),
+        topo.add_edge(Edge::new(v4, v5, EdgeCurve::Line)),
+        arc(topo, v5, v6, -c, -c),
+        topo.add_edge(Edge::new(v6, v7, EdgeCurve::Line)),
+        arc(topo, v7, v0, c, -c),
+    ];
+    let wire = Wire::new(
+        edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let fid = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z0,
+        },
+    ));
+    brepkit_operations::extrude::extrude(topo, fid, Vec3::new(0.0, 0.0, 1.0), h).unwrap()
+}
+
 fn main() {
     env_logger::init();
     let mode = std::env::args()
@@ -144,6 +197,34 @@ fn main() {
                 &mut topo,
                 hole,
                 &Mat4::translation(30.0, 30.0, 4.0),
+            )
+            .unwrap();
+            boolean::boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap()
+        }
+        "roundpocket" => {
+            // Rounded plate + interior box cutter flush at the bottom plane:
+            // the deep-cutout z=0 configuration with arc corners.
+            let rplate = rounded_rect_plate(&mut topo, 80.0, 3.75, 5.0, 5.0);
+            let hole =
+                brepkit_operations::primitives::make_box(&mut topo, 20.0, 20.0, 6.0).unwrap();
+            brepkit_operations::transform::transform_solid(
+                &mut topo,
+                hole,
+                &Mat4::translation(-38.0, -38.0, 5.0),
+            )
+            .unwrap();
+            boolean::boolean(&mut topo, BooleanOp::Cut, rplate, hole).unwrap()
+        }
+        "rectpocket" => {
+            // All-line analog of `pocket`: the box cutter's bottom cap is
+            // COINCIDENT with the plate's bottom plane (the deep-cutout z=0
+            // configuration).
+            let hole =
+                brepkit_operations::primitives::make_box(&mut topo, 20.0, 20.0, 6.0).unwrap();
+            brepkit_operations::transform::transform_solid(
+                &mut topo,
+                hole,
+                &Mat4::translation(30.0, 30.0, 5.0),
             )
             .unwrap();
             boolean::boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap()

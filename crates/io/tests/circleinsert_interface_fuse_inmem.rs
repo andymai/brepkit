@@ -32,7 +32,7 @@ fn load(name: &str, topo: &mut Topology) -> brepkit_topology::solid::SolidId {
 //   component per shell). Do not "fix" a fixture to satisfy that report.
 
 #[test]
-#[ignore = "coplanar-interface fuse with a holed interface face emits free edges; see #1538"]
+#[ignore = "captured body operand is pre-fix kernel output with baked-in winding errors; re-capture on a released kernel carrying the winding fixes before promoting; see #1538"]
 fn circleinsert_socket_fuse_is_watertight() {
     let mut topo = Topology::new();
     let body = load("circleinsert_body.bin", &mut topo);

@@ -3050,7 +3050,16 @@ fn cap_partial_overlap_free_loops(
         }
     }
 
-    let mut new_faces: Vec<Face> = Vec::new();
+    // Collected loops, one entry per closed cycle: the cap-plane index, the
+    // CCW-normalized oriented edges, and the 3D vertices for containment
+    // tests. Faces are built AFTER all loops are known so that loops nested
+    // inside another loop on the SAME plane become that cap's holes instead
+    // of independent coincident caps (the deep-cutout doubled bottom: SD
+    // drops both an annulus and the tool cap, freeing TWO loops — the outer
+    // ring and the kept disc's outline. Capping the inner loop separately
+    // double-covers the disc same-sense).
+    let cap_trace = std::env::var("BK_CAP_TRACE").is_ok();
+    let mut cap_loops: Vec<(usize, Vec<OrientedEdge>, Vec<Point3>)> = Vec::new();
 
     for start in 0..free_edges.len() {
         if used_edge[start] {
@@ -3099,13 +3108,14 @@ fn cap_partial_overlap_free_loops(
             continue;
         }
         let origin = Point3::new(0.0, 0.0, 0.0);
-        let Some(cap) = cap_planes.iter().copied().find(|cp| {
+        let Some(cap_idx) = cap_planes.iter().position(|cp| {
             verts3d
                 .iter()
                 .all(|p| (cp.normal.dot(*p - origin) - cp.d).abs() <= MERGE_TOL * 10.0)
         }) else {
             continue;
         };
+        let cap = cap_planes[cap_idx];
 
         // Build the outer wire from the existing edges in walk order. Each
         // OrientedEdge's natural direction is recovered by matching the edge's
@@ -3152,22 +3162,198 @@ fn cap_partial_overlap_free_loops(
                 .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
                 .collect();
         }
-        let Ok(wire) = Wire::new(oriented, true) else {
+        // Sample the loop boundary arc-true for the nesting tests below: a
+        // corner arc bulges past its chord by the sagitta, and a vertex-only
+        // polygon wrongly excludes points in the bulge (the deep-cutout bite
+        // corner sits exactly there).
+        let mut samples: Vec<Point3> = Vec::new();
+        for oe in &oriented {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            // Always parameterize with the edge's STORED endpoints: an open
+            // arc's domain is the CCW span start->end, and swapping them
+            // describes the complement arc. Reverse the sample order for a
+            // reverse-traversed edge instead.
+            let (sp, ep) = (sv.point(), ev.point());
+            if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                samples.push(if oe.is_forward() { sp } else { ep });
+            } else {
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                let mut pts: Vec<Point3> = (0..8)
+                    .map(|k| {
+                        let t = t0 + (t1 - t0) * (f64::from(k) / 8.0);
+                        edge.curve().evaluate_with_endpoints(t, sp, ep)
+                    })
+                    .collect();
+                if !oe.is_forward() {
+                    pts.reverse();
+                }
+                samples.extend(pts);
+            }
+        }
+        cap_loops.push((cap_idx, oriented, samples));
+    }
+
+    // Containment-nest loops sharing a cap plane: a loop whose vertices all
+    // lie inside a larger loop's polygon is that cap's HOLE (its region is
+    // already covered by the surviving face whose outline it is), wound
+    // opposite the outer. Deeper nesting alternates in principle; free-loop
+    // components here are tiny, so the direct-parent rule suffices.
+    let loop_area = |verts: &[Point3], normal: Vec3| -> f64 {
+        let mut n = Vec3::new(0.0, 0.0, 0.0);
+        for i in 0..verts.len() {
+            let c = verts[i];
+            let np = verts[(i + 1) % verts.len()];
+            n += Vec3::new(
+                (c.y() - np.y()) * (c.z() + np.z()),
+                (c.z() - np.z()) * (c.x() + np.x()),
+                (c.x() - np.x()) * (c.y() + np.y()),
+            );
+        }
+        n.dot(normal).abs() * 0.5
+    };
+    let contains = |outer: &[Point3], inner: &[Point3], normal: Vec3| -> bool {
+        // Project to the plane's dominant axes and point-in-polygon test the
+        // inner loop's vertices (they can lie ON the outer polygon only at
+        // shared vertices, which free-loop cycles of degree 2 exclude).
+        let (ax, ay) =
+            if normal.z().abs() >= normal.x().abs() && normal.z().abs() >= normal.y().abs() {
+                (0usize, 1usize)
+            } else if normal.x().abs() >= normal.y().abs() {
+                (1, 2)
+            } else {
+                (0, 2)
+            };
+        let coord = |p: &Point3, a: usize| match a {
+            0 => p.x(),
+            1 => p.y(),
+            _ => p.z(),
+        };
+        inner.iter().all(|p| {
+            let (px, py) = (coord(p, ax), coord(p, ay));
+            let mut inside = false;
+            for i in 0..outer.len() {
+                let a = &outer[i];
+                let b = &outer[(i + 1) % outer.len()];
+                let (axx, ayy) = (coord(a, ax), coord(a, ay));
+                let (bxx, byy) = (coord(b, ax), coord(b, ay));
+                if (ayy > py) != (byy > py) && px < (bxx - axx) * (py - ayy) / (byy - ayy) + axx {
+                    inside = !inside;
+                }
+            }
+            if !inside && cap_trace {
+                log::debug!("CAP pip FAIL at ({px:.2},{py:.2})");
+            }
+            inside
+        })
+    };
+
+    if cap_trace {
+        for (i, (ci, oes, verts)) in cap_loops.iter().enumerate() {
+            log::debug!(
+                "CAP loop {i}: plane#{ci} edges={} verts={} first=({:.2},{:.2},{:.2})",
+                oes.len(),
+                verts.len(),
+                verts[0].x(),
+                verts[0].y(),
+                verts[0].z()
+            );
+        }
+        for (ci, cp) in cap_planes.iter().enumerate() {
+            log::debug!(
+                "CAP plane#{ci}: n=({:.1},{:.1},{:.1}) d={:.2} out=({:.1},{:.1},{:.1})",
+                cp.normal.x(),
+                cp.normal.y(),
+                cp.normal.z(),
+                cp.d,
+                cp.out_normal.x(),
+                cp.out_normal.y(),
+                cp.out_normal.z()
+            );
+        }
+    }
+    let mut parent: Vec<Option<usize>> = vec![None; cap_loops.len()];
+    for i in 0..cap_loops.len() {
+        let mut best: Option<(usize, f64)> = None;
+        for j in 0..cap_loops.len() {
+            if i == j || cap_loops[i].0 != cap_loops[j].0 {
+                continue;
+            }
+            let normal = cap_planes[cap_loops[i].0].out_normal;
+            let area_j = loop_area(&cap_loops[j].2, normal);
+            if area_j <= loop_area(&cap_loops[i].2, normal) {
+                continue;
+            }
+            let c = contains(&cap_loops[j].2, &cap_loops[i].2, normal);
+            if cap_trace {
+                log::debug!(
+                    "CAP nest test i={i} j={j} area_i={:.1} area_j={area_j:.1} contains={c}",
+                    loop_area(&cap_loops[i].2, normal)
+                );
+            }
+            if c && best.is_none_or(|(_, a)| area_j < a) {
+                best = Some((j, area_j));
+            }
+        }
+        parent[i] = best.map(|(j, _)| j);
+        if cap_trace {
+            log::debug!("CAP parent[{i}] = {:?}", parent[i]);
+        }
+    }
+
+    // Even-odd nesting: depth-even loops are cap faces (their direct
+    // children as holes), depth-odd loops are consumed as holes. An island
+    // inside a hole (depth 2) is a cap of its own again.
+    let depth_of = |mut i: usize| -> usize {
+        let mut d = 0;
+        while let Some(p) = parent[i] {
+            d += 1;
+            i = p;
+            if d > cap_loops.len() {
+                break;
+            }
+        }
+        d
+    };
+    for i in 0..cap_loops.len() {
+        if depth_of(i) % 2 == 1 {
+            continue; // odd depth: becomes a hole of its parent below
+        }
+        let (cap_idx, oriented, verts3d) = &cap_loops[i];
+        let cap = cap_planes[*cap_idx];
+        let Ok(wire) = Wire::new(oriented.clone(), true) else {
             continue;
         };
         let wid = topo.add_wire(wire);
-        new_faces.push(Face::new(
+        let mut inner_wids = Vec::new();
+        for j in 0..cap_loops.len() {
+            if parent[j] != Some(i) {
+                continue;
+            }
+            // Hole winding: opposite the outer's CCW normalization.
+            let hole: Vec<OrientedEdge> = cap_loops[j]
+                .1
+                .iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+            if let Ok(w) = Wire::new(hole, true) {
+                inner_wids.push(topo.add_wire(w));
+            }
+        }
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let fid = topo.add_face(Face::new(
             wid,
-            Vec::new(),
+            inner_wids,
             FaceSurface::Plane {
                 normal: cap.out_normal,
                 d: cap.out_normal.dot(verts3d[0] - origin),
             },
         ));
-    }
-
-    for f in new_faces {
-        let fid = topo.add_face(f);
         face_ids.push(fid);
         // A synthesised cap has no input source — it is a generated face.
         sources.push(None);
