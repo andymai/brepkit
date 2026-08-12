@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786519835191,
+  "lastUpdate": 1786520255872,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28727,6 +28727,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25979867,
             "range": "± 113182",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61a417d3caeda365756dabefc3e9a01bf355422a",
+          "message": "chore(main): release 3.2.25 (#1547)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.25](https://github.com/andymai/brepkit/compare/v3.2.24...v3.2.25)\n(2026-08-12)\n\n\n### Bug Fixes\n\n* **algo:** orient split-edge images by endpoint chaining\n([#1546](https://github.com/andymai/brepkit/issues/1546))\n([22230d0](https://github.com/andymai/brepkit/commit/22230d0c21a3e6a604e29d9cfd1e50762e947b61))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.25 fixes split-edge image orientation by chaining endpoints,\npreventing reversed or misaligned edge images in downstream geometry\noperations.\n\n- **Bug Fixes**\n- In `brepkit-algo`, orient split-edge images using endpoint chaining\nfor consistent edge ordering.\n\n- **Dependencies**\n  - Bumped all `brepkit-*` workspace crates to `3.2.25` in `Cargo.toml`.\n\n<sup>Written for commit 9195c9a777def4ed15e4a55507ece4f9ce37a934.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1547?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-12T07:35:02Z",
+          "tree_id": "495bf8022ab0973ea6be908d36e8673fc8154cbf",
+          "url": "https://github.com/andymai/brepkit/commit/61a417d3caeda365756dabefc3e9a01bf355422a"
+        },
+        "date": 1786520252960,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 961437,
+            "range": "± 1311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1039368,
+            "range": "± 4190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11851,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707787,
+            "range": "± 1115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25460308,
+            "range": "± 277435",
             "unit": "ns/iter"
           }
         ]
