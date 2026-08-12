@@ -4910,8 +4910,13 @@ fn split_face_2d_impl(
         if single_closed {
             true
         } else {
-            deduped_line_loops =
-                plane_internal_line_loops(sections, frame, &boundary_edges, tol.linear);
+            deduped_line_loops = plane_internal_line_loops(
+                sections,
+                frame,
+                &boundary_edges,
+                &original_inner_wires,
+                tol.linear,
+            );
             deduped_line_loops.is_some()
         }
     } else {
@@ -7134,6 +7139,7 @@ fn plane_internal_line_loops(
     sections: &[SectionEdge],
     frame: &PlaneFrame,
     boundary_edges: &[OrientedPCurveEdge],
+    inner_wires: &[Vec<OrientedPCurveEdge>],
     tol_linear: f64,
 ) -> Option<Vec<SectionEdge>> {
     use std::collections::{HashMap, HashSet};
@@ -7303,6 +7309,24 @@ fn plane_internal_line_loops(
         }
     }
     if degree.values().any(|&d| d != 2) {
+        // Chains whose loose ends dangle strictly inside an INNER wire are
+        // fence loops overshooting into a hole: their in-hole tails lie
+        // outside the face material and the connecting geometry (a tool
+        // column swallowed by the hole) is not on this face at all, so the
+        // loop legitimately closes along the hole rim (the circleinsert
+        // slab's foot rings across the pocket). Trim each such chain at its
+        // exact rim crossing and close it with the rim arc between its two
+        // anchors. Any other degree defect keeps the historical bail.
+        if let Some(rescued) =
+            rescue_hole_dangling_loops(&deduped, &degree, &quant, inner_wires, frame, tol_linear)
+        {
+            log::debug!(
+                "plane_internal_line_loops: rescued {} hole-dangling sections into {} loop sections",
+                deduped.len(),
+                rescued.len()
+            );
+            return Some(rescued);
+        }
         let bad: Vec<_> = degree.iter().filter(|&(_, &d)| d != 2).collect();
         log::debug!(
             "plane_internal_line_loops: {} endpoints with degree != 2 (deduped {} of {}): {bad:?}",
@@ -7313,6 +7337,315 @@ fn plane_internal_line_loops(
         return None;
     }
     Some(deduped)
+}
+
+/// Rescue for [`plane_internal_line_loops`]: every degree-1 endpoint lies
+/// strictly inside one of the face's inner wires (holes). Trims each loose
+/// chain at its exact hole-rim crossing, drops the fully-in-hole tail
+/// sections, and closes each chain with the rim arc between its two anchors
+/// (the candidate arc containing no other chains' anchors). Returns `None`
+/// unless every step resolves unambiguously — the historical bail then
+/// stands.
+#[allow(clippy::too_many_lines)]
+fn rescue_hole_dangling_loops(
+    deduped: &[SectionEdge],
+    degree: &std::collections::HashMap<(i64, i64, i64), u32>,
+    quant: &dyn Fn(Point3) -> (i64, i64, i64),
+    inner_wires: &[Vec<OrientedPCurveEdge>],
+    frame: &PlaneFrame,
+    tol_linear: f64,
+) -> Option<Vec<SectionEdge>> {
+    if inner_wires.is_empty() || degree.values().any(|&d| d > 2) {
+        return None;
+    }
+    let margin = tol_linear * 100.0;
+
+    // Arc-true hole polygons in the local frame, plus per-hole edge geometry.
+    let mut hole_polys: Vec<Vec<Point2>> = Vec::new();
+    for wire in inner_wires {
+        let mut poly = Vec::new();
+        for e in wire {
+            poly.push(frame.project(e.start_3d));
+            if !matches!(e.curve_3d, EdgeCurve::Line) {
+                let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                for k in 1..32 {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 32.0, t0);
+                    poly.push(
+                        frame.project(e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d)),
+                    );
+                }
+            }
+        }
+        if poly.len() < 3 {
+            return None;
+        }
+        hole_polys.push(poly);
+    }
+    let hole_of = |p: Point3| -> Option<usize> {
+        let uv = frame.project(p);
+        hole_polys.iter().position(|poly| {
+            super::classify_2d::point_in_polygon_2d(uv, poly)
+                && super::classify_2d::distance_to_polygon_boundary(uv, poly) > margin
+        })
+    };
+
+    // Gate: every loose end strictly inside some hole.
+    let loose: Vec<(i64, i64, i64)> = degree
+        .iter()
+        .filter(|&(_, &d)| d == 1)
+        .map(|(&q, _)| q)
+        .collect();
+    if loose.is_empty() {
+        return None;
+    }
+    let mut loose_hole: std::collections::HashMap<(i64, i64, i64), usize> =
+        std::collections::HashMap::new();
+    for s in deduped {
+        for p in [s.start, s.end] {
+            if loose.contains(&quant(p)) {
+                let hi = hole_of(p)?;
+                loose_hole.insert(quant(p), hi);
+            }
+        }
+    }
+    if loose_hole.len() != loose.len() {
+        return None;
+    }
+
+    // Exact crossing of a Line section with a hole edge, in the local frame.
+    let line_hole_crossing = |sec_start: Point3, sec_end: Point3, hi: usize| -> Option<Point3> {
+        let wire = &inner_wires[hi];
+        let a2 = frame.project(sec_start);
+        let b2 = frame.project(sec_end);
+        let d2 = b2 - a2;
+        let mut best: Option<(f64, Point3)> = None;
+        for e in wire {
+            match &e.curve_3d {
+                EdgeCurve::Circle(c) => {
+                    let c2 = frame.project(c.center());
+                    let r = c.radius();
+                    // |a2 + t*d2 - c2|^2 = r^2
+                    let f = a2 - c2;
+                    let qa = d2.dot(d2);
+                    let qb = 2.0 * f.dot(d2);
+                    let qc = f.dot(f) - r * r;
+                    let disc = qb.mul_add(qb, -4.0 * qa * qc);
+                    if disc < 0.0 || qa.abs() < 1e-30 {
+                        continue;
+                    }
+                    for t in [
+                        (-qb - disc.sqrt()) / (2.0 * qa),
+                        (-qb + disc.sqrt()) / (2.0 * qa),
+                    ] {
+                        if !(0.0..=1.0).contains(&t) {
+                            continue;
+                        }
+                        let p3 = sec_start + (sec_end - sec_start) * t;
+                        // Within the arc's own span?
+                        let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                        let ang = c.project(p3);
+                        let span = t1 - t0;
+                        let rel = (ang - t0).rem_euclid(std::f64::consts::TAU);
+                        if rel <= span + 1e-9 {
+                            match best {
+                                Some((bt, _)) if bt <= t => {}
+                                _ => best = Some((t, p3)),
+                            }
+                        }
+                    }
+                }
+                EdgeCurve::Line => {
+                    let s2 = frame.project(e.start_3d);
+                    let e2 = frame.project(e.end_3d);
+                    let sd = e2 - s2;
+                    let det = d2.x().mul_add(sd.y(), -(d2.y() * sd.x()));
+                    if det.abs() < 1e-14 {
+                        continue;
+                    }
+                    let dx = s2 - a2;
+                    let t = dx.x().mul_add(sd.y(), -(dx.y() * sd.x())) / det;
+                    let u = dx.x().mul_add(d2.y(), -(dx.y() * d2.x())) / det;
+                    if (0.0..=1.0).contains(&t) && (-1e-9..=1.0 + 1e-9).contains(&u) {
+                        let p3 = sec_start + (sec_end - sec_start) * t;
+                        match best {
+                            Some((bt, _)) if bt <= t => {}
+                            _ => best = Some((t, p3)),
+                        }
+                    }
+                }
+                _ => return None,
+            }
+        }
+        best.map(|(_, p)| p)
+    };
+
+    // Walk each loose chain, trimming at the rim.
+    let mut sections: Vec<Option<SectionEdge>> = deduped.iter().cloned().map(Some).collect();
+    let mut adjacency: std::collections::HashMap<(i64, i64, i64), Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, s) in deduped.iter().enumerate() {
+        adjacency.entry(quant(s.start)).or_default().push(i);
+        adjacency.entry(quant(s.end)).or_default().push(i);
+    }
+    // (hole idx, anchor point, chain id) per trimmed end.
+    let mut anchors: Vec<(usize, Point3, usize)> = Vec::new();
+    let mut visited_loose: std::collections::HashSet<(i64, i64, i64)> =
+        std::collections::HashSet::new();
+    let mut chain_id = 0usize;
+    for &start_q in &loose {
+        if visited_loose.contains(&start_q) {
+            continue;
+        }
+        let hi = *loose_hole.get(&start_q)?;
+        // Walk from this loose end through degree-2 nodes to the other end.
+        let mut prev_q = start_q;
+        let mut cur_idx = *adjacency.get(&start_q)?.first()?;
+        let mut chain_members: Vec<usize> = Vec::new();
+        loop {
+            chain_members.push(cur_idx);
+            let s = deduped.get(cur_idx)?;
+            let (aq, bq) = (quant(s.start), quant(s.end));
+            let next_q = if aq == prev_q { bq } else { aq };
+            if loose.contains(&next_q) {
+                visited_loose.insert(start_q);
+                visited_loose.insert(next_q);
+                break;
+            }
+            let nbrs = adjacency.get(&next_q)?;
+            let next_idx = *nbrs.iter().find(|&&i| i != cur_idx)?;
+            prev_q = next_q;
+            cur_idx = next_idx;
+        }
+        // Trim both ends of this chain.
+        for end_of_chain in [false, true] {
+            let iter: Box<dyn Iterator<Item = &usize>> = if end_of_chain {
+                Box::new(chain_members.iter().rev())
+            } else {
+                Box::new(chain_members.iter())
+            };
+            let mut trimmed = false;
+            for &mi in iter {
+                let Some(sec) = sections[mi].clone() else {
+                    continue;
+                };
+                let in_s = hole_of(sec.start).is_some();
+                let in_e = hole_of(sec.end).is_some();
+                if in_s && in_e {
+                    sections[mi] = None;
+                    continue;
+                }
+                if !in_s && !in_e {
+                    return None;
+                }
+                if !matches!(sec.curve_3d, EdgeCurve::Line) {
+                    return None;
+                }
+                let cross = line_hole_crossing(sec.start, sec.end, hi)?;
+                let mut new_sec = sec;
+                if in_s {
+                    new_sec.start = cross;
+                } else {
+                    new_sec.end = cross;
+                }
+                new_sec.start_uv_a = None;
+                new_sec.end_uv_a = None;
+                new_sec.start_uv_b = None;
+                new_sec.end_uv_b = None;
+                sections[mi] = Some(new_sec);
+                anchors.push((hi, cross, chain_id));
+                trimmed = true;
+                break;
+            }
+            if !trimmed {
+                return None;
+            }
+        }
+        chain_id += 1;
+    }
+    if anchors.len() != 2 * chain_id {
+        return None;
+    }
+
+    // Rim connector per chain: the arc between its two anchors that contains
+    // no other chains' anchors.
+    let mut out: Vec<SectionEdge> = sections.into_iter().flatten().collect();
+    for cid in 0..chain_id {
+        let pair: Vec<&(usize, Point3, usize)> =
+            anchors.iter().filter(|(_, _, c)| *c == cid).collect();
+        let [(hi_a, pa, _), (hi_b, pb, _)] = pair[..] else {
+            return None;
+        };
+        if hi_a != hi_b {
+            return None;
+        }
+        // One shared circle for the whole hole rim.
+        let circle = inner_wires[*hi_a].iter().find_map(|e| {
+            if let EdgeCurve::Circle(c) = &e.curve_3d {
+                Some(c.clone())
+            } else {
+                None
+            }
+        })?;
+        let on_rim = |p: Point3| ((p - circle.center()).length() - circle.radius()).abs() <= margin;
+        if !on_rim(*pa) || !on_rim(*pb) {
+            return None;
+        }
+        let ang = |p: Point3| circle.project(p);
+        let (ta, tb) = (ang(*pa), ang(*pb));
+        let span_ab = (tb - ta).rem_euclid(std::f64::consts::TAU);
+        let others: Vec<f64> = anchors
+            .iter()
+            .filter(|(h, _, c)| *c != cid && h == hi_a)
+            .map(|(_, p, _)| ang(*p))
+            .collect();
+        let contains_other = |from: f64, span: f64| {
+            others.iter().any(|&o| {
+                let rel = (o - from).rem_euclid(std::f64::consts::TAU);
+                rel > 1e-9 && rel < span - 1e-9
+            })
+        };
+        let ab_clear = !contains_other(ta, span_ab);
+        let ba_clear = !contains_other(tb, std::f64::consts::TAU - span_ab);
+        let (from_p, to_p) = match (ab_clear, ba_clear) {
+            (true, false) => (*pa, *pb),
+            (false, true) => (*pb, *pa),
+            (true, true) => {
+                if span_ab <= std::f64::consts::PI {
+                    (*pa, *pb)
+                } else {
+                    (*pb, *pa)
+                }
+            }
+            (false, false) => return None,
+        };
+        let uv_c = frame.project(circle.center());
+        let pc2 = brepkit_math::curves2d::Circle2D::new(uv_c, circle.radius()).ok()?;
+        out.push(SectionEdge {
+            curve_3d: EdgeCurve::Circle(circle),
+            pcurve_a: brepkit_math::curves2d::Curve2D::Circle(pc2.clone()),
+            pcurve_b: brepkit_math::curves2d::Curve2D::Circle(pc2),
+            start: from_p,
+            end: to_p,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        });
+    }
+
+    // The rescued web must be fully degree-2.
+    let mut deg2: std::collections::HashMap<(i64, i64, i64), u32> =
+        std::collections::HashMap::new();
+    for s in &out {
+        *deg2.entry(quant(s.start)).or_insert(0) += 1;
+        *deg2.entry(quant(s.end)).or_insert(0) += 1;
+    }
+    if deg2.values().any(|&d| d != 2) {
+        return None;
+    }
+    Some(out)
 }
 
 #[cfg(test)]
