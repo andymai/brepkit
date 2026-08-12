@@ -952,18 +952,38 @@ fn expand_edge<S: BuildHasher>(
     if real_imgs.len() < 2 {
         return vec![OrientedEdge::new(eid, fwd)];
     }
-    if fwd {
+    // Orient each image by endpoint chaining instead of assuming it is minted
+    // in the parent's direction: a CommonBlock split_edge is shared with the
+    // coincident partner solid and keeps THAT solid's direction, so a parent
+    // whose common span runs opposite gets a backwards sub-edge (unclosed
+    // wire + same-direction shared edges on the #1538 deep-cutout pocket).
+    let ends = |id: EdgeId| -> Option<(Point3, Point3)> {
+        let e = topo.edge(id).ok()?;
+        Some((
+            topo.vertex(e.start()).ok()?.point(),
+            topo.vertex(e.end()).ok()?.point(),
+        ))
+    };
+    let Some((p_start, p_end)) = ends(eid) else {
+        return vec![OrientedEdge::new(eid, fwd)];
+    };
+    let mut cursor = if fwd { p_start } else { p_end };
+    let ordered: Vec<EdgeId> = if fwd {
         real_imgs
-            .iter()
-            .map(|&img| OrientedEdge::new(img, true))
-            .collect()
     } else {
-        real_imgs
-            .iter()
-            .rev()
-            .map(|&img| OrientedEdge::new(img, false))
-            .collect()
+        real_imgs.into_iter().rev().collect()
+    };
+    let mut out = Vec::with_capacity(ordered.len());
+    for img in ordered {
+        let Some((s, e)) = ends(img) else {
+            out.push(OrientedEdge::new(img, fwd));
+            continue;
+        };
+        let img_fwd = (s - cursor).length_squared() <= (e - cursor).length_squared();
+        cursor = if img_fwd { e } else { s };
+        out.push(OrientedEdge::new(img, img_fwd));
     }
+    out
 }
 
 /// Rebuild an unsplit face replacing boundary edges with CommonBlock shared edges.
