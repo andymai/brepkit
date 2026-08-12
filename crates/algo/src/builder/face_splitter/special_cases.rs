@@ -1703,10 +1703,21 @@ pub(super) fn split_face_with_internal_loops(
                 |p: Point3| ((p - circle.center()).length() - circle.radius()).abs() <= weld;
             // Tangent loops: exactly one edge with both endpoints and its own
             // midpoint on the rim; every other edge midpoint OFF the rim.
+            // A reversed edge (forward == false) stores swapped endpoints;
+            // its geometry is the stored CCW span sampled REVERSED, never the
+            // complement — evaluate through the effective endpoint order.
+            let eff = |e: &OrientedPCurveEdge| -> (Point3, Point3) {
+                if e.forward {
+                    (e.start_3d, e.end_3d)
+                } else {
+                    (e.end_3d, e.start_3d)
+                }
+            };
             let mid_of = |e: &OrientedPCurveEdge| -> Point3 {
-                let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                let (f, t) = eff(e);
+                let (t0, t1) = e.curve_3d.domain_with_endpoints(f, t);
                 e.curve_3d
-                    .evaluate_with_endpoints(f64::midpoint(t0, t1), e.start_3d, e.end_3d)
+                    .evaluate_with_endpoints(f64::midpoint(t0, t1), f, t)
             };
             // (loop idx, connector idx)
             let mut tangent: Vec<(usize, usize)> = Vec::new();
@@ -1744,7 +1755,8 @@ pub(super) fn split_face_with_internal_loops(
             let mut covered: Vec<(f64, f64, usize)> = Vec::new();
             for &(li, ci) in &tangent {
                 let e = &loops[li][ci];
-                let (a, b) = (ang_of(e.start_3d), ang_of(e.end_3d));
+                let (ef, et) = eff(e);
+                let (a, b) = (ang_of(ef), ang_of(et));
                 let m = ang_of(mid_of(e));
                 let span_ab = (b - a).rem_euclid(std::f64::consts::TAU);
                 let rel_m = (m - a).rem_euclid(std::f64::consts::TAU);

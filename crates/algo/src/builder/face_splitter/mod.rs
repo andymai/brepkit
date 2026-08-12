@@ -7606,6 +7606,9 @@ fn rescue_hole_dangling_loops(
         };
         let ab_clear = !contains_other(ta, span_ab);
         let ba_clear = !contains_other(tb, std::f64::consts::TAU - span_ab);
+        log::debug!(
+            "rescue connector: ta={ta:.4} tb={tb:.4} span_ab={span_ab:.4} ab_clear={ab_clear} ba_clear={ba_clear}"
+        );
         let (from_p, to_p) = match (ab_clear, ba_clear) {
             (true, false) => (*pa, *pb),
             (false, true) => (*pb, *pa),
