@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.31](https://github.com/andymai/brepkit/compare/v3.2.30...v3.2.31) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** close hole-dangling fence loops and weave them into the hole ([#1563](https://github.com/andymai/brepkit/issues/1563)) ([71951c6](https://github.com/andymai/brepkit/commit/71951c6f51b6c6354af09d078dc4b0e0a0cbcfd4))
+
 ## [3.2.30](https://github.com/andymai/brepkit/compare/v3.2.29...v3.2.30) (2026-08-12)
 
 
