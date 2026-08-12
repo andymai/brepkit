@@ -6771,11 +6771,8 @@ fn split_face_2d_impl(
                         .iter()
                         .enumerate()
                         .filter(|(_, sf)| loop_key(&sf.outer_wire) != hole_key)
-                        .max_by(|(_, a), (_, b)| {
-                            loop_area_abs(&a.outer_wire)
-                                .partial_cmp(&loop_area_abs(&b.outer_wire))
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
+                        .map(|(i, sf)| (i, loop_area_abs(&sf.outer_wire)))
+                        .max_by(|(_, a), (_, b)| a.total_cmp(b))
                         .map(|(i, _)| i)
                 });
                 if let Some(i) = idx {
