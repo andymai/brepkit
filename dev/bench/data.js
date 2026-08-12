@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786523422770,
+  "lastUpdate": 1786525220571,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28889,6 +28889,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26578349,
             "range": "± 21453",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "911e8877e55785d758a65d74604aca8790cbd6ac",
+          "message": "fix(algo): compare closed-curve directions by tangent, not parameter frame (#1550)\n\nCloses the coincident-cap pocket rim — the last winding sub-class of the\n#1538 interface family that #1548's fixes left open.\n\n## Root cause\n\n#1548's closed-edge direction comparison evaluated both curves at\nmatching fractions of their domains. That is frame-dependent: a closed\ncircle's `domain_with_endpoints` anchors at the curve's **own reference\ndirection**, not the shared start vertex, so two coincident circles with\ndifferent reference frames compare unrelated angles — opposing circles\ncan read as same-direction and skip the flip. The coincident-cap pocket\ncut (cutter cap flush with the plate's bottom plane, the tool's\n`cutDepth == floor` insert configuration) hit exactly that: the kept\nband's original rim merged with the section circle parameterized the\nother way, no flip applied, one same-direction rim edge survived. Traced\nwith `BK_MERGE_TRACE`, which showed the flip decision itself was wrong\n(`flip=false` for an opposing pair) while emission and application were\ncorrect.\n\n## Fix\n\n`closed_curves_same_direction`: tangents of the two curves at the shared\n3D point — frame-independent. Used by both `merge_duplicate_edges` and\n`rebuild_face_with_cb_edges`.\n\n## Verification\n\n- All three `interface_fuse_probe` modes (rect, circle, coincident-cap\npocket) strictly valid through cut and interface fuse.\n- The pocket regression pin in `interface_fuse_winding.rs` is un-ignored\nand passing.\n- Full workspace 2743/2743, wasm gridfinity 27/27.\n- Durable instruments added: `BK_BAND_TRACE`, `BK_MERGE_TRACE`,\n`BK_DUMP_CYL`; roadmap records the trap (never compare closed-curve\ndirections through their parameter frames).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes wrong winding on coincident closed edges by comparing tangents at\nthe shared point instead of sampling parameter frames. Resolves the\ncoincident-cap pocket rim case from #1538 and keeps interface-fuse\noutputs strictly valid.\n\n- **Bug Fixes**\n- Added `closed_curves_same_direction` to compare tangents at the shared\n3D point (frame-independent) for circles/ellipses.\n- Replaced quarter-point checks in `merge_duplicate_edges` and the CB\nclosed-rim branch of `rebuild_face_with_cb_edges` with the tangent-based\ntest.\n- Pocket regression un-ignored and passing; all `interface_fuse_probe`\nmodes (rect, circle, coincident-cap pocket) validate end to end.\n\n- **New Features**\n- Debug flags: `BK_BAND_TRACE` (band splitter inputs), `BK_MERGE_TRACE`\n(merge flip applications), `BK_DUMP_CYL` (cylinder wire dump with circle\naxes).\n\n<sup>Written for commit 2d532cb7373d5dc1678e4931a6d9b220fe2f8719.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1550?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T08:57:40Z",
+          "tree_id": "ed0746ff855b89ae53e7775895b8cf3897cf1ede",
+          "url": "https://github.com/andymai/brepkit/commit/911e8877e55785d758a65d74604aca8790cbd6ac"
+        },
+        "date": 1786525218117,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000162,
+            "range": "± 2054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1090497,
+            "range": "± 51686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13153,
+            "range": "± 179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 720634,
+            "range": "± 4704",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27036518,
+            "range": "± 145950",
             "unit": "ns/iter"
           }
         ]
