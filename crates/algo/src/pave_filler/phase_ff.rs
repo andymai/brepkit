@@ -1279,20 +1279,27 @@ fn restrict_curves_to_faces(
     tol: Tolerance,
     junctions: &mut JunctionRegistry,
 ) -> Vec<RawCurve> {
+    // `BK_RESTRICT=1`: the in-both window each section is trimmed to. Reports
+    // whether a curve reached this clip at all, which is what separates "the
+    // window was computed wrong" from "a special-case path emitted the section
+    // and skipped the clip entirely".
+    let trace_restrict = std::env::var_os("BK_RESTRICT").is_some();
+
     let (Some(ext_a), Some(ext_b)) = (
         FaceExtent::new(topo, fa, surf_a, v_range_a, tol),
         FaceExtent::new(topo, fb, surf_b, v_range_b, tol),
     ) else {
         // Conservative: if either face's extent can't be built, don't restrict.
+        if trace_restrict {
+            log::debug!(
+                "RESTRICT-SKIP fa={fa:?} fb={fb:?} no extent ({} curves pass unclipped)",
+                raw_curves.len()
+            );
+        }
         return raw_curves;
     };
 
     const N: usize = 24;
-    // `BK_RESTRICT=1`: the in-both window each section is trimmed to. Reports
-    // whether a curve reached this clip at all, which is what separates "the
-    // window was computed wrong" from "a special-case path emitted the section
-    // and skipped the clip entirely".
-    let trace_restrict = std::env::var("BK_RESTRICT").is_ok();
     let mut out = Vec::with_capacity(raw_curves.len());
     for raw in raw_curves {
         // Lines are clipped downstream by `clip_line_to_face`; only the
@@ -1411,9 +1418,15 @@ fn restrict_curves_to_faces(
                 ));
                 continue;
             }
-            if closed && f1 - f0 < n_fine && !matches!(raw.curve, EdgeCurve::Circle(_)) {
-                emit_closed_curve_windows(
-                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, n_fine, tol, junctions, &mut out,
+            if f1 - f0 < n_fine
+                && !matches!(raw.curve, EdgeCurve::Circle(_))
+                && (closed
+                    || (!matches!(surf_a, FaceSurface::Plane { .. })
+                        && !matches!(surf_b, FaceSurface::Plane { .. })))
+            {
+                emit_curve_windows(
+                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, n_fine, closed, tol, junctions,
+                    &mut out,
                 );
                 continue;
             }
@@ -1433,7 +1446,9 @@ fn restrict_curves_to_faces(
         // ellipse from an inner tapered wall meeting an outer corner (the
         // gridfinity lip knife-edge) would survive as a degenerate loop and
         // over-connect the rim. Circles are left whole (seam adoption handles
-        // them); open curves are left whole (the splitter clips them).
+        // them); open curves between plane faces are left whole (the splitter
+        // and `trim_open_curve_to_plane_face_lines` clip those), while open
+        // curves between two non-plane faces are windowed below.
         if closed && b1 - b0 < N && !matches!(raw.curve, EdgeCurve::Circle(_)) {
             // EVERY maximal in-both run, not just the longest: a closed
             // ellipse crossing a notched face has one window per side of the
@@ -1442,8 +1457,26 @@ fn restrict_curves_to_faces(
             // Non-wrapping windows get bisected in/out transitions and
             // boundary-junction snapping — sample-index endpoints sit ~0.03
             // off the junction and never weld.
-            emit_closed_curve_windows(
-                topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, tol, junctions, &mut out,
+            emit_curve_windows(
+                topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, closed, tol, junctions, &mut out,
+            );
+            continue;
+        }
+        // OPEN marched curve between two non-plane faces: no downstream path
+        // clips it (`trim_open_curve_to_plane_face_lines` is plane-gated, and
+        // the splitter trims open sections only against plane-face
+        // boundaries), so an over-long chain reaches the splitter whole and
+        // mints regions outside the face domain — the circleinsert corner: a
+        // near-coaxial cone×cylinder loop arrives as open chains spanning the
+        // full circumference of a quarter band whose in-both run is 5 of 24
+        // segments. Emit the exact in-both windows instead.
+        if !closed
+            && b1 - b0 < N
+            && !matches!(surf_a, FaceSurface::Plane { .. })
+            && !matches!(surf_b, FaceSurface::Plane { .. })
+        {
+            emit_curve_windows(
+                topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, closed, tol, junctions, &mut out,
             );
             continue;
         }
@@ -1790,15 +1823,16 @@ fn rescue_corner_crossing(
     })
 }
 
-/// Emit every maximal in-both window of a CLOSED section curve. Non-wrapping
+/// Emit every maximal in-both window of a section curve, closed or open
+/// (`closed` selects whether runs may wrap the sample seam). Non-wrapping
 /// windows get their in/out transitions bisected to the exact mutual-extent
 /// boundary and their endpoints snapped to the boundary triple junction —
 /// sample-index endpoints land ~a sample-spacing off the junction the chain
-/// must weld to. Seam-wrapping windows keep the historical sample-index trim
-/// (bisection across the seam is curve-type dependent; `trim_closed_curve_to_inboth_arc`
-/// owns the wrap split).
+/// must weld to. Seam-wrapping windows (closed curves only) keep the
+/// historical sample-index trim (bisection across the seam is curve-type
+/// dependent; `trim_closed_curve_to_inboth_arc` owns the wrap split).
 #[allow(clippy::too_many_arguments)]
-fn emit_closed_curve_windows(
+fn emit_curve_windows(
     topo: &Topology,
     fa: FaceId,
     fb: FaceId,
@@ -1807,6 +1841,7 @@ fn emit_closed_curve_windows(
     ext_b: &FaceExtent,
     inb: &[bool],
     n: usize,
+    closed: bool,
     tol: Tolerance,
     junctions: &mut JunctionRegistry,
     out: &mut Vec<RawCurve>,
@@ -1830,7 +1865,7 @@ fn emit_closed_curve_windows(
         let p = point_at(t);
         ext_a.contains(p) && ext_b.contains(p)
     };
-    for (r0, r1) in all_inboth_runs(inb, true) {
+    for (r0, r1) in all_inboth_runs(inb, closed) {
         if r1 - r0 < 2 {
             continue;
         }
@@ -5670,7 +5705,7 @@ mod tests {
         let mut junctions = JunctionRegistry::default();
         // Both extents the same square: the second face in a real pair only
         // narrows the window further, which this test doesn't need.
-        emit_closed_curve_windows(
+        emit_curve_windows(
             &topo,
             face,
             face,
@@ -5679,6 +5714,7 @@ mod tests {
             &ext,
             &inb,
             N,
+            true,
             tol,
             &mut junctions,
             &mut out,
