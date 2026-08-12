@@ -3058,6 +3058,7 @@ fn cap_partial_overlap_free_loops(
     // drops both an annulus and the tool cap, freeing TWO loops — the outer
     // ring and the kept disc's outline. Capping the inner loop separately
     // double-covers the disc same-sense).
+    let cap_trace = std::env::var("BK_CAP_TRACE").is_ok();
     let mut cap_loops: Vec<(usize, Vec<OrientedEdge>, Vec<Point3>)> = Vec::new();
 
     for start in 0..free_edges.len() {
@@ -3244,14 +3245,14 @@ fn cap_partial_overlap_free_loops(
                     inside = !inside;
                 }
             }
-            if !inside && std::env::var("BK_CAP_TRACE").is_ok() {
+            if !inside && cap_trace {
                 log::debug!("CAP pip FAIL at ({px:.2},{py:.2})");
             }
             inside
         })
     };
 
-    if std::env::var("BK_CAP_TRACE").is_ok() {
+    if cap_trace {
         for (i, (ci, oes, verts)) in cap_loops.iter().enumerate() {
             log::debug!(
                 "CAP loop {i}: plane#{ci} edges={} verts={} first=({:.2},{:.2},{:.2})",
@@ -3288,7 +3289,7 @@ fn cap_partial_overlap_free_loops(
                 continue;
             }
             let c = contains(&cap_loops[j].2, &cap_loops[i].2, normal);
-            if std::env::var("BK_CAP_TRACE").is_ok() {
+            if cap_trace {
                 log::debug!(
                     "CAP nest test i={i} j={j} area_i={:.1} area_j={area_j:.1} contains={c}",
                     loop_area(&cap_loops[i].2, normal)
@@ -3299,14 +3300,28 @@ fn cap_partial_overlap_free_loops(
             }
         }
         parent[i] = best.map(|(j, _)| j);
-        if std::env::var("BK_CAP_TRACE").is_ok() {
+        if cap_trace {
             log::debug!("CAP parent[{i}] = {:?}", parent[i]);
         }
     }
 
+    // Even-odd nesting: depth-even loops are cap faces (their direct
+    // children as holes), depth-odd loops are consumed as holes. An island
+    // inside a hole (depth 2) is a cap of its own again.
+    let depth_of = |mut i: usize| -> usize {
+        let mut d = 0;
+        while let Some(p) = parent[i] {
+            d += 1;
+            i = p;
+            if d > cap_loops.len() {
+                break;
+            }
+        }
+        d
+    };
     for i in 0..cap_loops.len() {
-        if parent[i].is_some() {
-            continue; // nested loop: becomes a hole of its parent below
+        if depth_of(i) % 2 == 1 {
+            continue; // odd depth: becomes a hole of its parent below
         }
         let (cap_idx, oriented, verts3d) = &cap_loops[i];
         let cap = cap_planes[*cap_idx];
