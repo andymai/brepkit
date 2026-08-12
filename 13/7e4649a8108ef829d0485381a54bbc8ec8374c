@@ -1,0 +1,21 @@
+crates/algo/src/classifier/ray_cast.rs
+  s_02fafbea412853::t_2cb4d69c16184f 249,251-264
+  s_02fafbea412853::t_973d2bc0575c63 26-31,676-700,723,789,792-801,834,840,867-870
+  s_02fafbea412853::t_e285e8f0afef6a 673,675,877-879
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "137e4649a8108ef829d0485381a54bbc8ec8374c",
+  "prompts": {},
+  "sessions": {
+    "s_02fafbea412853": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6e3ecbbc-eee7-43fd-9817-b3e48da79091",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
