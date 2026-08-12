@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786538134197,
+  "lastUpdate": 1786540416157,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29213,6 +29213,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15145297,
             "range": "± 22995",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6692b8817b8bad04e9aec42ed4267f28bab33ddc",
+          "message": "chore(algo): env-gated SD candidate-rejection instruments (#1556)\n\n## Summary\n\nAdds `BK_SD_MISS` debug logging to `detect_same_domain`'s two\ngeometric-overlap passes: candidate pairs that fail\n`planar_faces_overlap` / `analytic_faces_overlap`, pairs skipped as\ncomplementary splits, and analytic candidates rejected by the\n`surfaces_same_domain` gate (printed with full surface parameters). Also\nrefines the roadmap's circleinsert socket-fuse entry with the failure\nmap these instruments produced.\n\nMapping that residue needed exactly this visibility: the missing\ncorner-cylinder SD pairs never appear as candidates at all — no pair\nforms, no gate rejection fires — which no existing instrument could\nshow. Debug-level and env-gated; zero cost when unset.\n\nInstruments only, no behavior change. Clippy clean; algo lib tests\ngreen.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds env-gated debug logging to Same-Domain detection to trace why\ncandidate pairs are rejected in planar and analytic overlaps. Controlled\nby `BK_SD_MISS` (resolved once outside the loops); no behavior change\nwhen unset.\n\n- **New Features**\n- Added `BK_SD_MISS` logs in `same_domain.rs` for planar misses,\nanalytic misses, complementary-split skips, and `surfaces_same_domain`\ngate rejections (with surface params).\n- Added a simple logger in `crates/io/examples/circleinsert_chain.rs` to\nprint these debug lines.\n- Updated roadmap notes with the measured failure map from these\ninstruments.\n\n- **Refactors**\n- Resolve `BK_SD_MISS` once outside the pair loops to avoid env lookups\nin hot paths.\n\n<sup>Written for commit 2a8253f4f62b87e71658996ced54cd6577021b1d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1556?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T13:11:09Z",
+          "tree_id": "8280eae48b42b8bbc4a8e3670dd5c4c28b4056a5",
+          "url": "https://github.com/andymai/brepkit/commit/6692b8817b8bad04e9aec42ed4267f28bab33ddc"
+        },
+        "date": 1786540413346,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 965436,
+            "range": "± 27302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1042582,
+            "range": "± 15311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11965,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 708598,
+            "range": "± 5321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25660412,
+            "range": "± 65258",
             "unit": "ns/iter"
           }
         ]
