@@ -671,9 +671,21 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
 
         let mut holes = Vec::with_capacity(face.inner_wires().len());
         let mut circle_holes: Vec<(Point3, f64)> = Vec::new();
+        // Analytic holes only on a genuine plane face: the fallback path
+        // reaches here for non-planar surfaces via a Newell normal, where a
+        // hole's circle need not be coplanar with the polygon and the exact
+        // distance test below would be wrong.
+        let plane_normal =
+            if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() {
+                Some(*normal)
+            } else {
+                None
+            };
         for &iw in face.inner_wires() {
-            // A hole whose edges all lie on ONE circle stays analytic.
+            // A hole whose edges all lie on ONE circle IN THE FACE PLANE
+            // stays analytic.
             let circular: Option<(Point3, f64)> = (|| {
+                let pn = plane_normal?;
                 let wire = topo.wire(iw).ok()?;
                 let mut c: Option<(Point3, f64)> = None;
                 for oe in wire.edges() {
@@ -681,6 +693,9 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                     let brepkit_topology::edge::EdgeCurve::Circle(circ) = edge.curve() else {
                         return None;
                     };
+                    if circ.normal().cross(pn).length() > 1e-6 {
+                        return None;
+                    }
                     match &c {
                         None => c = Some((circ.center(), circ.radius())),
                         Some((cc, cr)) => {
