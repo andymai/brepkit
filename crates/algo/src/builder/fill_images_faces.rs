@@ -1170,21 +1170,9 @@ fn rebuild_face_with_cb_edges(
                     // the original traversal across the direction map.
                     let same_dir = (|| {
                         let orig_curve = curve.as_ref()?;
-                        let sp = topo.vertex(sv).ok()?.point();
-                        let ep = topo.vertex(ev).ok()?.point();
+                        let at = topo.vertex(sv).ok()?.point();
                         let cbe = topo.edge(cb_edge).ok()?;
-                        let cs3 = topo.vertex(cbe.start()).ok()?.point();
-                        let ce3 = topo.vertex(cbe.end()).ok()?.point();
-                        let (o0, o1) = orig_curve.domain_with_endpoints(sp, ep);
-                        let (b0, b1) = cbe.curve().domain_with_endpoints(cs3, ce3);
-                        let oq = orig_curve.evaluate_with_endpoints(o0 + (o1 - o0) * 0.25, sp, ep);
-                        let bq_same =
-                            cbe.curve()
-                                .evaluate_with_endpoints(b0 + (b1 - b0) * 0.25, cs3, ce3);
-                        let bq_flip =
-                            cbe.curve()
-                                .evaluate_with_endpoints(b0 + (b1 - b0) * 0.75, cs3, ce3);
-                        Some((oq - bq_same).length() <= (oq - bq_flip).length())
+                        closed_curves_same_direction(orig_curve, cbe.curve(), at)
                     })()
                     .unwrap_or(true);
                     if same_dir { fwd } else { !fwd }
