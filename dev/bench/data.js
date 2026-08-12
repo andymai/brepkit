@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786508256384,
+  "lastUpdate": 1786509686246,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28511,6 +28511,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26705960,
             "range": "± 346122",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0a9694f0242a9e74f9fec8195e533d52e32c87ad",
+          "message": "ci(cla): stop locking merged PRs (#1543)\n\nThe CLA action's `lock-pullrequest-aftermerge` defaults to true, so\n`github-actions[bot]` locks every merged PR seconds after merge. On a\nrelease PR that lock races release-please's post-merge flow: when the\nlock lands first (v3.2.22, locked 8s before the comment call),\nrelease-please dies on \"Unable to create comment because issue is\nlocked\" and never flips `autorelease: pending` to `autorelease: tagged`.\nEvery subsequent push run then retries creating the already-existing\nrelease, fails, and never opens the next release PR. `continue-on-error:\ntrue` in publish.yml shows all of it green.\n\nThat is exactly how #1540 and #1541 sat unreleased with no release PR\nopen. Recovery this time was manual: flip the label on #1535, rerun the\nRelease Please job (release PR #1542 opened).\n\nLocking merged PRs buys nothing here, so turn it off rather than\nteaching the release flow to fight it.\n\nVerification: the lock event on merged PRs (`gh api\nrepos/andymai/brepkit/issues/<n>/timeline`, actor `github-actions[bot]`)\nshould stop appearing for PRs merged after this lands.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nTurned off post-merge PR locking in the CLA workflow to stop\n`release-please` from failing on locked issues and stalling the release\nflow. Merged PRs will no longer be locked by `github-actions[bot]`, so\nthe autorelease label flips to tagged and the next release PR opens as\nexpected.\n\n<sup>Written for commit b3de01f3471080989ec8f931ad775f7ec431569d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1543?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-11T21:38:54-07:00",
+          "tree_id": "61f9ee68122786c00b9b5a233f974b1b7e56faa1",
+          "url": "https://github.com/andymai/brepkit/commit/0a9694f0242a9e74f9fec8195e533d52e32c87ad"
+        },
+        "date": 1786509683408,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 950006,
+            "range": "± 1885",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1027902,
+            "range": "± 9808",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11843,
+            "range": "± 191",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701316,
+            "range": "± 1155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25402395,
+            "range": "± 265416",
             "unit": "ns/iter"
           }
         ]
