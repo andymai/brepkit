@@ -6,9 +6,14 @@
 //!
 //! Modes: `circle` (round hole), `rect` (rectangular hole), `pocket`
 //! (blind pocket in the plate reaching exactly the interface — the
-//! circle-insert configuration). SYNTHETIC inputs only: both operands are
-//! validation-clean, which splits "the interface fuse is broken" from "the
-//! captured operands carry winding taint".
+//! circle-insert configuration), `circle4`/`pocket4` (same, but the
+//! cylinder tool's wall is pre-split into four quarter faces with
+//! quarter-arc rims, the way the layout tool's extruded circle profiles
+//! arrive), `pocket4r` (pocket4 with the tool profile wound CW — the
+//! extrude winding-normalization repro), `roundpocket4` (rounded plate +
+//! centered quartered cylinder). SYNTHETIC inputs only: both operands are
+//! validation-clean, which splits "the interface fuse is broken" from
+//! "the captured operands carry winding taint".
 //!
 //! `cargo run --release --example interface_fuse_probe -p brepkit-operations -- <mode>`
 #![allow(
@@ -162,6 +167,102 @@ fn rounded_rect_plate(topo: &mut Topology, w: f64, r: f64, z0: f64, h: f64) -> S
     brepkit_operations::extrude::extrude(topo, fid, Vec3::new(0.0, 0.0, 1.0), h).unwrap()
 }
 
+fn quartered_cylinder(
+    topo: &mut Topology,
+    cx: f64,
+    cy: f64,
+    r: f64,
+    z0: f64,
+    h: f64,
+    cw_profile: bool,
+) -> SolidId {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let t = 1e-7;
+    let v = |topo: &mut Topology, x: f64, y: f64| {
+        topo.add_vertex(Vertex::new(Point3::new(x, y, z0), t))
+    };
+    let v0 = v(topo, cx + r, cy);
+    let v1 = v(topo, cx, cy + r);
+    let v2 = v(topo, cx - r, cy);
+    let v3 = v(topo, cx, cy - r);
+    let arc = |topo: &mut Topology, a, b| {
+        let circle = Circle3D::new(Point3::new(cx, cy, z0), z, r).unwrap();
+        topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)))
+    };
+    let edges = [
+        arc(topo, v0, v1),
+        arc(topo, v1, v2),
+        arc(topo, v2, v3),
+        arc(topo, v3, v0),
+    ];
+    // The CW variant traverses the same CCW-stored arcs reversed, in reverse
+    // order: v0 -> v3 -> v2 -> v1 -> v0.
+    let oes: Vec<OrientedEdge> = if cw_profile {
+        edges
+            .iter()
+            .rev()
+            .map(|&e| OrientedEdge::new(e, false))
+            .collect()
+    } else {
+        edges.iter().map(|&e| OrientedEdge::new(e, true)).collect()
+    };
+    let wire = Wire::new(oes, true).unwrap();
+    let wid = topo.add_wire(wire);
+    let fid = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z0,
+        },
+    ));
+    brepkit_operations::extrude::extrude(topo, fid, Vec3::new(0.0, 0.0, 1.0), h).unwrap()
+}
+
+fn dump_faces(topo: &Topology, sid: SolidId) {
+    for fid in brepkit_topology::explorer::solid_faces(topo, sid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        println!(
+            "FACE {fid:?} {} reversed={}",
+            face.surface().type_tag(),
+            face.is_reversed()
+        );
+        for (wi, wid) in std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .enumerate()
+        {
+            println!("  w{wi}");
+            for oe in topo.wire(wid).unwrap().edges() {
+                let e = topo.edge(oe.edge()).unwrap();
+                let a = topo.vertex(e.start()).unwrap().point();
+                let b = topo.vertex(e.end()).unwrap().point();
+                let ax = if let brepkit_topology::edge::EdgeCurve::Circle(c) = e.curve() {
+                    format!(" axis_z={:.0}", c.normal().z())
+                } else {
+                    String::new()
+                };
+                println!(
+                    "    {:?} fwd={} ({:.1},{:.1},{:.1})->({:.1},{:.1},{:.1}){ax}",
+                    oe.edge(),
+                    oe.is_forward(),
+                    a.x(),
+                    a.y(),
+                    a.z(),
+                    b.x(),
+                    b.y(),
+                    b.z()
+                );
+            }
+        }
+    }
+}
+
 fn main() {
     env_logger::init();
     let mode = std::env::args()
@@ -229,6 +330,34 @@ fn main() {
             .unwrap();
             boolean::boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap()
         }
+        "circle4" => {
+            // Through-hole cut by a quarter-split cylinder wall.
+            let hole = quartered_cylinder(&mut topo, 40.0, 40.0, 10.0, 4.0, 7.0, false);
+            boolean::boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap()
+        }
+        "roundpocket4" => {
+            // Rounded plate + quarter-split cylinder through-cut at the
+            // center, bottom cap coincident with the plate bottom: both
+            // bounding planes of the captured circle-insert floor cut are
+            // rounded rects.
+            let rplate = rounded_rect_plate(&mut topo, 80.0, 3.75, 5.0, 5.0);
+            let hole = quartered_cylinder(&mut topo, 0.0, 0.0, 10.0, 5.0, 6.0, false);
+            boolean::boolean(&mut topo, BooleanOp::Cut, rplate, hole).unwrap()
+        }
+        "pocket4" | "pocket4r" => {
+            // Quarter-split cylinder whose bottom cap is COINCIDENT with the
+            // plate's bottom plane and whose top clears the plate top: the
+            // captured circle-insert floor through-cut. `pocket4r` winds the
+            // tool profile CW, probing seed-direction dependence of the
+            // pure-arc rim loops.
+            let cw = mode == "pocket4r";
+            let hole = quartered_cylinder(&mut topo, 40.0, 40.0, 10.0, 5.0, 6.0, cw);
+            if std::env::var("BK_DUMP_TOOL").is_ok() {
+                dump_faces(&topo, hole);
+            }
+            report(&topo, hole, "tool");
+            boolean::boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap()
+        }
         "pocket" => {
             // Blind pocket from the plate top reaching EXACTLY the interface
             // plane z=5 (the circle-insert configuration: cutDepth == floor).
@@ -246,10 +375,15 @@ fn main() {
     if std::env::var("BK_DUMP_CYL").is_ok() {
         for fid in brepkit_topology::explorer::solid_faces(&topo, plate).unwrap() {
             let face = topo.face(fid).unwrap();
-            if face.surface().type_tag() != "cylinder" {
+            let dump_all = std::env::var("BK_DUMP_CYL").is_ok_and(|v| v == "all");
+            if face.surface().type_tag() != "cylinder" && !dump_all {
                 continue;
             }
-            println!("CYL {fid:?} reversed={}", face.is_reversed());
+            println!(
+                "FACE {fid:?} {} reversed={}",
+                face.surface().type_tag(),
+                face.is_reversed()
+            );
             for (wi, wid) in std::iter::once(face.outer_wire())
                 .chain(face.inner_wires().iter().copied())
                 .enumerate()

@@ -371,6 +371,24 @@ fn main() {
             }
             continue;
         }
+        if std::env::var("VALIDATE").is_ok() {
+            let opts = brepkit_operations::validate::ValidationOptions {
+                check_orientation: true,
+                ..Default::default()
+            };
+            match brepkit_operations::validate::validate_solid_with_options(&topo, solid, &opts) {
+                Ok(report) => {
+                    if report.issues.is_empty() {
+                        println!("{path}: validate clean");
+                    }
+                    for i in &report.issues {
+                        println!("{path}: {}", i.description);
+                    }
+                }
+                Err(e) => println!("{path}: validate failed: {e}"),
+            }
+            continue;
+        }
         audit_one(&topo, solid, &path);
     }
 }

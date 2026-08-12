@@ -26,8 +26,9 @@ The `#[ignore]` inventory is the load-bearing artifact. Before quoting any
 rg -n -A2 '#\[ignore' crates/    # filter the doc-comment false hits by hand
 ```
 
-**Inventory status (2026-08-10): ZERO deferred-defect pins.**
-Every remaining `#[ignore]` is an explicit diagnostic or a slow-test marker. Known stale-but-harmless:
+**Inventory status (2026-08-12): ONE deferred-defect pin** —
+`circleinsert_socket_fuse_is_strictly_valid` (the #1538 socket-fuse residue, see OPEN).
+Every other `#[ignore]` is an explicit diagnostic or a slow-test marker. Known stale-but-harmless:
 the `profile_intersect.rs` box-sphere probes (box-sphere shipped analytic in #1006),
 `staircase_fuse_with_cylinders` (~2 min perf run), the two `#696` dovetail entries and
 `diverge_first_cut` (print-only).
@@ -125,7 +126,7 @@ that does not exist yet; without it, stop.
 | Item | Status / next step |
 |---|---|
 | **Tool geometric parity (#1517)** | MEASURED 2026-08-10 on released 3.2.22, stock pins, same-day same-catalog control. Generator suite 272 files / 2693 tests: **3.2.18 154 failed, 3.2.22 144 failed**; excluding stale per-kernel snapshots that is **153 -> 130 real**. The issue's old "137 failed / 2550 passed" DOES NOT REPRODUCE (3.2.18 measures 154 today) — the catalog grew, so only a same-day control is trustworthy. Head-to-head matrix: perf **0.63x** aggregate, faster on 24/26, **all 26 closed with 0 non-manifold** vs the reference's 5. Remaining 144 by class: 34 open-shell, **19 compound-capability (#1537 — 17 of them are the tool's stale `brepjs` pin at 18.124.2, fixed in brepjs 18.124.7; only the 2 compound-base `fuse` calls are a live gap, and it is brepjs-side)**, 15 timeout, 14 stale snapshot, 12 non-manifold, 2 reentrancy. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` |
-| **#1538 tail: the coplanar-interface family, DECOMPOSED** | Dug 2026-08-12 with synthetic clean-input probes (`interface_fuse_probe.rs`): the family is WINDING emitters, not one fuse defect. THREE ROOTS FIXED (see Closed: "Closed-edge winding direction"): internal-loops frame-area inversion on down-facing planes, merge never flipping closed edges, CB rebuild degenerating to forward=true on closed rims. Rect and circle through-hole chains (cut + interface fuse) now strictly valid end-to-end. Coincident-cap pocket rim ALSO FIXED (2026-08-12 follow-up): the quarter-point direction test was frame-dependent — a closed circle's `domain_with_endpoints` anchors at the curve's OWN reference direction, so two opposing circles can compare as same-direction. Replaced with tangent comparison at the shared point (`closed_curves_same_direction`, fill_images_faces); all three synthetic modes (rect/circle/pocket) strictly valid end-to-end, pocket pin un-ignored. Deepcutout line residue ALSO CLOSED (2026-08-12, see Closed: "Free-loop cap synthesis double-covered"): the whole chain (cut + socket fuse) is exact and strictly valid; all deepcutout pins active. REMAINING: (a) captured circleinsert fuse free=60 — its BODY operand is stale pre-fix kernel output with baked-in winding errors, re-capture on a released kernel before digging further (`circleinsert_interface_fuse_inmem.rs` ignored with that framing); (b) the 26-min 4x4 label-bracket row, unattributed; (c) the tool's `cornerRadius` scenario — booleans replay clean, capture executeBatch traffic next |
+| **#1538 tail: the coplanar-interface family, DECOMPOSED** | Dug 2026-08-12 with synthetic clean-input probes (`interface_fuse_probe.rs`): the family is WINDING emitters, not one fuse defect. THREE ROOTS FIXED (see Closed: "Closed-edge winding direction"): internal-loops frame-area inversion on down-facing planes, merge never flipping closed edges, CB rebuild degenerating to forward=true on closed rims. Rect and circle through-hole chains (cut + interface fuse) now strictly valid end-to-end. Coincident-cap pocket rim ALSO FIXED (2026-08-12 follow-up): the quarter-point direction test was frame-dependent — a closed circle's `domain_with_endpoints` anchors at the curve's OWN reference direction, so two opposing circles can compare as same-direction. Replaced with tangent comparison at the shared point (`closed_curves_same_direction`, fill_images_faces); all three synthetic modes (rect/circle/pocket) strictly valid end-to-end, pocket pin un-ignored. Deepcutout line residue ALSO CLOSED (2026-08-12, see Closed: "Free-loop cap synthesis double-covered"): the whole chain (cut + socket fuse) is exact and strictly valid; all deepcutout pins active. Circleinsert WINDING root ALSO CLOSED (2026-08-12, see Closed: "Extrude emitted mirrored wires"): the "stale operand" framing was REFUTED — a same-day re-capture on verified 3.2.28 was byte-identical (sha256) to the 3.2.24 capture; the damage was minted live by `extrude` on the tool's CW-wound profile. REMAINING: (a) circleinsert SOCKET FUSE with BOTH operands validation-clean still emits 84 free + 4 over-shared edges (pocket-mouth rim arcs at z=0/1.2, inter-feet gap channels, bin corner arcs at z=5) — native repro `cargo run --release -p brepkit-io --example circleinsert_chain` (FREE_EDGES=1 dumps owners), ignored pin `circleinsert_socket_fuse_is_strictly_valid`; the fuse has real 3D overlap (~4300mm³), not a pure coplanar interface; (b) the 26-min 4x4 label-bracket row, unattributed; (c) the tool's `cornerRadius` scenario — booleans replay clean, capture executeBatch traffic next; (d) NEW LEAD: `interface_fuse_probe roundpocket4` (rounded plate partially overlapping a square block, quartered-cylinder hole at the block corner) fuses to free=15 raw + ops mesh fallback — possibly the same partial-overlap family as #1552, unattributed |
 | **Tool pin bump** | gridfinity-layout-tool#3441 open: brepjs 18.124.8 + brepkit-wasm 3.2.24, intersectCurves patch re-targeted. #1536 CLOSED on the 3.2.24 re-measure (slotted row 43119.91 vs reference 43129, Euler 10, 24ms; full 26-row matrix 0 bnd / 0 nm) |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
@@ -138,6 +139,27 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Extrude emitted mirrored wires for CW-wound profiles (FIXED 2026-08-12, the circleinsert pocket-cut winding root)** —
+  `extrude` accepted CW-wound profiles by flipping SURFACE normals/rev flags
+  while emitting the mirrored wires as-is: a solid whose every wire winds
+  against its face flags. NO oracle catches this — pairwise edge opposition
+  survives a global mirror, and volume/mesh orientation read surfaces, not
+  wires — so the operand is "validation-clean" while GFA's face splitter
+  (which trusts effective wire winding) mints same-direction rim arcs in any
+  later boolean (the 8 arcs in the circleinsert floor cut; the layout tool
+  authors circle profiles CW). Fixed by rewinding profile wires up front
+  (outer CCW around the extrusion, holes CW). Repro modes `pocket4`/`pocket4r`
+  in `interface_fuse_probe.rs` (identical tools, opposite authoring);
+  regressions `cw_wound_extruded_profile_cut_has_valid_winding` +
+  `circleinsert_pocket_cut_is_strictly_valid` (real bin base,
+  `circleinsert_base.bin`). COLLATERAL ROOT also fixed: `chamfer_builder`
+  predicted the trimmer's Left/Right keep-side in a representation-independent
+  frame, but the trimmer's frame follows wire traversal — concave chamfers on
+  canonically-wound prisms kept the ridge strip and grew the solid (the CW
+  emission had masked it). Switched to the fillet builder's
+  `TrimKeep::AwayFrom(spine_pt)`, whose side test cancels the traversal
+  dependence. `audit_bin` gained `VALIDATE=1` (per-file validate_solid with
+  orientation checking).
 - **Free-loop cap synthesis double-covered a surviving face (FIXED 2026-08-12, the deepcutout 9-edge residue)** —
   `cap_partial_overlap_free_loops` (builder_solid) capped every closed free-edge loop
   independently. When SD's Cut+same-orientation branch drops BOTH a partially-
@@ -414,6 +436,15 @@ One line each; the fixture/PR carries the story. Newest first.
   routinely a major arc. Any new "which part of the circle does this edge cover" test
   must call it or reproduce it exactly (#1540). Taking the short way does not merely
   lose crossings, it invents them on the complement.
+- **Validation-clean is not winding-clean.** A globally mirrored solid (every
+  wire wound against its face flags) passes `validate_solid` WITH orientation
+  checking, positive oriented volume, and a clean directed mesh — pairwise
+  opposition and surface-derived normals all survive the mirror. The only
+  symptom is a downstream boolean minting same-direction shared edges from
+  "clean" operands. When that happens, audit the operand CONSTRUCTOR's
+  winding emission first (`extrude` shipped mirrored CW-profile prisms for a
+  long time), and remember the trimmer/splitter Left/Right frames follow wire
+  traversal — never predict them from geometry alone.
 - **A whole-solid volume cannot tell a MISSING cavity from a COLLAPSED one** — both read
   high by the same amount. Print per-shell signed volume against each shell's own bbox
   (`cargo run --release --example cavity_probe -p brepkit-io`) before blaming either the

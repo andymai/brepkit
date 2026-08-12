@@ -691,6 +691,20 @@ fn normalize_profile_wire_curves(
     Ok(())
 }
 
+/// Rebuild a wire traversing the same edges in reverse order with flipped
+/// senses.
+fn rewound_wire(topo: &mut Topology, wid: WireId) -> Result<WireId, crate::OperationsError> {
+    let oes: Vec<OrientedEdge> = topo
+        .wire(wid)?
+        .edges()
+        .iter()
+        .rev()
+        .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+        .collect();
+    let w = Wire::new(oes, true).map_err(crate::OperationsError::Topology)?;
+    Ok(topo.add_wire(w))
+}
+
 /// Extrude a planar face along a direction to produce a solid.
 ///
 /// The extrusion creates a prism-like solid from the face. A reversed copy of
@@ -743,6 +757,37 @@ pub fn extrude(
         direction.y() * distance,
         direction.z() * distance,
     );
+
+    // Rewind mis-wound profile wires (outer CCW around the extrusion, holes
+    // CW) before building anything. The winding compensation further down
+    // orients the SURFACES of a CW-wound profile correctly but emits the
+    // mirrored wires as-is, producing a solid whose every wire winds against
+    // its face flags. Such a solid passes validation (pairwise edge opposition
+    // survives a global mirror) but breaks the face splitter in downstream
+    // booleans, which trusts effective wire winding (the #1538 circle-insert
+    // pocket rim).
+    let input_wire_id = {
+        let oes = topo.wire(input_wire_id)?.edges().to_vec();
+        let pts = winding_sample_points(topo, &oes)?;
+        if crate::winding::is_cw_winding(&pts, &offset) {
+            rewound_wire(topo, input_wire_id)?
+        } else {
+            input_wire_id
+        }
+    };
+    let inner_wire_ids = {
+        let mut normalized = Vec::with_capacity(inner_wire_ids.len());
+        for iw in inner_wire_ids {
+            let oes = topo.wire(iw)?.edges().to_vec();
+            let pts = winding_sample_points(topo, &oes)?;
+            if crate::winding::inner_wire_is_cw(&pts, &offset) {
+                normalized.push(iw);
+            } else {
+                normalized.push(rewound_wire(topo, iw)?);
+            }
+        }
+        normalized
+    };
 
     let (
         input_verts,
