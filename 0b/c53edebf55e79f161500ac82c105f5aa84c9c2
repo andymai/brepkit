@@ -1,0 +1,25 @@
+crates/io/examples/circleinsert_chain.rs
+  s_02fafbea412853::t_0f719e8eefe64a 121-134,136-137
+crates/algo/src/builder/same_domain.rs
+  s_02fafbea412853::t_53be5517696c52 353-359,373-378,430-436,447-448,450,454
+  s_02fafbea412853::t_3eb8ded038b5a2 414-425
+  s_02fafbea412853::t_b697cf8bbce4fb 449,451-453
+.claude/skills/roadmap/SKILL.md
+  s_02fafbea412853::t_bae5727bf26d15 129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0bc53edebf55e79f161500ac82c105f5aa84c9c2",
+  "prompts": {},
+  "sessions": {
+    "s_02fafbea412853": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6e3ecbbc-eee7-43fd-9817-b3e48da79091",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
