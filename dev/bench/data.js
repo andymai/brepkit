@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786550662526,
+  "lastUpdate": 1786551101296,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29429,6 +29429,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26841061,
             "range": "± 145397",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fc9550969fefa2dd160aceb2546f73451ac03037",
+          "message": "chore(main): release 3.2.30 (#1560)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.30](https://github.com/andymai/brepkit/compare/v3.2.29...v3.2.30)\n(2026-08-12)\n\n\n### Bug Fixes\n\n* **algo:** window open marched sections between non-plane faces\n([#1559](https://github.com/andymai/brepkit/issues/1559))\n([c514e33](https://github.com/andymai/brepkit/commit/c514e332f87367f61a0fbc22d316aa8522186efa))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases 3.2.30 to pick up a bug fix in `brepkit-algo` that\ncloses/marches sections correctly across non‑planar faces in window\nopenings. Previously, sections could remain open or misconnect; now they\nconnect consistently, which may change resulting topology in those\ncases.\n\n**Review and rollout**\n- Bumps all `brepkit-*` crate versions to `3.2.30` in `Cargo.toml` and\n`.release-please-manifest.json`; updates the changelog.\n- No API changes. Update any pinned `brepkit-*` dependencies to `3.2.30`\nto receive the fix.\n- Expect minor geometry differences where the prior bug masked gaps;\nre-baseline golden tests if they target those scenarios.\n\n<sup>Written for commit 6b6f7cfc4773069f5721504fdfea6a21f487b299.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1560?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-12T16:09:01Z",
+          "tree_id": "0cf2e7079c0c88125195eaa6b7aad475b1bcb01e",
+          "url": "https://github.com/andymai/brepkit/commit/fc9550969fefa2dd160aceb2546f73451ac03037"
+        },
+        "date": 1786551098570,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000090,
+            "range": "± 4979",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1090940,
+            "range": "± 4671",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13451,
+            "range": "± 87",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 718754,
+            "range": "± 5949",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27204433,
+            "range": "± 116838",
             "unit": "ns/iter"
           }
         ]
