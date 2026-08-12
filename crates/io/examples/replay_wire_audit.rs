@@ -85,6 +85,49 @@ fn main() {
             }
         }
     }
+    // By-entity effective-direction census: the validator's criterion.
+    let mut ent_uses: HashMap<
+        brepkit_topology::edge::EdgeId,
+        Vec<(brepkit_topology::face::FaceId, bool)>,
+    > = HashMap::new();
+    for fid in solid_faces(&topo, result).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                ent_uses
+                    .entry(oe.edge())
+                    .or_default()
+                    .push((fid, oe.is_forward() != face.is_reversed()));
+            }
+        }
+    }
+    for (eid, us) in &ent_uses {
+        if us.len() == 2 && us[0].1 == us[1].1 {
+            let e = topo.edge(*eid).unwrap();
+            let a = topo.vertex(e.start()).unwrap().point();
+            let b = topo.vertex(e.end()).unwrap().point();
+            println!(
+                "INCONSISTENT {eid:?} {:?} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                std::mem::discriminant(e.curve()),
+                a.x(),
+                a.y(),
+                a.z(),
+                b.x(),
+                b.y(),
+                b.z()
+            );
+            for (fid, eff) in us {
+                let f = topo.face(*fid).unwrap();
+                println!(
+                    "    {fid:?} {} rev={} inner_wires={} eff_fwd={eff}",
+                    f.surface().type_tag(),
+                    f.is_reversed(),
+                    f.inner_wires().len()
+                );
+            }
+        }
+    }
+
     let mut same_dir = 0usize;
     for ((sk, ek), n) in &directed {
         if *n > 1 && sk != ek {

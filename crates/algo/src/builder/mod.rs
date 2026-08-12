@@ -279,10 +279,11 @@ fn log_subfaces_in_box(topo: &Topology, subs: &[SubFace], selected: &[bop::Selec
         }
         if touches {
             log::debug!(
-                "SUBFACE {:?} {} rev={} src={:?} class={:?} rank={:?} selected={} ip={} x[{:.3},{:.3}] y[{:.3},{:.3}] z[{:.3},{:.3}]",
+                "SUBFACE {:?} {} rev={} iw={} src={:?} class={:?} rank={:?} selected={} ip={} x[{:.3},{:.3}] y[{:.3},{:.3}] z[{:.3},{:.3}]",
                 sf.face_id,
                 f.surface().type_tag(),
                 f.is_reversed(),
+                f.inner_wires().len(),
                 sf.source_face,
                 sf.classification,
                 sf.rank,

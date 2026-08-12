@@ -75,12 +75,11 @@ fn deep_cutout_cut_is_analytic_and_validates() {
     assert!(curved > 0, "all-planar output is the mesh-fallback tell");
 }
 
-/// READY-REPRO: the cut result must also pass strict validation. Today it
-/// carries 9 same-direction shared edges (down from 11 plus two unclosed
-/// wires before the expand_edge fix) — the coincident-plane winding residue
-/// this family still owes.
+/// The cut result must pass strict validation: the free-loop cap synthesis
+/// now nests contained loops as holes (arc-true containment), so the
+/// SD-dropped annulus region is rebuilt as one annular cap instead of a
+/// full disc plus a coincident duplicate of the kept piece.
 #[test]
-#[ignore = "cut result carries same-direction shared edges; see #1538"]
 fn deep_cutout_cut_validates_strictly() {
     let mut topo = Topology::new();
     let body = load("deepcutout_body.bin", &mut topo);
@@ -96,13 +95,13 @@ fn deep_cutout_cut_validates_strictly() {
     assert!(report.is_valid(), "cut result must validate: {report:?}");
 }
 
-/// READY-REPRO for the coplanar-interface holed-cap fuse family (#1538 tail):
-/// fusing the through-holed cutout body onto the socket assembly meets the
-/// sockets' top plane with a bottom face that carries the cutout hole, and
-/// raw GFA emits free edges on that interface. Same family as the circle
-/// insert case (`circleinsert_interface_fuse_inmem.rs`).
+/// Fusing the through-holed cutout body onto the socket assembly meets the
+/// sockets' top plane with a bottom face carrying the cutout hole. With the
+/// cap-nesting fix the cut result is strictly valid and this fuse is exact
+/// and watertight (61 analytic faces; it read free=27 with the doubled
+/// bottom). `deepcutout_result_body.bin` is the current kernel's own cut
+/// output, refreshed alongside the fix.
 #[test]
-#[ignore = "coplanar-interface fuse with a holed interface face emits free edges; see #1538"]
 fn deep_cutout_socket_fuse_is_watertight() {
     let mut topo = Topology::new();
     let body = load("deepcutout_result_body.bin", &mut topo);
