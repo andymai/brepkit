@@ -2833,18 +2833,51 @@ fn remove_doubled_faces(
         groups.entry(key).or_default().push(fi);
     }
 
+    // The cancellation argument below holds only for faces on ONE infinite
+    // surface. Faces on DIFFERENT surfaces can share an identical boundary
+    // while bounding real volume between them — a two-edge lens where a
+    // corner cylinder crosses a chamfer cone has one edge pair and two
+    // legitimate boundary faces (the circleinsert socket fuse lost all four
+    // corner lens columns to exactly this). Partition each group by shared
+    // surface and cancel only within a class.
+    let tol = brepkit_math::tolerance::Tolerance::new();
     let mut drop_idx: HashSet<usize> = HashSet::new();
     for members in groups.values() {
-        if members.len() >= 2 {
-            if log::log_enabled!(log::Level::Debug) {
-                let ids: Vec<String> = members
-                    .iter()
-                    .map(|&m| format!("{:?}", face_ids[m]))
-                    .collect();
-                log::debug!("remove_doubled_faces: group {}", ids.join(" "));
+        if members.len() < 2 {
+            continue;
+        }
+        let mut classes: Vec<Vec<usize>> = Vec::new();
+        'member: for &m in members {
+            let Ok(face_m) = topo.face(face_ids[m]) else {
+                continue;
+            };
+            for class in &mut classes {
+                if let Ok(face_r) = topo.face(face_ids[class[0]])
+                    && super::same_domain::surfaces_same_domain(
+                        face_m.surface(),
+                        face_r.surface(),
+                        tol,
+                    )
+                    .is_some()
+                {
+                    class.push(m);
+                    continue 'member;
+                }
             }
-            for &m in members {
-                drop_idx.insert(m);
+            classes.push(vec![m]);
+        }
+        for class in classes {
+            if class.len() >= 2 {
+                if log::log_enabled!(log::Level::Debug) {
+                    let ids: Vec<String> = class
+                        .iter()
+                        .map(|&m| format!("{:?}", face_ids[m]))
+                        .collect();
+                    log::debug!("remove_doubled_faces: group {}", ids.join(" "));
+                }
+                for m in class {
+                    drop_idx.insert(m);
+                }
             }
         }
     }
