@@ -16,7 +16,7 @@ use crate::analytic;
 use crate::builder_utils::sample_nurbs_endpoints;
 use crate::spine::Spine;
 use crate::stripe::StripeResult;
-use crate::trimmer::{self, TrimKeep, TrimSide};
+use crate::trimmer::{self, TrimKeep};
 use crate::{BlendError, BlendResult};
 
 /// Internal representation of a chamfer edge set with its distance parameters.
@@ -206,28 +206,17 @@ impl<'a> ChamferBuilder<'a> {
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
             let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
 
-            let keep_side1 =
-                if let (Some(sec), Ok(face)) = (stripe.sections.first(), topo.face(stripe.face1)) {
-                    let n = face.surface().normal(0.0, 0.0);
-                    if n.dot(sec.center - sec.p1) > 0.0 {
-                        TrimSide::Right
-                    } else {
-                        TrimSide::Left
-                    }
-                } else {
-                    TrimSide::Right
-                };
-            let keep_side2 =
-                if let (Some(sec), Ok(face)) = (stripe.sections.first(), topo.face(stripe.face2)) {
-                    let n = face.surface().normal(0.0, 0.0);
-                    if n.dot(sec.center - sec.p2) > 0.0 {
-                        TrimSide::Right
-                    } else {
-                        TrimSide::Left
-                    }
-                } else {
-                    TrimSide::Right
-                };
+            // Keep the side of the contact line AWAY from the spine edge
+            // (mirrors the fillet builder): the strip between the contact
+            // line and the old edge is what the chamfer face replaces. The
+            // side is resolved inside the trimmer, whose Left/Right frame
+            // follows each face's wire traversal and cannot be predicted
+            // here — a surface-normal side test against the section centre
+            // reads the same for both traversals and picks the wrong chain
+            // on one of them (the concave notch on a canonically-wound
+            // prism kept the ridge strip and grew the solid).
+            let spine_pt = stripe.spine.evaluate(topo, 0.0)?;
+            let keep = TrimKeep::AwayFrom(spine_pt);
 
             let current_face1 = face_replacements
                 .get(&stripe.face1)
@@ -238,7 +227,7 @@ impl<'a> ChamferBuilder<'a> {
                 current_face1,
                 &contact1_pts,
                 &[(0.0, 0.0), (1.0, 0.0)],
-                TrimKeep::Side(keep_side1),
+                keep,
             );
 
             match trim1 {
@@ -263,7 +252,7 @@ impl<'a> ChamferBuilder<'a> {
                 current_face2,
                 &contact2_pts,
                 &[(0.0, 0.0), (1.0, 0.0)],
-                TrimKeep::Side(keep_side2),
+                keep,
             );
 
             match trim2 {
