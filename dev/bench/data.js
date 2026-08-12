@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786554712312,
+  "lastUpdate": 1786558094644,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29537,6 +29537,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25546373,
             "range": "± 115384",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0224e8d4db6526e9ff1ecd587897cdaa4227a4df",
+          "message": "docs(roadmap): channel-ring fix design after the clip-level refutation (#1562)\n\nRecords the measured refutation (inner-wire trimming in\n`clip_line_to_face_boundary` regressed the groove-chain, dovetail\nhole-cut, and coincident-lip-fuse foils even in its gentlest\nendpoint-only form — reverted, never shipped) and the surviving design:\na gated rescue at the `plane_internal_line_loops` degree bail plus\nlifting `union_internal_loop_with_hole`'s all-Line gate (the deliberate\narc deferral from the snap-clip close). Also fixes the 84/56\ninconsistency Copilot flagged on #1561. Docs only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments the refutation of clip-level inner‑wire trimming and records\nthe surviving channel‑ring fix design to steer implementation away from\na regressive path. This is a docs-only update to the `#1538 tail`\nroadmap entry.\n\n- Updates the row to reflect 84→56 free‑edge reduction on 3.2.30 and\nexplicitly “do not retry” clip‑level trimming in\n`clip_line_to_face_boundary` (reverted, never shipped).\n- Names the fix plan: rescue at the `plane_internal_line_loops`\ndegree‑gate bail and lift `union_internal_loop_with_hole`’s all‑Line\ngate so arc‑bearing foot loops merge with the pocket hole.\n- Corrects the 84/56 count inconsistency. No code changes or runtime\neffects.\n\n<sup>Written for commit 323535332209f67e85a7b7d12cfd0fbee7969e90.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1562?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T11:05:45-07:00",
+          "tree_id": "c2eb2089e7ddc80f481c64139c4e340ad8abd3a3",
+          "url": "https://github.com/andymai/brepkit/commit/0224e8d4db6526e9ff1ecd587897cdaa4227a4df"
+        },
+        "date": 1786558091707,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 956796,
+            "range": "± 1911",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1035114,
+            "range": "± 15486",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12292,
+            "range": "± 84",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706870,
+            "range": "± 8527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25570889,
+            "range": "± 76614",
             "unit": "ns/iter"
           }
         ]
