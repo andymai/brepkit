@@ -280,6 +280,8 @@ fn build_sd_grouping(
         }
     }
 
+    let sd_miss_trace = std::env::var("BK_SD_MISS").is_ok();
+
     // Step 3b (issue #696): geometric containment pass for planar faces.
     // Edge-set hashing alone misses the common boolean-residue pattern where
     // one face is fully contained inside another with a different boundary
@@ -350,7 +352,7 @@ fn build_sd_grouping(
             // interiors) are not overlapping duplicates; a coincident same-source
             // duplicate (same interior) still reaches `planar_faces_overlap`.
             if same_source_complementary_split(sub_faces, i, j, tol) {
-                if std::env::var("BK_SD_MISS").is_ok() {
+                if sd_miss_trace {
                     log::debug!(
                         "SD skip complementary (planar): {:?} vs {:?}",
                         sub_faces[i].face_id,
@@ -370,7 +372,7 @@ fn build_sd_grouping(
                 // this group came from geometric containment, not from
                 // boundary-identical edge sets.
                 geometric_overlap_groups.insert(uf.find(i));
-            } else if std::env::var("BK_SD_MISS").is_ok() {
+            } else if sd_miss_trace {
                 log::debug!(
                     "SD miss (planar): {:?} vs {:?}",
                     sub_faces[i].face_id,
@@ -412,7 +414,7 @@ fn build_sd_grouping(
                 _ => None,
             };
             let Some(same_dir) = same_dir else {
-                if std::env::var("BK_SD_MISS").is_ok() {
+                if sd_miss_trace {
                     log::debug!(
                         "SD gate none (analytic): {:?} {:?} vs {:?} {:?}",
                         sub_faces[i].face_id,
@@ -427,7 +429,7 @@ fn build_sd_grouping(
             // interiors) are not overlapping duplicates; a coincident same-source
             // duplicate (same interior) still reaches `analytic_faces_overlap`.
             if same_source_complementary_split(sub_faces, i, j, tol) {
-                if std::env::var("BK_SD_MISS").is_ok() {
+                if sd_miss_trace {
                     log::debug!(
                         "SD skip complementary (analytic): {:?} vs {:?}",
                         sub_faces[i].face_id,
@@ -444,7 +446,7 @@ fn build_sd_grouping(
                 let key = (i.min(j), i.max(j));
                 pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
                 geometric_overlap_groups.insert(uf.find(i));
-            } else if std::env::var("BK_SD_MISS").is_ok() {
+            } else if sd_miss_trace {
                 log::debug!(
                     "SD miss (analytic): {:?} {:?} vs {:?} {:?}",
                     sub_faces[i].face_id,
