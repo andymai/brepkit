@@ -891,6 +891,20 @@ pub(super) fn split_periodic_face_into_bands(
         ((on_seam - e.start_3d).length() < close_tol).then_some(v)
     };
 
+    if std::env::var("BK_BAND_TRACE").is_ok() {
+        for e in &boundary_circles {
+            let ax = if let EdgeCurve::Circle(c) = &e.curve_3d {
+                c.normal().z()
+            } else {
+                0.0
+            };
+            log::debug!(
+                "BAND-IN face {face_id:?} circle z={:.1} axis_z={ax:.0} fwd={}",
+                e.start_3d.z(),
+                e.forward
+            );
+        }
+    }
     let v0 = circle_v(boundary_circles[0])?;
     let v1 = circle_v(boundary_circles[1])?;
     let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {

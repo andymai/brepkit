@@ -2664,30 +2664,19 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             // condition is useless — but two coincident CLOSED edges can still
             // parameterize in opposite directions (a section-minted circle vs
             // a kept operand rim whose axis points the other way; the #1538
-            // pocket ring). Decide by comparing quarter points of the actual
-            // curves: same direction lands on the same point, opposite lands
-            // on the mirrored parameter.
+            // pocket ring). Decide by comparing tangents at the shared point:
+            // parameter-frame evaluation is not valid here, a closed curve's
+            // domain anchors at its own reference direction.
             let is_closed = canon_qs == canon_qe;
             let needs_flip = if is_closed {
                 let canon_edge = topo.edge(canonical)?;
-                let cs = topo.vertex(canon_edge.start())?.point();
-                let ce = topo.vertex(canon_edge.end())?.point();
-                let ds = topo.vertex(dup_edge.start())?.point();
-                let de = topo.vertex(dup_edge.end())?.point();
-                let (c0, c1) = canon_edge.curve().domain_with_endpoints(cs, ce);
-                let (d0, d1) = dup_edge.curve().domain_with_endpoints(ds, de);
-                let cq = canon_edge
-                    .curve()
-                    .evaluate_with_endpoints(c0 + (c1 - c0) * 0.25, cs, ce);
-                let dq_same =
-                    dup_edge
-                        .curve()
-                        .evaluate_with_endpoints(d0 + (d1 - d0) * 0.25, ds, de);
-                let dq_flip =
-                    dup_edge
-                        .curve()
-                        .evaluate_with_endpoints(d0 + (d1 - d0) * 0.75, ds, de);
-                (cq - dq_flip).length() < (cq - dq_same).length()
+                let at = topo.vertex(canon_edge.start())?.point();
+                !super::fill_images_faces::closed_curves_same_direction(
+                    canon_edge.curve(),
+                    dup_edge.curve(),
+                    at,
+                )
+                .unwrap_or(true)
             } else {
                 dup_qs == canon_qe && dup_qe == canon_qs
             };
@@ -2751,6 +2740,11 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             .map(|(eid, fwd)| {
                 if let Some(&(new_eid, flip)) = replacements.get(eid) {
                     let new_fwd = if flip { !*fwd } else { *fwd };
+                    if std::env::var("BK_MERGE_TRACE").is_ok() {
+                        log::debug!(
+                            "merge-apply outer: face#{fi} {eid:?} fwd={fwd} -> {new_eid:?} fwd={new_fwd} (flip={flip})"
+                        );
+                    }
                     brepkit_topology::wire::OrientedEdge::new(new_eid, new_fwd)
                 } else {
                     brepkit_topology::wire::OrientedEdge::new(*eid, *fwd)

@@ -6671,6 +6671,25 @@ fn split_face_2d_impl(
         }
     }
 
+    if std::env::var("BK_BAND_TRACE").is_ok() && !is_plane {
+        for (wi, (w, _)) in outers.iter().enumerate() {
+            let desc: Vec<String> = w
+                .iter()
+                .map(|e| {
+                    let closed = (e.start_3d - e.end_3d).length() < 1e-9;
+                    format!(
+                        "{:?}{} fwd={} z=({:.1},{:.1})",
+                        std::mem::discriminant(&e.curve_3d),
+                        if closed { "*" } else { "" },
+                        e.forward,
+                        e.start_3d.z(),
+                        e.end_3d.z()
+                    )
+                })
+                .collect();
+            log::debug!("BAND outer[{wi}] face {face_id:?}: {desc:?}");
+        }
+    }
     let mut sub_faces = Vec::new();
     for (outer_wire, _area) in outers {
         sub_faces.push(SplitSubFace {
