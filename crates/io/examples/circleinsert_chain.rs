@@ -118,7 +118,23 @@ fn report(topo: &Topology, sid: SolidId, label: &str) {
     );
 }
 
+struct Tap;
+impl log::Log for Tap {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.target().starts_with("brepkit_") && m.level() <= log::Level::Debug
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            println!("    [log] {}", r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+static TAP: Tap = Tap;
+
 fn main() {
+    let _ = log::set_logger(&TAP);
+    log::set_max_level(log::LevelFilter::Debug);
     let mut topo = Topology::new();
     let base = load("circleinsert_base.bin", &mut topo);
     let tool = cw_tool(&mut topo);
