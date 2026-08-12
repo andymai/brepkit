@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786511204495,
+  "lastUpdate": 1786519835191,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28673,6 +28673,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25639506,
             "range": "± 72178",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "22230d0c21a3e6a604e29d9cfd1e50762e947b61",
+          "message": "fix(algo): orient split-edge images by endpoint chaining (#1546)\n\nFixes the '2x2 solid mode with cutout cutDepth > solidSurfaceZ' scenario\nfrom #1538 (captured tool-side on 3.2.24, replayed natively).\n\n## Root cause\n\n`expand_edge` (`builder/fill_images_faces.rs`) rebuilds an unsplit\nface's wire by expanding each boundary edge into its split images,\nassuming every image is minted in the parent edge's direction. A\nCommonBlock split_edge is shared with the coincident partner solid and\nkeeps **that** solid's direction. A deep corner cutout flush with a\nrecessed bin's ledge makes exactly that configuration: the cutter's top\nedge is coincident with the ledge boundary running the other way, so one\nsub-edge lands backwards in the rebuilt wire — two unclosed wires plus\n11 same-direction shared edges. The ops layer correctly rejected GFA's\nexact result and paid an all-planar mesh fallback whose volume was wrong\nby +7, which then poisoned the downstream socket fuse into the exported\nopen shell.\n\n## Fix\n\nEach image is oriented by chaining endpoints from the parent's traversal\nstart instead of trusting mint order. The cut now stays exact: 27\nanalytic faces, exact volume (43237.932 = body − tool to the digit),\nclosed wires, 6ms, no fallback.\n\n## Pins\n\n- Active: `crates/io/tests/deepcutout_cut_inmem.rs` (no fallback + exact\nvolume + closed wires, from captured operands in `tests/data`).\n- Ignored ready-repros for the family's open residue: strict validation\n(9 same-direction shared edges remain, down from 11 + 2 unclosed) and\nthe coplanar-interface holed-cap socket fuses (`deepcutout` +\n`circleinsert` pairs), which still emit free edges at the interface —\nthat is the next #1538 campaign target, documented in the roadmap skill.\n- New instruments: `replay_wire_audit` (unclosed chains + same-direction\npairs, SAVE=), `dump_face_wires` (VALIDATE= mode).\n\n## Verification\n\nFull workspace 2740/2740 (render excluded per the known SIGSEGV), wasm\ngridfinity 27/27, splitter foils green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nOrient split-edge images by chaining endpoints from the parent edge to\nprevent reversed sub-edges during wire rebuilds. This fixes the #1538\n“2x2 solid mode with cutout cutDepth > solidSurfaceZ” case so the cut\nstays exact and watertight without a mesh fallback.\n\n- **Bug Fixes**\n- In `expand_edge` (`crates/algo/src/builder/fill_images_faces.rs`),\norder and orient split-edge images by chaining from the parent traversal\nstart, handling `CommonBlock` edges minted in the partner solid’s\ndirection.\n- Result: closed wires, analytic faces, exact volume; no fallback on the\ndeep cutout scenario from #1538.\n\n- **New Features**\n- Added `replay_wire_audit` example to list unclosed chains and\nsame-direction shared edges.\n- Added `dump_face_wires` example to print per-face oriented wire chains\n(`VALIDATE=` supported).\n- Added captured repros and data: `deepcutout_cut_inmem.rs` (asserts\nexact cut, no fallback, closed wires) and\n`circleinsert_interface_fuse_inmem.rs` (pins the holed coplanar\ninterface fuse residue for #1538).\n\n<sup>Written for commit a7023167e9732ecbfa8c44fd44dcca9db998f714.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1546?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T07:28:04Z",
+          "tree_id": "b49bfc83e1ce4448210ca8b4b0836b3e7d39c983",
+          "url": "https://github.com/andymai/brepkit/commit/22230d0c21a3e6a604e29d9cfd1e50762e947b61"
+        },
+        "date": 1786519832502,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960498,
+            "range": "± 2159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1039206,
+            "range": "± 4292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11963,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709667,
+            "range": "± 2190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25979867,
+            "range": "± 113182",
             "unit": "ns/iter"
           }
         ]
