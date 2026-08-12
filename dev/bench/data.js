@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786578305514,
+  "lastUpdate": 1786578737773,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29807,6 +29807,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25507719,
             "range": "± 59876",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37290f2000d907f748a0202937de1d79108e5e58",
+          "message": "chore(main): release 3.2.32 (#1568)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.32](https://github.com/andymai/brepkit/compare/v3.2.31...v3.2.32)\n(2026-08-12)\n\n\n### Bug Fixes\n\n* **algo:** test circular holes analytically in the ray-cast classifier\n([#1567](https://github.com/andymai/brepkit/issues/1567))\n([d2b84cf](https://github.com/andymai/brepkit/commit/d2b84cf6133eb5c46ea74a202dca9369923c144d))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.32 to fix misclassification of circular holes. The ray-cast\nclassifier now uses an analytic test for circular holes instead of ray\nsampling, correcting results and improving stability; behavior may\nchange on models with circular features.\n\n- Bumps all workspace crates to version `3.2.32` in `Cargo.toml` and\n`.release-please-manifest.json`; no API changes.\n- Expect different classification outputs where circular holes were\npreviously involved; no migration required.\n\n<sup>Written for commit 65a478394ca4ca6b5d4eb767c20629ea3abe8e3a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1568?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-12T23:49:49Z",
+          "tree_id": "a2f252ac354b59bf07f645b69b609248147f83cf",
+          "url": "https://github.com/andymai/brepkit/commit/37290f2000d907f748a0202937de1d79108e5e58"
+        },
+        "date": 1786578734172,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 963260,
+            "range": "± 5291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1040694,
+            "range": "± 12095",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11993,
+            "range": "± 467",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704684,
+            "range": "± 1479",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25594554,
+            "range": "± 303024",
             "unit": "ns/iter"
           }
         ]
