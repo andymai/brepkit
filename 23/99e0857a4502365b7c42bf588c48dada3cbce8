@@ -1,0 +1,20 @@
+crates/io/examples/circleinsert_chain.rs
+  s_02fafbea412853::t_a0dcf635861f77 164
+  s_02fafbea412853::t_17502170d8e11d 157-163,165-190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2399e0857a4502365b7c42bf588c48dada3cbce8",
+  "prompts": {},
+  "sessions": {
+    "s_02fafbea412853": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6e3ecbbc-eee7-43fd-9817-b3e48da79091",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
