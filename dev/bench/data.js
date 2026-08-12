@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786520255872,
+  "lastUpdate": 1786523015444,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28781,6 +28781,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25460308,
             "range": "± 277435",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c1702d0f9fcac695aaee677eb2b006857a9def47",
+          "message": "fix(algo): decide closed-edge winding by curve direction, not convention (#1548)\n\nDigs the #1538 coplanar-interface family to its core: synthetic\nclean-input probes showed the family is three independent WINDING\nemitters, not one fuse defect. Even `cut(box, box)` through-hole minted\n4 same-direction shared edges — invisible to the free-edge census,\ncaught only by the validator's orientation check, and paid for\ndownstream as open exported shells.\n\n## The three roots\n\n1. **`split_face_with_internal_loops`** normalized disc/hole loops with\na signed area from **stored UVs** (the surface's own parameterization).\nOn a down-facing plane that winds opposite the local frame the\nconvention reasons in, inverting the verdict: the bottom cap's hole wire\nwound backwards while the top cap's was correct. Areas now come from 3D\npoints projected through the local frame; non-planar faces keep the\ncalibrated stored-UV path.\n2. **`merge_duplicate_edges`** never flipped closed edges — endpoints\ncannot distinguish direction when start == end, and the code assumed\ncoincident circles always parameterize the same way. A section-minted\ncircle vs a kept operand rim can wind opposite ways. The flip is now\ndecided by quarter-point comparison of the two curves. (This changes the\nmerge's orientation *mapping* only — the terminal merge-key doctrine is\nuntouched.)\n3. **`rebuild_face_with_cb_edges`** degenerated to `forward=true` for a\nclosed rim swapped to its CommonBlock circle (the oriented-start\nposition test reads \"same start\" for either traversal). Same\nquarter-point comparison, carrying the original traversal across the\ndirection map.\n\n## Verification\n\n- New probe `interface_fuse_probe` (rect/circle/pocket modes;\n`BK_WINDING=1` prints per-edge effective directions with owning faces —\nverified against first-principles halfedge math on single edges).\n- Rect and circle through-hole chains (cut, then interface fuse) now\n**strictly valid end-to-end**; regressions in\n`interface_fuse_winding.rs`.\n- Remaining sub-classes pinned ignored and recorded in the roadmap: the\ncoincident-cap pocket rim (cylinder-band rim emission), the deep-cutout\nline-edge residue, the captured arc-cornered interface fuse.\n- Full workspace 2742/2742, wasm gridfinity 27/27.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix winding direction on closed edges by sampling curve direction\ninstead of relying on endpoint convention, removing same-direction\nshared edges in coplanar interface fuses (#1538). Through-hole cuts and\nfuses (circle and rectangle) now validate and export cleanly.\n\n- **Bug Fixes**\n- Face splitter: decide disc/hole winding on planes using 3D points\nprojected to the local frame; non‑planar faces keep stored-UV path.\nFixes down-facing plane inversion.\n- `merge_duplicate_edges`: allow flipping closed edges by comparing\nquarter-point samples; updates orientation mapping only, not merge keys.\n- `rebuild_face_with_cb_edges`: preserve closed-rim orientation when\nswapping to CommonBlock circles using the same quarter-point comparison.\n- Added `interface_fuse_probe` example and `interface_fuse_winding`\ntests. Rect and circle chains are strictly valid. The coincident-cap\npocket rim is pinned ignored and tracked in #1538.\n\n<sup>Written for commit 588bdbf8168389d3700ef89dc8e062ef27e71dec.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1548?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T08:21:04Z",
+          "tree_id": "138ef0bd6df9eebcbf7a1723c07fba9710e8a1d5",
+          "url": "https://github.com/andymai/brepkit/commit/c1702d0f9fcac695aaee677eb2b006857a9def47"
+        },
+        "date": 1786523012700,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 949496,
+            "range": "± 973",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1031173,
+            "range": "± 1542",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11852,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702083,
+            "range": "± 4842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25359313,
+            "range": "± 71277",
             "unit": "ns/iter"
           }
         ]
