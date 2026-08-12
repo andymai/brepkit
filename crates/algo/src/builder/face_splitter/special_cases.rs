@@ -1670,6 +1670,213 @@ pub(super) fn split_face_with_internal_loops(
         }
     }
 
+    // Multi-loop rim-tangent union: several rescued fence loops can each
+    // touch the SAME hole along one rim-coincident connector arc (the
+    // circleinsert slab: four foot rings, one pocket). The pairwise union
+    // above cannot take them (chord-based, and it consumes the hole after
+    // one loop). Weave ONE combined inner boundary instead: the rim spans
+    // not covered by any connector, spliced with each tangent loop's ring
+    // chain; the loops' own hole contributions are absorbed into it.
+    let mut hole_absorbed: Vec<bool> = vec![false; loops.len()];
+    if let Some(frame) = plane_frame.as_ref() {
+        'hole: for (hi, hole) in original_inner_wires.iter().enumerate() {
+            if consumed_holes.contains(&hi) {
+                continue;
+            }
+            let Some(circle) = hole.iter().find_map(|e| {
+                if let EdgeCurve::Circle(c) = &e.curve_3d {
+                    Some(c.clone())
+                } else {
+                    None
+                }
+            }) else {
+                continue;
+            };
+            if hole
+                .iter()
+                .any(|e| !matches!(e.curve_3d, EdgeCurve::Circle(_)))
+            {
+                continue;
+            }
+            let weld = tol_3d * 100.0;
+            let on_rim =
+                |p: Point3| ((p - circle.center()).length() - circle.radius()).abs() <= weld;
+            // Tangent loops: exactly one edge with both endpoints and its own
+            // midpoint on the rim; every other edge midpoint OFF the rim.
+            let mid_of = |e: &OrientedPCurveEdge| -> Point3 {
+                let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                e.curve_3d
+                    .evaluate_with_endpoints(f64::midpoint(t0, t1), e.start_3d, e.end_3d)
+            };
+            // (loop idx, connector idx)
+            let mut tangent: Vec<(usize, usize)> = Vec::new();
+            for (li, loop_edges) in loops.iter().enumerate() {
+                if union_hole_by_loop[li].is_some() {
+                    continue;
+                }
+                let rim_edges: Vec<usize> = loop_edges
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| on_rim(e.start_3d) && on_rim(e.end_3d) && on_rim(mid_of(e)))
+                    .map(|(i, _)| i)
+                    .collect();
+                if rim_edges.len() == 1
+                    && loop_edges
+                        .iter()
+                        .enumerate()
+                        .all(|(i, e)| i == rim_edges[0] || !on_rim(mid_of(e)))
+                {
+                    tangent.push((li, rim_edges[0]));
+                }
+            }
+            log::debug!(
+                "rim-tangent union: hole {hi} tangent loops {:?} of {}",
+                tangent,
+                loops.len()
+            );
+            if tangent.is_empty() {
+                continue;
+            }
+            let ang_of = |p: Point3| circle.project(p);
+            // Covered spans: (start angle, span, loop idx). The covered arc is
+            // the connector's own geometry; its midpoint disambiguates which
+            // way round the circle it runs.
+            let mut covered: Vec<(f64, f64, usize)> = Vec::new();
+            for &(li, ci) in &tangent {
+                let e = &loops[li][ci];
+                let (a, b) = (ang_of(e.start_3d), ang_of(e.end_3d));
+                let m = ang_of(mid_of(e));
+                let span_ab = (b - a).rem_euclid(std::f64::consts::TAU);
+                let rel_m = (m - a).rem_euclid(std::f64::consts::TAU);
+                if rel_m <= span_ab {
+                    covered.push((a, span_ab, li));
+                } else {
+                    covered.push((b, std::f64::consts::TAU - span_ab, li));
+                }
+            }
+            covered.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+            // Overlapping covered spans: not this shape; leave everything as is.
+            for w in covered.windows(2) {
+                if w[0].0 + w[0].1 > w[1].0 + 1e-9 {
+                    continue 'hole;
+                }
+            }
+            if let (Some(first), Some(last)) = (covered.first(), covered.last())
+                && last.0 + last.1 > first.0 + std::f64::consts::TAU + 1e-9
+            {
+                continue 'hole;
+            }
+            // Weave the union wire: for each covered span, the loop's ring
+            // chain (connector removed) traversed from the span's start
+            // anchor to its end anchor; between spans, rim pieces cut from
+            // the circle.
+            let pt_at = |a: f64| circle.evaluate(a);
+            let rim_piece = |a0: f64, a1: f64| -> Option<OrientedPCurveEdge> {
+                let span = (a1 - a0).rem_euclid(std::f64::consts::TAU);
+                if span * circle.radius() < tol_3d {
+                    return None;
+                }
+                let (s3, e3) = (pt_at(a0), pt_at(a1));
+                let pc = brepkit_math::curves2d::Circle2D::new(
+                    frame.project(circle.center()),
+                    circle.radius(),
+                )
+                .ok()?;
+                Some(OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Circle(circle.clone()),
+                    pcurve: brepkit_math::curves2d::Curve2D::Circle(pc),
+                    start_uv: frame.project(s3),
+                    end_uv: frame.project(e3),
+                    start_3d: s3,
+                    end_3d: e3,
+                    forward: true,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                })
+            };
+            let mut union_wire: Vec<OrientedPCurveEdge> = Vec::new();
+            let mut ok = true;
+            for (k, &(a0, span, li)) in covered.iter().enumerate() {
+                // Ring chain for this loop, from the anchor at angle a0
+                // (span start) to the anchor at its end, connector removed.
+                let ci = tangent.iter().find(|(l, _)| *l == li).map(|(_, c)| *c);
+                let Some(ci) = ci else {
+                    ok = false;
+                    break;
+                };
+                let start_anchor = pt_at(a0);
+                let mut chain: Vec<OrientedPCurveEdge> = loops[li]
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != ci)
+                    .map(|(_, e)| e.clone())
+                    .collect();
+                // Orient the chain to run start_anchor -> end_anchor by
+                // endpoint chaining.
+                let mut ordered: Vec<OrientedPCurveEdge> = Vec::new();
+                let mut cur = start_anchor;
+                while !chain.is_empty() {
+                    let Some(pos) = chain.iter().position(|e| {
+                        (e.start_3d - cur).length() < weld || (e.end_3d - cur).length() < weld
+                    }) else {
+                        ok = false;
+                        break;
+                    };
+                    let mut e = chain.remove(pos);
+                    if (e.end_3d - cur).length() < weld {
+                        std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+                        std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+                        e.forward = !e.forward;
+                    }
+                    cur = e.end_3d;
+                    ordered.push(e);
+                }
+                if !ok {
+                    break;
+                }
+                union_wire.extend(ordered);
+                // Rim piece from this span's end to the next span's start.
+                let end_a = a0 + span;
+                let next_a = covered[(k + 1) % covered.len()].0
+                    + if k + 1 == covered.len() {
+                        std::f64::consts::TAU
+                    } else {
+                        0.0
+                    };
+                if let Some(piece) = rim_piece(
+                    end_a.rem_euclid(std::f64::consts::TAU),
+                    next_a.rem_euclid(std::f64::consts::TAU),
+                ) {
+                    union_wire.push(piece);
+                }
+            }
+            if !ok || union_wire.is_empty() {
+                log::debug!(
+                    "rim-tangent union: weave failed ok={ok} n={}",
+                    union_wire.len()
+                );
+                continue;
+            }
+            // Positional closure check.
+            let closed = union_wire
+                .windows(2)
+                .all(|w| (w[0].end_3d - w[1].start_3d).length() < weld)
+                && union_wire
+                    .last()
+                    .is_some_and(|l| (l.end_3d - union_wire[0].start_3d).length() < weld);
+            if !closed {
+                log::debug!("rim-tangent union: wire not closed");
+                continue;
+            }
+            let first_li = tangent[0].0;
+            union_hole_by_loop[first_li] = Some(union_wire);
+            for &(li, _) in &tangent[1..] {
+                hole_absorbed[li] = true;
+            }
+            consumed_holes.insert(hi);
+        }
+    }
+
     let mut result = Vec::new();
 
     // For each closed loop: create an "inside" sub-face.
@@ -1826,6 +2033,9 @@ pub(super) fn split_face_with_internal_loops(
         // Build the outside sub-face's hole: the merged union outline when
         // this loop consumed an overlapping pre-existing hole, otherwise the
         // reversed loop.
+        if hole_absorbed[li] {
+            continue;
+        }
         let hole: Vec<OrientedPCurveEdge> = if let Some(u) = union_hole_by_loop[li].take() {
             // Normalize to hole winding: effective-CW about the effective
             // normal, i.e. stored CW (positive trapezoid area) for an
