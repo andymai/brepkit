@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.27](https://github.com/andymai/brepkit/compare/v3.2.26...v3.2.27) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** compare closed-curve directions by tangent, not parameter frame ([#1550](https://github.com/andymai/brepkit/issues/1550)) ([911e887](https://github.com/andymai/brepkit/commit/911e8877e55785d758a65d74604aca8790cbd6ac))
+
 ## [3.2.26](https://github.com/andymai/brepkit/compare/v3.2.25...v3.2.26) (2026-08-12)
 
 
