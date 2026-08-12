@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786546639441,
+  "lastUpdate": 1786550662526,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29375,6 +29375,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26660944,
             "range": "± 47059",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c514e332f87367f61a0fbc22d316aa8522186efa",
+          "message": "fix(algo): window open marched sections between non-plane faces (#1559)\n\n## Summary\n\n`restrict_curves_to_faces` kept open marched sections whole (\"the\ndownstream splitter trims them\") — but that downstream trim only exists\nfor plane faces (`trim_open_curve_to_plane_face_lines` is plane-gated,\nand the splitter clips open sections only against plane-face\nboundaries). Between two quadrics, an over-long open chain reaches the\nsplitter whole and mints sub-faces outside the face domain.\n\nThe circleinsert socket fuse hits this at every bin corner: the socket's\nchamfer cone and the bin's corner cylinder are near-coaxial (axes\n0.354mm apart), so their intersection is a closed wavy loop around the\nfull cylinder, arriving from the marcher as two open chains. The\nquarter-band corner face's in-both window is 5 of 24 samples; the\nunclipped chains made the splitter emit an unsplit band plus\nout-of-domain fragments, which `remove_doubled_faces` then cancelled\n(identical post-merge edge sets), cascading into an 84-edge free ring\nand 4 over-shared corner arcs.\n\nThe fix generalizes `emit_closed_curve_windows` to `emit_curve_windows`\n(explicit closed flag) and emits exact bisection-refined in-both windows\nfor OPEN marched curves when NEITHER face is a plane — plane pairs keep\ntheir existing paths. Applied in both the main sample-clip and the\nfine-resample branch.\n\n## Measured on the circleinsert chain repro\n\n- socket fuse: free 84 → 56, over-shared 4 → 0\n- builder: 227 selected with 11 eaten as doubled + 2 sliver shells → 214\nselected, ONE clean 214-face shell, zero doubled groups\n- the remaining 56 free edges are the z=0/1.2 pocket/channel ring — a\nseparate mechanism, tracked in the roadmap entry (the ignored fuse pin\nstays ignored)\n\n## Verification\n\nFull workspace suite green (render excluded per the known SIGSEGV),\nincluding the goma band fixtures, honeycomb and kumiko chains, the\ntorus-notch whole-loop canary, and wasm gridfinity. Clippy/fmt via\nhooks.\n\nAdvances #1538.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nWindows open marched intersection sections between two non‑plane faces\ninstead of passing them through. Previously we left open chains intact\nexpecting plane‑only downstream trimming, which produced out‑of‑domain\nregions; now we emit exact in‑both windows for those cases while keeping\nplane‑involved behavior unchanged.\n\n- Generalizes `emit_closed_curve_windows` to `emit_curve_windows` (adds\n`closed` flag) and uses it in both sample‑clip and fine‑resample paths;\napplies to open curves only when neither face is a plane.\n- Hoists the `BK_RESTRICT` env lookup and adds debug logging when extent\nconstruction fails, noting unclipped passes.\n- Keeps circles whole; continues windowing of closed non‑circles; open\ncurves with any plane face still rely on splitter/plane trimming.\n- Circleinsert repro: free edges 84 → 56, over‑shared edges 4 → 0; one\nclean 214‑face shell; the z=0/1.2 ring remains tracked separately.\n- Test suite green.\n\n<sup>Written for commit 816c8e41fae8fcc22c9ca8df798b29e53ad24274.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1559?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T16:01:46Z",
+          "tree_id": "433c9855098c4b4a15852807af21f4c39b9af7ba",
+          "url": "https://github.com/andymai/brepkit/commit/c514e332f87367f61a0fbc22d316aa8522186efa"
+        },
+        "date": 1786550659270,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1001453,
+            "range": "± 1956",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1087722,
+            "range": "± 1411",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13156,
+            "range": "± 176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 723611,
+            "range": "± 15116",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26841061,
+            "range": "± 145397",
             "unit": "ns/iter"
           }
         ]
