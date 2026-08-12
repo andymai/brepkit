@@ -6714,9 +6714,18 @@ fn split_face_2d_impl(
         keys.sort_unstable();
         keys
     };
+    let loop_area_abs = |wl: &[OrientedPCurveEdge]| -> f64 {
+        let pts = if is_plane {
+            sampling::sample_wire_loop_uv_via_frame(wl, frame)
+        } else {
+            sample_wire_loop_uv(wl)
+        };
+        signed_area_2d(&pts).abs()
+    };
     for hole in holes {
         if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
             let hole_key = loop_key(&hole);
+            let hole_area = loop_area_abs(&hole);
             let mut assigned = false;
             let mut fallback_idx: Option<usize> = None;
             for (i, sf) in sub_faces.iter_mut().enumerate() {
@@ -6731,6 +6740,18 @@ fn split_face_2d_impl(
                 if loop_key(&sf.outer_wire) == hole_key {
                     continue;
                 }
+                // A hole cannot be carried by a region smaller than itself.
+                // The first-vertex probe reads "inside" when the hole's traced
+                // loop happens to START at a vertex it shares with a small
+                // sibling region (a woven wall-notch rect shares its inner
+                // corners with the cavity-mouth loop on a shelled bin rim), and
+                // first-match order then hands the whole mouth to the notch —
+                // the containing disc loses its hole and the mouth re-emerges
+                // as a same-sense doubled cover (#1536). Area dominance is the
+                // one containment invariant the probe cannot fake.
+                if loop_area_abs(&sf.outer_wire) < hole_area * (1.0 - 1e-6) {
+                    continue;
+                }
                 if fallback_idx.is_none() {
                     fallback_idx = Some(i);
                 }
@@ -6741,8 +6762,25 @@ fn split_face_2d_impl(
                     break;
                 }
             }
-            if !assigned && let Some(i) = fallback_idx {
-                sub_faces[i].inner_wires.push(hole);
+            if !assigned {
+                // Last resort mirrors the pre-gate behaviour (never silently
+                // drop a hole): the first area-passing candidate, else the
+                // largest non-twin sub-face.
+                let idx = fallback_idx.or_else(|| {
+                    sub_faces
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, sf)| loop_key(&sf.outer_wire) != hole_key)
+                        .max_by(|(_, a), (_, b)| {
+                            loop_area_abs(&a.outer_wire)
+                                .partial_cmp(&loop_area_abs(&b.outer_wire))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|(i, _)| i)
+                });
+                if let Some(i) = idx {
+                    sub_faces[i].inner_wires.push(hole);
+                }
             }
         }
     }

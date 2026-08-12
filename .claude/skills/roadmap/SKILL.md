@@ -126,7 +126,7 @@ that does not exist yet; without it, stop.
 |---|---|
 | **Tool geometric parity (#1517)** | MEASURED 2026-08-10 on released 3.2.22, stock pins, same-day same-catalog control. Generator suite 272 files / 2693 tests: **3.2.18 154 failed, 3.2.22 144 failed**; excluding stale per-kernel snapshots that is **153 -> 130 real**. The issue's old "137 failed / 2550 passed" DOES NOT REPRODUCE (3.2.18 measures 154 today) — the catalog grew, so only a same-day control is trustworthy. Head-to-head matrix: perf **0.63x** aggregate, faster on 24/26, **all 26 closed with 0 non-manifold** vs the reference's 5. Remaining 144 by class: 34 open-shell, **19 compound-capability (#1537 — 17 of them are the tool's stale `brepjs` pin at 18.124.2, fixed in brepjs 18.124.7; only the 2 compound-base `fuse` calls are a live gap, and it is brepjs-side)**, 15 timeout, 14 stale snapshot, 12 non-manifold, 2 reentrancy. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` |
 | **#1538 regressions from the band-split fixes** | Open-shell half CLOSED by #1540 (see Closed). Still open: 2 timeouts + 1 triangle-count invariant. The open-shell to mesh-fallback cascade is a plausible route to the timeouts but is NOT measured; #1530's ring-section horizontals are the other suspect (3.2.21 was already slow). Next step is a tool-side re-measure on a kernel carrying #1540, NOT another native dig |
-| **#1536 slotted no-lip loses its cavity** | LOCALIZED 2026-08-10 to the BODY OPERAND, not the fuse and not the measurement. `cavity_probe` on `slotted_nolip_body.bin`: outer shell +111351 (99.8% of its bbox), inner shell **-5263 against a 98783 bbox — 5.3% fill**. The cavity is present and correctly signed, it just encloses nothing; a correct one is ~-92000, exactly the 135237-vs-43129 gap. So GFA and every volume oracle are exonerated (per-shell sum, `oriented_solid_volume` and the fixture's own recorded numbers all agree). Next step is capturing one stage EARLIER than `crates/io/tests/data/slotted_nolip_body.bin` — the shell/cut chain that builds the body |
+| **#1536 slotted no-lip loses its cavity** | ROOT FIXED kernel-side 2026-08-12 (see Closed: "Slot cut closed the shelled bin's pocket"). Tool-side confirmation pending: needs a release carrying the fix, then the parity-matrix `2x2 slotted no-lip` row should read ~43129 (was 135221). Close the issue on that re-measure, not before |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -138,6 +138,19 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Slot cut closed the shelled bin's pocket (#1536 root, FIXED 2026-08-12)** —
+  the face splitter's first-vertex hole matching attached the rim annulus's woven
+  cavity-mouth loop to the tiny notch rectangle it shares two corners with
+  (first-match order + strict ray-cast jitter on an exactly-on-corner probe), so
+  the annulus lost its hole (emitted as a full disc) and the mouth re-emerged as a
+  same-sense coincident ceiling: closed, manifold, volume 6x. Arc-cornered rims
+  only — an all-line rim traces the mouth loop from a different first vertex. Fix:
+  area-dominance gate on hole-attach candidates (a hole cannot be carried by a
+  region smaller than itself), `builder/face_splitter/mod.rs` "Simple hole
+  matching". Regression `crates/operations/tests/shelled_bin_slot_cut.rs`; probes
+  `slot_cut_probe.rs` (operations example), `shell_face_census.rs` +
+  `cavity_probe.rs` (io examples). The ops-layer trivial-containment shortcut and
+  raw GFA both reproduced identically — the shortcut was a red herring.
 - **Rim-arc crossings took the short way round (CLOSED 2026-08-10, #1540, the #1538 open shells)** —
   `circle_arc_plane_crossings` (added by #1534) decided which part of a circle a
   boundary edge covers by taking the SHORTER way between its vertices. The kernel has
@@ -367,6 +380,13 @@ One line each; the fixture/PR carries the story. Newest first.
   high by the same amount. Print per-shell signed volume against each shell's own bbox
   (`cargo run --release --example cavity_probe -p brepkit-io`) before blaming either the
   boolean or the measurement (#1536).
+- **A hole can only be carried by a region larger than itself; a shared-corner probe
+  fakes containment.** The splitter's first-vertex hole matching + first-match order
+  handed a 6577-area mouth loop to a 1.26-area notch because the traced loop STARTED
+  at a shared corner and the strict ray-cast read it inside (#1536). When auditing
+  hole attachment, check area dominance before trusting any point probe. Per-face
+  signed-volume census (`shell_face_census`) is the cheap way to spot the resulting
+  same-sense doubled cover: one face's contribution has the wrong sign for its shell.
 - **Measurement and tessellation walk different face sets.** Tessellation uses
   `explorer::solid_faces` (outer + inner shells) so the MESH is complete, while several
   volume/area/CoM paths walked `outer_shell()` alone — closed, manifold and correctly
