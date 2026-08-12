@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786528300332,
+  "lastUpdate": 1786537723190,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29105,6 +29105,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17828941,
             "range": "± 944057",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "723dad71fd39a5b09fd10e820f7705a3aa63ce05",
+          "message": "fix(operations): rewind mis-wound extrude profiles before building (#1554)\n\n## Summary\n\n- `extrude` accepted CW-wound profiles by flipping surface normals while\nemitting the mirrored wires as-is: solids whose every wire winds against\nits face flags. They pass validation (pairwise edge opposition survives\na global mirror), read positive oriented volume, and mesh cleanly, but\nthe GFA face splitter trusts effective wire winding and mints\nsame-direction shared edges in any later boolean. This is the winding\nroot of the #1538 circle-insert floor cut (8 same-direction rim arcs in\nthe body, then 60 free edges and a mesh fallback in the socket fuse):\nthe layout tool authors its insert circle profiles CW. Profile wires are\nnow rewound up front (outer CCW around the extrusion, holes CW).\n- Rewinding unmasked a chamfer defect the mirrored emission had hidden:\nthe chamfer builder predicted the trimmer's Left/Right keep-side in a\nrepresentation-independent frame, but the trimmer's frame follows wire\ntraversal, so concave chamfers on canonically-wound prisms kept the\nridge strip and grew the solid (the pinned regression, authored with a\nCW profile, only passed because of the mirrored emission). It now uses\nthe fillet builder's `TrimKeep::AwayFrom(spine_pt)` pattern, whose side\ntest cancels the traversal dependence.\n\n## Evidence\n\n- Same-day re-capture of the circleinsert operands on verified\nbrepkit-wasm 3.2.28 is byte-identical (sha256) to the 3.2.24 capture,\nrefuting the fixture's stale-operand framing: the winding damage was\nminted live by the current kernel.\n- New probe modes `pocket4`/`pocket4r` in `interface_fuse_probe` build\nbyte-equivalent quartered-cylinder tools with opposite profile\nauthoring; pre-fix the CW one mints exactly 8 inconsistent shared edges,\npost-fix both are strictly valid end-to-end.\n\n## Tests\n\n- `cw_wound_extruded_profile_cut_has_valid_winding`\n(interface_fuse_winding): CW 4-arc profile → extrude → coincident-cap\ncut → fuse, strictly valid at every step; fails pre-fix.\n- `circleinsert_pocket_cut_is_strictly_valid`: the captured pre-pocket\nbin (`circleinsert_base.bin`) cut with the CW-authored tool; fails\npre-fix with the original 8-edge signature.\n- `chamfer_v2_concave_notch_adds_only_the_chamfer_sliver` now also\npasses with the profile authored CCW (it failed on main that way).\n- The socket fuse remains pinned ignored: with both operands\nvalidation-clean it still emits 84 free + 4 over-shared edges; native\nrepro `cargo run --release -p brepkit-io --example circleinsert_chain`\n(FREE_EDGES=1 dumps owners). That residue is the family's open item and\nis framed in the roadmap.\n- Full workspace suite green (127 binaries, render excluded per the\nknown SIGSEGV), wasm gridfinity 27/27, clippy -D warnings clean,\nboundaries clean.\n\nCloses nothing outright; advances #1538.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRewinds mis-wound extrude profiles before building so wires match face\norientation, fixing the circle-insert winding that caused same-direction\nshared edges and mesh fallbacks (advances #1538). Also makes chamfer\ntrimming traversal-independent to stop concave chamfers from adding\nmaterial.\n\n- **Bug Fixes**\n- `extrude`: detect and rewind CW profiles up front (outer CCW, holes\nCW) instead of mirroring wires; prevents GFA from creating\nsame-direction shared edges.\n- Chamfer builder: use `TrimKeep::AwayFrom(spine_pt)` for keep-side;\nremoves traversal dependence and trims concave chamfers correctly.\n- Circle-insert pocket cut now validates strictly and removes the prior\n8 inconsistent rim arcs; remaining socket-fuse residue tracked in #1538.\n\n- **New Features**\n- Added `crates/io/examples/circleinsert_chain.rs` to replay the\npocket→fuse chain; supports `FREE_EDGES=1` and `SAVE_BODY`.\n- `interface_fuse_probe`: new modes `circle4`, `pocket4`, `pocket4r`,\n`roundpocket4` to exercise quartered-cylinder tools and CW/CCW\nauthoring.\n  - `audit_bin`: `VALIDATE=1` runs orientation checks.\n- Tests added/updated for CW-wound extruded cuts and chamfer; fixture\nswitched to `circleinsert_base.bin`.\n\n<sup>Written for commit bd6faec39c5925b75b49b96d0adb8aac88e85c8d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1554?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T05:26:16-07:00",
+          "tree_id": "fa32520420792c398a8d6fef3af66bc24e93e7a8",
+          "url": "https://github.com/andymai/brepkit/commit/723dad71fd39a5b09fd10e820f7705a3aa63ce05"
+        },
+        "date": 1786537720393,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 956001,
+            "range": "± 1243",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1037215,
+            "range": "± 1574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11934,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 703234,
+            "range": "± 9712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25657909,
+            "range": "± 114701",
             "unit": "ns/iter"
           }
         ]
