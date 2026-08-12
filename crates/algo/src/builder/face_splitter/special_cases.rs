@@ -1755,15 +1755,18 @@ pub(super) fn split_face_with_internal_loops(
                 }
             }
             covered.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+            log::debug!("rim-tangent union: covered {covered:?}");
             // Overlapping covered spans: not this shape; leave everything as is.
             for w in covered.windows(2) {
                 if w[0].0 + w[0].1 > w[1].0 + 1e-9 {
+                    log::debug!("rim-tangent union: covered spans overlap");
                     continue 'hole;
                 }
             }
             if let (Some(first), Some(last)) = (covered.first(), covered.last())
                 && last.0 + last.1 > first.0 + std::f64::consts::TAU + 1e-9
             {
+                log::debug!("rim-tangent union: covered spans wrap");
                 continue 'hole;
             }
             // Weave the union wire: for each covered span, the loop's ring
