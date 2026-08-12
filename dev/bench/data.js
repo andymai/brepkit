@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786510783174,
+  "lastUpdate": 1786511204495,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28619,6 +28619,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25592770,
             "range": "± 58635",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "83dcb9451903f13f4a4dcdfb73f26e665bc6d30d",
+          "message": "chore(main): release 3.2.24 (#1545)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.24](https://github.com/andymai/brepkit/compare/v3.2.23...v3.2.24)\n(2026-08-12)\n\n\n### Bug Fixes\n\n* **algo:** gate split-hole attachment on area dominance\n([#1544](https://github.com/andymai/brepkit/issues/1544))\n([6ab89b6](https://github.com/andymai/brepkit/commit/6ab89b669d01e354e3647c1d203a84eb48485ecd))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.24. Fixes split-hole attachment by gating it on area\ndominance to avoid incorrect attachments in ambiguous cases.\n\n- **Bug Fixes**\n  - `brepkit-algo`: gate split-hole attachment on area dominance.\n\n- **Dependencies**\n- Bump workspace crates to `3.2.24` in `Cargo.toml` and\n`.release-please-manifest.json`.\n\n<sup>Written for commit a35940fa283b8478d2e16ab2d3565c669b32464e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1545?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-12T05:04:10Z",
+          "tree_id": "3262a080fe12eaddc0b5e6f2915abc66c51981cd",
+          "url": "https://github.com/andymai/brepkit/commit/83dcb9451903f13f4a4dcdfb73f26e665bc6d30d"
+        },
+        "date": 1786511201783,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 959808,
+            "range": "± 2833",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1040579,
+            "range": "± 45107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12074,
+            "range": "± 383",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710706,
+            "range": "± 1706",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25639506,
+            "range": "± 72178",
             "unit": "ns/iter"
           }
         ]
