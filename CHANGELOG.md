@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.25](https://github.com/andymai/brepkit/compare/v3.2.24...v3.2.25) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** orient split-edge images by endpoint chaining ([#1546](https://github.com/andymai/brepkit/issues/1546)) ([22230d0](https://github.com/andymai/brepkit/commit/22230d0c21a3e6a604e29d9cfd1e50762e947b61))
+
 ## [3.2.24](https://github.com/andymai/brepkit/compare/v3.2.23...v3.2.24) (2026-08-12)
 
 
