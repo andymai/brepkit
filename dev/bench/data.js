@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786525220571,
+  "lastUpdate": 1786525701700,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28943,6 +28943,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27036518,
             "range": "± 145950",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b176dfc6d54c4851e868129754b80644f03b840",
+          "message": "chore(main): release 3.2.27 (#1551)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.27](https://github.com/andymai/brepkit/compare/v3.2.26...v3.2.27)\n(2026-08-12)\n\n\n### Bug Fixes\n\n* **algo:** compare closed-curve directions by tangent, not parameter\nframe ([#1550](https://github.com/andymai/brepkit/issues/1550))\n([911e887](https://github.com/andymai/brepkit/commit/911e8877e55785d758a65d74604aca8790cbd6ac))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.27 with a fix to closed-curve direction comparison using\ntangents for more reliable orientation on periodic curves. Includes\nworkspace version bumps; no API changes.\n\n- **Bug Fixes**\n- `brepkit-algo`: compare closed-curve directions by tangent, not\nparameter frame, to prevent false reversals.\n\n<sup>Written for commit 1b6e9f4482f7ec5a238055087e2a1e8a8ada409a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1551?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-12T09:05:41Z",
+          "tree_id": "eb473f3928ed69aa46cd9c1418a14e04e1bd7665",
+          "url": "https://github.com/andymai/brepkit/commit/5b176dfc6d54c4851e868129754b80644f03b840"
+        },
+        "date": 1786525698552,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 952536,
+            "range": "± 2749",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1037179,
+            "range": "± 156109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11860,
+            "range": "± 295",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 708206,
+            "range": "± 30816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25582516,
+            "range": "± 207090",
             "unit": "ns/iter"
           }
         ]
