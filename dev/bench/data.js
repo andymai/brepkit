@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786566091267,
+  "lastUpdate": 1786568127302,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29699,6 +29699,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25710857,
             "range": "± 112246",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6175fe40ddf435847b1d163ad7e2bd81f4a919e0",
+          "message": "docs(roadmap): 3.2.31 weave shipped; last sliver isolated to an on-plane classification flip (#1565)\n\nRecords the #1563/3.2.31 close (rescue + rim-tangent union: chain free\n84→4, over 4→0, both durable lessons) and the root isolation of the\nfinal 4-edge residue: the socket-bottom pad piece classifies Inside in\nexactly one mirrored quadrant, from an interior point lying in the\npocket's open mouth exactly on the removed bottom's plane — the on-plane\nedge-grazing ray trap. Docs only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMarks the circleinsert weave fix as shipped in 3.2.31 and narrows the\nremaining 4-edge residue to an on‑plane classification flip on the\nsocket‑bottom pad. This updates the roadmap to reflect current status\nand a concrete next diagnostic step.\n\n- Replaces the “surviving design” plan with shipped status for the\ninternal‑loops rescue plus rim‑tangent union (#1563): free edges 84→4\nand over‑shared edges 4→0.\n- Records two lessons: always respect the `forward` flag on oriented\np‑curve edges; do not perform clip‑level inner‑wire trimming on holed\nfaces.\n- Isolates the last sliver: the mirrored interior point exactly on the\nremoved bottom plane (z=0) classifies Inside in one quadrant and Outside\nin another due to edge‑grazing ray parity; expected Outside in both.\nRepro: `replay_pair` at (-5.182, 5.182, 0) vs (5.182, 5.182, 0).\n- Docs-only change in `.claude/skills/roadmap/SKILL.md`.\n\n<sup>Written for commit bda8bb70b356295ab4b219dbc3c30a56c28dd4ce.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1565?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T13:52:35-07:00",
+          "tree_id": "fae3b845284ba29ebbf8e88715a1e8a7e721963c",
+          "url": "https://github.com/andymai/brepkit/commit/6175fe40ddf435847b1d163ad7e2bd81f4a919e0"
+        },
+        "date": 1786568124356,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 941649,
+            "range": "± 8747",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1027412,
+            "range": "± 14574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11710,
+            "range": "± 119",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 685413,
+            "range": "± 3540",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25342717,
+            "range": "± 59851",
             "unit": "ns/iter"
           }
         ]
