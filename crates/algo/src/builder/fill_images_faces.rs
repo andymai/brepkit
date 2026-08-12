@@ -1166,25 +1166,13 @@ fn rebuild_face_with_cb_edges(
                     // "same start" for either traversal), and the CB curve
                     // can parameterize opposite the original rim (the #1538
                     // pocket ring: a kept wall's own rim vs the section
-                    // circle). Compare quarter points of the two curves and
-                    // carry the original traversal across the direction map.
+                    // circle). Compare tangents at the shared point and carry
+                    // the original traversal across the direction map.
                     let same_dir = (|| {
                         let orig_curve = curve.as_ref()?;
-                        let sp = topo.vertex(sv).ok()?.point();
-                        let ep = topo.vertex(ev).ok()?.point();
+                        let at = topo.vertex(sv).ok()?.point();
                         let cbe = topo.edge(cb_edge).ok()?;
-                        let cs3 = topo.vertex(cbe.start()).ok()?.point();
-                        let ce3 = topo.vertex(cbe.end()).ok()?.point();
-                        let (o0, o1) = orig_curve.domain_with_endpoints(sp, ep);
-                        let (b0, b1) = cbe.curve().domain_with_endpoints(cs3, ce3);
-                        let oq = orig_curve.evaluate_with_endpoints(o0 + (o1 - o0) * 0.25, sp, ep);
-                        let bq_same =
-                            cbe.curve()
-                                .evaluate_with_endpoints(b0 + (b1 - b0) * 0.25, cs3, ce3);
-                        let bq_flip =
-                            cbe.curve()
-                                .evaluate_with_endpoints(b0 + (b1 - b0) * 0.75, cs3, ce3);
-                        Some((oq - bq_same).length() <= (oq - bq_flip).length())
+                        closed_curves_same_direction(orig_curve, cbe.curve(), at)
                     })()
                     .unwrap_or(true);
                     if same_dir { fwd } else { !fwd }
@@ -3162,6 +3150,27 @@ fn layered_vertex(
     crate::perf::bump_local_vertex_insert();
     local.insert(key, v);
     v
+}
+
+/// Traversal-direction comparison for two coincident CLOSED edges: their
+/// parameter frames are independent (a closed circle's `domain_with_endpoints`
+/// is anchored at the curve's own reference direction, not the shared start
+/// vertex), so quarter-point evaluation compares unrelated angles. Compare
+/// tangents at the shared 3D point instead. `None` when either curve's
+/// direction at the point cannot be derived (non-conic closed curves).
+pub(super) fn closed_curves_same_direction(
+    a: &EdgeCurve,
+    b: &EdgeCurve,
+    at: Point3,
+) -> Option<bool> {
+    let tangent_at = |curve: &EdgeCurve| -> Option<brepkit_math::vec::Vec3> {
+        match curve {
+            EdgeCurve::Circle(c) => Some(c.tangent(c.project(at))),
+            EdgeCurve::Ellipse(e) => Some(e.tangent(e.project(at))),
+            _ => None,
+        }
+    };
+    Some(tangent_at(a)?.dot(tangent_at(b)?) > 0.0)
 }
 
 #[allow(clippy::too_many_arguments)]

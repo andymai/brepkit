@@ -9,7 +9,9 @@
 //!   verdict on a down-facing plane (fixed: local-frame areas);
 //! - `merge_duplicate_edges` never flipped closed edges, silently reversing
 //!   winding when two coincident circles parameterize opposite ways (fixed:
-//!   quarter-point direction comparison);
+//!   tangent comparison at the shared point — parameter-frame evaluation is
+//!   NOT valid for closed curves, whose domains anchor at their own
+//!   reference directions);
 //! - `rebuild_face_with_cb_edges` degenerated to `forward=true` for a closed
 //!   rim replaced by its CommonBlock circle (fixed: same comparison).
 
@@ -71,13 +73,13 @@ fn circle_through_hole_cut_and_interface_fuse_have_valid_winding() {
     assert_strictly_valid(&topo, fused, "circle interface fuse");
 }
 
-/// READY-REPRO: a cutter whose bottom cap is COINCIDENT with the plate's
-/// bottom plane (the circle-insert cutDepth == floor configuration) still
-/// mints one same-direction shared edge at the rim — the cylinder-band
-/// split's rim emission in the coincident-cap case, the family's remaining
-/// sub-class.
+/// A cutter whose bottom cap is COINCIDENT with the plate's bottom plane
+/// (the circle-insert cutDepth == floor configuration). The kept band's
+/// original rim merges with the section circle parameterized the other way;
+/// the direction map must come from tangents at the shared point, not from
+/// parameter-frame evaluation (a closed circle's domain anchors at its own
+/// reference direction).
 #[test]
-#[ignore = "coincident-cap pocket cut mints one same-direction rim edge; see #1538"]
 fn coincident_cap_pocket_cut_has_valid_winding() {
     let mut topo = Topology::new();
     let (plate, _block) = plate_and_block(&mut topo);

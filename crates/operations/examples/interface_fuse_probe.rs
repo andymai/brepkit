@@ -162,6 +162,42 @@ fn main() {
         }
         other => panic!("unknown mode {other}"),
     };
+    if std::env::var("BK_DUMP_CYL").is_ok() {
+        for fid in brepkit_topology::explorer::solid_faces(&topo, plate).unwrap() {
+            let face = topo.face(fid).unwrap();
+            if face.surface().type_tag() != "cylinder" {
+                continue;
+            }
+            println!("CYL {fid:?} reversed={}", face.is_reversed());
+            for (wi, wid) in std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .enumerate()
+            {
+                println!("  w{wi}");
+                for oe in topo.wire(wid).unwrap().edges() {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    let a = topo.vertex(e.start()).unwrap().point();
+                    let b = topo.vertex(e.end()).unwrap().point();
+                    let ax = if let brepkit_topology::edge::EdgeCurve::Circle(c) = e.curve() {
+                        format!(" axis_z={:.0}", c.normal().z())
+                    } else {
+                        String::new()
+                    };
+                    println!(
+                        "    {:?} fwd={} ({:.1},{:.1},{:.1})->({:.1},{:.1},{:.1}){ax}",
+                        oe.edge(),
+                        oe.is_forward(),
+                        a.x(),
+                        a.y(),
+                        a.z(),
+                        b.x(),
+                        b.y(),
+                        b.z()
+                    );
+                }
+            }
+        }
+    }
     report(&topo, plate, "plate with hole");
 
     // Block below: 80 x 80 x 5 spanning z 0..5, sharing the z=5 plane.
