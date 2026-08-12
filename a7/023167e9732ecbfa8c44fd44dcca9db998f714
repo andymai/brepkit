@@ -1,0 +1,52 @@
+crates/io/tests/data/deepcutout_tool.bin
+  s_9066a1e8cd8ad4::t_b2a80fe951e63d 1
+crates/io/tests/circleinsert_interface_fuse_inmem.rs
+  s_9066a1e8cd8ad4::t_b81200d79b2b85 26-32
+  s_9066a1e8cd8ad4::t_e55eabdfaf0f06 1-25,33-47
+crates/io/tests/data/circleinsert_body.bin
+  s_9066a1e8cd8ad4::t_b2a80fe951e63d 1
+crates/io/examples/dump_face_wires.rs
+  s_9066a1e8cd8ad4::t_e69e37295bd751 1-19,25-77
+  s_9066a1e8cd8ad4::t_3935f8e9434ccb 20-24
+crates/io/examples/replay_wire_audit.rs
+  s_9066a1e8cd8ad4::t_12c6289ad20e2c 11-12
+  s_9066a1e8cd8ad4::t_630c297909126c 57
+  s_9066a1e8cd8ad4::t_c6f49920b79a54 41-44
+  s_9066a1e8cd8ad4::t_8574835a9b4420 88-102
+  s_9066a1e8cd8ad4::t_f6001ddcbcc243 1-10,13-32,40,45-56,58-87,103-104
+  s_9066a1e8cd8ad4::t_343afc14d6b6ce 33-39
+.claude/skills/roadmap/SKILL.md
+  s_9066a1e8cd8ad4::t_f8ca0fb95883e1 129
+  s_9066a1e8cd8ad4::t_9392d97bbe056d 128
+  s_9066a1e8cd8ad4::t_bffb5ccdea1ea7 536-546
+  s_9066a1e8cd8ad4::t_4ae93fa6a17e8f 141-151
+crates/algo/src/builder/fill_images_faces.rs
+  s_9066a1e8cd8ad4::t_c1111c4736679d 974
+  s_9066a1e8cd8ad4::t_cf6c3a5fbf0f83 955-971,975-984,986
+crates/io/tests/data/circleinsert_sockets.bin
+  s_9066a1e8cd8ad4::t_b2a80fe951e63d 1
+crates/io/tests/deepcutout_cut_inmem.rs
+  s_9066a1e8cd8ad4::t_5200b5b2588cfa 78-98
+  s_9066a1e8cd8ad4::t_0182688e482b45 1-51,54,61-77,99-117
+  s_9066a1e8cd8ad4::t_32b05d97e2181f 52-53,55-60
+crates/io/tests/data/deepcutout_result_body.bin
+  s_9066a1e8cd8ad4::t_b2a80fe951e63d 1
+crates/io/tests/data/deepcutout_body.bin
+  s_9066a1e8cd8ad4::t_b2a80fe951e63d 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a7023167e9732ecbfa8c44fd44dcca9db998f714",
+  "prompts": {},
+  "sessions": {
+    "s_9066a1e8cd8ad4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0bfeb58-04ff-4765-b511-d498ad00696c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
