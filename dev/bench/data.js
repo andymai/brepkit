@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786540416157,
+  "lastUpdate": 1786543867132,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29267,6 +29267,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25660412,
             "range": "± 65258",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f5f9f04a3ce3d5bec87fffac92163da014b0d206",
+          "message": "docs(roadmap): reframe the circleinsert socket-fuse residue (#1557)\n\nCorrects the roadmap entry shipped with #1556, twice over — recording\nboth burned framings so no future session resumes them:\n\n1. The SD framing was measured wrong: the socket blocks have no geometry\ncoincident with the bin walls (they are baseplate-profile docks fused\ninto the bin floor); detect_same_domain's 9 pairs are essentially\ncomplete.\n2. The follow-up wall-fencing/one-branch framing was also retracted\nsame-day: the foot flares outward going up, the wall's drop band is the\nmiddle strip with an apparently closed fence, and the builder's wall\nkeep region is plausibly correct.\n\nThe freed faces are the slab-top gap-channel pieces, pocket-wall\ncylinders, socket corner cones, and bin corner cylinders. The entry now\npoints at the next measurement: a single-edge trace of one freed\ngap-channel edge. Docs only.",
+          "timestamp": "2026-08-12T14:08:31Z",
+          "tree_id": "3fb004f1be4d54ef4d40731a016f5e536a384edd",
+          "url": "https://github.com/andymai/brepkit/commit/f5f9f04a3ce3d5bec87fffac92163da014b0d206"
+        },
+        "date": 1786543864418,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 963462,
+            "range": "± 1626",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046421,
+            "range": "± 10487",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11907,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709229,
+            "range": "± 5295",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25672830,
+            "range": "± 1704613",
             "unit": "ns/iter"
           }
         ]
