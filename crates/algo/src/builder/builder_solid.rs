@@ -2836,6 +2836,13 @@ fn remove_doubled_faces(
     let mut drop_idx: HashSet<usize> = HashSet::new();
     for members in groups.values() {
         if members.len() >= 2 {
+            if log::log_enabled!(log::Level::Debug) {
+                let ids: Vec<String> = members
+                    .iter()
+                    .map(|&m| format!("{:?}", face_ids[m]))
+                    .collect();
+                log::debug!("remove_doubled_faces: group {}", ids.join(" "));
+            }
             for &m in members {
                 drop_idx.insert(m);
             }
