@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.24](https://github.com/andymai/brepkit/compare/v3.2.23...v3.2.24) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** gate split-hole attachment on area dominance ([#1544](https://github.com/andymai/brepkit/issues/1544)) ([6ab89b6](https://github.com/andymai/brepkit/commit/6ab89b669d01e354e3647c1d203a84eb48485ecd))
+
 ## [3.2.23](https://github.com/andymai/brepkit/compare/v3.2.22...v3.2.23) (2026-08-12)
 
 
