@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.32](https://github.com/andymai/brepkit/compare/v3.2.31...v3.2.32) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** test circular holes analytically in the ray-cast classifier ([#1567](https://github.com/andymai/brepkit/issues/1567)) ([d2b84cf](https://github.com/andymai/brepkit/commit/d2b84cf6133eb5c46ea74a202dca9369923c144d))
+
 ## [3.2.31](https://github.com/andymai/brepkit/compare/v3.2.30...v3.2.31) (2026-08-12)
 
 
