@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786558094644,
+  "lastUpdate": 1786565663960,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29591,6 +29591,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25570889,
             "range": "± 76614",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "71951c6f51b6c6354af09d078dc4b0e0a0cbcfd4",
+          "message": "fix(algo): close hole-dangling fence loops and weave them into the hole (#1563)\n\n## Summary\n\nTwo coordinated extensions of the face splitter's internal-loops path,\nclosing most of the circleinsert socket-fuse residue (#1538):\n\n1. **Hole-dangling rescue** (`rescue_hole_dangling_loops`): when\n`plane_internal_line_loops` fails its degree gate and EVERY loose\nendpoint lies strictly inside an inner wire, the dangling chains are\nfence loops overshooting into a hole — their in-hole tails lie outside\nthe face material and the connecting geometry is not on the face. The\nrescue trims each chain at its exact rim crossing, drops fully-in-hole\nsections, and closes each chain with the rim arc containing no other\nchains' anchors.\n\n2. **Rim-tangent union**: several rescued loops can touch the SAME hole\nalong rim-coincident connectors (four foot rings, one pocket). The\nexisting pairwise union is chord-based and consumes the hole after one\nloop; the new weave builds ONE combined inner boundary — uncovered rim\nspans spliced with each loop's ring chain — and absorbs the loops'\nindividual hole contributions.\n\nPlus the load-bearing correction inside the union: a reversed\n`OrientedPCurveEdge` stores swapped endpoints with `forward=false`, and\nits geometry is the stored CCW span sampled reversed — never the\ncomplement. The span detection now reads through the flag (it originally\nread raw endpoints, saw every connector as the long complement, and\nsilently never fired).\n\n## Measured on the circleinsert chain repro\n\n- socket fuse: free **84 → 4**, over-shared **4 → 0** (combined with the\nalready-shipped #1559)\n- the remaining 4 free edges bound one z=0 sliver in a single quadrant\n(tracked in the roadmap entry; the ignored fuse pin stays ignored until\nfree=0)\n\n## Verification\n\nFull workspace suite green (render excluded per the known SIGSEGV),\nincluding the groove-chain, dovetail hole-cut, coincident-lip-fuse,\ndeepened-wall-opening, deepcutout, and shelled-bin fixtures, plus wasm\ngridfinity. The rescue is gated on the exact failure signature and the\nthree sentinel foils were verified not to reach it.\n\nAdvances #1538.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCloses hole‑dangling fence loops in the face splitter and weaves\nrim‑tangent loops into their hole to prevent missed unions on\ncircle‑insert faces. Previously the internal‑loops path bailed on degree\ndefects and pairwise union consumed the hole after the first loop; now\nchains trim at rim crossings, close on the rim, multiple tangent loops\nmerge into one inner boundary, and span detection handles reversed\nedges.\n\n- Rescue in `plane_internal_line_loops`: when every degree‑1 endpoint\nlies strictly inside an inner wire, trim each chain at the exact rim\ncrossing, drop in‑hole tails, and close it with the rim arc that\ncontains no other chains’ anchors; any other defect keeps the prior\nbail.\n- Rim‑tangent union: when several rescued loops touch the same circular\nhole via rim‑coincident connectors, weave one combined inner boundary\n(uncovered rim spans spliced with each loop’s ring chain), absorb those\nloops’ hole contributions, and consume the hole.\n- Corrects reversed edge handling: connector span detection now respects\n`OrientedPCurveEdge.forward` so reversed edges use the stored span. On\nthe circle‑insert repro: free edges 84 → 4; over‑shared 4 → 0.\n\n**Review and rollout**\n- Gated: rescue triggers only for strict in‑hole dangling endpoints; the\nweave triggers only for circular holes with clean, non‑overlapping\nconnector spans; ambiguous cases fall back to the prior behavior.\n- Tolerances: rim checks use 100× linear tol or weld; closure is\nvalidated before emitting unions; debug logs cover rescue and rim‑span\ndecisions.\n- Tests and instrumentation: adds a unit test that pins the rescue;\nexample `crates/io/examples/circleinsert_chain.rs` prints channel edges\nwhen `CHANNEL_EDGE` is set. No migrations required.\n\n<sup>Written for commit 851589a67388ac9843bc4e1f6ebdb34c649e25a3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1563?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-12T20:11:53Z",
+          "tree_id": "5271b35ab7c87ad2ba3891cc9d6d2424f96f5180",
+          "url": "https://github.com/andymai/brepkit/commit/71951c6f51b6c6354af09d078dc4b0e0a0cbcfd4"
+        },
+        "date": 1786565661466,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1020024,
+            "range": "± 7895",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1096621,
+            "range": "± 10006",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13115,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 718512,
+            "range": "± 1301",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26922983,
+            "range": "± 98844",
             "unit": "ns/iter"
           }
         ]
