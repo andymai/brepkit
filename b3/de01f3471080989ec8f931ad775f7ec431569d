@@ -1,0 +1,19 @@
+.github/workflows/cla.yml
+  s_9066a1e8cd8ad4::t_6732cdfd6dfd26 27-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b3de01f3471080989ec8f931ad775f7ec431569d",
+  "prompts": {},
+  "sessions": {
+    "s_9066a1e8cd8ad4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0bfeb58-04ff-4765-b511-d498ad00696c",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
