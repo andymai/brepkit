@@ -24,6 +24,12 @@ jobs:
           path-to-signatures: 'signatures/cla.json'
           path-to-document: 'https://github.com/andymai/brepkit/blob/main/.github/CLA.md'
           branch: 'cla-signatures'
+          # The default (true) locks every merged PR within seconds. On a
+          # release PR that races release-please's post-merge comment: if the
+          # lock wins, the autorelease label is never flipped to "tagged" and
+          # every later run retries the old release instead of opening the
+          # next release PR (masked green by continue-on-error in publish.yml).
+          lock-pullrequest-aftermerge: false
           # web-flow is GitHub's web-UI committer identity; release-please PR
           # commits carry it as the committer, so it must be allowlisted or
           # every release PR fails the CLA check.
