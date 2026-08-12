@@ -7665,6 +7665,77 @@ mod tests {
         )
     }
 
+    /// The hole-dangling rescue: a fence chain whose two loose ends dangle
+    /// inside an inner wire must be trimmed at its exact rim crossings and
+    /// closed with the rim arc between the anchors (through the side away
+    /// from the chain), yielding a fully degree-2 loop web. The hole edge is
+    /// a closed circle (seam vertex), the codebase's common hole shape.
+    #[test]
+    fn hole_dangling_chain_is_rescued_with_a_rim_connector() {
+        use brepkit_math::curves::Circle3D;
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let face = topo.face(face_id).unwrap();
+        let surface = face.surface().clone();
+        let wire_pts = collect_wire_points(&topo, face.outer_wire());
+        let normal = extract_plane_normal(&surface);
+        let frame = PlaneFrame::from_plane_face(normal, &wire_pts);
+        let boundary =
+            boundary_edges_to_pcurve(&topo, face.outer_wire(), &surface, &wire_pts, Some(&frame));
+
+        let center = Point3::new(0.5, 0.5, 0.0);
+        let r = 0.2;
+        let circle = Circle3D::new(center, brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let seam = Point3::new(0.7, 0.5, 0.0);
+        let hole = vec![OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(circle),
+            pcurve: brepkit_math::curves2d::Curve2D::Circle(
+                brepkit_math::curves2d::Circle2D::new(frame.project(center), r).unwrap(),
+            ),
+            start_uv: frame.project(seam),
+            end_uv: frame.project(seam),
+            start_3d: seam,
+            end_3d: seam,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }];
+
+        // U-shaped chain; both loose ends dangle inside the hole.
+        let sections = [
+            line_section(Point3::new(0.1, 0.4, 0.0), Point3::new(0.45, 0.4, 0.0)),
+            line_section(Point3::new(0.1, 0.4, 0.0), Point3::new(0.1, 0.6, 0.0)),
+            line_section(Point3::new(0.1, 0.6, 0.0), Point3::new(0.45, 0.6, 0.0)),
+        ];
+        let rescued = plane_internal_line_loops(&sections, &frame, &boundary, &[hole], 1e-7)
+            .expect("chain must be rescued");
+        assert_eq!(rescued.len(), 4, "3 trimmed sections + 1 rim connector");
+        let connector = rescued
+            .iter()
+            .find(|s| matches!(s.curve_3d, EdgeCurve::Circle(_)))
+            .expect("rim connector arc");
+        for p in [connector.start, connector.end] {
+            assert!(
+                ((p - center).length() - r).abs() < 1e-6,
+                "connector anchors on the rim"
+            );
+        }
+        // Trimmed line ends sit exactly on the rim; x = 0.5 - sqrt(r^2 - 0.1^2).
+        let x_rim = 0.5 - (r * r - 0.01_f64).sqrt();
+        for s in &rescued {
+            if matches!(s.curve_3d, EdgeCurve::Line) {
+                for p in [s.start, s.end] {
+                    let on_rim = ((p - center).length() - r).abs() < 1e-6;
+                    let inside = (p - center).length() < r - 1e-6;
+                    assert!(!inside, "no endpoint may remain inside the hole");
+                    if on_rim {
+                        assert!((p.x() - x_rim).abs() < 1e-6);
+                    }
+                }
+            }
+        }
+    }
+
     fn line_section(start: Point3, end: Point3) -> SectionEdge {
         SectionEdge {
             curve_3d: EdgeCurve::Line,
