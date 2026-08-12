@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786537723190,
+  "lastUpdate": 1786538134197,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29159,6 +29159,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25657909,
             "range": "± 114701",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "12eb7949ceb688816659eb22ce02436df8ab377b",
+          "message": "chore(main): release 3.2.29 (#1555)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.29](https://github.com/andymai/brepkit/compare/v3.2.28...v3.2.29)\n(2026-08-12)\n\n\n### Bug Fixes\n\n* **operations:** rewind mis-wound extrude profiles before building\n([#1554](https://github.com/andymai/brepkit/issues/1554))\n([723dad7](https://github.com/andymai/brepkit/commit/723dad71fd39a5b09fd10e820f7705a3aa63ce05))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.29 fixes an extrude reliability bug by rewinding mis-wound\nprofiles in `brepkit-operations`, preventing invalid geometry during\nbuild. Also bumps all workspace crates to 3.2.29.\n\n<sup>Written for commit 40d520ae1a9db170b8d43be8591535bb60153745.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1555?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-12T12:33:35Z",
+          "tree_id": "76317cb093989532c7f57fe80430534f141821cd",
+          "url": "https://github.com/andymai/brepkit/commit/12eb7949ceb688816659eb22ce02436df8ab377b"
+        },
+        "date": 1786538131436,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 516464,
+            "range": "± 19772",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 567201,
+            "range": "± 7120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7142,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 372276,
+            "range": "± 1017",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15145297,
+            "range": "± 22995",
             "unit": "ns/iter"
           }
         ]
