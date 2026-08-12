@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786388632594,
+  "lastUpdate": 1786508256384,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -28457,6 +28457,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26596100,
             "range": "± 41600",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2a2cf8e3168cba749e566f81a77a298b4e7cc828",
+          "message": "chore(main): release 3.2.23 (#1542)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.23](https://github.com/andymai/brepkit/compare/v3.2.22...v3.2.23)\n(2026-08-12)\n\n\n### Bug Fixes\n\n* **algo:** span a rim arc the way the kernel defines it, not the short\nway ([#1540](https://github.com/andymai/brepkit/issues/1540))\n([ed8dfc7](https://github.com/andymai/brepkit/commit/ed8dfc798866b462ecba9587d4cc078674cbaa39))\n* **measure:** count cavity shells in volume, area and centre of mass\n([#1541](https://github.com/andymai/brepkit/issues/1541))\n([5ffdb4a](https://github.com/andymai/brepkit/commit/5ffdb4a1a30de2903f6b4c2ea4ff2c4bfc08c022))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.23 with fixes that improve arc generation and measurement\naccuracy.\n\n- **Bug Fixes**\n- Rim arcs now follow the kernel’s definition instead of the shortest\npath.\n  - Volume, area, and centre of mass now include cavity shells.\n\n<sup>Written for commit a8bf3f1bbec58191997c65298afe43ec9c37d9da.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1542?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-12T04:15:07Z",
+          "tree_id": "53f08b11c22ea33c397483c3ff77fd3d68767fa3",
+          "url": "https://github.com/andymai/brepkit/commit/2a2cf8e3168cba749e566f81a77a298b4e7cc828"
+        },
+        "date": 1786508253211,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 998733,
+            "range": "± 17455",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1084071,
+            "range": "± 2633",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13191,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 719613,
+            "range": "± 1546",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26705960,
+            "range": "± 346122",
             "unit": "ns/iter"
           }
         ]
