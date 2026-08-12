@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.26](https://github.com/andymai/brepkit/compare/v3.2.25...v3.2.26) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** decide closed-edge winding by curve direction, not convention ([#1548](https://github.com/andymai/brepkit/issues/1548)) ([c1702d0](https://github.com/andymai/brepkit/commit/c1702d0f9fcac695aaee677eb2b006857a9def47))
+
 ## [3.2.25](https://github.com/andymai/brepkit/compare/v3.2.24...v3.2.25) (2026-08-12)
 
 
