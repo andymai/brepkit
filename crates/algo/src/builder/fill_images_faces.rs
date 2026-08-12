@@ -1160,13 +1160,43 @@ fn rebuild_face_with_cb_edges(
             if let Some(&cb_edge) = cb_qpair_edges.get(&key)
                 && cb_edge != eid
             {
-                let oriented_start_q = if fwd { qs } else { qe };
-                // If we can't look up the CB edge's start position,
-                // preserve the original orientation rather than
-                // guessing `false`.
-                let new_fwd = cb_start_qs
-                    .get(&cb_edge)
-                    .map_or(fwd, |&cs| cs == oriented_start_q);
+                let new_fwd = if qs == qe {
+                    // Closed rim replaced by the CB circle: endpoints cannot
+                    // orient it (start == end makes the position test read
+                    // "same start" for either traversal), and the CB curve
+                    // can parameterize opposite the original rim (the #1538
+                    // pocket ring: a kept wall's own rim vs the section
+                    // circle). Compare quarter points of the two curves and
+                    // carry the original traversal across the direction map.
+                    let same_dir = (|| {
+                        let orig_curve = curve.as_ref()?;
+                        let sp = topo.vertex(sv).ok()?.point();
+                        let ep = topo.vertex(ev).ok()?.point();
+                        let cbe = topo.edge(cb_edge).ok()?;
+                        let cs3 = topo.vertex(cbe.start()).ok()?.point();
+                        let ce3 = topo.vertex(cbe.end()).ok()?.point();
+                        let (o0, o1) = orig_curve.domain_with_endpoints(sp, ep);
+                        let (b0, b1) = cbe.curve().domain_with_endpoints(cs3, ce3);
+                        let oq = orig_curve.evaluate_with_endpoints(o0 + (o1 - o0) * 0.25, sp, ep);
+                        let bq_same =
+                            cbe.curve()
+                                .evaluate_with_endpoints(b0 + (b1 - b0) * 0.25, cs3, ce3);
+                        let bq_flip =
+                            cbe.curve()
+                                .evaluate_with_endpoints(b0 + (b1 - b0) * 0.75, cs3, ce3);
+                        Some((oq - bq_same).length() <= (oq - bq_flip).length())
+                    })()
+                    .unwrap_or(true);
+                    if same_dir { fwd } else { !fwd }
+                } else {
+                    let oriented_start_q = if fwd { qs } else { qe };
+                    // If we can't look up the CB edge's start position,
+                    // preserve the original orientation rather than
+                    // guessing `false`.
+                    cb_start_qs
+                        .get(&cb_edge)
+                        .map_or(fwd, |&cs| cs == oriented_start_q)
+                };
                 oes.push(OrientedEdge::new(cb_edge, new_fwd));
                 continue;
             }

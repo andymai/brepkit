@@ -1611,11 +1611,22 @@ pub(super) fn split_face_with_internal_loops(
     // the hole plus the hole pieces inside the loop.
     let mut consumed_holes: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut union_hole_by_loop: Vec<Option<Vec<OrientedPCurveEdge>>> = vec![None; loops.len()];
-    if let FaceSurface::Plane { normal, .. } = surface {
-        // Stored UVs on hole wires can be fitted in a foreign frame; build ONE
-        // local frame and project every 3D endpoint through it for all 2D
-        // tests (the pcurve-convention lesson).
-        let frame = PlaneFrame::from_plane_face(*normal, wire_pts);
+    // Stored UVs on section and hole wires can be fitted in a foreign frame;
+    // build ONE local frame and project every 3D endpoint through it for all
+    // 2D tests (the pcurve-convention lesson). This frame also decides the
+    // disc/hole winding normalization below: stored UVs from the FF phase
+    // live in the surface's own parameterization, whose handedness disagrees
+    // with the local frame on a down-facing plane, and a signed area taken in
+    // the wrong frame inverts the winding verdict (the z-interface pocket
+    // ring of #1538: the bottom cap's hole wound backwards while the top
+    // cap's was correct).
+    let plane_frame = if let FaceSurface::Plane { normal, .. } = surface {
+        Some(PlaneFrame::from_plane_face(*normal, wire_pts))
+    } else {
+        None
+    };
+    if let Some(frame) = plane_frame.as_ref() {
+        let frame = frame.clone();
         for (li, loop_edges) in loops.iter_mut().enumerate() {
             let mut hit: Option<usize> = None;
             for (hi, hole) in original_inner_wires.iter().enumerate() {
@@ -1656,7 +1667,40 @@ pub(super) fn split_face_with_internal_loops(
         // Compute signed area in UV. For single-edge closed curves
         // (circles), sample points along the pcurve since start_uv ~= end_uv
         // gives zero area with just the endpoints.
-        let signed_area = if loop_edges.len() == 1 {
+        // On a plane, take the area in the LOCAL frame from 3D points: the
+        // stored UVs come from the surface's own parameterization, whose
+        // handedness can disagree with the frame on a down-facing plane and
+        // invert this verdict. Non-planar faces keep the stored-UV area the
+        // periodic machinery is calibrated to.
+        let signed_area = if let Some(frame) = plane_frame.as_ref() {
+            let mut area = 0.0;
+            for edge in loop_edges.iter() {
+                let (t0, t1) = edge
+                    .curve_3d
+                    .domain_with_endpoints(edge.start_3d, edge.end_3d);
+                let n = if matches!(edge.curve_3d, EdgeCurve::Line) {
+                    1
+                } else {
+                    32
+                };
+                for k in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    let ta = t0 + (t1 - t0) * (k as f64 / n as f64);
+                    #[allow(clippy::cast_precision_loss)]
+                    let tb = t0 + (t1 - t0) * ((k + 1) as f64 / n as f64);
+                    let a3 = edge
+                        .curve_3d
+                        .evaluate_with_endpoints(ta, edge.start_3d, edge.end_3d);
+                    let b3 = edge
+                        .curve_3d
+                        .evaluate_with_endpoints(tb, edge.start_3d, edge.end_3d);
+                    let a = frame.project(a3);
+                    let b = frame.project(b3);
+                    area += (b.x() - a.x()) * (b.y() + a.y());
+                }
+            }
+            area
+        } else if loop_edges.len() == 1 {
             // For single-edge closed curves (circles), sample UV points
             // along the 3D curve and project to UV. The pcurve evaluation
             // gives proper UV coordinates for the full circle.
@@ -1771,11 +1815,21 @@ pub(super) fn split_face_with_internal_loops(
         let hole: Vec<OrientedPCurveEdge> = if let Some(u) = union_hole_by_loop[li].take() {
             // Normalize to hole winding: effective-CW about the effective
             // normal, i.e. stored CW (positive trapezoid area) for an
-            // unreversed parent, stored CCW for a reversed one.
-            let area: f64 = u
-                .iter()
-                .map(|e| (e.end_uv.x() - e.start_uv.x()) * (e.end_uv.y() + e.start_uv.y()))
-                .sum();
+            // unreversed parent, stored CCW for a reversed one. Same local
+            // frame as the disc normalization — stored UVs can be foreign.
+            let area: f64 = if let Some(frame) = plane_frame.as_ref() {
+                u.iter()
+                    .map(|e| {
+                        let a = frame.project(e.start_3d);
+                        let b = frame.project(e.end_3d);
+                        (b.x() - a.x()) * (b.y() + a.y())
+                    })
+                    .sum()
+            } else {
+                u.iter()
+                    .map(|e| (e.end_uv.x() - e.start_uv.x()) * (e.end_uv.y() + e.start_uv.y()))
+                    .sum()
+            };
             let mut u = u;
             if (area < 0.0) != reversed {
                 u.reverse();

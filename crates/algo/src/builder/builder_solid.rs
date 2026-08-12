@@ -2660,10 +2660,37 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             let dup_qs = quantize_point(topo.vertex(dup_edge.start())?.point(), tol);
             let dup_qe = quantize_point(topo.vertex(dup_edge.end())?.point(), tol);
             // Detect reversed vertex order. For closed edges (start == end),
-            // qs == qe for both canonical and duplicate, so the flip condition
-            // would be trivially true. Never flip closed edges.
+            // qs == qe for both canonical and duplicate, so the vertex-order
+            // condition is useless — but two coincident CLOSED edges can still
+            // parameterize in opposite directions (a section-minted circle vs
+            // a kept operand rim whose axis points the other way; the #1538
+            // pocket ring). Decide by comparing quarter points of the actual
+            // curves: same direction lands on the same point, opposite lands
+            // on the mirrored parameter.
             let is_closed = canon_qs == canon_qe;
-            let needs_flip = !is_closed && dup_qs == canon_qe && dup_qe == canon_qs;
+            let needs_flip = if is_closed {
+                let canon_edge = topo.edge(canonical)?;
+                let cs = topo.vertex(canon_edge.start())?.point();
+                let ce = topo.vertex(canon_edge.end())?.point();
+                let ds = topo.vertex(dup_edge.start())?.point();
+                let de = topo.vertex(dup_edge.end())?.point();
+                let (c0, c1) = canon_edge.curve().domain_with_endpoints(cs, ce);
+                let (d0, d1) = dup_edge.curve().domain_with_endpoints(ds, de);
+                let cq = canon_edge
+                    .curve()
+                    .evaluate_with_endpoints(c0 + (c1 - c0) * 0.25, cs, ce);
+                let dq_same =
+                    dup_edge
+                        .curve()
+                        .evaluate_with_endpoints(d0 + (d1 - d0) * 0.25, ds, de);
+                let dq_flip =
+                    dup_edge
+                        .curve()
+                        .evaluate_with_endpoints(d0 + (d1 - d0) * 0.75, ds, de);
+                (cq - dq_flip).length() < (cq - dq_same).length()
+            } else {
+                dup_qs == canon_qe && dup_qe == canon_qs
+            };
             replacements.insert(dup, (canonical, needs_flip));
         }
     }
