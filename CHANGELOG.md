@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.2.23](https://github.com/andymai/brepkit/compare/v3.2.22...v3.2.23) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** span a rim arc the way the kernel defines it, not the short way ([#1540](https://github.com/andymai/brepkit/issues/1540)) ([ed8dfc7](https://github.com/andymai/brepkit/commit/ed8dfc798866b462ecba9587d4cc078674cbaa39))
+* **measure:** count cavity shells in volume, area and centre of mass ([#1541](https://github.com/andymai/brepkit/issues/1541)) ([5ffdb4a](https://github.com/andymai/brepkit/commit/5ffdb4a1a30de2903f6b4c2ea4ff2c4bfc08c022))
+
 ## [3.2.22](https://github.com/andymai/brepkit/compare/v3.2.21...v3.2.22) (2026-08-10)
 
 
