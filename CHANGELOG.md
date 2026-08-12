@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.30](https://github.com/andymai/brepkit/compare/v3.2.29...v3.2.30) (2026-08-12)
+
+
+### Bug Fixes
+
+* **algo:** window open marched sections between non-plane faces ([#1559](https://github.com/andymai/brepkit/issues/1559)) ([c514e33](https://github.com/andymai/brepkit/commit/c514e332f87367f61a0fbc22d316aa8522186efa))
+
 ## [3.2.29](https://github.com/andymai/brepkit/compare/v3.2.28...v3.2.29) (2026-08-12)
 
 
