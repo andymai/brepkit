@@ -280,6 +280,8 @@ fn build_sd_grouping(
         }
     }
 
+    let sd_miss_trace = std::env::var("BK_SD_MISS").is_ok();
+
     // Step 3b (issue #696): geometric containment pass for planar faces.
     // Edge-set hashing alone misses the common boolean-residue pattern where
     // one face is fully contained inside another with a different boundary
@@ -350,6 +352,13 @@ fn build_sd_grouping(
             // interiors) are not overlapping duplicates; a coincident same-source
             // duplicate (same interior) still reaches `planar_faces_overlap`.
             if same_source_complementary_split(sub_faces, i, j, tol) {
+                if sd_miss_trace {
+                    log::debug!(
+                        "SD skip complementary (planar): {:?} vs {:?}",
+                        sub_faces[i].face_id,
+                        sub_faces[j].face_id
+                    );
+                }
                 continue;
             }
             if uf.find(i) == uf.find(j) {
@@ -363,6 +372,12 @@ fn build_sd_grouping(
                 // this group came from geometric containment, not from
                 // boundary-identical edge sets.
                 geometric_overlap_groups.insert(uf.find(i));
+            } else if sd_miss_trace {
+                log::debug!(
+                    "SD miss (planar): {:?} vs {:?}",
+                    sub_faces[i].face_id,
+                    sub_faces[j].face_id
+                );
             }
         }
     }
@@ -398,11 +413,29 @@ fn build_sd_grouping(
                 (Some(si), Some(sj)) => surfaces_same_domain(si, sj, tol),
                 _ => None,
             };
-            let Some(same_dir) = same_dir else { continue };
+            let Some(same_dir) = same_dir else {
+                if sd_miss_trace {
+                    log::debug!(
+                        "SD gate none (analytic): {:?} {:?} vs {:?} {:?}",
+                        sub_faces[i].face_id,
+                        surfaces[i],
+                        sub_faces[j].face_id,
+                        surfaces[j]
+                    );
+                }
+                continue;
+            };
             // Complementary partition regions of one split (same source, distinct
             // interiors) are not overlapping duplicates; a coincident same-source
             // duplicate (same interior) still reaches `analytic_faces_overlap`.
             if same_source_complementary_split(sub_faces, i, j, tol) {
+                if sd_miss_trace {
+                    log::debug!(
+                        "SD skip complementary (analytic): {:?} vs {:?}",
+                        sub_faces[i].face_id,
+                        sub_faces[j].face_id
+                    );
+                }
                 continue;
             }
             if uf.find(i) == uf.find(j) {
@@ -413,6 +446,14 @@ fn build_sd_grouping(
                 let key = (i.min(j), i.max(j));
                 pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
                 geometric_overlap_groups.insert(uf.find(i));
+            } else if sd_miss_trace {
+                log::debug!(
+                    "SD miss (analytic): {:?} {:?} vs {:?} {:?}",
+                    sub_faces[i].face_id,
+                    surfaces[i],
+                    sub_faces[j].face_id,
+                    surfaces[j]
+                );
             }
         }
     }
