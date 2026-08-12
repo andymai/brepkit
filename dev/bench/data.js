@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786565663960,
+  "lastUpdate": 1786566091267,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29645,6 +29645,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26922983,
             "range": "± 98844",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ef8ef3c13af7b21b04598983e0cc1b75e37bc732",
+          "message": "chore(main): release 3.2.31 (#1564)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.31](https://github.com/andymai/brepkit/compare/v3.2.30...v3.2.31)\n(2026-08-12)\n\n\n### Bug Fixes\n\n* **algo:** close hole-dangling fence loops and weave them into the hole\n([#1563](https://github.com/andymai/brepkit/issues/1563))\n([71951c6](https://github.com/andymai/brepkit/commit/71951c6f51b6c6354af09d078dc4b0e0a0cbcfd4))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases 3.2.31 and bumps all `brepkit-*` crate versions. Fixes hole\nprocessing by closing dangling fence loops and weaving them into hole\nboundaries; previously some loops remained open and detached.\n\n- Migration: update all `brepkit-*` dependencies to `3.2.31`.\n- Validate results where holes and fences interact; closed loops may\nchange edge/face counts and downstream operations.\n\n<sup>Written for commit ce4362196a56449917b34c5d74a8de4777a4afd8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1564?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-12T20:18:49Z",
+          "tree_id": "776a61b43b0b291c998c2b81fcfac73d2ebb0628",
+          "url": "https://github.com/andymai/brepkit/commit/ef8ef3c13af7b21b04598983e0cc1b75e37bc732"
+        },
+        "date": 1786566087987,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 961261,
+            "range": "± 3822",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046068,
+            "range": "± 15380",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11978,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 714107,
+            "range": "± 6228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25710857,
+            "range": "± 112246",
             "unit": "ns/iter"
           }
         ]
