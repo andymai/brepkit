@@ -1,0 +1,23 @@
+crates/math/src/analytic_intersection.rs
+  s_02fafbea412853::t_af24fc8c41191e 1554-1556
+  s_02fafbea412853::t_c1ee7055befc15 1678-1681
+  s_02fafbea412853::t_4a2173095efda9 1479
+crates/algo/src/pave_filler/phase_ff.rs
+  s_02fafbea412853::t_4d46c4a47c5f0a 3303-3308
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5635184d521f75bb334fcd2bea90ae076274454b",
+  "prompts": {},
+  "sessions": {
+    "s_02fafbea412853": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6e3ecbbc-eee7-43fd-9817-b3e48da79091",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
