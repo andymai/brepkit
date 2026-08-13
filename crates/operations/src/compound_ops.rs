@@ -74,7 +74,17 @@ pub fn fuse_all(
         // — fuse it in ONE GFA arrangement (via `fuse_cluster`, N-way with a
         // sequential fallback) instead of a pairwise reduction that re-processes
         // a growing accumulator O(n²).
-        group_results.push(crate::boolean::fuse_cluster(topo, &group_solids)?);
+        //
+        // A 2-solid group takes the pairwise contract directly: fuse_cluster's
+        // mesh-fallback bail exists to keep a degraded fuse from poisoning the
+        // REST of a batch, but a pair has no rest — erroring only makes the
+        // caller redo this exact fuse pairwise and pay the fallback twice
+        // (brepjs's fuseAllBisect retry did exactly that on every degraded
+        // pair fuse).
+        group_results.push(match *group_solids.as_slice() {
+            [a, b] => crate::boolean::boolean(topo, crate::boolean::BooleanOp::Fuse, a, b)?,
+            _ => crate::boolean::fuse_cluster(topo, &group_solids)?,
+        });
     }
 
     if group_results.len() == 1 {
