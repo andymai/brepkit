@@ -1475,6 +1475,9 @@ fn try_algebraic_intersection(
 /// the cones do not meet (parallel radius lines or a crossing on the wrong
 /// nappe), and `None` for the identical-cone overlap or a degenerate
 /// (near-flat) cone — both of which fall through to the general path.
+/// Parallel-but-offset axes with equal half-angle tangents reduce to a
+/// radical-plane conic (`offset_parallel_cone_cone`); other offset
+/// configurations defer to the marcher with `None`.
 ///
 /// # Errors
 ///
@@ -1497,7 +1500,7 @@ pub fn exact_cone_cone(
     let delta_v = Vec3::new(delta.x(), delta.y(), delta.z());
     let along = delta_v.dot(axis);
     if (delta_v - axis * along).length() > 1e-8 {
-        return Ok(None); // Parallel but offset axes — not coaxial.
+        return offset_parallel_cone_cone(c1, c2);
     }
 
     let (s1, s2) = (c1.half_angle().sin(), c2.half_angle().sin());
@@ -1532,6 +1535,84 @@ pub fn exact_cone_cone(
     );
     let circle = Circle3D::new(center, axis, radius)?;
     Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
+}
+
+/// Parallel-axis (or anti-parallel), offset-apex cones with equal half-angle
+/// tangents: subtracting the two quadric equations cancels both the radial
+/// and the axial quadratic terms (their coefficients depend only on
+/// `tan²(half_angle)`), so every intersection point lies on a plane — the
+/// degenerate member of the quadric pencil — and plane ∩ cone is an exact
+/// conic. The gridfinity spacer lip fuse hits this exactly: opposed 45°
+/// corner cones offset 0.25mm, which the marcher shreds into ~64 closed
+/// micro-loops per pair (#1570). Unequal angles keep a genuine quadratic
+/// term, and an unbounded section (hyperbola/parabola) has no closed-form
+/// win over the marcher — both defer with `None`.
+fn offset_parallel_cone_cone(
+    c1: &ConicalSurface,
+    c2: &ConicalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    if c1.half_angle().sin().abs() < 1e-12 || c2.half_angle().sin().abs() < 1e-12 {
+        return Ok(None); // Degenerate (near-flat) cone, as in the coaxial path.
+    }
+    let t1 = c1.half_angle().tan();
+    let t2 = c2.half_angle().tan();
+    if !t1.is_finite() || !t2.is_finite() {
+        return Ok(None);
+    }
+    if (t1 - t2).abs() > 1e-9 * (1.0 + t1.abs().max(t2.abs())) {
+        return Ok(None);
+    }
+
+    let w = c1.axis();
+    let apex1 = c1.apex();
+    let apex2 = c2.apex();
+    let delta = apex2 - apex1;
+    let delta_v = Vec3::new(delta.x(), delta.y(), delta.z());
+    let s = delta_v.dot(w);
+    let tm = 0.5 * (t1 + t2);
+    let k = 1.0 + tm * tm;
+
+    // In the apex1 frame each cone is |P|² − k(P·w)² = 0 (shifted by δ for
+    // cone 2; the axis SIGN drops out since only (P·w)² appears). Their
+    // difference: P·(2δ − 2ksw) = |δ|² − ks².
+    let n = (delta_v - w * (k * s)) * 2.0;
+    let n_len = n.length();
+    if n_len < 1e-12 {
+        return Ok(None);
+    }
+    let n_hat = n * (1.0 / n_len);
+    let d = (dot_np(n, apex1) + delta_v.dot(delta_v) - k * s * s) / n_len;
+
+    // `exact_plane_cone` already rejects sections on cone 1's phantom nappe;
+    // cone 2's nappe must be checked here. A conic on the shared quadric
+    // pencil cannot cross between nappes except exactly through apex 2, so
+    // sampled quarter-points either all pass or all fail; a mixed verdict
+    // means an apex-touching degeneracy — defer to the marcher.
+    let axis2 = c2.axis();
+    let scale = 1.0 + delta_v.length();
+    let mut out = Vec::new();
+    for curve in exact_plane_cone(c1, n_hat, d)? {
+        let samples: Vec<Point3> = match &curve {
+            ExactIntersectionCurve::Circle(c) => (0..4)
+                .map(|i| crate::traits::ParametricCurve::evaluate(c, TAU * f64::from(i) / 4.0))
+                .collect(),
+            ExactIntersectionCurve::Ellipse(e) => (0..4)
+                .map(|i| crate::traits::ParametricCurve::evaluate(e, TAU * f64::from(i) / 4.0))
+                .collect(),
+            ExactIntersectionCurve::Points(_) => return Ok(None),
+        };
+        let on_real_nappe = |p: &Point3| {
+            let rel = *p - apex2;
+            Vec3::new(rel.x(), rel.y(), rel.z()).dot(axis2) >= -1e-9 * scale
+        };
+        let hits = samples.iter().filter(|p| on_real_nappe(p)).count();
+        match hits {
+            0 => {}
+            4 => out.push(curve),
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some(out))
 }
 
 /// Exact coaxial cone-cylinder intersection: returns the shared circle.
@@ -1594,9 +1675,10 @@ pub fn exact_cone_cylinder(
     Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
 }
 
-/// Algebraic coaxial cone-cone intersection (NURBS form for the general
-/// bounded path). Delegates to [`exact_cone_cone`] and samples each exact
-/// circle into an interpolated NURBS `IntersectionCurve`, mirroring the
+/// Algebraic cone-cone intersection (NURBS form for the general bounded
+/// path). Delegates to [`exact_cone_cone`] and samples each exact conic
+/// (coaxial circle or offset-parallel radical-plane ellipse) into an
+/// interpolated NURBS `IntersectionCurve`, mirroring the
 /// sphere-cylinder algebraic path. phase FF prefers the exact circle form
 /// directly (so the section edge links to the coincident boundary), but a
 /// caller of `intersect_analytic_analytic_bounded` still gets one clean
@@ -1610,22 +1692,30 @@ fn algebraic_cone_cone(
     };
     let mut curves = Vec::new();
     for exact in exacts {
-        let ExactIntersectionCurve::Circle(circle) = exact else {
-            continue;
-        };
         let n_samples = 33;
         let mut positions = Vec::with_capacity(n_samples);
         let mut points = Vec::with_capacity(n_samples);
         #[allow(clippy::cast_precision_loss)]
         for i in 0..n_samples {
             let theta = TAU * i as f64 / (n_samples - 1) as f64;
-            let pt = crate::traits::ParametricCurve::evaluate(&circle, theta);
+            let pt = match &exact {
+                ExactIntersectionCurve::Circle(circle) => {
+                    crate::traits::ParametricCurve::evaluate(circle, theta)
+                }
+                ExactIntersectionCurve::Ellipse(ellipse) => {
+                    crate::traits::ParametricCurve::evaluate(ellipse, theta)
+                }
+                ExactIntersectionCurve::Points(_) => break,
+            };
             positions.push(pt);
             points.push(IntersectionPoint {
                 point: pt,
                 param1: (0.0, 0.0),
                 param2: (0.0, 0.0),
             });
+        }
+        if positions.is_empty() {
+            continue;
         }
         let degree = 3.min(positions.len() - 1);
         let curve = interpolate(&positions, degree)?;
@@ -2511,6 +2601,110 @@ mod tests {
 
         let curves = intersect_plane_cone(&cone, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
         assert!(!curves.is_empty(), "should find intersection with cone");
+    }
+
+    /// The 1u gridfinity spacer lip fuse corner (#1570): the body's lip
+    /// recess cone (45 deg, opening downward) meets the tool's lip cone
+    /// (45 deg, opening upward) with axes offset 0.25mm in x and y. Equal
+    /// half-angle tangents put the whole intersection on the radical plane,
+    /// so the section is one exact ellipse; the marcher shredded this into
+    /// ~64 closed micro-loops per pair.
+    #[test]
+    fn offset_parallel_equal_angle_cones_give_one_exact_ellipse() {
+        let c1 = ConicalSurface::new(
+            Point3::new(
+                -16.999_999_999_999_975,
+                -16.999_999_999_999_975,
+                5.849_999_999_999_951,
+            ),
+            Vec3::new(0.0, 0.0, -1.0),
+            0.785_398_163_397_433_5,
+        )
+        .unwrap();
+        let c2 = ConicalSurface::new(
+            Point3::new(
+                -16.750_000_000_000_036,
+                -16.750_000_000_000_018,
+                0.749_999_999_999_881,
+            ),
+            Vec3::new(0.0, 0.0, 1.0),
+            0.785_398_163_397_467_6,
+        )
+        .unwrap();
+
+        let curves = exact_cone_cone(&c1, &c2)
+            .unwrap()
+            .expect("offset parallel equal-angle cones must take the radical-plane path");
+        assert_eq!(curves.len(), 1, "expected exactly one section conic");
+        assert!(
+            matches!(curves[0], ExactIntersectionCurve::Ellipse(_)),
+            "expected an ellipse section, got {:?}",
+            curves[0]
+        );
+        let ExactIntersectionCurve::Ellipse(ellipse) = &curves[0] else {
+            return;
+        };
+
+        // Every sample must lie on BOTH cones: distance to the axis equals
+        // tan(half_angle) times the axial distance from the apex, on the
+        // real nappe of each.
+        for i in 0..16 {
+            let p = crate::traits::ParametricCurve::evaluate(ellipse, TAU * f64::from(i) / 16.0);
+            for (cone, label) in [(&c1, "c1"), (&c2, "c2")] {
+                let rel = p - cone.apex();
+                let rel_v = Vec3::new(rel.x(), rel.y(), rel.z());
+                let axial = rel_v.dot(cone.axis());
+                let radial = (rel_v - cone.axis() * axial).length();
+                assert!(
+                    axial > 0.0,
+                    "{label}: sample on phantom nappe (axial {axial})"
+                );
+                let expect = cone.half_angle().tan() * axial;
+                assert!(
+                    (radial - expect).abs() < 1e-9,
+                    "{label}: sample off surface by {}",
+                    (radial - expect).abs()
+                );
+            }
+        }
+    }
+
+    /// Opposed cones whose real nappes occupy disjoint half-spaces share a
+    /// radical-plane conic only on the phantom nappe — the exact path must
+    /// report a definitive empty intersection, not defer to the marcher.
+    #[test]
+    fn offset_parallel_cones_opening_apart_have_no_real_intersection() {
+        let c1 = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let c2 = ConicalSurface::new(
+            Point3::new(0.25, 0.25, 20.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let curves = exact_cone_cone(&c1, &c2)
+            .unwrap()
+            .expect("radical-plane path");
+        assert!(curves.is_empty(), "disjoint nappes must yield no curves");
+    }
+
+    /// Unequal half-angles keep a quadratic term in the pencil — no plane
+    /// reduction exists, so the exact path must defer to the marcher.
+    #[test]
+    fn offset_parallel_cones_with_unequal_angles_defer() {
+        let c1 = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let c2 = ConicalSurface::new(Point3::new(0.25, 0.25, 0.5), Vec3::new(0.0, 0.0, 1.0), 0.6)
+            .unwrap();
+        assert!(exact_cone_cone(&c1, &c2).unwrap().is_none());
     }
 
     #[test]

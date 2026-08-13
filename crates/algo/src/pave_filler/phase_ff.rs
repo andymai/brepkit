@@ -3300,25 +3300,43 @@ fn compute_raw_curves(
             // shared cap rim. Emit it as an exact Circle so the closed-circle
             // handling (seam adoption + `link_existing`) treats it as the
             // existing shared boundary edge instead of adopting a fresh,
-            // redundant section edge. Non-coaxial cones (None) fall through to
-            // the general marcher.
+            // redundant section edge. Parallel/anti-parallel offset axes with
+            // equal half-angles reduce to a radical-plane conic and arrive as
+            // an exact Ellipse (the gridfinity spacer lip's opposed corner
+            // cones, #1570 — the marcher shredded that near-tangent quartic
+            // into dozens of closed micro-loops). Other configurations (None)
+            // fall through to the general marcher.
             match analytic_intersection::exact_cone_cone(c1, c2)? {
                 Some(exacts) => {
                     let mut results = Vec::new();
                     for exact in exacts {
-                        if let analytic_intersection::ExactIntersectionCurve::Circle(circle) = exact
-                        {
-                            let bbox = circle_bbox(&circle);
-                            let domain = (0.0, std::f64::consts::TAU);
-                            let p_start = ParametricCurve::evaluate(&circle, domain.0);
-                            let p_end = ParametricCurve::evaluate(&circle, domain.1);
-                            results.push(RawCurve {
-                                curve: EdgeCurve::Circle(circle),
-                                bbox,
-                                t_range: domain,
-                                p_start,
-                                p_end,
-                            });
+                        let domain = (0.0, std::f64::consts::TAU);
+                        match exact {
+                            analytic_intersection::ExactIntersectionCurve::Circle(circle) => {
+                                let bbox = circle_bbox(&circle);
+                                let p_start = ParametricCurve::evaluate(&circle, domain.0);
+                                let p_end = ParametricCurve::evaluate(&circle, domain.1);
+                                results.push(RawCurve {
+                                    curve: EdgeCurve::Circle(circle),
+                                    bbox,
+                                    t_range: domain,
+                                    p_start,
+                                    p_end,
+                                });
+                            }
+                            analytic_intersection::ExactIntersectionCurve::Ellipse(ellipse) => {
+                                let bbox = ellipse_bbox(&ellipse);
+                                let p_start = ParametricCurve::evaluate(&ellipse, domain.0);
+                                let p_end = ParametricCurve::evaluate(&ellipse, domain.1);
+                                results.push(RawCurve {
+                                    curve: EdgeCurve::Ellipse(ellipse),
+                                    bbox,
+                                    t_range: domain,
+                                    p_start,
+                                    p_end,
+                                });
+                            }
+                            analytic_intersection::ExactIntersectionCurve::Points(_) => {}
                         }
                     }
                     Ok(results)

@@ -182,6 +182,22 @@ fn main() {
     describe(&topo, a, "A");
     describe(&topo, b, "B");
 
+    if std::env::var("FACE_DUMP").is_ok() {
+        for (sid, label) in [(a, "A"), (b, "B")] {
+            for fid in solid_faces(&topo, sid).unwrap() {
+                let face = topo.face(fid).unwrap();
+                let s = face.surface();
+                if s.is_analytic() || matches!(s, brepkit_topology::face::FaceSurface::Plane { .. })
+                {
+                    println!("{label} {fid:?} {s:?}");
+                } else {
+                    println!("{label} {fid:?} nurbs");
+                }
+            }
+        }
+        return;
+    }
+
     let bop = match op.as_str() {
         "cut" => brepkit_algo::bop::BooleanOp::Cut,
         "intersect" => brepkit_algo::bop::BooleanOp::Intersect,
