@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786601664401,
+  "lastUpdate": 1786603670022,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30185,6 +30185,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25532931,
             "range": "± 32280",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "04385a24f1719e742b6a69dd5dbb2e7afe9936dd",
+          "message": "chore(algo): trace SD selection decisions and analytic overlap spans (#1576)\n\n## Summary\n- `BK_SD_SEL` logs each same-domain pair's faces, orientation flag,\nrepresentative, and the keep/drop verdict at selection time.\n- `BK_SD_AREA` on the analytic (coaxial cylinder/cone) overlap pass logs\nthe unwrapped `(arc-length, axial)` spans, the chosen periodic shift,\ncontainment flags, and clip areas.\n- Log-only, both env-gated; no behavior change.\n\nThese two traces exonerated SD for the spacer lip fuse residue (#1570\ntail): the wall-strip pairs are detected by edge-set hash and resolved\nkeep-A/drop-B correctly, and every analytic candidate pair is a\ngenuinely disjoint stacked band. The residue is downstream (a missing\ninner-skirt wall in the selected face set).\n\n## Test plan\n- `cargo test -p brepkit-algo` green; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nTraces same-domain (SD) selection decisions and analytic overlap spans\nto aid debugging. No behavior change; logs emit only when BK_SD_SEL or\nBK_SD_AREA is set.\n\n- With BK_SD_SEL: logs op, face IDs for A/B, same-orientation flag,\nrepresentative face, and the keep/rep/drop verdict for each SD pair.\n- With BK_SD_AREA: during analytic (coaxial cylinder/cone) overlap, logs\nunwrapped spans (arc-length, axial) for each polygon, chosen periodic\nshift, containment flags, intersection area, and per-face areas.\n- Default off; enable by setting BK_SD_SEL and/or BK_SD_AREA in the\nenvironment.\n\n<sup>Written for commit 9c5e0257c268401963ec08f82cccb3589cf6e90b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1576?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T06:45:18Z",
+          "tree_id": "db77e4adc1062d641a3e10d634fdd386d47187a3",
+          "url": "https://github.com/andymai/brepkit/commit/04385a24f1719e742b6a69dd5dbb2e7afe9936dd"
+        },
+        "date": 1786603667414,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 957968,
+            "range": "± 1958",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1038017,
+            "range": "± 1875",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11738,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706905,
+            "range": "± 15307",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25406656,
+            "range": "± 30751",
             "unit": "ns/iter"
           }
         ]
