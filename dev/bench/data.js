@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786653757768,
+  "lastUpdate": 1786655314074,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30887,6 +30887,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25265178,
             "range": "± 41698",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a0c27d168cc19d5b959e32d8511ac48f3cf6479",
+          "message": "docs(roadmap): close the 2x2 label-bracket row on the 3.2.37 matrix (#1589)\n\nCollapses the OPEN dig row into a one-line Closed entry per roadmap\ndoctrine, now that the fix (#1587, released as 3.2.37) is confirmed by a\nsame-day tool matrix: the row reads 34 vs 66ms (0.52x, was 2.3x slower),\naggregate 0.63x with brepkit faster on 24 of 26 rows, 0 non-manifold\nscenarios vs the reference's 5. The remaining reference-led rows (bp 6x4\nmagnets 1.10x, 4x4 mag no-lip 1.06x) take the OPEN slot as a noise-band\nresidual watch.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCloses the 2x2 label-bracket performance row in the roadmap based on the\nreleased 3.2.37 matrix. Replaces the prior OPEN diagnostic with a\none-line Closed entry and surfaces the remaining bin/baseplate residuals\nas noise-band watches.\n\n- Replaces “scenario-first 2.3x slower” with “Bin/baseplate perf\nresiduals: bp 6x4 magnets 1.10x, 4x4 mag no-lip 1.06x” in the status\ntable.\n- Adds the Closed entry with confirmed metrics: 34 vs 66ms (0.52x; was\n2.3x slower), aggregate 0.63x, faster 24/26, non‑manifold 0 vs 5.\n- Captures the kernel root and fix for posterity: collinear-overlap\nwindow splitting and riding-piece drop in `integrate_holes_plane`, and\npairwise contract for 2‑solid `fuse_all` groups; documents the\neliminated `boolean` mesh fallback double-billing.\n\n<sup>Written for commit 3083cb7d75bfb3e49292e8d0477ae6157bbac3bf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1589?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T14:06:15-07:00",
+          "tree_id": "3c150367a3390c3b7eeebe3e55458832de8d0cc5",
+          "url": "https://github.com/andymai/brepkit/commit/8a0c27d168cc19d5b959e32d8511ac48f3cf6479"
+        },
+        "date": 1786655310893,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 812959,
+            "range": "± 1933",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 853909,
+            "range": "± 972",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10227,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 559114,
+            "range": "± 2677",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21090218,
+            "range": "± 108735",
             "unit": "ns/iter"
           }
         ]
