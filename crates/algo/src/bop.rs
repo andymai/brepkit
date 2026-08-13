@@ -162,6 +162,25 @@ fn apply_sd_selection(
     for pair in sd_pairs {
         let sf_a = &sub_faces[pair.idx_a];
 
+        if std::env::var("BK_SD_SEL").is_ok() {
+            log::debug!(
+                "SD select {:?}: a={:?} b={:?} same_ori={} rep={:?} -> {}",
+                op,
+                sub_faces[pair.idx_a].face_id,
+                sub_faces[pair.idx_b].face_id,
+                pair.same_orientation,
+                sub_faces[pair.representative].face_id,
+                if same_ori_needed == pair.same_orientation {
+                    if op == BooleanOp::Cut {
+                        "keep A"
+                    } else {
+                        "keep rep"
+                    }
+                } else {
+                    "drop both"
+                }
+            );
+        }
         if same_ori_needed == pair.same_orientation {
             // Orientations match what the operation needs:
             // - Fuse + same-ori: keep the larger (containing) face for a
