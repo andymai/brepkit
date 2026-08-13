@@ -75,6 +75,36 @@ fn seg_cross_param(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<f64
     (t > 1e-6 && t < 1.0 - 1e-6 && u > -1e-6 && u < 1.0 + 1e-6).then_some(t)
 }
 
+/// Overlap span `[ta, tb]` (parameters along `a0->a1`, clamped to `[0,1]`)
+/// where segment `a` rides collinearly on segment `b`: parallel within the
+/// same near-parallel rejection band as [`seg_cross_param`], on the same
+/// supporting line within a weld-scale offset, overlapping by more than a
+/// parameter sliver. `None` otherwise.
+fn collinear_overlap_span(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<(f64, f64)> {
+    let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
+    let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
+    let len2 = rx.mul_add(rx, ry * ry);
+    if len2 < 1e-18 {
+        return None;
+    }
+    let scale = (rx.hypot(ry) * sx.hypot(sy)).max(f64::MIN_POSITIVE);
+    if rx.mul_add(sy, -(ry * sx)).abs() > 1e-9 * scale {
+        return None;
+    }
+    let len = len2.sqrt();
+    let off = |px: f64, py: f64| ((px - a0.x()) * ry - (py - a0.y()) * rx).abs() / len;
+    if off(b0.x(), b0.y()) > 1e-6 || off(b1.x(), b1.y()) > 1e-6 {
+        return None;
+    }
+    let t_of = |px: f64, py: f64| ((px - a0.x()) * rx + (py - a0.y()) * ry) / len2;
+    let (mut ta, mut tb) = (t_of(b0.x(), b0.y()), t_of(b1.x(), b1.y()));
+    if ta > tb {
+        std::mem::swap(&mut ta, &mut tb);
+    }
+    let (ta, tb) = (ta.max(0.0), tb.min(1.0));
+    (tb - ta > 1e-6).then_some((ta, tb))
+}
+
 /// Split section edges at interior T-junctions with other sections.
 ///
 /// `all_edges[section_start..]` holds the section edges as consecutive
@@ -630,10 +660,28 @@ fn integrate_holes_plane(
         let s0 = frame.project(s.start);
         let s1 = frame.project(s.end);
         let mut ts: Vec<f64> = vec![0.0, 1.0];
+        // Spans of this section that ride collinearly ON a hole edge. A
+        // window inside such a span has a boundary point for a midpoint,
+        // which the interior polygon test below cannot classify — the
+        // verdict flips with ray direction, so of a mirrored pair of wall
+        // cuts one reads inside and the other outside (the label-bracket
+        // finger fuse). Split at the overlap ends and drop the riding
+        // piece explicitly: the hole edge itself already bounds the
+        // arrangement there, and emitting a duplicate would recreate the
+        // parallel-twin hazard the dedup above guards against.
+        let mut riding: Vec<(f64, f64)> = Vec::new();
         for (b0, b1, _, _) in &hole_segs {
             if let Some(t) = seg_cross_param(s0, s1, *b0, *b1) {
                 ts.push(t);
                 any_crossing = true;
+            } else if let Some((ta, tb)) = collinear_overlap_span(s0, s1, *b0, *b1) {
+                for t in [ta, tb] {
+                    if t > 1e-6 && t < 1.0 - 1e-6 {
+                        ts.push(t);
+                        any_crossing = true;
+                    }
+                }
+                riding.push((ta, tb));
             }
         }
         ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -641,6 +689,9 @@ fn integrate_holes_plane(
         for w in ts.windows(2) {
             let (ta, tb) = (w[0], w[1]);
             let tm = 0.5 * (ta + tb);
+            if riding.iter().any(|&(a, b)| tm >= a && tm <= b) {
+                continue; // rides the hole boundary — the hole edge covers it
+            }
             let mid = Point2::new(
                 s0.x() + (s1.x() - s0.x()) * tm,
                 s0.y() + (s1.y() - s0.y()) * tm,
