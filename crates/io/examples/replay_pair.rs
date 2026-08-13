@@ -497,8 +497,9 @@ fn main() {
     }
 
     // FUSE_ALL=1 replays the wasm `fuseAll` path (compound_ops::fuse_all over
-    // {A, B}), which routes through fuse_cluster and REJECTS a mesh-fallback
-    // result where the pairwise `boolean` accepts it.
+    // {A, B}). A 2-solid group takes the pairwise contract (fallback accepted);
+    // 3+ solid clusters route through fuse_cluster, whose mesh-fallback bail
+    // rejects a degraded fuse to protect the rest of the batch.
     if std::env::var("FUSE_ALL").is_ok() {
         println!("-- compound_ops::fuse_all {{A, B}} --");
         let compound = topo.add_compound(brepkit_topology::compound::Compound::new(vec![a, b]));

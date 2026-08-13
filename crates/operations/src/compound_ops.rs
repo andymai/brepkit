@@ -81,8 +81,8 @@ pub fn fuse_all(
         // caller redo this exact fuse pairwise and pay the fallback twice
         // (brepjs's fuseAllBisect retry did exactly that on every degraded
         // pair fuse).
-        group_results.push(match *group_solids.as_slice() {
-            [a, b] => crate::boolean::boolean(topo, crate::boolean::BooleanOp::Fuse, a, b)?,
+        group_results.push(match group_solids.as_slice() {
+            &[a, b] => crate::boolean::boolean(topo, crate::boolean::BooleanOp::Fuse, a, b)?,
             _ => crate::boolean::fuse_cluster(topo, &group_solids)?,
         });
     }
