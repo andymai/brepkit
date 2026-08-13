@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786578737773,
+  "lastUpdate": 1786579694746,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29861,6 +29861,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25594554,
             "range": "± 303024",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b009ba8245e58085a752bc0d56d8f23f82940896",
+          "message": "docs(roadmap): circleinsert chain closed in 3.2.32 (#1569)\n\nRecords the close: the #1538 circleinsert socket fuse went from free 84\n/ over 4 to 0 / 0 across four releases (3.2.29 extrude winding + chamfer\nkeep-side, 3.2.30 open-curve windowing, 3.2.31 hole-dangling rescue +\nrim-tangent union, 3.2.32 analytic classifier holes), with the strict\nvalidation pin active. Also fences the vote-layer rule search (formally\ninseparable flip points) and notes the pending tool-side re-measure.\nDocs only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments that the circleinsert socket‑fuse chain is fully closed in\n3.2.32: the last 4 free edges were a classifier false negative on holed\nplanes, now fixed by analytic circular hole containment; chain goes from\n84 free / 4 over to 0 / 0. This matters for validation parity and\nremoves the need to tweak vote-layer rules.\n\n- Updates the `#1538` roadmap row to record the four‑release arc and the\n3.2.32 fix (analytic hole classifier) with strict pin\n`circleinsert_socket_fuse_is_strictly_valid` active.\n- Explicitly advises against resuming vote‑layer rule changes for\non‑plane samples; the flip points are inseparable at that resolution.\n- Notes pending tool‑side re‑measure on 3.2.32 and that branch\n`fix/doubled-faces-same-surface-gate` remains parked/unshipped.\n\n<sup>Written for commit 75edca99b8b7600d742539496822f3622fab7c69.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1569?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T00:05:21Z",
+          "tree_id": "e3b8a8593cd68c1b6cfe0f0b54dba393ec37b19e",
+          "url": "https://github.com/andymai/brepkit/commit/b009ba8245e58085a752bc0d56d8f23f82940896"
+        },
+        "date": 1786579691582,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 954309,
+            "range": "± 2012",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1041880,
+            "range": "± 33890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12071,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 711814,
+            "range": "± 8600",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25601896,
+            "range": "± 51096",
             "unit": "ns/iter"
           }
         ]
