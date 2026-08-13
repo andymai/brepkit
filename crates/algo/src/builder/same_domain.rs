@@ -1474,6 +1474,30 @@ fn analytic_faces_overlap(
     let area_i = super::classify_2d::signed_area_2d(&poly_i).abs();
     let area_j = super::classify_2d::signed_area_2d(&poly_j).abs();
     let smaller = area_i.min(area_j);
+    if std::env::var("BK_SD_AREA").is_ok() {
+        let span = |poly: &[brepkit_math::vec::Point2]| {
+            let (mut ulo, mut uhi, mut vlo, mut vhi) = (
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+            );
+            for p in poly {
+                ulo = ulo.min(p.x());
+                uhi = uhi.max(p.x());
+                vlo = vlo.min(p.y());
+                vhi = vhi.max(p.y());
+            }
+            (ulo, uhi, vlo, vhi)
+        };
+        log::debug!(
+            "SD area (analytic) {:?}x{:?}: span_i={:?} span_j={:?} shift={best_shift:.3} ip_i_in_j={ip_i_in_j} ip_j_in_i={ip_j_in_i} inter={overlap_area:.4} area_i={area_i:.3} area_j={area_j:.3}",
+            sub_faces[i].face_id,
+            sub_faces[j].face_id,
+            span(&poly_i),
+            span(&poly_j)
+        );
+    }
     smaller > tol.linear_sq() && overlap_area > smaller * 0.5
 }
 
