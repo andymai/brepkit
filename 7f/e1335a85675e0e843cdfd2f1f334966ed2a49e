@@ -1,0 +1,75 @@
+crates/io/tests/data/bp64_pocket_tool_15.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_18.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_9.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_11.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_23.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_10.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_20.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_13.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_22.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/bp64_pocket_compound_cut_inmem.rs
+  s_5511e9ebcd4d22::t_198f38ec3ed584 75-78
+  s_5511e9ebcd4d22::t_553b723c0fa50c 1-74,79-80,82-84
+  s_5511e9ebcd4d22::t_b90ce83e44bedf 81
+crates/io/tests/data/bp64_pocket_tool_16.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_17.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_8.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_5.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_14.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_21.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_4.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_6.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_19.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/operations/src/boolean/mod.rs
+  s_5511e9ebcd4d22::t_da874c8ce8ecac 1059-1075,1082-1089
+  s_5511e9ebcd4d22::t_f944d636025111 1076-1081
+  s_5511e9ebcd4d22::t_c16f231bf8ee1b 946-966,977-989,992-999
+crates/io/tests/data/bp64_pocket_tool_12.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_slab.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_24.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_3.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_2.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_7.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+crates/io/tests/data/bp64_pocket_tool_1.bin
+  s_5511e9ebcd4d22::t_f311a750be310f 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7fe1335a85675e0e843cdfd2f1f334966ed2a49e",
+  "prompts": {},
+  "sessions": {
+    "s_5511e9ebcd4d22": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71b94051-2c50-4fd2-8261-b5d80b549276",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
