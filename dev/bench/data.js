@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786603670022,
+  "lastUpdate": 1786606498843,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30239,6 +30239,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25406656,
             "range": "± 30751",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "28eaf739d199c5818d051efe0d6ab9a5380bfdde",
+          "message": "docs(roadmap): spacer residue root mapped to coincident-coplanar hole probes (#1577)\n\nRoadmap maintenance for the #1570 tail: the SD asymmetric-fragmentation\nframing is refuted by the BK_SD_SEL/BK_SD_AREA traces (#1575/#1576) —\ndetection and selection are correct. The true root is\n`classify_coincident_coplanar`'s depth probes sampling an annular\nsub-face's own hole (the open foot cavity), declaring the buried ring\nOutside. The candidate fix is parked on `fix/coplanar-probe-own-region`\n(not mergeable yet: the corner bits still misclassify and shell assembly\nfails); the row records the exact next probes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap entry for #1570 to reflect the true root cause of\nthe spacer residue. The prior SD asymmetric-fragmentation hypothesis is\nrefuted; `classify_coincident_coplanar` depth probes sampled an annular\nsub-face’s own hole and marked the buried ring Outside. The entry notes\na parked fix on `fix/coplanar-probe-own-region` and a corner-bit\nclassification blocker.\n\n- One-line docs change in `.claude/skills/roadmap/SKILL.md`; no runtime\nimpact.\n- Confirms SD detection/selection correctness via\n`BK_SD_SEL`/`BK_SD_AREA`; adds classifier probe flags `BK_CLS`/`BK_COP`.\n- Records next steps and that the fix branch is not mergeable until\ncorner bits classify correctly.\n\n<sup>Written for commit 74de6cfbae6db70bc7edaced7e40079d99d6cc9b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1577?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T07:32:11Z",
+          "tree_id": "73a0cfe1bea624d303f0be44403dd390b88a7f59",
+          "url": "https://github.com/andymai/brepkit/commit/28eaf739d199c5818d051efe0d6ab9a5380bfdde"
+        },
+        "date": 1786606495586,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 790368,
+            "range": "± 12861",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 864505,
+            "range": "± 12339",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10133,
+            "range": "± 424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 580028,
+            "range": "± 6599",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21114378,
+            "range": "± 507308",
             "unit": "ns/iter"
           }
         ]
