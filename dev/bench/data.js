@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786641141181,
+  "lastUpdate": 1786643213375,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30617,6 +30617,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21527055,
             "range": "± 133093",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d4b0f31a4d572e0ee8e84ee0ec6cc103e41d99f9",
+          "message": "docs(roadmap): generator suite green on 3.2.36 — collapse the closed #1538 and #1570 rows (#1584)\n\n## Summary\n\n**The entire tool generator suite is green on brepkit-wasm 3.2.36: 283\nfiles, 2790 passed, 0 failed, 4 skipped.**\n\nSame-day pair on the identical 2794-test catalog (measure-3232 worktree,\nbrepjs pin unchanged between runs): **3.2.35 = 146 failed → 3.2.36 = 0\nfailed**. The only kernel delta is #1581 — the 4x4 base-fuse fix. The\nfeet-to-base interface is shared by every bin scenario, so the one fix\ncollapsed the open-shell, non-manifold, timeout, and stale-snapshot\nfailure classes together (exact fuses restore the original snapshot\ntriangle counts).\n\nVerified per doctrine: 0 raw FAIL lines in the log (not just the\nsummary), no snapshot writes, resolution of brepkit-wasm through brepjs\nconfirmed at 3.2.36 by path and version before the run. Targeted rows:\nthe 26-minute `4×4 magnet + label bracket + half-sockets` timeout passes\nin 3.85s; `4x4 with everything enabled` (56s flaky this morning) passes\nin 2.77s.\n\n## Roadmap maintenance\n\n- `#1538` and `#1570` rows collapse from OPEN dig logs to Closed entries\nwith their pins (per the doctrine's rot rule).\n- The clip-level inner-wire trimming and vote-layer on-plane-sample\nrefutations move to the Refuted section.\n- The `#[ignore]` inventory line reads zero deferred-defect pins\n(regenerated 2026-08-13).\n- The Tool pin bump row now targets 3.2.36.\n\nDocs only; `check-doc-paths.sh` passes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to reflect the generator suite green on\n`brepkit-wasm` 3.2.36 and collapses the previously open #1538 and #1570\nrows into Closed entries. Previously the doc reported 146 failures on\n3.2.35 and one deferred-defect pin; it now documents 0 failures on\n3.2.36 and zero deferred-defect pins.\n\n- Rewrites the Tool geometric parity row to confirm suite green on\n`brepkit-wasm` 3.2.36, attribute the collapse to #1581, and note users\nget parity at the next tool pin bump; keeps harness references.\n- Collapses #1538 and #1570 from OPEN dig logs to concise Closed entries\nwith their pins and fixture references.\n- Moves the clip-level inner-wire trimming and vote-layer\non-plane-sample items to Refuted.\n- Updates the `#[ignore]` inventory line to 2026-08-13 with ZERO\ndeferred-defect pins.\n- Updates Tool pin bump target to `brepkit-wasm` 3.2.36 and `brepjs`\n18.124.8.\n- Action: bump the tool pin in gridfinity-layout-tool#3441 to\n`brepkit-wasm` 3.2.36 and `brepjs` 18.124.8.\n\n<sup>Written for commit aa1956a9aa39eb75d20b4e47c493389c63aa5976.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1584?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T10:44:21-07:00",
+          "tree_id": "8a6cd4fc4eb5fbe75203e5473d5477106a33a37c",
+          "url": "https://github.com/andymai/brepkit/commit/d4b0f31a4d572e0ee8e84ee0ec6cc103e41d99f9"
+        },
+        "date": 1786643210729,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 977548,
+            "range": "± 19199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1058301,
+            "range": "± 27988",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12157,
+            "range": "± 57",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 722964,
+            "range": "± 8440",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25963971,
+            "range": "± 48523",
             "unit": "ns/iter"
           }
         ]
