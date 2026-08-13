@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786579694746,
+  "lastUpdate": 1786594591062,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29915,6 +29915,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25601896,
             "range": "± 51096",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e1cbc19f51bc958cfb5243e9526a4324f734124",
+          "message": "fix(algo): skip open-curve windowing on fragmented curve populations (#1571)\n\n## Summary\n\nFixes #1570 (spacer export timeout since 3.2.30).\n\nThe 1u spacer's lip fuse arrives at phase FF with a pre-existing\npathological curve population — a few near-coaxial quadric pairs each\ncarrying 64 marched chains (verified identical on the 3.2.29 tag: 584\nrestrict entries both). The 3.2.30 open-curve windowing processed each\nof those chains, multiplying the section flood: a doomed-anyway analytic\nattempt went from 12.6s (3.2.29) to 128s (3.2.30+) before the same mesh\nfallback, which pushed the tool-side export past its 30s test budget.\n\nPairs with more than 12 raw curves now keep the historic whole-curve\nbehavior. Genuine windowing cases carry a handful of curves (the\ncircleinsert corner pairs: 2 each), so the #1538 close is unaffected.\n\n## Measured\n\n- Spacer operand replay: raw GFA 128s → 12.7s (3.2.29 parity, same fast\nfallback).\n- circleinsert chain: still free=0, over=0, strict pin green.\n- Honeycomb foils 4/4; full workspace suite green.\n\nNote for the backlog: the spacer fuse was ALREADY failing analytically\non 3.2.29 (free=41/over=18 → mesh fallback) — that latent defect\npredates the windowing and is tracked separately in the roadmap; this PR\nrestores the fast-fallback behavior.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSkips open-curve windowing for fragmented curve populations to remove a\n3.2.30 performance regression that caused spacer export timeouts. Old\nbehavior windowed every open-curve chain; new behavior keeps whole-curve\nrestriction when a pair has >12 raw curves, preventing section flood and\nrestoring 3.2.29 timings.\n\n- Gate: windowing only when raw_curves.len() <= 12 in\nrestrict_curves_to_faces; otherwise use historic whole-curve\nrestriction.\n- Genuine windowing cases with few curves (e.g., circleinsert corners\nwith 2) remain unchanged; closed and circular edges are unaffected.\n- Results: spacer replay 128s → 12.7s; circleinsert free=0/over=0;\nhoneycomb foils 4/4; full workspace suite green. Analytic outcome is\nunchanged; this only removes extra work before the same mesh fallback.\n\n<sup>Written for commit 301f6f85ffdbadb3ac3977c29ce6b7b81635d3cb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1571?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T04:13:56Z",
+          "tree_id": "127595a1558be11df4b144ff640f0d6733f87a14",
+          "url": "https://github.com/andymai/brepkit/commit/0e1cbc19f51bc958cfb5243e9526a4324f734124"
+        },
+        "date": 1786594588041,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 962694,
+            "range": "± 2249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1048903,
+            "range": "± 3913",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12376,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710774,
+            "range": "± 2179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25497348,
+            "range": "± 40122",
             "unit": "ns/iter"
           }
         ]
