@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.33](https://github.com/andymai/brepkit/compare/v3.2.32...v3.2.33) (2026-08-13)
+
+
+### Bug Fixes
+
+* **algo:** skip open-curve windowing on fragmented curve populations ([#1571](https://github.com/andymai/brepkit/issues/1571)) ([0e1cbc1](https://github.com/andymai/brepkit/commit/0e1cbc19f51bc958cfb5243e9526a4324f734124))
+
 ## [3.2.32](https://github.com/andymai/brepkit/compare/v3.2.31...v3.2.32) (2026-08-12)
 
 
