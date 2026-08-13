@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.34](https://github.com/andymai/brepkit/compare/v3.2.33...v3.2.34) (2026-08-13)
+
+
+### Bug Fixes
+
+* **math:** exact radical-plane section for offset parallel equal-angle cones ([#1573](https://github.com/andymai/brepkit/issues/1573)) ([8ebd333](https://github.com/andymai/brepkit/commit/8ebd333302a3a805eb1205534a7243dbbac43712))
+
 ## [3.2.33](https://github.com/andymai/brepkit/compare/v3.2.32...v3.2.33) (2026-08-13)
 
 
