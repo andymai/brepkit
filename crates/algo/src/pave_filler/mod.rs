@@ -83,22 +83,44 @@ impl<'a> PaveFiller<'a> {
     ///
     /// Returns [`AlgoError`] if any topology lookup or intersection fails.
     pub fn perform(&mut self, arena: &mut GfaArena) -> Result<(), AlgoError> {
+        use crate::perf::gfa_time;
         self.init_pave_blocks(arena)?;
 
-        phase_vv::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
+        gfa_time!(
+            "phase_vv",
+            phase_vv::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)
+        )?;
         // VV is the only phase that registers same-domain vertices, and
         // `edge_pave_blocks` is fixed at init — so the pave-vertex coincidence
         // index is stable for the remaining phases. Build it once here instead
         // of linear-scanning every pave block per intersection endpoint.
         arena.build_pave_vertex_index(self.topo, self.tol.linear);
-        phase_ve::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-        phase_ee::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-        phase_vf::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-        phase_ef::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-        phase_ff::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
+        gfa_time!(
+            "phase_ve",
+            phase_ve::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)
+        )?;
+        gfa_time!(
+            "phase_ee",
+            phase_ee::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)
+        )?;
+        gfa_time!(
+            "phase_vf",
+            phase_vf::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)
+        )?;
+        gfa_time!(
+            "phase_ef",
+            phase_ef::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)
+        )?;
+        gfa_time!(
+            "phase_ff",
+            phase_ff::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)
+        )?;
 
         // Coplanar face splitting: parallel planes are skipped by Phase FF.
-        phase_ff_coplanar::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
+        gfa_time!(
+            "phase_ff_coplanar",
+            phase_ff_coplanar::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)
+        )?;
 
         Ok(())
     }
@@ -145,6 +167,7 @@ pub fn run_pave_filler(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
+    use crate::perf::gfa_time;
     // Stage 1: Intersection (may create new vertices for EE/EF/FF crossings)
     {
         let mut filler = PaveFiller::with_tolerance(topo, solid_a, solid_b, tol);
@@ -152,12 +175,15 @@ pub fn run_pave_filler(
     }
 
     // Stage 2: Resolution (mutable Topology)
-    make_blocks::perform(arena)?;
-    force_interf_ee::perform(topo, tol, arena)?;
-    link_existing::perform(topo, tol, arena)?;
-    make_split_edges::perform(topo, arena)?;
-    make_pcurves::perform(topo, arena)?;
-    fill_face_info::perform(topo, arena)?;
+    gfa_time!("make_blocks", make_blocks::perform(arena))?;
+    gfa_time!(
+        "force_interf_ee",
+        force_interf_ee::perform(topo, tol, arena)
+    )?;
+    gfa_time!("link_existing", link_existing::perform(topo, tol, arena))?;
+    gfa_time!("make_split_edges", make_split_edges::perform(topo, arena))?;
+    gfa_time!("make_pcurves", make_pcurves::perform(topo, arena))?;
+    gfa_time!("fill_face_info", fill_face_info::perform(topo, arena))?;
 
     Ok(())
 }

@@ -148,3 +148,30 @@ pub fn snapshot() -> PerfSnapshot {
         section_fit_points: SECTION_FIT_POINTS.load(Ordering::Relaxed),
     }
 }
+
+/// Wall-clock stage timing for the GFA pipeline: wraps a stage expression and,
+/// when the `BK_GFA_TIME` env var is set, logs `GFA_TIME <label> <ms>` at
+/// debug level. Native only — wasm32 has no monotonic clock (`Instant::now`
+/// traps and poisons the kernel), so the wasm expansion is the bare body.
+#[cfg(not(target_arch = "wasm32"))]
+macro_rules! gfa_time {
+    ($label:expr, $body:expr) => {{
+        if std::env::var("BK_GFA_TIME").is_ok() {
+            let __t = std::time::Instant::now();
+            let __r = $body;
+            log::debug!(
+                "GFA_TIME {:<20} {:8.1}ms",
+                $label,
+                __t.elapsed().as_secs_f64() * 1e3
+            );
+            __r
+        } else {
+            $body
+        }
+    }};
+}
+#[cfg(target_arch = "wasm32")]
+macro_rules! gfa_time {
+    ($label:expr, $body:expr) => {{ $body }};
+}
+pub(crate) use gfa_time;

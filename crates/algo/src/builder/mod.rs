@@ -358,9 +358,10 @@ impl Builder {
     ///
     /// Returns [`AlgoError`] if topology lookups or classification fails.
     pub fn perform(&mut self) -> Result<(), AlgoError> {
-        self.build_face_ranks()?;
-        self.fill_images();
-        self.classify_sub_faces()?;
+        use crate::perf::gfa_time;
+        gfa_time!("build_face_ranks", self.build_face_ranks())?;
+        gfa_time!("fill_images", self.fill_images());
+        gfa_time!("classify_sub_faces", self.classify_sub_faces())?;
         if let Ok(v) = std::env::var("BK_CLS3")
             && let Ok(want) = v.parse::<usize>()
         {
@@ -391,16 +392,23 @@ impl Builder {
     /// Returns [`AlgoError`] if face selection produces no faces or
     /// assembly fails.
     pub fn build_result(mut self, op: BooleanOp) -> Result<(Topology, SolidId), AlgoError> {
-        let selected = bop::select_faces(
-            &self.sub_faces,
-            op,
-            &self.sd_pairs,
-            &self.sd_within_rank_dups,
+        use crate::perf::gfa_time;
+        let selected = gfa_time!(
+            "select_faces",
+            bop::select_faces(
+                &self.sub_faces,
+                op,
+                &self.sd_pairs,
+                &self.sd_within_rank_dups,
+            )
         );
         log_subfaces_in_box(&self.topo, &self.sub_faces, &selected);
         log_source_face_partition(&self.topo, &self.sub_faces, &selected);
         let cap_planes = self.partial_overlap_cap_planes(&selected);
-        let solid_id = assemble::assemble_solid(&mut self.topo, &selected, &cap_planes)?;
+        let solid_id = gfa_time!(
+            "assemble_solid",
+            assemble::assemble_solid(&mut self.topo, &selected, &cap_planes)
+        )?;
         Ok((self.topo, solid_id))
     }
 
