@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786601351096,
+  "lastUpdate": 1786601664401,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30131,6 +30131,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25555451,
             "range": "± 78599",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6e9eebe9d77e7484999bef5e04975a8cbb5952e",
+          "message": "chore(algo): enrich SD miss traces with plane data and clip areas (#1575)\n\n## Summary\n- `BK_SD_MISS` planar miss lines now print each face's plane (normal z,\nd) and stored interior point, which is what separates a\ncorrectly-rejected hole-contained sliver from a genuinely missed\ncoincident pair.\n- The planar partial-overlap clip logs its area arithmetic (`area_i`,\n`area_j`, intersection, threshold) under a new `BK_SD_AREA` gate.\n- Log-only, both behind env gates; no behavior change.\n\n## Test plan\n- `cargo test -p brepkit-algo --lib same_domain` green; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nEnriches same-domain (SD) miss debug logs with per-face plane data and\ninterior points, and adds gated area arithmetic logs for planar\npartial-overlap clips. This improves diagnosis of hole-contained slivers\nvs real coincident gaps; no behavior change.\n\n- Planar SD miss logs now show each face as (face_id, (plane normal.z,\nd) if planar, interior_point).\n- When `BK_SD_AREA` is set, planar overlap logs area_i, area_j,\nintersection area, and the acceptance threshold.\n- Logs are behind `BK_SD_MISS` and `BK_SD_AREA`; unset by default. Set\n`BK_SD_MISS=1` or `BK_SD_AREA=1` to enable.\n\n<sup>Written for commit 8f01d5aab1e9754aef2ae57088038795b2e583fa.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1575?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T06:11:45Z",
+          "tree_id": "8e1bde8b3d36f0a99d307c158377a1db465fee32",
+          "url": "https://github.com/andymai/brepkit/commit/a6e9eebe9d77e7484999bef5e04975a8cbb5952e"
+        },
+        "date": 1786601660533,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 959011,
+            "range": "± 814",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1037450,
+            "range": "± 3643",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12104,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707159,
+            "range": "± 1376",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25532931,
+            "range": "± 32280",
             "unit": "ns/iter"
           }
         ]
