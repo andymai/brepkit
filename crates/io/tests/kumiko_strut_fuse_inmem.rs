@@ -103,7 +103,7 @@ fn kumiko_wedge_strut_pair_fuse_is_exact() {
 /// stay exact. Today the raw GFA result comes back open and the op pays the
 /// mesh fallback (the kumiko corner-window frontier).
 #[test]
-#[ignore = "corner-window frontier: faceted-strut fuses mesh-fall-back (see module doc)"]
+#[ignore = "corner-window frontier: faceted-strut fuses degrade to the mesh fallback (see module doc)"]
 fn kumiko_diagonal_strut_fuse_is_exact() {
     let mut topo = Topology::new();
     let v = load("kumiko_strut_vertical.bin", &mut topo);
