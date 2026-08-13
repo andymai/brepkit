@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786655314074,
+  "lastUpdate": 1786661213951,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30941,6 +30941,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21090218,
             "range": "± 108735",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6b6df4b172a57011a454151cd0e2f617410a6445",
+          "message": "perf(operations): cut contact-thin compound-cut tools in one arrangement (#1590)\n\n## Result\n\nThe 6x4 baseplate's pocket stage (24 pitch-aligned pocket frustums\ncompound-cut from the slab) drops from 501ms to 31ms native, with an\nidentical exact result (222 faces, 96 cones, watertight, volume\nunchanged). Stage-level, this owns most of the bp 6x4 magnets row's\ndeficit in the parity matrix (pocketsCut measured 825ms wasm vs the\nreference's 466ms stage).\n\n## Root\n\nThe 24 pockets TOUCH rim-to-rim in the grid (38 adjacencies) but never\ninterpenetrate. Batching therefore ran: fuse_n computes the welded\nunion, the by-edge-id gate rejects it (a touching union is genuinely\nnon-manifold), and fuse_cluster falls back to 23 pairwise accumulator\nfuses. One GFA pipeline per tool, ~24 wasted arrangements — measured\nwith the new BK_GFA_TIME stage timers (25 pipeline runs, 223ms of stage\ntime plus per-run store-copy overhead).\n\n## Fix\n\nA cheapest-first rung in compound_cut: when every pairwise tool AABB\nintersection is at most 100*tol thick in some axis (tools may touch\nface-to-face or rim-to-rim, never nest), combine the tool shells\nverbatim — the same position-duplicate-edge tool the fuse ladder builds\none GFA run per tool — and cut once via boolean_inner. A mesh-fallback\ntaint or any error falls through to the existing cluster/fuse ladder\nunchanged. Interpenetrating pairs (the coaxial magnet+screw drill) fail\nthe guard and never take the shortcut, so the #1488 edge-tangent\nprotections are preserved (its guard test stays green).\n\n## Verification\n\n- Fixture `bp64_pocket_compound_cut_inmem` (captured operands): exact,\nclosed, all 96 cones, no fallback, volume pinned.\n- Full operations (825), algo (214), io (41 binaries incl. all\ncaptured-operand foils), wasm gridfinity canary: green.\n- approx_census boolean rows: all exact analytic, timings unchanged.\n- clippy -D warnings green on touched crates.\n\nAlso ships BK_GFA_TIME: env-gated, native-only per-stage wall-clock\ntimers for the pave filler and builder (the instrument that separated\nmerge waste from real arrangement cost).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCuts contact-only compound cuts in one GFA arrangement instead of N and\nadds env-gated per-stage GFA timers. Previously we welded then fell back\nto pairwise fuses; now, if every tool pair’s AABB overlap is ≤ 100×tol\nin some axis, we merge tool shells verbatim and cut once;\ninterpenetrating sets still use the fuse ladder.\n\n- Review notes\n- `crates/operations/src/boolean/mod.rs`: cheapest-first rung in\n`compound_cut`; precomputes per-tool AABBs once (shared by clustering\nand the contact-thin guard); any error or mesh-fallback taint falls\nthrough to the existing cluster/fuse path.\n- `crates/algo/src/perf.rs`: `BK_GFA_TIME` timers and `gfa_time!` macro;\ncaches the env flag via `OnceLock`; native-only, wasm expands to a\nno-op.\n- `crates/algo/src/builder/mod.rs`,\n`crates/algo/src/pave_filler/mod.rs`: wrap major stages/phases in\n`gfa_time!`.\n- Tests: adds `bp64_pocket_compound_cut_inmem` with captured operands;\npins exactness and no fallback; 6x4 pocket stage drops 501ms → 31ms\nnative.\n\n<sup>Written for commit cf39034bebed0b4cb479e61afa4375c43024dd89.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1590?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T22:44:26Z",
+          "tree_id": "96a68a6c08cbfe89b4f59357e02a5716b7bf589a",
+          "url": "https://github.com/andymai/brepkit/commit/6b6df4b172a57011a454151cd0e2f617410a6445"
+        },
+        "date": 1786661211255,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 969502,
+            "range": "± 1468",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1050441,
+            "range": "± 1628",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12400,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 714916,
+            "range": "± 11056",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25840310,
+            "range": "± 164027",
             "unit": "ns/iter"
           }
         ]
