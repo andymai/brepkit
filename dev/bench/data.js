@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786637704742,
+  "lastUpdate": 1786638144951,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30509,6 +30509,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25956178,
             "range": "± 41035",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "02725e34148ebb10dcc2367ab0f415af56f502d9",
+          "message": "chore(main): release 3.2.36 (#1582)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.36](https://github.com/andymai/brepkit/compare/v3.2.35...v3.2.36)\n(2026-08-13)\n\n\n### Bug Fixes\n\n* **algo:** close the 4x4 base fuse — pocket-mouth islands and group\ndemotion ([#1581](https://github.com/andymai/brepkit/issues/1581))\n([8d096cc](https://github.com/andymai/brepkit/commit/8d096cc0f96529c8c9a1b15d7b877c447b4374b5))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.36 updates workspace crate versions and fixes the 4x4 base\nfuse in `brepkit-algo`. Previously the fuse could leave pocket-mouth\nislands and demote groups incorrectly; it now closes correctly and\npreserves grouping, preventing invalid geometry.\n\n**Review**\n- `Cargo.toml` versions bumped to 3.2.36 across `brepkit-*` crates;\n`.release-please-manifest.json` and `CHANGELOG.md` updated.\n- No public API changes; geometry outputs may differ for models using\nthe 4x4 base fuse path.\n\n**Rollout**\n- No migration required.\n- Consumers should bump `brepkit-algo` and related workspace crates to\n`3.2.36`.\n- Revalidate models that rely on the 4x4 base fuse.\n\n<sup>Written for commit 9cba23250c2487765cc20302415337e8ef3413ab.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1582?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-13T16:20:11Z",
+          "tree_id": "93ac7a4bfea98ca1756207c76b574ba15657c2cc",
+          "url": "https://github.com/andymai/brepkit/commit/02725e34148ebb10dcc2367ab0f415af56f502d9"
+        },
+        "date": 1786638142321,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 808635,
+            "range": "± 13831",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 852281,
+            "range": "± 3500",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10252,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 561175,
+            "range": "± 1257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21009310,
+            "range": "± 59090",
             "unit": "ns/iter"
           }
         ]
