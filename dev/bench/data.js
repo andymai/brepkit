@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786661213951,
+  "lastUpdate": 1786661590239,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30995,6 +30995,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25840310,
             "range": "± 164027",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e1b293b0bba7083c87424d2b2d98d14780f1be30",
+          "message": "chore(main): release 3.2.38 (#1591)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.38](https://github.com/andymai/brepkit/compare/v3.2.37...v3.2.38)\n(2026-08-13)\n\n\n### Performance\n\n* **operations:** cut contact-thin compound-cut tools in one arrangement\n([#1590](https://github.com/andymai/brepkit/issues/1590))\n([6b6df4b](https://github.com/andymai/brepkit/commit/6b6df4b172a57011a454151cd0e2f617410a6445))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.38 bumps all workspace crate versions and updates release\nmetadata. `brepkit-operations` now cuts contact-thin compound-cut tools\nin one arrangement instead of multiple, improving performance without\nchanging public APIs.\n\n**Rollout**\n- All `brepkit-*` crates are at `3.2.38`; ensure consumers resolve\n`3.2.38`.\n- No migration actions required.\n\n<sup>Written for commit 66a2daa7f187694063412bf673a7082ec9ac8b96.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1591?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-13T22:50:42Z",
+          "tree_id": "ea74d013abdee50793e0c301186bc39c205d2942",
+          "url": "https://github.com/andymai/brepkit/commit/e1b293b0bba7083c87424d2b2d98d14780f1be30"
+        },
+        "date": 1786661586970,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1012948,
+            "range": "± 78576",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1105837,
+            "range": "± 17011",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12982,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 726709,
+            "range": "± 2016",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27067199,
+            "range": "± 66674",
             "unit": "ns/iter"
           }
         ]
