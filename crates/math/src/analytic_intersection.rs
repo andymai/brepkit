@@ -1476,7 +1476,7 @@ fn try_algebraic_intersection(
 /// nappe), and `None` for the identical-cone overlap or a degenerate
 /// (near-flat) cone — both of which fall through to the general path.
 /// Parallel-but-offset axes with equal half-angle tangents reduce to a
-/// radical-plane conic (see [`offset_parallel_cone_cone`]); other offset
+/// radical-plane conic (`offset_parallel_cone_cone`); other offset
 /// configurations defer to the marcher with `None`.
 ///
 /// # Errors
@@ -1551,6 +1551,9 @@ fn offset_parallel_cone_cone(
     c1: &ConicalSurface,
     c2: &ConicalSurface,
 ) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    if c1.half_angle().sin().abs() < 1e-12 || c2.half_angle().sin().abs() < 1e-12 {
+        return Ok(None); // Degenerate (near-flat) cone, as in the coaxial path.
+    }
     let t1 = c1.half_angle().tan();
     let t2 = c2.half_angle().tan();
     if !t1.is_finite() || !t2.is_finite() {
@@ -1672,9 +1675,10 @@ pub fn exact_cone_cylinder(
     Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
 }
 
-/// Algebraic coaxial cone-cone intersection (NURBS form for the general
-/// bounded path). Delegates to [`exact_cone_cone`] and samples each exact
-/// circle into an interpolated NURBS `IntersectionCurve`, mirroring the
+/// Algebraic cone-cone intersection (NURBS form for the general bounded
+/// path). Delegates to [`exact_cone_cone`] and samples each exact conic
+/// (coaxial circle or offset-parallel radical-plane ellipse) into an
+/// interpolated NURBS `IntersectionCurve`, mirroring the
 /// sphere-cylinder algebraic path. phase FF prefers the exact circle form
 /// directly (so the section edge links to the coincident boundary), but a
 /// caller of `intersect_analytic_analytic_bounded` still gets one clean

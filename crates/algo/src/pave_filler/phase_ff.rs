@@ -3300,8 +3300,12 @@ fn compute_raw_curves(
             // shared cap rim. Emit it as an exact Circle so the closed-circle
             // handling (seam adoption + `link_existing`) treats it as the
             // existing shared boundary edge instead of adopting a fresh,
-            // redundant section edge. Non-coaxial cones (None) fall through to
-            // the general marcher.
+            // redundant section edge. Parallel/anti-parallel offset axes with
+            // equal half-angles reduce to a radical-plane conic and arrive as
+            // an exact Ellipse (the gridfinity spacer lip's opposed corner
+            // cones, #1570 — the marcher shredded that near-tangent quartic
+            // into dozens of closed micro-loops). Other configurations (None)
+            // fall through to the general marcher.
             match analytic_intersection::exact_cone_cone(c1, c2)? {
                 Some(exacts) => {
                     let mut results = Vec::new();
