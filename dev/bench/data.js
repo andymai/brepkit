@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786646982675,
+  "lastUpdate": 1786653310655,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30779,6 +30779,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27499671,
             "range": "± 71688",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f40d062270b4557c9430a253ae13292faa3ad908",
+          "message": "fix(algo): split hole-riding section windows at collinear-overlap ends (#1587)\n\n## Result\n\nThe 2x2 label-bracket fuse is exact, closed, and fallback-free again: 58\nfaces keeping all 8 cylinders, 0 free edges, 11ms native on both the\npairwise and fuseAll paths. Before this, the exact result came back open\n(3 free edges), the op paid a 121-face all-planar mesh fallback, and the\ntool paid that fallback twice per generation (fuseAll failed after 95ms,\nbrepjs's fuseAllBisect then redid the identical fuse via the pairwise\nbinding for another 99ms). Those two calls were 195 of the 240ms\nscenario-first row that reads 2.3x slower than the reference kernel in\nthe parity matrix.\n\n## Roots\n\n1. The tool's bracket design changed since the Aug 9 capture (#1510):\nits eight support ramps now end in vertical finger strips lying exactly\nin the cavity-wall plane y=40.550. The bracket's side-wall cuts on the\nbin's top ring then ride collinearly on the ring's inner boundary over\npart of their span. The hole weave (integrate_holes_plane) classified\neach such section as ONE window whose midpoint sits exactly ON the hole\npolygon, and the interior polygon test's verdict on a boundary point\nflips with ray direction: of the two mirrored wall cuts, -x read outside\n(kept) and +x read inside (dropped whole). The dropped cut left its lune\npartner a pendant (pruned), the +x corner lune was never split out of\nthe ring, and the shell came back open. Fix: split section windows at\nthe collinear-overlap ends and drop the riding piece explicitly, so\nevery surviving window has a strictly-off-boundary midpoint. The riding\npiece duplicates geometry the hole edge already provides (parallel-twin\nhazard).\n\n2. fuse_cluster's mesh-fallback bail exists to keep a degraded fuse from\npoisoning the rest of a batch, but a 2-solid group has no rest: erroring\nonly makes the caller redo the identical fuse pairwise and pay the\nfallback twice. 2-solid fuse_all groups now take the pairwise contract\ndirectly.\n\n## Verification\n\n- New fixture `labelbracket_fingers_fuse_is_exact_and_closed` (captured\noperands, arena .bin): no fallback, 0 free edges, 8 cylinders kept,\nvolume in the analytic band (15899.06 expected, 15898.85 measured at\n0.01 deflection).\n- Full io fixture suite (40 binaries), operations (825), algo (214),\nwasm gridfinity canary (27): all green. The face-splitter foil set is\ninside these.\n- approx_census: every boolean row exact analytic; remaining fallbacks\nare the documented by-design set.\n- Boundaries check green; clippy -D warnings green on touched crates.\n\nDiagnosis instruments used: per-kernel-call census in the tool,\nreplay_pair (new FUSE_ALL mode, committed), BK_SUBFACE_SRC/BOX/WIRE,\nBK_SECEDGE, BK_SPLIT_TRACE.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes hole-weave misclassification when a section rides collinearly on a\nhole edge by splitting windows at overlap ends and dropping the riding\nspan. For 2‑solid groups, `fuse_all` now uses the pairwise contract to\navoid double work on mesh fallbacks.\n\n- Changes\n- `crates/algo`: detect collinear overlap spans, split section windows\nat overlap ends, and skip the riding piece so kept windows have\noff-boundary midpoints and no parallel‑twin duplication.\n- `crates/operations`: route 2‑solid `fuse_all` groups through pairwise\n`boolean()`; refactor the 2‑solid arm to match on the slice reference.\n- `crates/io`: add `labelbracket_fingers_fuse_is_exact_and_closed`\nfixture; add `FUSE_ALL=1` mode to `replay_pair` and refresh its comment\nto align with the per‑group contract; update roadmap note.\n\n- Impact\n- Label‑bracket fuse is exact and closed (58 faces, 8 cylinders), no\nfallback, ~11ms; previously it returned open (3 free edges) and paid the\nmesh fallback twice (~195ms).\n- No migration required. If a caller relied on a 2‑solid `fuse_all`\nerror to trigger a retry, it now returns the pairwise result (which may\nuse the mesh fallback).\n  - All suites remain green.\n\n<sup>Written for commit 59bb798f715e1a5009d45784d715092cefba7f34.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1587?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T20:32:35Z",
+          "tree_id": "e020a3febb5734e8cd8093e24f0b4cfa546460aa",
+          "url": "https://github.com/andymai/brepkit/commit/f40d062270b4557c9430a253ae13292faa3ad908"
+        },
+        "date": 1786653307690,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1021535,
+            "range": "± 3822",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1110818,
+            "range": "± 3503",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13299,
+            "range": "± 199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 732813,
+            "range": "± 1618",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27004974,
+            "range": "± 216093",
             "unit": "ns/iter"
           }
         ]
