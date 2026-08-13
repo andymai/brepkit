@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786653310655,
+  "lastUpdate": 1786653757768,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30833,6 +30833,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27004974,
             "range": "± 216093",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80f3be9dc92be18a1c4ba99719e6edd9efba4654",
+          "message": "chore(main): release 3.2.37 (#1588)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.37](https://github.com/andymai/brepkit/compare/v3.2.36...v3.2.37)\n(2026-08-13)\n\n\n### Bug Fixes\n\n* **algo:** split hole-riding section windows at collinear-overlap ends\n([#1587](https://github.com/andymai/brepkit/issues/1587))\n([f40d062](https://github.com/andymai/brepkit/commit/f40d062270b4557c9430a253ae13292faa3ad908))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.37 fixes sectioning stability by splitting hole-riding\nsection windows at the ends of collinear overlaps. Previously a window\ncould span the entire overlap and overrun boundaries; now it breaks at\noverlap endpoints to avoid artifacts.\n\n- Bumps the root crate and all workspace crates to 3.2.37 and updates\n`CHANGELOG.md` and `.release-please-manifest.json`.\n- No source changes in this PR; the algorithm fix is already merged.\n- No API or file-format changes; no migration needed.\n\n<sup>Written for commit be760fb8997e5e17bd63a8ed7e89ffa2137e7a9a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1588?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-13T20:39:59Z",
+          "tree_id": "13ca84e63388ad8e648431bf7e76e8b3712d8841",
+          "url": "https://github.com/andymai/brepkit/commit/80f3be9dc92be18a1c4ba99719e6edd9efba4654"
+        },
+        "date": 1786653754334,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 935076,
+            "range": "± 1804",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1022840,
+            "range": "± 1642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12335,
+            "range": "± 347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674842,
+            "range": "± 804",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25265178,
+            "range": "± 41698",
             "unit": "ns/iter"
           }
         ]
