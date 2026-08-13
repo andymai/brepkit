@@ -1,0 +1,19 @@
+crates/operations/src/compound_ops.rs
+  s_5511e9ebcd4d22::t_240607dc006801 77-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e1ab2ac6ac00a05573dbdfb4fb8fb93571acb6d0",
+  "prompts": {},
+  "sessions": {
+    "s_5511e9ebcd4d22": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71b94051-2c50-4fd2-8261-b5d80b549276",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
