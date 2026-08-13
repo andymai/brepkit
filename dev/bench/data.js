@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786638144951,
+  "lastUpdate": 1786641141181,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30563,6 +30563,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21009310,
             "range": "± 59090",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4d49a7f1bd1b294e083dd28e0789d60afda4368c",
+          "message": "test(operations): pin the partial-overlap corner-hole interface fuse (#1583)\n\n## Summary\n\nThe roadmap's **roundpocket4 lead** (#1538 REMAINING item d) no longer\nreproduces on main. This PR pins the configuration and closes the lead\nin the roadmap.\n\n**The configuration:** a rounded-rect plate centered at the origin with\na quartered-cylinder through-hole at its center, fused onto a block\ncovering only one quadrant, so the hole lands exactly at the block's\ncorner and only some rim sections cross the fused interface.\n\n**The recorded failure:** raw GFA fuse free=15 with phantom material\n(vol 69839 vs the exact 62375), ops paying a 117-all-planar-face mesh\nfallback that still validated clean.\n\n**Attribution by bisect:** still failing at 9d47b189 (post-#1578), clean\non 3.2.36 — the close is collateral of #1581's pocket-mouth island fix.\nThe corner hole at a partial-overlap interface is the same\nvertex-coincidence promotion-path island configuration.\n\n**The pin** (`partial_overlap_corner_hole_interface_fuse_is_exact`): the\nbroken result validated clean, so validity alone is not a sufficient\nassertion. It pins zero mesh fallbacks, strict validity of cut and fuse,\nall 8 quarter-cylinder hole walls surviving, and the fuse volume\nequalling the operand sum at one deflection (the operands share only the\ninterface plane).\n\n## Verification\n\n- `cargo test -p brepkit-operations --test interface_fuse_winding`: 5\npassed\n- clippy clean on the test target\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins the partial-overlap corner-hole interface fuse and closes the\n`roundpocket4` lead. Previously the fuse produced phantom islands\n(free=15) and triggered an all‑planar mesh fallback with slightly wrong\nvolume; now the fuse is exact with no fallback and correct volume.\n\n- Adds regression `partial_overlap_corner_hole_interface_fuse_is_exact`\nin `crates/operations/tests/interface_fuse_winding.rs`.\n- Asserts no change in `boolean::mesh_fallback_count()`, strict validity\nfor cut and fuse, 4 hole quarter‑walls (r=10) and 4 rounded‑corner side\nfaces (r=3.75) survive, and fuse volume equals the operand sum at one\ndeflection.\n- Updates the roadmap entry to closed; bisect attributes the close to\n#1581 and the scenario is clean on 3.2.36.\n\n<sup>Written for commit dba78505eee904acb8518ade3b9b66f6e1f56756.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1583?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T10:10:01-07:00",
+          "tree_id": "09546c2b1273f91f4dc342a31e84ab721fc9e063",
+          "url": "https://github.com/andymai/brepkit/commit/4d49a7f1bd1b294e083dd28e0789d60afda4368c"
+        },
+        "date": 1786641138280,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 798576,
+            "range": "± 5347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 880415,
+            "range": "± 3480",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9703,
+            "range": "± 70",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 590512,
+            "range": "± 4539",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21527055,
+            "range": "± 133093",
             "unit": "ns/iter"
           }
         ]
