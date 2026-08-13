@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786594591062,
+  "lastUpdate": 1786595021201,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -29969,6 +29969,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25497348,
             "range": "± 40122",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8587ba21afb44c2031853755c6e37b69c7d99672",
+          "message": "chore(main): release 3.2.33 (#1572)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.33](https://github.com/andymai/brepkit/compare/v3.2.32...v3.2.33)\n(2026-08-13)\n\n\n### Bug Fixes\n\n* **algo:** skip open-curve windowing on fragmented curve populations\n([#1571](https://github.com/andymai/brepkit/issues/1571))\n([0e1cbc1](https://github.com/andymai/brepkit/commit/0e1cbc19f51bc958cfb5243e9526a4324f734124))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.33 updates workspace versions and fixes open-curve windowing\nin `brepkit-algo`. Previously it attempted windowing on fragmented\nopen-curve populations; now it skips windowing, reducing invalid windows\nand downstream geometry errors.\n\n**Review and rollout**\n- Bumps all `brepkit-*` workspace crates to 3.2.33 in `Cargo.toml` and\nupdates `.release-please-manifest.json` and `CHANGELOG.md`.\n- No API changes; upgrade without code changes.\n\n<sup>Written for commit cf285ca9612fa1739e366d6c0d304617876ca299.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1572?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-13T04:21:15Z",
+          "tree_id": "bad0c9c897ca79cf03a1f6bf56b61cdf48827b36",
+          "url": "https://github.com/andymai/brepkit/commit/8587ba21afb44c2031853755c6e37b69c7d99672"
+        },
+        "date": 1786595018614,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 927068,
+            "range": "± 3161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1009711,
+            "range": "± 14703",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12086,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 667772,
+            "range": "± 1104",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24905646,
+            "range": "± 46005",
             "unit": "ns/iter"
           }
         ]
