@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786646124684,
+  "lastUpdate": 1786646982675,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30725,6 +30725,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25807610,
             "range": "± 58936",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4b64a4b1e41322da98ad83f863b003febe2d306b",
+          "message": "docs(roadmap): record the 2x2 label-bracket perf row from the fresh 3.2.36 matrix (#1586)\n\nFresh head-to-head matrix on the shipped 3.2.36 pin (both kernels, same\nsession): aggregate 0.63x, brepkit 0 non-manifold vs the reference's 5.\nOne genuine perf item surfaced: **2x2 label bracket at 223ms vs 80ms\n(2.79x)**, geometry clean on both sides — recorded as an OPEN row with\nthe stability-first next step. The three volume-FAIL rows are all the\ndocumented reference-side double-cover over-count (nm 959–1802 vs\nbrepkit 0). Docs only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments the 2x2 label-bracket performance regression and clarifies\nthat the real gap is in scenario-first runs, not process-cold or warmed\ncache repeats. Docs-only; no behavior changes.\n\n- Matrix on shipped 3.2.36: headline 223 vs 80ms (2.79x). Scenario-first\n(warm process) is 278 vs 119ms; process-cold is near parity (420 vs\n374ms). Warm repeats (6 vs 22ms) are brepjs parameter-cache hits on both\nsides and not kernel comparisons.\n- Geometry is clean on both sides (brepkit nm=0; reference nm=147).\nOther matrix notes: bp 6x4 magnets now 1.11x, 4x4 mag no-lip exact\n1.00x, aggregate 0.63x.\n- The three volume-FAIL rows are the reference’s double-cover over-count\n(nm 959–1802 vs brepkit 0), not defects.\n- Next: capture the scenario’s boolean traffic and replay natively to\nfind the hot op (`parity-benchmarking`); prior bracket FUSE was 39ms\nnative when closed, so suspect a different op earlier in the chain.\n\n<sup>Written for commit e9063c3689af457c02e9a77350373a3bdbea7e49.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1586?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T11:47:15-07:00",
+          "tree_id": "e945941ba1d9fc92ccbf624368dc220617a96683",
+          "url": "https://github.com/andymai/brepkit/commit/4b64a4b1e41322da98ad83f863b003febe2d306b"
+        },
+        "date": 1786646980025,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1014126,
+            "range": "± 1018",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1102949,
+            "range": "± 1253",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13125,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 726392,
+            "range": "± 1678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27499671,
+            "range": "± 71688",
             "unit": "ns/iter"
           }
         ]
