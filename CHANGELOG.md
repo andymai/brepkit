@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.37](https://github.com/andymai/brepkit/compare/v3.2.36...v3.2.37) (2026-08-13)
+
+
+### Bug Fixes
+
+* **algo:** split hole-riding section windows at collinear-overlap ends ([#1587](https://github.com/andymai/brepkit/issues/1587)) ([f40d062](https://github.com/andymai/brepkit/commit/f40d062270b4557c9430a253ae13292faa3ad908))
+
 ## [3.2.36](https://github.com/andymai/brepkit/compare/v3.2.35...v3.2.36) (2026-08-13)
 
 
