@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786600821181,
+  "lastUpdate": 1786601351096,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30077,6 +30077,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26740171,
             "range": "± 22727",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "09d98ce7b64dca2fa3a810b8065dbf402f5e360d",
+          "message": "chore(main): release 3.2.34 (#1574)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.34](https://github.com/andymai/brepkit/compare/v3.2.33...v3.2.34)\n(2026-08-13)\n\n\n### Bug Fixes\n\n* **math:** exact radical-plane section for offset parallel equal-angle\ncones ([#1573](https://github.com/andymai/brepkit/issues/1573))\n([8ebd333](https://github.com/andymai/brepkit/commit/8ebd333302a3a805eb1205534a7243dbbac43712))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases 3.2.34 and fixes the radical-plane section computation for\noffset, parallel, equal-angle cones in `brepkit-math`. Previously the\nsection could be approximate or incorrect; it now computes the exact\nsection, which may change results in those cases.\n\n- Versions updated from 3.2.33 to 3.2.34 in\n`.release-please-manifest.json`, root `version`, and all workspace\ncrates in `Cargo.toml` (`brepkit-*`).\n- No API changes. If you maintain geometry golden tests, re-run and\nupdate baselines for affected cone-section cases.\n\n<sup>Written for commit a3dad766ff3981b2ff5c52257e48ba0368687c62.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1574?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-13T06:06:32Z",
+          "tree_id": "f36b6c579b7418d22582c3d9d2e11de5e5587809",
+          "url": "https://github.com/andymai/brepkit/commit/09d98ce7b64dca2fa3a810b8065dbf402f5e360d"
+        },
+        "date": 1786601348239,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 960835,
+            "range": "± 6730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1040180,
+            "range": "± 15600",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12019,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 708240,
+            "range": "± 649",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25555451,
+            "range": "± 78599",
             "unit": "ns/iter"
           }
         ]
