@@ -3306,19 +3306,33 @@ fn compute_raw_curves(
                 Some(exacts) => {
                     let mut results = Vec::new();
                     for exact in exacts {
-                        if let analytic_intersection::ExactIntersectionCurve::Circle(circle) = exact
-                        {
-                            let bbox = circle_bbox(&circle);
-                            let domain = (0.0, std::f64::consts::TAU);
-                            let p_start = ParametricCurve::evaluate(&circle, domain.0);
-                            let p_end = ParametricCurve::evaluate(&circle, domain.1);
-                            results.push(RawCurve {
-                                curve: EdgeCurve::Circle(circle),
-                                bbox,
-                                t_range: domain,
-                                p_start,
-                                p_end,
-                            });
+                        let domain = (0.0, std::f64::consts::TAU);
+                        match exact {
+                            analytic_intersection::ExactIntersectionCurve::Circle(circle) => {
+                                let bbox = circle_bbox(&circle);
+                                let p_start = ParametricCurve::evaluate(&circle, domain.0);
+                                let p_end = ParametricCurve::evaluate(&circle, domain.1);
+                                results.push(RawCurve {
+                                    curve: EdgeCurve::Circle(circle),
+                                    bbox,
+                                    t_range: domain,
+                                    p_start,
+                                    p_end,
+                                });
+                            }
+                            analytic_intersection::ExactIntersectionCurve::Ellipse(ellipse) => {
+                                let bbox = ellipse_bbox(&ellipse);
+                                let p_start = ParametricCurve::evaluate(&ellipse, domain.0);
+                                let p_end = ParametricCurve::evaluate(&ellipse, domain.1);
+                                results.push(RawCurve {
+                                    curve: EdgeCurve::Ellipse(ellipse),
+                                    bbox,
+                                    t_range: domain,
+                                    p_start,
+                                    p_end,
+                                });
+                            }
+                            analytic_intersection::ExactIntersectionCurve::Points(_) => {}
                         }
                     }
                     Ok(results)
