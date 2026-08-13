@@ -47,11 +47,13 @@ correctness, manifold correctness, AND generation performance at least as good. 
 first, then beating it, is the acceptance bar. See `parity-benchmarking` for the harness.
 
 Where that stands: **REACHED AND SHIPPED (2026-08-13)** — the tool pins brepkit-wasm
-3.2.36 (gridfinity-layout-tool#3471), on which its full generator suite measures 0
-failed / 2790 passed (issue #1517 closed; see the Closed entry). Every head-to-head
-bench row leads (0.63x aggregate, faster on 24/26); all four primitive-boolean
-fallbacks are exact analytic. Per-PR history and per-row numbers live in git, MEMORY.md,
-and the bench harness — do not re-record them here. Native criterion CAVEAT: the
+3.2.38, its full generator suite is green on every bump (issue #1517 closed at
+0/2790 on 3.2.36; see the Closed entries). The 3.2.38 parity matrix reads 0.45x
+aggregate with brepkit faster on 25 of 26 rows (the last is a 1.04x noise-band
+watch) and 0 non-manifold scenarios vs the reference's 5; all four
+primitive-boolean fallbacks are exact analytic. Per-PR history and per-row
+numbers live in git, MEMORY.md, and the bench harness — do not re-record them
+here. Native criterion CAVEAT: the
 cad_operations "mesh sphere" case runs a bench-local PER-FACE shim ~40x lighter than the
 solid-level path — never compare it to solid-level numbers (`perf_probe` has the matching
 native figure).
@@ -124,7 +126,7 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **Bin/baseplate perf residuals: bp 6x4 magnets 1.10x, 4x4 mag no-lip 1.06x** | bp 6x4 ROOT FOUND AND FIXED kernel-side 2026-08-13 (awaiting release + tool re-measure): the #1488-era "no dominant stage" had rotted — stage breakdown on 3.2.37 shows pocketsCut 825 vs 466ms and lightweightFloorCut 479 vs 285ms own the deficit. The 24 pitch-aligned pockets TOUCH rim-to-rim (38 grid adjacencies): `fuse_n` computes the welded union, the by-edge-id gate rejects it (touching unions are genuinely non-manifold), and `fuse_cluster` fell back to 23 pairwise accumulator fuses — ~24 wasted GFA runs (501ms native for a 31ms cut). Fix: contact-thin compound-cut shortcut (no tool pair's AABB intersection thicker than 100·tol in every axis → combine tool shells verbatim, cut once; interpenetrating pairs like the coaxial magnet+screw drill take the fuse ladder). Fixture `bp64_pocket_compound_cut_inmem.rs`; `BK_GFA_TIME` stage timers shipped (native-only). lightweightFloorCut's 253ms native is the genuine big-base cut, not merge waste. 4x4 mag no-lip 1.06x remains a noise-band watch (1.00x on 3.2.36) |
+| **4x4 mag no-lip noise-band watch (1.04x on the 3.2.38 matrix)** | The only row the reference leads; has oscillated 1.00x-1.06x across 3.2.36-3.2.38 with no kernel change targeting it. Watch, do not chase, unless a fresh same-day matrix shows a real drift |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -136,6 +138,22 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **bp 6x4 magnets residual + every baseplate row (CLOSED 2026-08-13 on released 3.2.38; row 775 vs 1383ms = 0.56x, was 1.10x; aggregate 0.45x, faster 25/26)** —
+  the #1488-era "no dominant stage" reading had rotted: pocketsCut owned the
+  deficit (825 vs 466ms wasm). The 24 pitch-aligned pockets touch rim-to-rim
+  (38 grid adjacencies), `fuse_n`'s welded union is genuinely non-manifold so
+  the by-edge-id gate rejects it, and `fuse_cluster` fell back to 23 pairwise
+  accumulator fuses: ~24 wasted GFA runs, 501ms native for a 31ms cut. Fix
+  #1590: contact-thin compound-cut shortcut (every pairwise tool-AABB
+  intersection at most 100·tol thick in some axis → combine tool shells
+  verbatim, cut once; interpenetrating pairs like the coaxial magnet+screw
+  drill take the fuse ladder; fallback taint falls through unchanged).
+  Lifted bp 2x2 plain to 0.18x and bp 4x4 plain to 0.16x as collateral.
+  Fixture `bp64_pocket_compound_cut_inmem.rs`; instrument `BK_GFA_TIME`
+  (native-only per-stage wall clock, the tool that separated merge waste from
+  arrangement cost). lightweightFloorCut's 253ms native is the genuine
+  big-base cut, not merge waste — the remaining lever on this row if ever
+  needed.
 - **2x2 label bracket scenario-first row (CLOSED 2026-08-13 on released 3.2.37; matrix row 34 vs 66ms = 0.52x, was 2.3x slower)** —
   the tool's redesigned bracket (finger strips in the cavity-wall plane, changed
   since the Aug 9 #1510 capture) made its wall cuts ride collinearly on the top
