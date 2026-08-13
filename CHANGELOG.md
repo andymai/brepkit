@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.38](https://github.com/andymai/brepkit/compare/v3.2.37...v3.2.38) (2026-08-13)
+
+
+### Performance
+
+* **operations:** cut contact-thin compound-cut tools in one arrangement ([#1590](https://github.com/andymai/brepkit/issues/1590)) ([6b6df4b](https://github.com/andymai/brepkit/commit/6b6df4b172a57011a454151cd0e2f617410a6445))
+
 ## [3.2.37](https://github.com/andymai/brepkit/compare/v3.2.36...v3.2.37) (2026-08-13)
 
 
