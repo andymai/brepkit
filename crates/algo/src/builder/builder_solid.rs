@@ -538,7 +538,20 @@ fn face_normal_at(topo: &Topology, face_id: FaceId, point: Point3) -> Option<Vec
 /// yields negative and is still rejected. Returns `None` when no face yields a
 /// usable contribution so the caller falls back to the volume sign.
 fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> {
+    // Two readings per face, arbitrated at the end. The reversed flag is not
+    // a reliable orientation datum on every path: boolean outputs circulate
+    // with mixed flag-vs-winding populations that every solid-level oracle
+    // accepts (the op3 spacer body: 37 of 50 planar faces disagree, yet it
+    // is halfedge-clean with positive mesh volume). A Cut-minted cavity, by
+    // contrast, is flag-flipped COHERENTLY (`SelectedFace::reversed` on
+    // every kept tool face, wires untouched). So: when the flag-composed
+    // and wire-only integrals agree, use that sign; when they disagree, a
+    // near-total reversed-mass means the flags are the datum (the cavity),
+    // otherwise they are rot and the wires are the datum.
     let mut flux = 0.0_f64;
+    let mut flux_wire = 0.0_f64;
+    let mut rev_mass = 0.0_f64;
+    let mut tot_mass = 0.0_f64;
     let mut any = false;
     let trace = std::env::var("BK_FLUX").is_ok();
     for &fid in faces {
@@ -560,10 +573,19 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     continue;
                 };
                 let (sp, ep) = (sv.point(), ev.point());
+                // `evaluate_with_endpoints` takes the curve's OWN parameter
+                // (raw knot/angle domain for everything but Line) — a raw
+                // [0,1] fraction extrapolates a marched-section NURBS edge to
+                // astronomical coordinates and the flux sign becomes noise.
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
                 for k in 0..4 {
                     let f = f64::from(k) / 4.0;
                     let f = if oe.is_forward() { f } else { 1.0 - f };
-                    pts.push(edge.curve().evaluate_with_endpoints(f, sp, ep));
+                    pts.push(edge.curve().evaluate_with_endpoints(
+                        (d1 - d0).mul_add(f, d0),
+                        sp,
+                        ep,
+                    ));
                 }
             }
             if pts.len() < 3 {
@@ -577,11 +599,15 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 }
                 Point3::new(c.x() / n, c.y() / n, c.z() / n)
             };
-            let Some(normal) = face_normal_at(topo, fid, centroid) else {
-                continue;
-            };
-            let area = newell_normal(&pts).length() * 0.5;
-            flux += area * Vec3::new(centroid.x(), centroid.y(), centroid.z()).dot(normal);
+            let n2 = newell_normal(&pts);
+            let c_wire = 0.5 * Vec3::new(centroid.x(), centroid.y(), centroid.z()).dot(n2);
+            let c_comp = if face.is_reversed() { -c_wire } else { c_wire };
+            flux += c_comp;
+            flux_wire += c_wire;
+            tot_mass += c_wire.abs();
+            if face.is_reversed() {
+                rev_mass += c_wire.abs();
+            }
             any = true;
         } else {
             // Curved: integrate over the boundary's (u, v) parameter box.
@@ -597,10 +623,27 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     continue;
                 };
                 let (sp, ep) = (sv.point(), ev.point());
-                for k in 0..=8 {
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                // Traversal order (is_forward-aware, endpoint sample left to
+                // the next edge) so the uv polygon's signed area below reads
+                // the wire's true winding.
+                for k in 0..8 {
                     let f = f64::from(k) / 8.0;
-                    let p = edge.curve().evaluate_with_endpoints(f, sp, ep);
+                    let f = if oe.is_forward() { f } else { 1.0 - f };
+                    let p = edge
+                        .curve()
+                        .evaluate_with_endpoints((d1 - d0).mul_add(f, d0), sp, ep);
                     if let Some((u, v)) = surface.project_point(p) {
+                        if trace && (v.abs() > 1e6 || u.abs() > 1e6) {
+                            log::debug!(
+                                "  FLUXUV edge {:?} {} f={f} p=({:.3},{:.3},{:.3}) uv=({u:.3},{v:.3})",
+                                oe.edge(),
+                                edge.curve().type_tag(),
+                                p.x(),
+                                p.y(),
+                                p.z()
+                            );
+                        }
                         uvs.push((u, v));
                     }
                 }
@@ -612,7 +655,7 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 (f64::MAX, f64::MIN, f64::MAX, f64::MIN),
                 |(ul, uh, vl, vh), &(u, v)| (ul.min(u), uh.max(u), vl.min(v), vh.max(v)),
             );
-            let reversed = face.is_reversed();
+            let rev_flag = face.is_reversed();
             let (n_u, n_v) = (24usize, 24usize);
             let du = (u_hi - u_lo) / n_u as f64;
             let dv = (v_hi - v_lo) / n_v as f64;
@@ -621,6 +664,7 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
             }
             let eps_u = du * 1e-3;
             let eps_v = dv * 1e-3;
+            let mut raw_surf = 0.0_f64;
             for iu in 0..n_u {
                 for iv in 0..n_v {
                     let u = u_lo + (iu as f64 + 0.5) * du;
@@ -641,14 +685,35 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     if da < 1e-20 {
                         continue;
                     }
-                    let mut n = surface.normal(u, v);
-                    if reversed {
-                        n = -n;
-                    }
-                    flux += da * Vec3::new(p.x(), p.y(), p.z()).dot(n);
-                    any = true;
+                    let n = surface.normal(u, v);
+                    raw_surf += da * Vec3::new(p.x(), p.y(), p.z()).dot(n);
                 }
             }
+            let r = if rev_flag { -1.0 } else { 1.0 };
+            // Composed = the historical flag-on-stored-normal reading, so
+            // every case the old vote accepted is unchanged whenever the
+            // arbitration picks the composed side. Wire = winding on the
+            // parameterization normal, purely geometric. A face without a
+            // wire reading contributes its flag reading to both integrals,
+            // and its reversed flag still counts toward the coherence mass —
+            // a cavity made of wrap-around bands must not read as mixed
+            // merely because its windings are unreadable.
+            // Curved faces use the historical flag reading on BOTH sides:
+            // the splitter's uv loop-winding conventions (raw-frame CW
+            // handling, seam splits) make a split curved face's wire winding
+            // a non-datum — the notched-torus band foil is the proof. Only
+            // planar faces, whose traversal-ordered Newell reading is
+            // frame-free, contribute an independent wire reading; their
+            // reversed mass still feeds the coherence arbitration.
+            let c_comp = r * raw_surf;
+            let c_wire = c_comp;
+            flux += c_comp;
+            flux_wire += c_wire;
+            tot_mass += c_wire.abs();
+            if rev_flag {
+                rev_mass += c_wire.abs();
+            }
+            any = true;
         }
         if trace {
             log::debug!(
@@ -657,18 +722,66 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 face.is_reversed(),
                 flux - flux_before
             );
+            if (flux - flux_before).abs() > 1e12
+                && let Ok(wire) = topo.wire(face.outer_wire())
+            {
+                for oe in wire.edges() {
+                    if let Ok(edge) = topo.edge(oe.edge())
+                        && let (Ok(sv), Ok(ev)) =
+                            (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                    {
+                        let (sp, ep) = (sv.point(), ev.point());
+                        let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                        let mid = edge.curve().evaluate_with_endpoints(
+                            (d1 - d0).mul_add(0.5, d0),
+                            sp,
+                            ep,
+                        );
+                        log::debug!(
+                            "  FLUXEDGE {:?} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) mid=({:.3},{:.3},{:.3})",
+                            oe.edge(),
+                            edge.curve().type_tag(),
+                            sp.x(),
+                            sp.y(),
+                            sp.z(),
+                            ep.x(),
+                            ep.y(),
+                            ep.z(),
+                            mid.x(),
+                            mid.y(),
+                            mid.z()
+                        );
+                    }
+                }
+            }
         }
     }
-    if !any || flux.abs() < 1e-9 {
+    if !any || (flux.abs() < 1e-9 && flux_wire.abs() < 1e-9) {
         return None;
     }
+    let outward = if (flux > 0.0) == (flux_wire > 0.0) {
+        flux > 0.0
+    } else if rev_mass > 0.95 * tot_mass {
+        // A coherent global flip is a Cut-minted cavity: the flags ARE the
+        // datum (every kept tool face flag-flipped, wires untouched).
+        flux > 0.0
+    } else {
+        // Mixed flags contradicting the wires are rot; the wires are the
+        // datum (the solid-level mesh, which every oracle trusts, reads
+        // these shells positive).
+        flux_wire > 0.0
+    };
     if trace {
         log::debug!(
-            "growth shell FLUX total={flux:.4} -> outward={}",
-            flux > 0.0
+            "growth shell FLUX composed={flux:.4} wire={flux_wire:.4} rev_mass={:.3} -> outward={outward}",
+            if tot_mass > 0.0 {
+                rev_mass / tot_mass
+            } else {
+                0.0
+            }
         );
     }
-    Some(flux > 0.0)
+    Some(outward)
 }
 
 /// Classify shells as Growth (outer) or Hole (inner).

@@ -105,6 +105,7 @@ pub fn classify_point_cached(
 /// # Errors
 ///
 /// Returns [`AlgoError`] on a topology lookup failure.
+#[allow(clippy::too_many_arguments)]
 pub fn classify_coincident_coplanar(
     topo: &Topology,
     opposing_solid: SolidId,
@@ -112,10 +113,17 @@ pub fn classify_coincident_coplanar(
     sub_face_id: brepkit_topology::face::FaceId,
     sub_normal: Vec3,
     sub_d: f64,
+    interior: Point3,
     tol: brepkit_math::tolerance::Tolerance,
 ) -> Result<Option<FaceClass>, AlgoError> {
     let plane_tol = tol.linear.max(1e-7);
     let n_tol = 1e-6_f64;
+    // The sub-face's own material region: probes must sample it, not just
+    // avoid the opposing region. An annular sub-face's vertex centroid falls
+    // in its own hole, and the hole can be genuinely open space (the spacer
+    // foot plate's ring around the open foot cavity, #1570) — probing there
+    // reads air-air and wrongly declares the buried band Outside.
+    let own_region = planar_face_polygons(topo, sub_face_id)?;
     let faces = brepkit_topology::explorer::solid_faces(topo, opposing_solid)?;
     for fid in faces {
         let face = topo.face(fid)?;
@@ -206,7 +214,10 @@ pub fn classify_coincident_coplanar(
         // where every centroid fraction jumps clear across the band into the hole
         // (the opposing 2D region) and is rejected — without them the band face
         // found no valid probe and was dropped.
-        let mut candidates: Vec<Point3> = Vec::with_capacity(6);
+        let mut candidates: Vec<Point3> = Vec::with_capacity(7);
+        // The sub-face's sampled interior point is the one probe guaranteed
+        // to lie on its own material — for an annulus it is the only one.
+        candidates.push(interior);
         for frac in [0.25_f64, 0.4, 0.55] {
             candidates.push(tip + (centroid - tip) * frac);
         }
@@ -235,6 +246,13 @@ pub fn classify_coincident_coplanar(
             {
                 continue;
             }
+            // And it must sample the sub-face's OWN material: a probe in the
+            // sub-face's hole says nothing about the face itself.
+            if let Some((own_outer, own_holes, own_normal)) = &own_region
+                && !point_in_planar_region(probe_xy, own_outer, own_holes, own_normal)
+            {
+                continue;
+            }
             any_valid = true;
             let probe_a = probe_xy + np * probe;
             let probe_b = probe_xy - np * probe;
@@ -248,10 +266,27 @@ pub fn classify_coincident_coplanar(
                     ray_cast_inside_votes(topo, opposing_solid, probe_b)?,
                 ),
             };
+            if std::env::var("BK_COP").is_ok() {
+                log::debug!(
+                    "COP sub={sub_face_id:?} vs {fid:?}: tip=({:.3},{:.3},{:.3}) depth={depth:.3} probe=({:.3},{:.3},{:.3}) av={av} bv={bv}",
+                    tip.x(),
+                    tip.y(),
+                    tip.z(),
+                    probe_xy.x(),
+                    probe_xy.y(),
+                    probe_xy.z()
+                );
+            }
             if av >= 2 || bv >= 2 {
                 // Solid persists on a side: internal plane → keep (defer).
                 return Ok(None);
             }
+        }
+        if std::env::var("BK_COP").is_ok() {
+            log::debug!(
+                "COP sub={sub_face_id:?} vs {fid:?}: any_valid={any_valid} -> {:?}",
+                any_valid.then_some(FaceClass::Outside)
+            );
         }
         return Ok(any_valid.then_some(FaceClass::Outside));
     }
