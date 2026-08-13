@@ -281,12 +281,27 @@ fn partial_overlap_corner_hole_interface_fuse_is_exact() {
     );
     assert_strictly_valid(&topo, fused, "partial-overlap corner-hole fuse");
 
-    let cylinders = brepkit_topology::explorer::solid_faces(&topo, fused)
+    // The fused solid carries two cylinder families: the hole's quarter
+    // walls (r=10) and the plate's rounded-corner side faces (r=3.75).
+    let radii: Vec<f64> = brepkit_topology::explorer::solid_faces(&topo, fused)
         .unwrap()
         .iter()
-        .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == "cylinder")
-        .count();
-    assert_eq!(cylinders, 8, "all quarter-cylinder hole walls must survive");
+        .filter_map(|&f| match topo.face(f).unwrap().surface() {
+            FaceSurface::Cylinder(c) => Some(c.radius()),
+            _ => None,
+        })
+        .collect();
+    let hole_walls = radii.iter().filter(|&&cr| (cr - hr).abs() < 1e-9).count();
+    let corner_faces = radii.iter().filter(|&&cr| (cr - r).abs() < 1e-9).count();
+    assert_eq!(
+        hole_walls, 4,
+        "all quarter-cylinder hole walls must survive"
+    );
+    assert_eq!(
+        corner_faces, 4,
+        "all rounded-corner side faces must survive"
+    );
+    assert_eq!(radii.len(), 8, "no extra cylinder fragments: {radii:?}");
 
     // The operands share only the z=5 interface plane, so the fuse volume is
     // exactly their sum (compared at one deflection to cancel tessellation).
