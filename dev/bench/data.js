@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786661590239,
+  "lastUpdate": 1786663224097,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31049,6 +31049,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27067199,
             "range": "± 66674",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d12bda9a72a6f167c461681e71bec05b6b945994",
+          "message": "docs(roadmap): close the bp 6x4 pocket-stage row on the 3.2.38 matrix (#1592)\n\nCollapses the bp 6x4 magnets OPEN row into a Closed entry now that #1590\n(released as 3.2.38) is confirmed by a same-day matrix: the row reads\n775 vs 1383ms (0.56x, was 1.10x), every baseplate row improved (bp 2x2\nplain 0.18x, bp 4x4 plain 0.16x), aggregate 0.45x with brepkit faster on\n25 of 26 rows. The north-star paragraph now carries the 3.2.38 figures;\nthe sole remaining reference-led row (4x4 mag no-lip, 1.04x) stays as a\nnoise-band watch.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCloses the bp 6x4 magnets pocket-stage row and updates the roadmap’s\nnorth-star to the 3.2.38 parity matrix. The row moved from 1.10x slower\nto 0.56x of the reference after #1590 shipped; the only remaining watch\nis 4x4 mag no-lip at 1.04x (noise band).\n\n- Updates parity summary to `brepkit-wasm` 3.2.38 with 0.45x aggregate,\nfaster on 25/26 rows, and 0 non-manifold scenarios vs the reference’s 5.\n- Collapses the bp 6x4 magnets residual into a Closed entry with\nmeasured timings (775 vs 1383ms) and a brief root-cause/fix note\n(contact-thin compound-cut shortcut, `BK_GFA_TIME` instrumentation,\nfixture `bp64_pocket_compound_cut_inmem.rs`).\n- Narrows the residuals table to the single 4x4 mag no-lip noise-band\nwatch; no other action required.\n\n<sup>Written for commit 01aaae2361641e1fdc3d93da28481519d220b6b2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1592?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T16:17:52-07:00",
+          "tree_id": "c177539476d15fdc10bb409f040a19ce41e00ef9",
+          "url": "https://github.com/andymai/brepkit/commit/d12bda9a72a6f167c461681e71bec05b6b945994"
+        },
+        "date": 1786663221255,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 972489,
+            "range": "± 2257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1053802,
+            "range": "± 944",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12001,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 715998,
+            "range": "± 10149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25971837,
+            "range": "± 98914",
             "unit": "ns/iter"
           }
         ]
