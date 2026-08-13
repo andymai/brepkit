@@ -161,3 +161,139 @@ fn cw_wound_extruded_profile_cut_has_valid_winding() {
     let fused = boolean::boolean(&mut topo, BooleanOp::Fuse, holed, block).unwrap();
     assert_strictly_valid(&topo, fused, "cw-profile interface fuse");
 }
+
+/// A rounded-rect plate centered at the origin with a quartered-cylinder
+/// through-hole at its center, fused onto a block covering only ONE quadrant
+/// of the plate: the hole lands exactly at the block's corner, so only some
+/// of its rim sections cross the fused interface. Pre-#1581 the
+/// vertex-coincidence promotion path spliced those hole-split sections
+/// without the full weave; the pocket-mouth cells traced as disconnected
+/// islands and emitted as phantom material (raw fuse free=15, wrong volume,
+/// ops paying an all-planar mesh fallback that still validated clean — which
+/// is why this pins the fallback count and volume sum, not just validity).
+#[test]
+fn partial_overlap_corner_hole_interface_fuse_is_exact() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let z0 = 5.0;
+
+    // Rounded 80x80 plate spanning z 5..10, centered at the origin.
+    let (hw, r) = (40.0, 3.75);
+    let c = hw - r;
+    let v = |topo: &mut Topology, x: f64, y: f64| {
+        topo.add_vertex(Vertex::new(Point3::new(x, y, z0), 1e-7))
+    };
+    let corners = [
+        (hw, -c),
+        (hw, c),
+        (c, hw),
+        (-c, hw),
+        (-hw, c),
+        (-hw, -c),
+        (-c, -hw),
+        (c, -hw),
+    ];
+    let vs: Vec<_> = corners.iter().map(|&(x, y)| v(&mut topo, x, y)).collect();
+    let arc_centers = [(c, c), (-c, c), (-c, -c), (c, -c)];
+    let mut edges = Vec::new();
+    for i in 0..4 {
+        edges.push(topo.add_edge(Edge::new(vs[2 * i], vs[2 * i + 1], EdgeCurve::Line)));
+        let (ax, ay) = arc_centers[i];
+        let circle = Circle3D::new(Point3::new(ax, ay, z0), z, r).unwrap();
+        edges.push(topo.add_edge(Edge::new(
+            vs[2 * i + 1],
+            vs[(2 * i + 2) % 8],
+            EdgeCurve::Circle(circle),
+        )));
+    }
+    let wid = topo.add_wire(
+        Wire::new(
+            edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap(),
+    );
+    let fid = topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane { normal: z, d: z0 },
+    ));
+    let plate = brepkit_operations::extrude::extrude(&mut topo, fid, z, 5.0).unwrap();
+
+    // Quartered r=10 cylinder through-cut at the origin, bottom cap
+    // coincident with the plate bottom.
+    let hr = 10.0;
+    let hv = [
+        v(&mut topo, hr, 0.0),
+        v(&mut topo, 0.0, hr),
+        v(&mut topo, -hr, 0.0),
+        v(&mut topo, 0.0, -hr),
+    ];
+    let harc = |topo: &mut Topology, a, b| {
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, z0), z, hr).unwrap();
+        topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)))
+    };
+    let hedges = [
+        harc(&mut topo, hv[0], hv[1]),
+        harc(&mut topo, hv[1], hv[2]),
+        harc(&mut topo, hv[2], hv[3]),
+        harc(&mut topo, hv[3], hv[0]),
+    ];
+    let hwid = topo.add_wire(
+        Wire::new(
+            hedges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap(),
+    );
+    let hfid = topo.add_face(Face::new(
+        hwid,
+        vec![],
+        FaceSurface::Plane { normal: z, d: z0 },
+    ));
+    let hole = brepkit_operations::extrude::extrude(&mut topo, hfid, z, 6.0).unwrap();
+
+    let holed = boolean::boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap();
+    assert_strictly_valid(&topo, holed, "corner-hole cut");
+
+    // Block spanning (0..80, 0..80, z 0..5): one quadrant of the plate.
+    let block = brepkit_operations::primitives::make_box(&mut topo, 80.0, 80.0, 5.0).unwrap();
+
+    let deflection = 0.05;
+    let holed_vol =
+        brepkit_operations::measure::oriented_solid_volume(&topo, holed, deflection).unwrap();
+    let block_vol =
+        brepkit_operations::measure::oriented_solid_volume(&topo, block, deflection).unwrap();
+
+    let fallbacks_before = boolean::mesh_fallback_count();
+    let fused = boolean::boolean(&mut topo, BooleanOp::Fuse, holed, block).unwrap();
+    assert_eq!(
+        boolean::mesh_fallback_count(),
+        fallbacks_before,
+        "partial-overlap corner-hole fuse must not mesh-fallback"
+    );
+    assert_strictly_valid(&topo, fused, "partial-overlap corner-hole fuse");
+
+    let cylinders = brepkit_topology::explorer::solid_faces(&topo, fused)
+        .unwrap()
+        .iter()
+        .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == "cylinder")
+        .count();
+    assert_eq!(cylinders, 8, "all quarter-cylinder hole walls must survive");
+
+    // The operands share only the z=5 interface plane, so the fuse volume is
+    // exactly their sum (compared at one deflection to cancel tessellation).
+    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, fused, deflection).unwrap();
+    assert!(
+        (vol - (holed_vol + block_vol)).abs() < 0.5,
+        "fuse volume {vol:.3} vs operand sum {:.3}",
+        holed_vol + block_vol
+    );
+}
