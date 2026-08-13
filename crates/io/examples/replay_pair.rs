@@ -496,6 +496,32 @@ fn main() {
         return;
     }
 
+    // FUSE_ALL=1 replays the wasm `fuseAll` path (compound_ops::fuse_all over
+    // {A, B}), which routes through fuse_cluster and REJECTS a mesh-fallback
+    // result where the pairwise `boolean` accepts it.
+    if std::env::var("FUSE_ALL").is_ok() {
+        println!("-- compound_ops::fuse_all {{A, B}} --");
+        let compound = topo.add_compound(brepkit_topology::compound::Compound::new(vec![a, b]));
+        let before = brepkit_operations::boolean::mesh_fallback_count();
+        let t = std::time::Instant::now();
+        match brepkit_operations::compound_ops::fuse_all(&mut topo, compound) {
+            Ok(sid) => {
+                let ms = t.elapsed().as_millis();
+                let fell_back = brepkit_operations::boolean::mesh_fallback_count() > before;
+                describe(
+                    &topo,
+                    sid,
+                    &format!(
+                        "fuse_all {ms}ms{}",
+                        if fell_back { " [MESH FALLBACK]" } else { "" }
+                    ),
+                );
+            }
+            Err(e) => println!("  fuse_all FAILED in {}ms: {e}", t.elapsed().as_millis()),
+        }
+        return;
+    }
+
     let raw_only = std::env::var("RAW_ONLY").is_ok();
     if !raw_only {
         println!("-- operations::boolean {op} --");

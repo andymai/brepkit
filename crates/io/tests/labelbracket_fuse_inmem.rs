@@ -33,10 +33,19 @@
 //! the tangency point, which points at pave-block attachment rather than at
 //! section computation.
 //!
-//! Ready-repro: the assertion below is what a fix must satisfy. It is ignored
-//! because every change in that area has to clear the full face-splitter foil
-//! set (d4 gridfinity, honeycomb pcut1/pcut3, divider-lip, groove-mouth,
-//! junction-disc, cylinder-slot, a1corner).
+//! A second bracket variant (`labelbracket_fingers_bracket.bin`, captured
+//! 2026-08-13 against the same bin) ends its eight support ramps in vertical
+//! finger strips lying exactly IN the cavity-wall plane y=40.550. Its side
+//! wall cuts on the bin's top ring then ride collinearly on the ring's inner
+//! boundary over part of their span, and the hole weave's whole-window
+//! midpoint probe sat exactly ON the hole polygon — an on-boundary ray-cast
+//! whose verdict flipped between the two mirrored walls (+x dropped, -x
+//! kept). The dropped wall cut left its lune partner a pendant, the +x
+//! corner lune was never split from the ring, and the shell came back open
+//! (3 free edges), forcing the mesh fallback — and, through fuse_cluster's
+//! fallback bail, a doubled fuse in consumers that try fuseAll first. Fixed
+//! by splitting boundary-riding windows at the collinear-overlap ends in
+//! `integrate_holes_plane` and dropping the riding piece explicitly.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -141,5 +150,58 @@ fn labelbracket_fuse_closes_the_back_wall() {
     assert!(
         has_back_wall,
         "no face on the y=40.550 plane reaching z=16.010 in the fuse result"
+    );
+}
+
+#[test]
+fn labelbracket_fingers_fuse_is_exact_and_closed() {
+    let mut topo = Topology::new();
+    let bin = load("labelbracket_fuse_bin.bin", &mut topo);
+    let bracket = load("labelbracket_fingers_bracket.bin", &mut topo);
+
+    assert_eq!(free_edge_count(&topo, bin), 0, "bin operand has free edges");
+    assert_eq!(
+        free_edge_count(&topo, bracket),
+        0,
+        "bracket operand has free edges"
+    );
+
+    let before = brepkit_operations::boolean::mesh_fallback_count();
+    let result = brepkit_operations::boolean::boolean(
+        &mut topo,
+        brepkit_operations::boolean::BooleanOp::Fuse,
+        bin,
+        bracket,
+    )
+    .expect("fuse should succeed");
+    assert_eq!(
+        brepkit_operations::boolean::mesh_fallback_count(),
+        before,
+        "fuse degraded to the mesh fallback"
+    );
+
+    assert_eq!(
+        free_edge_count(&topo, result),
+        0,
+        "fuse left an open shell: a top-ring corner lune was not split out"
+    );
+
+    let curved = solid_faces(&topo, result)
+        .unwrap()
+        .iter()
+        .filter(|&&fid| topo.face(fid).unwrap().surface().type_tag() != "plane")
+        .count();
+    assert_eq!(curved, 8, "result should keep the bin's 8 cylinders");
+
+    // Analytic union: bin 14102.76 (outer r=3.75 rounded prism minus the
+    // r=2.55 cavity) + bracket 1799.652 (all-planar, deflection-exact)
+    // minus the two corner lune columns the plate shares with the wall
+    // (2 x 1.395 x 1.2 = 3.35) = 15899.06; at 0.01 deflection the cylinder
+    // chords under-count ~0.2. Fallback-vs-exact is decided by the counter
+    // and free-edge asserts above, not by this band.
+    let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (15898.0..=15900.0).contains(&vol),
+        "unexpected fused volume {vol}"
     );
 }
