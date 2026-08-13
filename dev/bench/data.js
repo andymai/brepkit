@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786617287641,
+  "lastUpdate": 1786627554709,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30401,6 +30401,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25805995,
             "range": "± 30966",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0801468fbf6efa6088810f35f4a9c24fd30554d1",
+          "message": "docs(roadmap): tool-side confirmation and sweep verdict for the spacer close (#1580)\n\nRoadmap maintenance: records the released-kernel confirmation (spacer\n2.37s on 3.2.35 vs the 46s timeout), the same-day suite pair (146 vs 145\non an identical 2794-test catalog), the name-level decomposition of the\nflips (fixed / flaky / benign snapshot drift), and the bisect showing\nthe two snapshot-count changes came from 3.2.34's exact-conic\nrepresentation change.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRecords tool-side confirmation for `#1570` and the suite sweep verdict\nin the roadmap. The spacer test no longer times out (was 46s; the prior\n3.2.28 “baseline” was 3.94s due to a broken operand) and is now 2.37s on\nreleased 3.2.35; suite deltas are categorized as fixes, flaky cases, or\nbenign per-kernel snapshot drift from the exact-conic change.\n\n- Updates only the `#1570 spacer export timeout` row: replaces\n“re-measure pending” with confirmed metrics (2.37s) and the same-day\n2794-test pair (3.2.35=146 vs 3.2.22=145), including flip decomposition\nand 3.2.34 bisect notes; no code or API changes.\n\n<sup>Written for commit 8cd39e3e1dbb453d0286d162d34d986c4920a5a7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1580?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T13:23:13Z",
+          "tree_id": "934b892558c5a3c0d085c94f60d270afb1ca2edd",
+          "url": "https://github.com/andymai/brepkit/commit/0801468fbf6efa6088810f35f4a9c24fd30554d1"
+        },
+        "date": 1786627551402,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1001848,
+            "range": "± 29034",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1083950,
+            "range": "± 24564",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12073,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 714474,
+            "range": "± 3702",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25881896,
+            "range": "± 74289",
             "unit": "ns/iter"
           }
         ]
