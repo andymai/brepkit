@@ -41,6 +41,42 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
     }
     let free = uses.values().filter(|&&c| c == 1).count();
     let over = uses.values().filter(|&&c| c > 2).count();
+    if std::env::var("WIND_DUMP").is_ok() {
+        let mut eff: HashMap<EdgeId, Vec<(brepkit_topology::face::FaceId, bool)>> = HashMap::new();
+        for &fid in &faces {
+            let Ok(face) = topo.face(fid) else { continue };
+            let rev = face.is_reversed();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let Ok(w) = topo.wire(wid) else { continue };
+                for oe in w.edges() {
+                    eff.entry(oe.edge())
+                        .or_default()
+                        .push((fid, oe.is_forward() != rev));
+                }
+            }
+        }
+        for (eid, us) in &eff {
+            if us.len() == 2
+                && us[0].1 == us[1].1
+                && let Ok(e) = topo.edge(*eid)
+                && let (Ok(a), Ok(b)) = (topo.vertex(e.start()), topo.vertex(e.end()))
+            {
+                let (a, b) = (a.point(), b.point());
+                println!(
+                    "  SAMEDIR edge {eid:?} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) faces={:?}",
+                    e.curve().type_tag(),
+                    a.x(),
+                    a.y(),
+                    a.z(),
+                    b.x(),
+                    b.y(),
+                    b.z(),
+                    us
+                );
+            }
+        }
+    }
     if std::env::var("FREE_EDGES").is_ok() {
         for (eid, n) in &uses {
             if *n != 2
@@ -460,28 +496,33 @@ fn main() {
         return;
     }
 
-    println!("-- operations::boolean {op} --");
+    let raw_only = std::env::var("RAW_ONLY").is_ok();
+    if !raw_only {
+        println!("-- operations::boolean {op} --");
+    }
     let ops_op = match op.as_str() {
         "cut" => brepkit_operations::boolean::BooleanOp::Cut,
         "intersect" => brepkit_operations::boolean::BooleanOp::Intersect,
         _ => brepkit_operations::boolean::BooleanOp::Fuse,
     };
-    let before = brepkit_operations::boolean::mesh_fallback_count();
-    let t = std::time::Instant::now();
-    match brepkit_operations::boolean::boolean(&mut topo, ops_op, a, b) {
-        Ok(sid) => {
-            let ms = t.elapsed().as_millis();
-            let fell_back = brepkit_operations::boolean::mesh_fallback_count() > before;
-            describe(
-                &topo,
-                sid,
-                &format!(
-                    "OPS {op} {ms}ms{}",
-                    if fell_back { " [MESH FALLBACK]" } else { "" }
-                ),
-            );
+    if !raw_only {
+        let before = brepkit_operations::boolean::mesh_fallback_count();
+        let t = std::time::Instant::now();
+        match brepkit_operations::boolean::boolean(&mut topo, ops_op, a, b) {
+            Ok(sid) => {
+                let ms = t.elapsed().as_millis();
+                let fell_back = brepkit_operations::boolean::mesh_fallback_count() > before;
+                describe(
+                    &topo,
+                    sid,
+                    &format!(
+                        "OPS {op} {ms}ms{}",
+                        if fell_back { " [MESH FALLBACK]" } else { "" }
+                    ),
+                );
+            }
+            Err(e) => println!("  OPS {op} FAILED in {}ms: {e}", t.elapsed().as_millis()),
         }
-        Err(e) => println!("  OPS {op} FAILED in {}ms: {e}", t.elapsed().as_millis()),
     }
 
     println!("-- raw GFA {op} --");

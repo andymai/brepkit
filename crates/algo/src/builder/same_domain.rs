@@ -677,12 +677,30 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                     if idx == idx_a || idx == idx_b {
                         continue;
                     }
-                    let rep = if sub_faces[idx].rank == Rank::A {
-                        idx_a
+                    let (rep, opp) = if sub_faces[idx].rank == Rank::A {
+                        (idx_a, idx_b)
                     } else {
-                        idx_b
+                        (idx_b, idx_a)
                     };
                     if !is_residue(idx, rep, &member_set) {
+                        continue;
+                    }
+                    // Demotion annihilates the member together with the
+                    // cross-rank pair, which is only sound where the OPPOSITE
+                    // side actually covers it. Sixteen disjoint foot tops
+                    // coincident with one bin plate all land in one group via
+                    // the shared partner; the piece under the plate's insert-
+                    // pocket HOLE is not covered — it is the pocket's bottom
+                    // cap and must survive to normal classification (#1517
+                    // 4x4 row: dropping it left a 33-face open foot).
+                    if planar_member_uncovered_by_opposite(topo, sub_faces, idx, opp) {
+                        if std::env::var("BK_SD").is_ok() {
+                            log::debug!(
+                                "SD within-rank EXEMPT (uncovered by opposite) face={:?} src={:?}",
+                                sub_faces[idx].face_id,
+                                sub_faces[idx].source_face
+                            );
+                        }
                         continue;
                     }
                     within_rank_dups.push(WithinRankDuplicate {
@@ -924,6 +942,61 @@ fn compute_edge_set_quantized(
 /// is the conservative criterion that catches boolean residue (issue #696)
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
+/// Whether a planar sub-face's interior lies OUTSIDE the opposite-rank
+/// representative's material region (outside its outer polygon or inside one
+/// of its holes). Such a member is not annihilated by the coincident overlap
+/// and must not be demoted to a within-rank duplicate. Conservative: any
+/// failure to build the polygons or find an interior point returns `false`
+/// (historical demotion behavior).
+fn planar_member_uncovered_by_opposite(
+    topo: &Topology,
+    sub_faces: &[SubFace],
+    idx: usize,
+    opp_idx: usize,
+) -> bool {
+    let trace = std::env::var("BK_SD").is_ok();
+    let Some(ip) = sub_faces[idx].interior_point else {
+        if trace {
+            log::debug!(
+                "SD uncovered? {:?}: no interior point",
+                sub_faces[idx].face_id
+            );
+        }
+        return false;
+    };
+    let Ok(face) = topo.face(sub_faces[idx].face_id) else {
+        return false;
+    };
+    if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+        return false;
+    }
+    let polys = crate::classifier::planar_face_polygons(topo, sub_faces[opp_idx].face_id);
+    let Ok(Some((opp_outer, opp_holes, opp_normal))) = polys else {
+        if trace {
+            log::debug!(
+                "SD uncovered? {:?}: opposite {:?} polygons unavailable",
+                sub_faces[idx].face_id,
+                sub_faces[opp_idx].face_id
+            );
+        }
+        return false;
+    };
+    let covered =
+        crate::classifier::point_in_planar_region(ip, &opp_outer, &opp_holes, &opp_normal);
+    if trace {
+        log::debug!(
+            "SD uncovered? {:?} ip=({:.3},{:.3},{:.3}) vs {:?} (holes={}): covered={covered}",
+            sub_faces[idx].face_id,
+            ip.x(),
+            ip.y(),
+            ip.z(),
+            sub_faces[opp_idx].face_id,
+            opp_holes.len()
+        );
+    }
+    !covered
+}
+
 fn planar_faces_overlap(
     topo: &Topology,
     sub_faces: &[SubFace],

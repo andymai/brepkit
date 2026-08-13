@@ -5229,6 +5229,7 @@ fn split_face_2d_impl(
     // untouched openings — a baseplate top cut at one corner — keeps the other
     // openings' exact arc geometry instead of chord-fragmenting them).
     let mut woven_hole_indices: Vec<usize> = Vec::new();
+    let mut holes_promoted = false;
     let mut holes_integrated = if is_plane && !original_inner_wires.is_empty() {
         if let Some((extra, passthrough)) = integrate_holes_plane(
             sections,
@@ -5300,6 +5301,7 @@ fn split_face_2d_impl(
             }
             if !holes_integrated {
                 holes_integrated = true;
+                holes_promoted = true;
                 for (si, sct) in sections.iter().enumerate() {
                     if !matches!(sct.curve_3d, EdgeCurve::Line) {
                         continue;
@@ -6744,8 +6746,79 @@ fn split_face_2d_impl(
             log::debug!("BAND outer[{wi}] face {face_id:?}: {desc:?}");
         }
     }
+    // A traced region whose interior lies strictly inside one of the face's
+    // ORIGINAL holes is not material — a face's sub-faces tile its outer
+    // region minus its holes, always. When a hole's rim arrives in the
+    // arrangement as split boundary pieces (a pave-image-expanded inner wire)
+    // and sections cross the opening (the 16-foot wall grid running under a
+    // bin's insert-pocket mouth, #1517 4x4 row), the angular walker traces
+    // the in-hole cells as loops and they used to be emitted as phantom
+    // material — a disc over the pocket mouth that SD then paired against
+    // the tool's genuine caps, dropping both and leaving the foot open.
+    // Only for the vertex-coincidence PROMOTION path: it splices hole-split
+    // line sections into the arrangement without the full weave, so the
+    // in-hole cells emerge as disconnected-island traces (garbage). The real
+    // weave (integrate_holes_plane) creates in-hole regions INTENTIONALLY
+    // (the tilted-divider cap), and the un-woven path attaches the original
+    // hole AFTER the split so regions legitimately span the opening (the
+    // dovetail holecut chain) — no discard in either.
+    let hole_polys_for_discard: Vec<Vec<Point2>> =
+        if is_plane && holes_promoted && !original_inner_wires.is_empty() {
+            original_inner_wires
+                .iter()
+                .map(|h| sample_wire_loop_uv_via_frame(h, frame))
+                .filter(|p| p.len() >= 3)
+                .collect()
+        } else {
+            Vec::new()
+        };
+    let hole_margin = tol.linear * 10.0;
     let mut sub_faces = Vec::new();
     for (outer_wire, _area) in outers {
+        if !hole_polys_for_discard.is_empty() {
+            let poly = sample_wire_loop_uv_via_frame(&outer_wire, frame);
+            if poly.len() >= 3 {
+                let ip = super::classify_2d::sample_interior_point(&poly);
+                let matched_hole = hole_polys_for_discard.iter().find(|hp| {
+                    super::classify_2d::point_in_polygon_2d(ip, hp)
+                        && super::classify_2d::distance_to_polygon_boundary(ip, hp) > hole_margin
+                });
+                if let Some(hole_poly) = matched_hole {
+                    if trace_split {
+                        log::debug!(
+                            "STRACE-DROP face={face_id:?} in-hole island (ip=({:.4},{:.4}))",
+                            ip.x(),
+                            ip.y()
+                        );
+                    }
+                    // The island trace IS the opening's rim: a disconnected
+                    // island component inside a cell is unreachable from the
+                    // cell's own angular walk, so the containing region would
+                    // otherwise emerge with no inner wire and over-cover the
+                    // opening. Hand the outline (reversed to hole orientation)
+                    // to the hole-matching pass below — but only when the
+                    // original-hole attach pass will NOT also run, or the
+                    // opening would be represented twice (the dovetail
+                    // a1corner holecut aborted to mesh on the doubled rim).
+                    // Orient the outline to the ORIGINAL inner wire's
+                    // winding — the ground truth for this face's hole sense
+                    // (a raw-frame-CW face mirrors every convention; a blind
+                    // reversal left 34 same-direction shared edges around
+                    // the pocket rim).
+                    let mut hole_loop = outer_wire;
+                    if signed_area_2d(&poly) * signed_area_2d(hole_poly) < 0.0 {
+                        hole_loop.reverse();
+                        for edge in &mut hole_loop {
+                            std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
+                            std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
+                            edge.forward = !edge.forward;
+                        }
+                    }
+                    holes.push(hole_loop);
+                    continue;
+                }
+            }
+        }
         sub_faces.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire,
