@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786606498843,
+  "lastUpdate": 1786616846360,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30293,6 +30293,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21114378,
             "range": "± 507308",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9d47b189ef1a23d776c48678e23adc84d068ca6b",
+          "message": "fix(algo): close the spacer foot fuse — hole probes, in-hole sections, orientation vote (#1578)\n\n## Summary\nCloses the #1570 tail natively: the 1u spacer foot fuse is exact\nend-to-end — **435ms, no mesh fallback, free=0/over=0, watertight at\nexport tolerance** — versus the 12-15s doomed analytic attempt plus mesh\nfallback that was the tool's 46s test timeout. Four roots beyond the\ncone-cone shred (#1573), each verified by its own instrument:\n\n- **Coincident-coplanar depth probes sampled the sub-face's own hole.**\nThe probe walk (tip → vertex centroid) lands inside an annular\nsub-face's hole; for the foot plate that hole is the genuinely open\ncavity, so every probe read air-air and the buried ring classified\nOutside. Probes now must lie in the sub-face's own region, and the\nsub-face's sampled interior point joins the candidates.\n- **Wholly-in-hole sections leaked into the arrangement.** When the hole\nweave bails (a section crossing the hole's corner arc cannot be woven),\nthe general path carried in-hole sections through; they closed into four\nphantom corner lens loops (garbage faces plus punched holes). Such\nsections are now dropped, sampled arc-true via\n`sample_wire_loop_uv_via_frame` (per-edge sampling scrambles the\npolygon).\n- **The shell-orientation flux sampled raw t ∈ [0,1].**\n`evaluate_with_endpoints` takes raw curve parameters for everything but\nLine, so marched NURBS edges extrapolated to 1e21 coordinates and the\nvote's sign was noise (prior passes were coin flips). Parameters now map\nthrough `domain_with_endpoints`.\n- **The reversed flag is not a reliable orientation datum.** Boolean\noutputs circulate with mixed flag-vs-winding populations (the op3 body:\n37/50 planar faces disagree) that every solid-level oracle accepts,\nwhile Cut-minted cavities are coherently flag-flipped. The vote computes\nboth flag-composed and wire-only flux and arbitrates: agreement wins\noutright; disagreement with near-total reversed mass is a cavity (flags\nrule); mixed disagreement is flag rot (wires rule).\n\n## Test plan\n- New fixture `spacer_foot_fuse_inmem` on the captured tool operands:\nstrict no-fallback + validate + volume pins.\n- Full `brepkit-algo` (214), `brepkit-operations`, `brepkit-io` suites\ngreen, including the inward-cavity foil the arbitration must not\nregress.\n- `replay_pair` gains WINDING_CENSUS / MESH_FACE / FACE_WIRES probe\nmodes; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCloses the spacer foot fuse timeout by hardening coplanar\nclassification, hole handling, and shell orientation. Old behavior:\n12–15s analytic attempt, mesh fallback, and invalid shells. New\nbehavior: exact fuse in ~435ms with no fallback, free=0/over=0,\nwatertight; adds a regression test.\n\n- Coplanar classification: probes must lie in the sub-face’s own region\nand include the sub-face’s interior sample point. Fixes annular faces\nmisclassifying as Outside when centroids fall in their holes.\nImplemented in `classifier::classify_coincident_coplanar`.\n- Face splitter: drops sections that lie wholly inside a hole when the\nhole weave bails; samples arcs via `sample_wire_loop_uv_via_frame`.\nPrevents phantom in-hole lens loops on plane faces. Implemented in\n`face_splitter`.\n- Shell orientation vote: samples edge points in their true curve domain\nand arbitrates between flag-composed and wire-only flux. Wire-only\nreading applies to planar faces only; curved faces use the historical\nflag reading on both sides. Fallback faces contribute to the coherence\nmass. Implemented in `builder_solid`.\n- Test and tooling: adds `spacer_foot_fuse_inmem` with captured\noperands; `replay_pair` gains `WINDING_CENSUS`, `MESH_FACE`, and\n`FACE_WIRES`. New traces: `BK_COP`, `BK_CLS`, `BK_FLUX`.\n\n- Migration: calls to `classifier::classify_coincident_coplanar` must\npass the sub-face interior sample point (new parameter). No other API or\nrollout changes.\n\n<sup>Written for commit 254a7c3b8de6ae354a365c01da8f5f8290526419.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1578?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T10:24:52Z",
+          "tree_id": "3e6086de95ef78083510592200f4824af1a6eb64",
+          "url": "https://github.com/andymai/brepkit/commit/9d47b189ef1a23d776c48678e23adc84d068ca6b"
+        },
+        "date": 1786616843765,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1009085,
+            "range": "± 1069",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1098960,
+            "range": "± 19789",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13170,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 724275,
+            "range": "± 1619",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27042273,
+            "range": "± 59867",
             "unit": "ns/iter"
           }
         ]
