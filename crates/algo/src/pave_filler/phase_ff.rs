@@ -1300,6 +1300,14 @@ fn restrict_curves_to_faces(
     };
 
     const N: usize = 24;
+    // Open-curve windowing is skipped for pathologically fragmented curve
+    // populations: a near-coaxial quadric pair can arrive as dozens of
+    // marched chains (the 1u spacer fuse: 64 per pair), and windowing each
+    // one multiplies the section flood the splitter then grinds on (a 12s
+    // doomed-anyway analytic attempt became 128s before the same mesh
+    // fallback, #1570). Genuine windowing cases carry a handful of curves
+    // (the circleinsert corner: 2 per pair).
+    let window_open_curves = raw_curves.len() <= 12;
     let mut out = Vec::with_capacity(raw_curves.len());
     for raw in raw_curves {
         // Lines are clipped downstream by `clip_line_to_face`; only the
@@ -1421,7 +1429,8 @@ fn restrict_curves_to_faces(
             if f1 - f0 < n_fine
                 && !matches!(raw.curve, EdgeCurve::Circle(_))
                 && (closed
-                    || (!matches!(surf_a, FaceSurface::Plane { .. })
+                    || (window_open_curves
+                        && !matches!(surf_a, FaceSurface::Plane { .. })
                         && !matches!(surf_b, FaceSurface::Plane { .. })))
             {
                 emit_curve_windows(
@@ -1471,6 +1480,7 @@ fn restrict_curves_to_faces(
         // full circumference of a quarter band whose in-both run is 5 of 24
         // segments. Emit the exact in-both windows instead.
         if !closed
+            && window_open_curves
             && b1 - b0 < N
             && !matches!(surf_a, FaceSurface::Plane { .. })
             && !matches!(surf_b, FaceSurface::Plane { .. })
