@@ -373,11 +373,18 @@ fn build_sd_grouping(
                 // boundary-identical edge sets.
                 geometric_overlap_groups.insert(uf.find(i));
             } else if sd_miss_trace {
-                log::debug!(
-                    "SD miss (planar): {:?} vs {:?}",
-                    sub_faces[i].face_id,
-                    sub_faces[j].face_id
-                );
+                let probe = |idx: usize| {
+                    let sf = &sub_faces[idx];
+                    let d = topo.face(sf.face_id).ok().and_then(|f| {
+                        if let FaceSurface::Plane { normal, d } = *f.surface() {
+                            Some((normal.z(), d))
+                        } else {
+                            None
+                        }
+                    });
+                    (sf.face_id, d, sf.interior_point)
+                };
+                log::debug!("SD miss (planar): {:?} vs {:?}", probe(i), probe(j));
             }
         }
     }
@@ -1119,6 +1126,15 @@ fn planar_faces_overlap(
                 brepkit_math::polygon_boolean::BooleanOp::Intersection,
                 tol.linear,
             );
+            if std::env::var("BK_SD_AREA").is_ok() {
+                log::debug!(
+                    "SD area {:?}x{:?}: area_i={area_i:.3} area_j={area_j:.3} inter={:.3} thresh={:.3}",
+                    sub_faces[i].face_id,
+                    sub_faces[j].face_id,
+                    inter.area().abs(),
+                    smaller * 0.5
+                );
+            }
             if inter.area().abs() > smaller * 0.5 {
                 return true;
             }
