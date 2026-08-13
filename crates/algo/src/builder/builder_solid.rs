@@ -655,33 +655,7 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 (f64::MAX, f64::MIN, f64::MAX, f64::MIN),
                 |(ul, uh, vl, vh), &(u, v)| (ul.min(u), uh.max(u), vl.min(v), vh.max(v)),
             );
-            // The uv polygon's signed winding (u unwrapped along traversal)
-            // is the face's wire reading: CCW in (u, v) means the wire's own
-            // sense is the surface normal (du x dv). An ambiguous polygon
-            // (seam-spanning band whose closure jump dwarfs the enclosed
-            // area) has no wire reading and both readings fall back to the
-            // flag.
             let rev_flag = face.is_reversed();
-            let mut poly: Vec<(f64, f64)> = Vec::with_capacity(uvs.len());
-            for &(u, v) in &uvs {
-                let u = poly.last().map_or(u, |&(pu, _)| {
-                    let k = ((u - pu) / std::f64::consts::TAU).round();
-                    std::f64::consts::TAU.mul_add(-k, u)
-                });
-                poly.push((u, v));
-            }
-            let mut area2 = 0.0;
-            for i in 0..poly.len() {
-                let (u0, v0) = poly[i];
-                let (u1, v1) = poly[(i + 1) % poly.len()];
-                area2 += u0.mul_add(v1, -(u1 * v0));
-            }
-            let box_area = (u_hi - u_lo) * (v_hi - v_lo);
-            let wire_sign: Option<f64> = if area2.abs() > 0.05 * box_area.abs() {
-                Some(if area2 < 0.0 { -1.0 } else { 1.0 })
-            } else {
-                None
-            };
             let (n_u, n_v) = (24usize, 24usize);
             let du = (u_hi - u_lo) / n_u as f64;
             let dv = (v_hi - v_lo) / n_v as f64;
@@ -690,7 +664,7 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
             }
             let eps_u = du * 1e-3;
             let eps_v = dv * 1e-3;
-            let mut raw = 0.0_f64;
+            let mut raw_surf = 0.0_f64;
             for iu in 0..n_u {
                 for iv in 0..n_v {
                     let u = u_lo + (iu as f64 + 0.5) * du;
@@ -712,18 +686,31 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                         continue;
                     }
                     let n = surface.normal(u, v);
-                    raw += da * Vec3::new(p.x(), p.y(), p.z()).dot(n);
+                    raw_surf += da * Vec3::new(p.x(), p.y(), p.z()).dot(n);
                 }
             }
             let r = if rev_flag { -1.0 } else { 1.0 };
-            let (c_wire, c_comp, flip_counts) = match wire_sign {
-                Some(w) => (w * raw, w * r * raw, rev_flag),
-                None => (r * raw, r * raw, false),
-            };
+            // Composed = the historical flag-on-stored-normal reading, so
+            // every case the old vote accepted is unchanged whenever the
+            // arbitration picks the composed side. Wire = winding on the
+            // parameterization normal, purely geometric. A face without a
+            // wire reading contributes its flag reading to both integrals,
+            // and its reversed flag still counts toward the coherence mass —
+            // a cavity made of wrap-around bands must not read as mixed
+            // merely because its windings are unreadable.
+            // Curved faces use the historical flag reading on BOTH sides:
+            // the splitter's uv loop-winding conventions (raw-frame CW
+            // handling, seam splits) make a split curved face's wire winding
+            // a non-datum — the notched-torus band foil is the proof. Only
+            // planar faces, whose traversal-ordered Newell reading is
+            // frame-free, contribute an independent wire reading; their
+            // reversed mass still feeds the coherence arbitration.
+            let c_comp = r * raw_surf;
+            let c_wire = c_comp;
             flux += c_comp;
             flux_wire += c_wire;
             tot_mass += c_wire.abs();
-            if flip_counts {
+            if rev_flag {
                 rev_mass += c_wire.abs();
             }
             any = true;
@@ -744,7 +731,12 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                             (topo.vertex(edge.start()), topo.vertex(edge.end()))
                     {
                         let (sp, ep) = (sv.point(), ev.point());
-                        let mid = edge.curve().evaluate_with_endpoints(0.5, sp, ep);
+                        let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                        let mid = edge.curve().evaluate_with_endpoints(
+                            (d1 - d0).mul_add(0.5, d0),
+                            sp,
+                            ep,
+                        );
                         log::debug!(
                             "  FLUXEDGE {:?} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) mid=({:.3},{:.3},{:.3})",
                             oe.edge(),
