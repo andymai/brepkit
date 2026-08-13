@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786627554709,
+  "lastUpdate": 1786637704742,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30455,6 +30455,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25881896,
             "range": "± 74289",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8d096cc0f96529c8c9a1b15d7b877c447b4374b5",
+          "message": "fix(algo): close the 4x4 base fuse — pocket-mouth islands and group demotion (#1581)\n\n## Summary\nThe tool's heaviest timeout row (\"4x4 with everything enabled\", #1517):\nits final base fuse — a 123-face bin body whose center insert pocket\nopens exactly at the four-foot junction, fused with the 544-face 16-foot\nbase — burned a **72.7s wasm mesh fallback with non-manifold output\n(over=36)**. It is **exact in ~100ms** now (native RAW 102ms,\nfree=0/over=0, volume reconciling to 0.6mm³ of the operand sum,\nwatertight at export tolerance). Three roots:\n\n- **Pocket-mouth islands emitted as material.** The vertex-coincidence\npromotion path splices hole-split line sections into the arrangement\nwithout the full weave, so the cells inside the pocket mouth trace as\ndisconnected islands and were emitted as phantom faces — a disc over the\nopening that SD then paired against the feet's genuine caps, dropping\nboth.\n- **The plate lost its inner wire.** An island is unreachable from the\ncontaining cell's angular walk, so the surviving plate piece emerged\nhole-less and over-covered the opening. Discarded islands are now handed\nto the hole-matching pass, oriented to the ORIGINAL inner wire's\nwinding. Both behaviors are gated to the promotion path only — the real\nweave creates in-hole regions intentionally (tilted-divider cap foil),\nand the un-woven path legitimately spans openings before the post-split\nhole attach (dovetail holecut foil); both foils gated the gating.\n- **Group demotion annihilated the pocket caps.** The SD geometric group\n(one bin plate coincident with sixteen disjoint foot tops, transitively\nmerged through the shared partner) demoted every same-rank member to a\nwithin-rank duplicate of one representative. A member whose interior is\nnot covered by the opposite-rank representative's material — the pocket\nbites, the only caps under the open mouth — is now exempt from demotion.\n\n## Test plan\n- New fixture `gridbin4x4_feet_fuse_inmem` on the captured tool\noperands: no-fallback + volume + no NEW orientation issues (the captured\nbody arrives with 34 same-direction divider edges of its own, far from\nthe interface).\n- Full `brepkit-algo`, `brepkit-operations`, `brepkit-io` suites green,\nincluding the tilted-divider and dovetail holecut foils that shaped the\ngating; clippy clean.\n- `replay_pair` gains RAW_ONLY and WIND_DUMP probe modes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCloses the 4x4 base fuse regression where the pocket opening at the\nfour-foot junction forced a 72.7s wasm mesh fallback and produced\nnon-manifold output; the fuse now runs exact in ~100ms and exports\nwatertight. Old behavior emitted pocket-mouth islands as material and\ndemoted valid pocket caps; new behavior preserves inner wires in the\npromotion path and skips demotion when the opposite-rank member does not\ncover the interior (addresses #1517).\n\n- In face splitting, when we promote holes via vertex-coincidence,\ndiscard-only island traces now feed the hole-matching pass using the\noriginal inner-wire winding; this is gated to the promotion path and\ndoes not affect the full weave or the un-woven attach path.\n- In same-domain detection, demotion now checks opposite-rank coverage\nbefore collapsing members, preserving caps under the pocket mouth.\n- Verification: new `gridbin4x4_feet_fuse_inmem` fixture on captured\noperands; suites in `brepkit-algo`, `brepkit-operations`, and\n`brepkit-io` pass. `replay_pair` adds `RAW_ONLY` and `WIND_DUMP` probe\nmodes for focused inspection.\n\n<sup>Written for commit 5657cf473517ab31b391bfa579d1ff0454579b39.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1581?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T16:12:23Z",
+          "tree_id": "3b4b9ab4aa596968c33f28329ce33e0a57f954fe",
+          "url": "https://github.com/andymai/brepkit/commit/8d096cc0f96529c8c9a1b15d7b877c447b4374b5"
+        },
+        "date": 1786637701772,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 975762,
+            "range": "± 2608",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1057895,
+            "range": "± 1275",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12222,
+            "range": "± 147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 716984,
+            "range": "± 1577",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25956178,
+            "range": "± 41035",
             "unit": "ns/iter"
           }
         ]
