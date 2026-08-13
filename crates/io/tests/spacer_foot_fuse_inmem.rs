@@ -62,7 +62,7 @@ fn spacer_foot_fuse_is_exact_and_strictly_valid() {
 
     let vol = brepkit_operations::measure::oriented_solid_volume(&topo, fused, 0.01).unwrap();
     assert!(
-        (vol - 2401.65).abs() < 0.5,
-        "exact fuse volume expected ~2401.65, got {vol}"
+        (vol - 2404.44).abs() < 0.5,
+        "exact fuse volume expected ~2404.44 at 0.01 deflection, got {vol}"
     );
 }

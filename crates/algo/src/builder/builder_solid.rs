@@ -538,7 +538,20 @@ fn face_normal_at(topo: &Topology, face_id: FaceId, point: Point3) -> Option<Vec
 /// yields negative and is still rejected. Returns `None` when no face yields a
 /// usable contribution so the caller falls back to the volume sign.
 fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> {
+    // Two readings per face, arbitrated at the end. The reversed flag is not
+    // a reliable orientation datum on every path: boolean outputs circulate
+    // with mixed flag-vs-winding populations that every solid-level oracle
+    // accepts (the op3 spacer body: 37 of 50 planar faces disagree, yet it
+    // is halfedge-clean with positive mesh volume). A Cut-minted cavity, by
+    // contrast, is flag-flipped COHERENTLY (`SelectedFace::reversed` on
+    // every kept tool face, wires untouched). So: when the flag-composed
+    // and wire-only integrals agree, use that sign; when they disagree, a
+    // near-total reversed-mass means the flags are the datum (the cavity),
+    // otherwise they are rot and the wires are the datum.
     let mut flux = 0.0_f64;
+    let mut flux_wire = 0.0_f64;
+    let mut rev_mass = 0.0_f64;
+    let mut tot_mass = 0.0_f64;
     let mut any = false;
     let trace = std::env::var("BK_FLUX").is_ok();
     for &fid in faces {
@@ -586,18 +599,15 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 }
                 Point3::new(c.x() / n, c.y() / n, c.z() / n)
             };
-            // The face's outward sense is its wire traversal COMPOSED with
-            // the reversed flag (a reversed face walks its wire backwards) —
-            // not the stored surface normal x flag, which misreads a legal
-            // flag-and-rewound-wire combo (the op3 spacer body's top plate,
-            // #1570). The traversal-ordered Newell normal captures the wire;
-            // the flag then flips it. For a conventional face this matches
-            // `face_normal_at` exactly.
-            let mut n2 = newell_normal(&pts);
+            let n2 = newell_normal(&pts);
+            let c_wire = 0.5 * Vec3::new(centroid.x(), centroid.y(), centroid.z()).dot(n2);
+            let c_comp = if face.is_reversed() { -c_wire } else { c_wire };
+            flux += c_comp;
+            flux_wire += c_wire;
+            tot_mass += c_wire.abs();
             if face.is_reversed() {
-                n2 = -n2;
+                rev_mass += c_wire.abs();
             }
-            flux += 0.5 * Vec3::new(centroid.x(), centroid.y(), centroid.z()).dot(n2);
             any = true;
         } else {
             // Curved: integrate over the boundary's (u, v) parameter box.
@@ -645,15 +655,13 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 (f64::MAX, f64::MIN, f64::MAX, f64::MIN),
                 |(ul, uh, vl, vh), &(u, v)| (ul.min(u), uh.max(u), vl.min(v), vh.max(v)),
             );
-            // Wire-true orientation: unwrap periodic u along the traversal,
-            // read the uv polygon's signed winding, then compose with the
-            // reversed flag (a reversed face walks its wire backwards). CCW
-            // in (u, v) means the wire's own sense is the surface normal
-            // (du x dv); the flag then flips it. Stored-normal x flag alone
-            // misreads a legal flag-and-rewound-wire combo (#1570). An
-            // ambiguous polygon (seam-spanning band whose closure jump
-            // dwarfs the enclosed area) falls back to the flag.
-            let reversed = face.is_reversed();
+            // The uv polygon's signed winding (u unwrapped along traversal)
+            // is the face's wire reading: CCW in (u, v) means the wire's own
+            // sense is the surface normal (du x dv). An ambiguous polygon
+            // (seam-spanning band whose closure jump dwarfs the enclosed
+            // area) has no wire reading and both readings fall back to the
+            // flag.
+            let rev_flag = face.is_reversed();
             let mut poly: Vec<(f64, f64)> = Vec::with_capacity(uvs.len());
             for &(u, v) in &uvs {
                 let u = poly.last().map_or(u, |&(pu, _)| {
@@ -669,10 +677,10 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 area2 += u0.mul_add(v1, -(u1 * v0));
             }
             let box_area = (u_hi - u_lo) * (v_hi - v_lo);
-            let reversed = if area2.abs() > 0.05 * box_area.abs() {
-                (area2 < 0.0) != reversed
+            let wire_sign: Option<f64> = if area2.abs() > 0.05 * box_area.abs() {
+                Some(if area2 < 0.0 { -1.0 } else { 1.0 })
             } else {
-                reversed
+                None
             };
             let (n_u, n_v) = (24usize, 24usize);
             let du = (u_hi - u_lo) / n_u as f64;
@@ -682,6 +690,7 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
             }
             let eps_u = du * 1e-3;
             let eps_v = dv * 1e-3;
+            let mut raw = 0.0_f64;
             for iu in 0..n_u {
                 for iv in 0..n_v {
                     let u = u_lo + (iu as f64 + 0.5) * du;
@@ -702,14 +711,22 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     if da < 1e-20 {
                         continue;
                     }
-                    let mut n = surface.normal(u, v);
-                    if reversed {
-                        n = -n;
-                    }
-                    flux += da * Vec3::new(p.x(), p.y(), p.z()).dot(n);
-                    any = true;
+                    let n = surface.normal(u, v);
+                    raw += da * Vec3::new(p.x(), p.y(), p.z()).dot(n);
                 }
             }
+            let r = if rev_flag { -1.0 } else { 1.0 };
+            let (c_wire, c_comp, flip_counts) = match wire_sign {
+                Some(w) => (w * raw, w * r * raw, rev_flag),
+                None => (r * raw, r * raw, false),
+            };
+            flux += c_comp;
+            flux_wire += c_wire;
+            tot_mass += c_wire.abs();
+            if flip_counts {
+                rev_mass += c_wire.abs();
+            }
+            any = true;
         }
         if trace {
             log::debug!(
@@ -747,16 +764,32 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
             }
         }
     }
-    if !any || flux.abs() < 1e-9 {
+    if !any || (flux.abs() < 1e-9 && flux_wire.abs() < 1e-9) {
         return None;
     }
+    let outward = if (flux > 0.0) == (flux_wire > 0.0) {
+        flux > 0.0
+    } else if rev_mass > 0.95 * tot_mass {
+        // A coherent global flip is a Cut-minted cavity: the flags ARE the
+        // datum (every kept tool face flag-flipped, wires untouched).
+        flux > 0.0
+    } else {
+        // Mixed flags contradicting the wires are rot; the wires are the
+        // datum (the solid-level mesh, which every oracle trusts, reads
+        // these shells positive).
+        flux_wire > 0.0
+    };
     if trace {
         log::debug!(
-            "growth shell FLUX total={flux:.4} -> outward={}",
-            flux > 0.0
+            "growth shell FLUX composed={flux:.4} wire={flux_wire:.4} rev_mass={:.3} -> outward={outward}",
+            if tot_mass > 0.0 {
+                rev_mass / tot_mass
+            } else {
+                0.0
+            }
         );
     }
-    Some(flux > 0.0)
+    Some(outward)
 }
 
 /// Classify shells as Growth (outer) or Hole (inner).

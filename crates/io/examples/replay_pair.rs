@@ -211,13 +211,86 @@ fn main() {
                     "bbox=({:.3},{:.3},{:.3})..({:.3},{:.3},{:.3})",
                     lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]
                 );
+                let rev = face.is_reversed();
                 if s.is_analytic() || matches!(s, brepkit_topology::face::FaceSurface::Plane { .. })
                 {
-                    println!("{label} {fid:?} {bbox} {s:?}");
+                    println!("{label} {fid:?} rev={rev} {bbox} {s:?}");
                 } else {
-                    println!("{label} {fid:?} {bbox} nurbs");
+                    println!("{label} {fid:?} rev={rev} {bbox} nurbs");
                 }
             }
+        }
+        return;
+    }
+
+    if let Ok(want) = std::env::var("MESH_FACE") {
+        for fid in solid_faces(&topo, a).unwrap() {
+            if format!("{fid:?}") != format!("Id({want})") {
+                continue;
+            }
+            let m = brepkit_operations::tessellate::tessellate_with_uvs(&topo, fid, 0.05)
+                .unwrap()
+                .mesh;
+            let mut nz = 0.0;
+            for t in 0..m.indices.len() / 3 {
+                let p0 = m.positions[m.indices[t * 3] as usize];
+                let p1 = m.positions[m.indices[t * 3 + 1] as usize];
+                let p2 = m.positions[m.indices[t * 3 + 2] as usize];
+                nz += (p1 - p0).cross(p2 - p0).z();
+            }
+            println!(
+                "A {fid:?} rev={} tris={} sum_tri_normal_z={nz:.3}",
+                topo.face(fid).unwrap().is_reversed(),
+                m.indices.len() / 3
+            );
+        }
+        return;
+    }
+
+    if std::env::var("WINDING_CENSUS").is_ok() {
+        for (sid, label) in [(a, "A"), (b, "B")] {
+            let mut agree = 0;
+            let mut disagree = 0;
+            for fid in solid_faces(&topo, sid).unwrap() {
+                let face = topo.face(fid).unwrap();
+                let brepkit_topology::face::FaceSurface::Plane { normal, .. } = *face.surface()
+                else {
+                    continue;
+                };
+                let wire = topo.wire(face.outer_wire()).unwrap();
+                let mut pts = Vec::new();
+                for oe in wire.edges() {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    let vid = if oe.is_forward() { e.start() } else { e.end() };
+                    pts.push(topo.vertex(vid).unwrap().point());
+                }
+                if pts.len() < 3 {
+                    continue;
+                }
+                let mut n = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
+                for i in 0..pts.len() {
+                    let p = pts[i];
+                    let q = pts[(i + 1) % pts.len()];
+                    n += brepkit_math::vec::Vec3::new(
+                        (p.y() - q.y()) * (p.z() + q.z()),
+                        (p.z() - q.z()) * (p.x() + q.x()),
+                        (p.x() - q.x()) * (p.y() + q.y()),
+                    );
+                }
+                let wire_sign = n.dot(normal) > 0.0;
+                let flag_says_forward = !face.is_reversed();
+                if wire_sign == flag_says_forward {
+                    agree += 1;
+                } else {
+                    disagree += 1;
+                    println!(
+                        "{label} {fid:?} DISAGREE rev={} wire_dot_normal={:.3}",
+                        face.is_reversed(),
+                        n.dot(normal)
+                    );
+                }
+            }
+            println!("{label}: planar faces agree={agree} disagree={disagree}");
         }
         return;
     }
