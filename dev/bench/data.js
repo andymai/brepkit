@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786643213375,
+  "lastUpdate": 1786646124684,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30671,6 +30671,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25963971,
             "range": "± 48523",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "050ac15c91df7c9cfd0b576b2a1302b8110dc13f",
+          "message": "docs(roadmap): tool pin 3.2.36 shipped, #1517 closed at parity (#1585)\n\nRoadmap maintenance: gridfinity-layout-tool#3471 merged (brepkit-wasm\n3.2.36 + persisted mesh-cache revision r2, catching Greptile's\nstale-preview finding), and issue #1517 is closed on the 0-failure\ngenerator-suite measurement. The pin-bump and parity rows now state the\nshipped reality. Docs only; check-doc-paths passes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMarks `gridfinity-layout-tool#3471` as shipped on `brepkit-wasm` 3.2.36\nwith mesh-cache r2, and records `#1517` closed at geometric parity. The\nroadmap now reflects parity on the shipped pin and eviction of stale\npreviews via r2.\n\n- Review notes\n  - Only `.claude/skills/roadmap/SKILL.md` changed.\n- Moved the closed parity and pin-bump rows out of OPEN; the “north\nstar” paragraph states the shipped result; `#1517` now lives in Closed.\n- Pins: `brepkit-wasm` 3.2.36; mesh-cache r2; `brepjs` 18.124.8\n(intersectCurves dist-patch unchanged; re-target on every `brepjs`\nbump).\n\n- Rollout/Migration\n  - Docs-only in this repo.\n- In the tool, mesh-cache r2 evicts stale previews from older kernels;\nno user action required.\n\n<sup>Written for commit 0beffba9c3974bdee56e2ae1f4e800b4cf7ebf4e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1585?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T11:32:58-07:00",
+          "tree_id": "bfdc4a5e968de70c6b93b90fabcb278f8b5a6339",
+          "url": "https://github.com/andymai/brepkit/commit/050ac15c91df7c9cfd0b576b2a1302b8110dc13f"
+        },
+        "date": 1786646121714,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 966472,
+            "range": "± 4132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1047877,
+            "range": "± 1783",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12048,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 714287,
+            "range": "± 2850",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25807610,
+            "range": "± 58936",
             "unit": "ns/iter"
           }
         ]
