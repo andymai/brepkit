@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.36](https://github.com/andymai/brepkit/compare/v3.2.35...v3.2.36) (2026-08-13)
+
+
+### Bug Fixes
+
+* **algo:** close the 4x4 base fuse — pocket-mouth islands and group demotion ([#1581](https://github.com/andymai/brepkit/issues/1581)) ([8d096cc](https://github.com/andymai/brepkit/commit/8d096cc0f96529c8c9a1b15d7b877c447b4374b5))
+
 ## [3.2.35](https://github.com/andymai/brepkit/compare/v3.2.34...v3.2.35) (2026-08-13)
 
 
