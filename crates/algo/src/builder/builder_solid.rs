@@ -586,11 +586,18 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 }
                 Point3::new(c.x() / n, c.y() / n, c.z() / n)
             };
-            let Some(normal) = face_normal_at(topo, fid, centroid) else {
-                continue;
-            };
-            let area = newell_normal(&pts).length() * 0.5;
-            flux += area * Vec3::new(centroid.x(), centroid.y(), centroid.z()).dot(normal);
+            // The face's outward sense is its wire traversal COMPOSED with
+            // the reversed flag (a reversed face walks its wire backwards) —
+            // not the stored surface normal x flag, which misreads a legal
+            // flag-and-rewound-wire combo (the op3 spacer body's top plate,
+            // #1570). The traversal-ordered Newell normal captures the wire;
+            // the flag then flips it. For a conventional face this matches
+            // `face_normal_at` exactly.
+            let mut n2 = newell_normal(&pts);
+            if face.is_reversed() {
+                n2 = -n2;
+            }
+            flux += 0.5 * Vec3::new(centroid.x(), centroid.y(), centroid.z()).dot(n2);
             any = true;
         } else {
             // Curved: integrate over the boundary's (u, v) parameter box.
@@ -607,8 +614,12 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 };
                 let (sp, ep) = (sv.point(), ev.point());
                 let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
-                for k in 0..=8 {
+                // Traversal order (is_forward-aware, endpoint sample left to
+                // the next edge) so the uv polygon's signed area below reads
+                // the wire's true winding.
+                for k in 0..8 {
                     let f = f64::from(k) / 8.0;
+                    let f = if oe.is_forward() { f } else { 1.0 - f };
                     let p = edge
                         .curve()
                         .evaluate_with_endpoints((d1 - d0).mul_add(f, d0), sp, ep);
@@ -634,7 +645,35 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 (f64::MAX, f64::MIN, f64::MAX, f64::MIN),
                 |(ul, uh, vl, vh), &(u, v)| (ul.min(u), uh.max(u), vl.min(v), vh.max(v)),
             );
+            // Wire-true orientation: unwrap periodic u along the traversal,
+            // read the uv polygon's signed winding, then compose with the
+            // reversed flag (a reversed face walks its wire backwards). CCW
+            // in (u, v) means the wire's own sense is the surface normal
+            // (du x dv); the flag then flips it. Stored-normal x flag alone
+            // misreads a legal flag-and-rewound-wire combo (#1570). An
+            // ambiguous polygon (seam-spanning band whose closure jump
+            // dwarfs the enclosed area) falls back to the flag.
             let reversed = face.is_reversed();
+            let mut poly: Vec<(f64, f64)> = Vec::with_capacity(uvs.len());
+            for &(u, v) in &uvs {
+                let u = poly.last().map_or(u, |&(pu, _)| {
+                    let k = ((u - pu) / std::f64::consts::TAU).round();
+                    std::f64::consts::TAU.mul_add(-k, u)
+                });
+                poly.push((u, v));
+            }
+            let mut area2 = 0.0;
+            for i in 0..poly.len() {
+                let (u0, v0) = poly[i];
+                let (u1, v1) = poly[(i + 1) % poly.len()];
+                area2 += u0.mul_add(v1, -(u1 * v0));
+            }
+            let box_area = (u_hi - u_lo) * (v_hi - v_lo);
+            let reversed = if area2.abs() > 0.05 * box_area.abs() {
+                (area2 < 0.0) != reversed
+            } else {
+                reversed
+            };
             let (n_u, n_v) = (24usize, 24usize);
             let du = (u_hi - u_lo) / n_u as f64;
             let dv = (v_hi - v_lo) / n_v as f64;
