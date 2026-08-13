@@ -1,0 +1,19 @@
+crates/io/tests/kumiko_strut_fuse_inmem.rs
+  s_5511e9ebcd4d22::t_010cd1b28e1df5 106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b9caf82e44ae4c8211e8523d1934e880bea1655a",
+  "prompts": {},
+  "sessions": {
+    "s_5511e9ebcd4d22": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71b94051-2c50-4fd2-8261-b5d80b549276",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
