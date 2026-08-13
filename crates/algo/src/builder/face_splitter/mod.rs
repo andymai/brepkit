@@ -5441,6 +5441,55 @@ fn split_face_2d_impl(
             continue;
         }
 
+        // A section lying entirely inside one of the face's holes is over
+        // air, not material. The hole weave drops these itself, but when it
+        // bails (a section crossing a hole's corner ARC cannot be woven) the
+        // general path used to carry them into the arrangement, where they
+        // close into phantom in-hole loops — garbage faces plus punched
+        // holes (the spacer foot plate's corner lenses, #1570). Arc-true
+        // sampling on both the section and the hole rims; strict interior
+        // with a margin so a rim-riding section is never eaten.
+        if is_plane && !original_inner_wires.is_empty() {
+            let (d0, d1) = section
+                .curve_3d
+                .domain_with_endpoints(section.start, section.end);
+            let samples: Vec<Point2> = (0..=8)
+                .map(|k| {
+                    let t = d0 + (d1 - d0) * f64::from(k) / 8.0;
+                    frame.project(section.curve_3d.evaluate_with_endpoints(
+                        t,
+                        section.start,
+                        section.end,
+                    ))
+                })
+                .collect();
+            let margin = tol.linear * 10.0;
+            let wholly_in_hole = original_inner_wires.iter().any(|hole| {
+                let poly = sample_wire_loop_uv_via_frame(hole, frame);
+                poly.len() >= 3
+                    && samples.iter().all(|&p| {
+                        super::classify_2d::point_in_polygon_2d(p, &poly)
+                            && super::classify_2d::distance_to_polygon_boundary(p, &poly) > margin
+                    })
+            });
+            if trace_split {
+                log::debug!(
+                    "STRACE-INHOLE sec ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) {} wholly_in_hole={wholly_in_hole} holes={}",
+                    section.start.x(),
+                    section.start.y(),
+                    section.start.z(),
+                    section.end.x(),
+                    section.end.y(),
+                    section.end.z(),
+                    section.curve_3d.type_tag(),
+                    original_inner_wires.len()
+                );
+            }
+            if wholly_in_hole {
+                continue;
+            }
+        }
+
         // Curved sections on plane faces must live in the same PlaneFrame
         // as the boundary edges. The pcurve from build_section_edges was
         // fitted in a frame anchored at the original (pre-split) wire, so

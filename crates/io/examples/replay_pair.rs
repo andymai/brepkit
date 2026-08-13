@@ -222,6 +222,44 @@ fn main() {
         return;
     }
 
+    if let Ok(want) = std::env::var("FACE_WIRES") {
+        for (sid, label) in [(a, "A"), (b, "B")] {
+            for fid in solid_faces(&topo, sid).unwrap() {
+                if format!("{fid:?}") != format!("Id({want})") {
+                    continue;
+                }
+                let face = topo.face(fid).unwrap();
+                for (wi, wid) in std::iter::once(face.outer_wire())
+                    .chain(face.inner_wires().iter().copied())
+                    .enumerate()
+                {
+                    let w = topo.wire(wid).unwrap();
+                    println!("{label} {fid:?} wire{wi} ({} edges):", w.edges().len());
+                    for oe in w.edges() {
+                        let e = topo.edge(oe.edge()).unwrap();
+                        let (sv, ev) = (
+                            topo.vertex(e.start()).unwrap().point(),
+                            topo.vertex(e.end()).unwrap().point(),
+                        );
+                        println!(
+                            "  {:?} {} fwd={} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                            oe.edge(),
+                            e.curve().type_tag(),
+                            oe.is_forward(),
+                            sv.x(),
+                            sv.y(),
+                            sv.z(),
+                            ev.x(),
+                            ev.y(),
+                            ev.z()
+                        );
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     let bop = match op.as_str() {
         "cut" => brepkit_algo::bop::BooleanOp::Cut,
         "intersect" => brepkit_algo::bop::BooleanOp::Intersect,

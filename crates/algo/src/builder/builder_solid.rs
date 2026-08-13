@@ -560,10 +560,19 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     continue;
                 };
                 let (sp, ep) = (sv.point(), ev.point());
+                // `evaluate_with_endpoints` takes the curve's OWN parameter
+                // (raw knot/angle domain for everything but Line) — a raw
+                // [0,1] fraction extrapolates a marched-section NURBS edge to
+                // astronomical coordinates and the flux sign becomes noise.
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
                 for k in 0..4 {
                     let f = f64::from(k) / 4.0;
                     let f = if oe.is_forward() { f } else { 1.0 - f };
-                    pts.push(edge.curve().evaluate_with_endpoints(f, sp, ep));
+                    pts.push(edge.curve().evaluate_with_endpoints(
+                        (d1 - d0).mul_add(f, d0),
+                        sp,
+                        ep,
+                    ));
                 }
             }
             if pts.len() < 3 {
@@ -597,10 +606,23 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     continue;
                 };
                 let (sp, ep) = (sv.point(), ev.point());
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
                 for k in 0..=8 {
                     let f = f64::from(k) / 8.0;
-                    let p = edge.curve().evaluate_with_endpoints(f, sp, ep);
+                    let p = edge
+                        .curve()
+                        .evaluate_with_endpoints((d1 - d0).mul_add(f, d0), sp, ep);
                     if let Some((u, v)) = surface.project_point(p) {
+                        if trace && (v.abs() > 1e6 || u.abs() > 1e6) {
+                            log::debug!(
+                                "  FLUXUV edge {:?} {} f={f} p=({:.3},{:.3},{:.3}) uv=({u:.3},{v:.3})",
+                                oe.edge(),
+                                edge.curve().type_tag(),
+                                p.x(),
+                                p.y(),
+                                p.z()
+                            );
+                        }
                         uvs.push((u, v));
                     }
                 }
@@ -657,6 +679,33 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 face.is_reversed(),
                 flux - flux_before
             );
+            if (flux - flux_before).abs() > 1e12
+                && let Ok(wire) = topo.wire(face.outer_wire())
+            {
+                for oe in wire.edges() {
+                    if let Ok(edge) = topo.edge(oe.edge())
+                        && let (Ok(sv), Ok(ev)) =
+                            (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                    {
+                        let (sp, ep) = (sv.point(), ev.point());
+                        let mid = edge.curve().evaluate_with_endpoints(0.5, sp, ep);
+                        log::debug!(
+                            "  FLUXEDGE {:?} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) mid=({:.3},{:.3},{:.3})",
+                            oe.edge(),
+                            edge.curve().type_tag(),
+                            sp.x(),
+                            sp.y(),
+                            sp.z(),
+                            ep.x(),
+                            ep.y(),
+                            ep.z(),
+                            mid.x(),
+                            mid.y(),
+                            mid.z()
+                        );
+                    }
+                }
+            }
         }
     }
     if !any || flux.abs() < 1e-9 {
