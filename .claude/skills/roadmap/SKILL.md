@@ -26,8 +26,10 @@ The `#[ignore]` inventory is the load-bearing artifact. Before quoting any
 rg -n -A2 '#\[ignore' crates/    # filter the doc-comment false hits by hand
 ```
 
-**Inventory status (2026-08-13): ZERO deferred-defect pins** —
-every `#[ignore]` is an explicit diagnostic or a slow-test marker. Known stale-but-harmless:
+**Inventory status (2026-08-13): ONE deferred-defect pin** —
+`kumiko_diagonal_strut_fuse_is_exact` (`crates/io/tests/kumiko_strut_fuse_inmem.rs`),
+the corner-window frontier's acceptance bar. Every other `#[ignore]` is an explicit
+diagnostic or a slow-test marker. Known stale-but-harmless:
 the `profile_intersect.rs` box-sphere probes (box-sphere shipped analytic in #1006),
 `staircase_fuse_with_cylinders` (~2 min perf run), the two `#696` dovetail entries and
 `diverge_first_cut` (print-only).
@@ -129,7 +131,7 @@ that does not exist yet; without it, stop.
 | **4x4 mag no-lip noise-band watch (1.04x on the 3.2.38 matrix)** | The only row the reference leads; has oscillated 1.00x-1.06x across 3.2.36-3.2.38 with no kernel change targeting it. Watch, do not chase, unless a fresh same-day matrix shows a real drift |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
-| **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
+| **Kumiko corner-window strut fuses (fixtures RE-CAPTURED 2026-08-13)** | Live repro restored: `crates/io/tests/kumiko_strut_fuse_inmem.rs` + four `kumiko_strut_*.bin` operands (captured from the tool's kumikoWrapSpike probe, which still fails on 3.2.38 with "cluster fuse degraded to mesh fallback"). Shape: the coaxial wedge-strut pair fuse is EXACT (pinned active); every fuse involving a helix-swept diagonal strut (serialized as a ~42-face segmented prism) mesh-falls-back — raw GFA leaves 15+ free edges incl. ellipse sections where slanted segment planes cross the wedge cylinders. Ready-repro `kumiko_diagonal_strut_fuse_is_exact` (ignored) is the acceptance bar. The prior dig's four documented roots (band rescue, graze scaling, chord-represented NURBS boundaries, reverse-twin misread) died with the parked branch; treat as a fresh multi-root investigation, run the full splitter foil set on any change |
 | **Marched FF sections carry `pave_block_id=None`** | Architectural note without a live repro (the snapClip op-cut-3 case replays clean, fixture `snapclip_export_corner_inmem.rs` ACTIVE). If a new leak lands here, the canonical altitude is pave-block attachment at phase-FF/make_blocks — every face-splitter-level attempt broke calibrated chains |
 | **v1 fillet deprecations entangled with the public wasm API** | `try_fillet` still reaches deprecated `fillet`/`fillet_rolling_ball`; migrating changes public behavior — a product decision, not safe cleanup. See `fillet-blend`, `wasm-bindings` |
 | **crates.io / GTM items** | Andy-only. Publishing infrastructure works (see MEMORY.md for the release-please `continue-on-error` masking gotcha) |
