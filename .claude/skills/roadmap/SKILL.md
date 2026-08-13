@@ -124,7 +124,7 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **2x2 label bracket perf row: scenario-first 2.3x slower** | ROOT FOUND AND FIXED kernel-side 2026-08-13 (awaiting release + same-day tool matrix re-measure). Capture showed 195 of the row's 240ms is ONE fuse paid TWICE: the tool's bracket gained finger strips lying in the cavity-wall plane (redesigned since the Aug 9 #1510 capture), the exact fuse came back open (3 free edges: the +x top-ring corner lune never split out), `boolean` paid the 121-face mesh fallback, and `fuse_cluster`'s fallback bail made brepjs's fuseAllBisect redo the identical fuse pairwise (fuseAll 95ms discarded + fuseWithEvolution 99ms kept). Kernel root: the hole weave classified whole-window midpoints that ride collinearly ON a hole edge via the interior polygon test — an on-boundary ray-cast whose verdict flipped between the mirrored walls. Fix: collinear-overlap window splitting + explicit riding-piece drop in `integrate_holes_plane`; plus 2-solid `fuse_all` groups now take the pairwise contract directly (a pair has no batch to protect — the bail only double-billed every degraded pair fuse). Fixture `labelbracket_fingers_fuse_is_exact_and_closed`; native after: both paths exact 58 faces, 11ms. From the same matrix, still true: bp 6x4 magnets 1.11x, 4x4 mag no-lip 1.00x, aggregate 0.63x; the three volume-FAIL rows are the reference's own double-cover over-count (nm 959-1802 vs brepkit 0) — not defects. Only scenario-first numbers are kernel comparisons in this harness (warm repeats are parameter-cache hits both sides) |
+| **Bin/baseplate perf residuals: bp 6x4 magnets 1.10x, 4x4 mag no-lip 1.06x** | The only rows the reference still leads on the 3.2.37 matrix (2026-08-13); both previously measured at or near parity (1.11x / 1.00x on 3.2.36), so treat as a noise-band residual unless a fresh same-day matrix shows them drifting. bp 6x4 magnets has a prior "no dominant stage" decomposition (#1488 close) |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -135,6 +135,24 @@ that does not exist yet; without it, stop.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **2x2 label bracket scenario-first row (CLOSED 2026-08-13 on released 3.2.37; matrix row 34 vs 66ms = 0.52x, was 2.3x slower)** —
+  the tool's redesigned bracket (finger strips in the cavity-wall plane, changed
+  since the Aug 9 #1510 capture) made its wall cuts ride collinearly on the top
+  ring's inner boundary; the hole weave's whole-window midpoint sat exactly ON
+  the hole polygon and the on-boundary ray-cast verdict flipped between the
+  mirrored walls, so the +x corner lune never split out of the ring: exact fuse
+  open (3 free edges) → 121-face mesh fallback → paid TWICE (brepjs
+  fuseAllBisect: fuseAll bail discarded 95ms, pairwise redo kept 99ms — 195 of
+  the row's 240ms). Fix #1587: collinear-overlap window splitting + explicit
+  riding-piece drop in `integrate_holes_plane`, and 2-solid `fuse_all` groups
+  take the pairwise contract (a pair has no batch to protect; the bail only
+  double-billed degraded pair fuses). Fixture
+  `labelbracket_fingers_fuse_is_exact_and_closed`. Same-day 3.2.37 matrix:
+  aggregate 0.63x, faster 24/26, nm 0 vs 5; the three volume-FAIL rows remain
+  the reference's own double-cover over-count. Durable: only scenario-first
+  numbers are kernel comparisons in the labelBracketPerf harness (warm repeats
+  are parameter-cache hits on both sides).
 
 - **Tool geometric parity, #1517 (CLOSED at parity 2026-08-13, shipped in gridfinity-layout-tool#3471)** —
   generator suite **0 failed / 2790 passed** (283 files) on 3.2.36; same-day control
