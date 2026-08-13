@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786616846360,
+  "lastUpdate": 1786617287641,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30347,6 +30347,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27042273,
             "range": "± 59867",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "397a1a8d28f3b157ed2d4117612ba5eaaf92c962",
+          "message": "chore(main): release 3.2.35 (#1579)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.35](https://github.com/andymai/brepkit/compare/v3.2.34...v3.2.35)\n(2026-08-13)\n\n\n### Bug Fixes\n\n* **algo:** close the spacer foot fuse — hole probes, in-hole sections,\norientation vote\n([#1578](https://github.com/andymai/brepkit/issues/1578))\n([9d47b18](https://github.com/andymai/brepkit/commit/9d47b189ef1a23d776c48678e23adc84d068ca6b))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.35 across the workspace to fix spacer foot fuse handling in\n`brepkit-algo` for hole probes, in‑hole sections, and orientation\nvoting. This improves classification accuracy; APIs are unchanged, but\nresults in affected cases may differ.\n\n**Notes**\n- Bumps versions to `3.2.35` in `Cargo.toml` and\n`.release-please-manifest.json`; updates all workspace crates to\n`3.2.35`.\n- Behavior change: the spacer foot fuse now closes correctly during hole\nprobing/in‑hole section evaluation, improving orientation votes and\nreducing misclassifications.\n- Migration: No code changes required; if you pin versions, update to\n`3.2.35`.\n\n<sup>Written for commit 67140b215a399fa8c70cb69c369760fedae8ba5f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1579?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-13T10:32:10Z",
+          "tree_id": "eead21d063dd31f4d0899c656808b356c367ca6e",
+          "url": "https://github.com/andymai/brepkit/commit/397a1a8d28f3b157ed2d4117612ba5eaaf92c962"
+        },
+        "date": 1786617284386,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 975679,
+            "range": "± 2183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1056887,
+            "range": "± 10055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12017,
+            "range": "± 118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 717019,
+            "range": "± 22835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25805995,
+            "range": "± 30966",
             "unit": "ns/iter"
           }
         ]
