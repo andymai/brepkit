@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786595021201,
+  "lastUpdate": 1786600821181,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -30023,6 +30023,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24905646,
             "range": "± 46005",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8ebd333302a3a805eb1205534a7243dbbac43712",
+          "message": "fix(math): exact radical-plane section for offset parallel equal-angle cones (#1573)\n\n## Summary\n- #1570 reframed by operand bisection: op0-op3 receive byte-identical\noperands on 3.2.29 and 3.2.32; only op4's body differs. The 3.2.28/29\n\"4s baseline\" was a silent op3 analytic failure feeding a 662-face mesh\nblob (volume wrong by +2.2) downstream. 3.2.30's open-curve windowing\nfixed op3, and the newly exact body exposed op4's real defect.\n- The op4 defect: 8 corner pairs of opposed 45-degree cones\n(anti-parallel axes, 0.25mm apex offset). The marcher shredded each\npair's intersection into 50-64 closed micro-loops, costing 12-15s\nnatively (x3 in wasm = the 46s timeout) and corrupting the census to\nfree=41/over=18.\n- Fix: cones with parallel/anti-parallel axes and equal half-angle\ntangents intersect exactly on the radical plane (their quadric\ndifference is linear). `offset_parallel_cone_cone` computes that plane\nand reuses `exact_plane_cone` for the conic, with a nappe check against\nthe second cone. The FF cone-cone arm and `algebraic_cone_cone` now\nconsume Ellipse results; `replay_pair` gains a `FACE_DUMP` mode.\n- Result on the captured spacer lip fuse: RAW 14.1s -> 0.4s,\nfree=41/over=18 -> 12/4. The remaining residue sits on one coincident\nz=5 annular ring (SD asymmetric-fragmentation frontier), tracked in the\nroadmap.\n\n## Test plan\n- New math tests: captured-cone pair yields exactly one ellipse lying on\nboth cones (16 samples, 1e-9); disjoint-nappe pair yields definitive\nempty; unequal angles defer to the marcher.\n- Foils: full `brepkit-algo`, `brepkit-operations`, `brepkit-io` suites\ngreen; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nComputes the exact radical-plane section for offset\nparallel/anti-parallel equal-angle cone–cone intersections and guards\ndegenerate cones. Previously we deferred to the marcher, which produced\ndozens of micro-loops and timeouts; now we return a single Ellipse (or a\ndefinitive empty) and cut fuse time from ~14.1s to ~0.4s on the spacer\ncase (#1570).\n\n- Math: `exact_cone_cone` detects parallel/anti-parallel axes with equal\nhalf-angle tangents and calls `offset_parallel_cone_cone`. It constructs\nthe radical plane, reuses the plane–cone solver, and filters by the\nsecond cone’s real nappe. Degenerate (near-flat) cones and unequal\nangles defer to the marcher; apex-touching degeneracies also defer.\n- Algorithms: The FF cone–cone arm and `algebraic_cone_cone` now consume\n`Ellipse` results in addition to `Circle`. Consumers that assumed only\n`Circle` must handle `Ellipse`.\n- Tooling: `replay_pair` adds `FACE_DUMP=1` to print analytic/plane face\nparameters and exit.\n- Tests: Added cases for exact ellipse on equal-angle opposed cones,\ndefinitive empty for disjoint nappes, and defer on unequal angles.\n\n<sup>Written for commit 5635184d521f75bb334fcd2bea90ae076274454b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1573?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T05:57:43Z",
+          "tree_id": "46f73c9019dfbf0d14b58c6cd379aeece44a82ed",
+          "url": "https://github.com/andymai/brepkit/commit/8ebd333302a3a805eb1205534a7243dbbac43712"
+        },
+        "date": 1786600818183,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1007363,
+            "range": "± 1463",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1095279,
+            "range": "± 7215",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13206,
+            "range": "± 73",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 716529,
+            "range": "± 10199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26740171,
+            "range": "± 22727",
             "unit": "ns/iter"
           }
         ]
