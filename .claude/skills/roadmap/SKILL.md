@@ -46,10 +46,10 @@ at full parity, across all its generator scenarios: 100% triangle correctness, v
 correctness, manifold correctness, AND generation performance at least as good. Parity
 first, then beating it, is the acceptance bar. See `parity-benchmarking` for the harness.
 
-Where that stands: **every head-to-head bench row leads** (last full sweep 2026-08-07 on
-released kernels, equivalence verified per row; the weakest rows were closed by #1389
-mesh-sphere, #1396 exact all-planar volume, #1408/#1410 intersect octant). Gridfinity bin
-parity is reached; the full tool generator directory is green; all four primitive-boolean
+Where that stands: **REACHED AND SHIPPED (2026-08-13)** — the tool pins brepkit-wasm
+3.2.36 (gridfinity-layout-tool#3471), on which its full generator suite measures 0
+failed / 2790 passed (issue #1517 closed; see the Closed entry). Every head-to-head
+bench row leads (0.63x aggregate, faster on 24/26); all four primitive-boolean
 fallbacks are exact analytic. Per-PR history and per-row numbers live in git, MEMORY.md,
 and the bench harness — do not re-record them here. Native criterion CAVEAT: the
 cad_operations "mesh sphere" case runs a bench-local PER-FACE shim ~40x lighter than the
@@ -124,8 +124,6 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
-| **Tool geometric parity (#1517, CLOSED at parity)** | **GENERATOR SUITE GREEN on 3.2.36 (2026-08-13): 283 files, 2790 passed / 0 failed / 4 skipped.** Same-day pair on the identical 2794-test catalog (measure-3232 worktree, brepjs pin unchanged): 3.2.35 = 146 failed -> 3.2.36 = 0. The only kernel delta is #1581, the 4x4 base-fuse close — the feet-to-base interface every bin scenario shares, so the one fix collapsed the open-shell, non-manifold, timeout, AND stale-snapshot classes together (exact fuses restore the original snapshot triangle counts). Verified per doctrine: 0 raw FAIL lines in the log, no snapshot writes. The 26-min 4x4 label-bracket timeout row passes in 3.85s; 4x4-everything in 2.77s. #1581's kernel story: the 123-face pocket body x 544-face 16-foot base fuse burned 72.7s wasm in a dirty mesh fallback, now exact in ~100ms — three roots (promotion-path islands discarded AND handed to hole matching in original winding, gated to the promotion path only; SD group demotion exempts members not covered by the opposite representative); fixture `crates/io/tests/gridbin4x4_feet_fuse_inmem.rs`. Head-to-head matrix: perf **0.63x** aggregate, faster on 24/26, all 26 closed with 0 non-manifold vs the reference's 5. SHIPPED: gridfinity-layout-tool#3471 pins 3.2.36 with the persisted mesh-cache revision bumped to r2 (stale old-kernel previews evict); issue #1517 CLOSED 2026-08-13. Harness `kernelParityMatrix.test.ts` + `scripts/compare-kernel-parity.ts` |
-| **Tool pin bump** | SHIPPED 2026-08-13: gridfinity-layout-tool#3471 (brepkit-wasm 3.2.36 + mesh-cache revision r2; brepjs stays 18.124.8 so the intersectCurves dist-patch needed no re-target — it must be re-targeted on every brepjs bump). #1536 CLOSED on the 3.2.24 re-measure (slotted row 43119.91 vs reference 43129, Euler 10, 24ms; full 26-row matrix 0 bnd / 0 nm) |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
@@ -137,6 +135,21 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Tool geometric parity, #1517 (CLOSED at parity 2026-08-13, shipped in gridfinity-layout-tool#3471)** —
+  generator suite **0 failed / 2790 passed** (283 files) on 3.2.36; same-day control
+  146 failed on 3.2.35; the collapse is #1581's base-fuse island fix, the
+  feet-to-base interface every bin scenario shares (verified: 0 raw FAIL lines, no
+  snapshot writes, brepjs pin fixed across the pair). The 26-min label-bracket
+  timeout runs in 3.85s, 4x4-everything in 2.77s. #1581's kernel story: the
+  123-face pocket body x 544-face 16-foot base fuse, 72.7s dirty fallback ->
+  ~100ms exact; three roots (promotion-path islands discarded AND hole-matched in
+  original winding, gated to the promotion path; SD group demotion exempts members
+  not covered by the opposite representative); fixture
+  `crates/io/tests/gridbin4x4_feet_fuse_inmem.rs`. The ship bump also moved the
+  tool's persisted mesh-cache revision to r2 (stale old-kernel previews evict).
+  Head-to-head: 0.63x aggregate, faster on 24/26, 0 non-manifold vs the
+  reference's 5. Harness `kernelParityMatrix.test.ts` +
+  `scripts/compare-kernel-parity.ts`.
 - **#1538 coplanar-interface fuse family (CLOSED 2026-08-13; arc #1554/#1559/#1563/#1567/#1581 over 3.2.29-3.2.36)** —
   six roots: the winding emitters (extrude CW-profile rewind, closed-edge merge/CB
   direction), open-curve windowing, the hole-dangling rescue + rim-tangent union,
