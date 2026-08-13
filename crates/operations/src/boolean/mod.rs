@@ -940,7 +940,8 @@ pub fn compound_cut(
     let mut result = target;
     let mut batched = false;
     if tools.len() >= 2
-        && let Some(clusters) = cluster_tools_by_aabb(topo, tools)
+        && let Some(boxes) = tool_bounding_boxes(topo, tools)
+        && let clusters = cluster_tools_by_aabb(&boxes, tools)
         && !clusters.is_empty()
     {
         // Cheapest rung first: when no tool pair shares volume (disjoint or
@@ -953,7 +954,7 @@ pub fn compound_cut(
         // (the coaxial magnet+screw drill) disqualify the whole set: a
         // multi-component tool with overlapping components breaks parity
         // classification, so those take the fuse ladder.
-        if tools_at_most_touch(topo, tools) {
+        if tools_at_most_touch(&boxes) {
             let shortcut = crate::compound_ops::merge_disjoint_solids(topo, tools)
                 .and_then(|tool| boolean_inner(topo, BooleanOp::Cut, target, tool));
             match shortcut {
@@ -1062,15 +1063,8 @@ pub(crate) fn fuse_cluster(
 /// interpenetrate. The discriminant for the contact-thin compound-cut
 /// shortcut — a coaxial magnet+screw drill pair (screw box nested inside
 /// the magnet box) fails it, a pitch-aligned pocket grid passes.
-fn tools_at_most_touch(topo: &Topology, tools: &[SolidId]) -> bool {
+fn tools_at_most_touch(boxes: &[brepkit_math::aabb::Aabb3]) -> bool {
     let band = brepkit_math::tolerance::Tolerance::new().linear * 100.0;
-    let mut boxes = Vec::with_capacity(tools.len());
-    for &t in tools {
-        let Ok(b) = crate::measure::solid_bounding_box(topo, t) else {
-            return false;
-        };
-        boxes.push(b);
-    }
     for i in 0..boxes.len() {
         for j in (i + 1)..boxes.len() {
             let ix =
@@ -1087,10 +1081,25 @@ fn tools_at_most_touch(topo: &Topology, tools: &[SolidId]) -> bool {
     true
 }
 
+/// Per-tool AABBs, computed once and shared by the clustering pass and the
+/// contact-thin guard. `None` when any AABB is unavailable.
+fn tool_bounding_boxes(
+    topo: &Topology,
+    tools: &[SolidId],
+) -> Option<Vec<brepkit_math::aabb::Aabb3>> {
+    tools
+        .iter()
+        .map(|&t| crate::measure::solid_bounding_box(topo, t).ok())
+        .collect()
+}
+
 /// Group tools into AABB-overlap clusters (union-find over tolerance-
 /// expanded boxes). Tools within a cluster may interpenetrate; distinct
-/// clusters are pairwise disjoint. `None` when any AABB is unavailable.
-fn cluster_tools_by_aabb(topo: &Topology, tools: &[SolidId]) -> Option<Vec<Vec<SolidId>>> {
+/// clusters are pairwise disjoint.
+fn cluster_tools_by_aabb(
+    boxes: &[brepkit_math::aabb::Aabb3],
+    tools: &[SolidId],
+) -> Vec<Vec<SolidId>> {
     fn find(parent: &mut Vec<usize>, i: usize) -> usize {
         if parent[i] != i {
             let root = find(parent, parent[i]);
@@ -1099,10 +1108,6 @@ fn cluster_tools_by_aabb(topo: &Topology, tools: &[SolidId]) -> Option<Vec<Vec<S
         parent[i]
     }
     let tol = brepkit_math::tolerance::Tolerance::new().linear;
-    let mut boxes = Vec::with_capacity(tools.len());
-    for &t in tools {
-        boxes.push(crate::measure::solid_bounding_box(topo, t).ok()?);
-    }
     let mut parent: Vec<usize> = (0..tools.len()).collect();
     for i in 0..boxes.len() {
         for j in (i + 1)..boxes.len() {
@@ -1120,7 +1125,7 @@ fn cluster_tools_by_aabb(topo: &Topology, tools: &[SolidId]) -> Option<Vec<Vec<S
         let root = find(&mut parent, i);
         clusters.entry(root).or_default().push(tools[i]);
     }
-    Some(clusters.into_values().collect())
+    clusters.into_values().collect()
 }
 
 /// Perform a boolean operation and return an [`crate::evolution::EvolutionMap`]

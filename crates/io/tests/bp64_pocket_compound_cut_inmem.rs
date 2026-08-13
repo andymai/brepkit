@@ -63,7 +63,7 @@ fn bp64_pocket_compound_cut_is_exact_and_analytic() {
     for &fid in &faces {
         let face = topo.face(fid).unwrap();
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            let Ok(wire) = topo.wire(wid) else { continue };
+            let wire = topo.wire(wid).unwrap();
             for oe in wire.edges() {
                 *uses.entry(oe.edge()).or_default() += 1;
             }
