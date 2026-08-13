@@ -186,12 +186,36 @@ fn main() {
         for (sid, label) in [(a, "A"), (b, "B")] {
             for fid in solid_faces(&topo, sid).unwrap() {
                 let face = topo.face(fid).unwrap();
-                let s = face.surface();
+                let s = face.surface().clone();
+                let mut lo = [f64::MAX; 3];
+                let mut hi = [f64::MIN; 3];
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    let Ok(w) = topo.wire(wid) else { continue };
+                    for oe in w.edges() {
+                        let Ok(e) = topo.edge(oe.edge()) else {
+                            continue;
+                        };
+                        for vid in [e.start(), e.end()] {
+                            let Ok(v) = topo.vertex(vid) else { continue };
+                            let p = v.point();
+                            for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+                                lo[k] = lo[k].min(c);
+                                hi[k] = hi[k].max(c);
+                            }
+                        }
+                    }
+                }
+                let bbox = format!(
+                    "bbox=({:.3},{:.3},{:.3})..({:.3},{:.3},{:.3})",
+                    lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]
+                );
                 if s.is_analytic() || matches!(s, brepkit_topology::face::FaceSurface::Plane { .. })
                 {
-                    println!("{label} {fid:?} {s:?}");
+                    println!("{label} {fid:?} {bbox} {s:?}");
                 } else {
-                    println!("{label} {fid:?} nurbs");
+                    println!("{label} {fid:?} {bbox} nurbs");
                 }
             }
         }
