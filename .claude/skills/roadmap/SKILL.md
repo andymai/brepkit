@@ -124,6 +124,7 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
+| **2x2 label bracket perf row: 2.79x slower (223 vs 80ms)** | Fresh matrix 2026-08-13 on shipped 3.2.36 (single run; confirm stability first). Geometry clean both sides (brepkit nm=0; the reference itself nm=147). The graze-era note had this row at 1.59x, so it likely regressed further. Also from that matrix: bp 6x4 magnets improved to 1.11x, 4x4 mag no-lip exact 1.00x, aggregate 0.63x; the three volume-FAIL rows (3x3 scoop+label+lip, compartments+scoop, full-featured) are all the reference double-cover over-count (nm 959-1802 vs brepkit 0) — not defects. Next: re-run the row for stability, then capture its boolean traffic and find the hot op (`parity-benchmarking` capture recipe) |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
 | **Kumiko corner-window roots (4, documented)** | Unshipped; the parked branch `fix/kumiko-corner-window-cut` is GONE from the remote with its fixtures. Re-attempting means re-capturing fixtures first |
