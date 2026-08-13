@@ -1,0 +1,21 @@
+crates/operations/tests/interface_fuse_winding.rs
+  s_f2f2b253d25507::t_8bbd6e5e0e93d9 284-286,289-293,296-298
+  s_f2f2b253d25507::t_2ef87cdadc84ff 294-295
+  s_f2f2b253d25507::t_8407467ecd02ac 299-301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dba78505eee904acb8518ade3b9b66f6e1f56756",
+  "prompts": {},
+  "sessions": {
+    "s_f2f2b253d25507": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "267c9a5e-bbb3-4be4-ad8e-d7f8fc9dcd58",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
