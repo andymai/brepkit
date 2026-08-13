@@ -1,0 +1,21 @@
+crates/operations/src/compound_ops.rs
+  s_5511e9ebcd4d22::t_f969e923767c5d 84-85
+crates/io/examples/replay_pair.rs
+  s_5511e9ebcd4d22::t_a32dbe9f3e47c4 500-502
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "59bb798f715e1a5009d45784d715092cefba7f34",
+  "prompts": {},
+  "sessions": {
+    "s_5511e9ebcd4d22": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71b94051-2c50-4fd2-8261-b5d80b549276",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
