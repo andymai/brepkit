@@ -943,6 +943,27 @@ pub fn compound_cut(
         && let Some(clusters) = cluster_tools_by_aabb(topo, tools)
         && !clusters.is_empty()
     {
+        // Cheapest rung first: when no tool pair shares volume (disjoint or
+        // merely TOUCHING — a baseplate's pocket grid meets rim-to-rim), the
+        // union's boundary is just the concatenation of the tool shells, so
+        // combine them verbatim and cut once. This is the same
+        // position-duplicate-edge tool the fuse ladder below builds one GFA
+        // run per tool (a 6x4 plate's 24-pocket stage spent ~24 wasted
+        // arrangements on it), minus all the fuses. Interpenetrating pairs
+        // (the coaxial magnet+screw drill) disqualify the whole set: a
+        // multi-component tool with overlapping components breaks parity
+        // classification, so those take the fuse ladder.
+        if tools_at_most_touch(topo, tools) {
+            let shortcut = crate::compound_ops::merge_disjoint_solids(topo, tools)
+                .and_then(|tool| boolean_inner(topo, BooleanOp::Cut, target, tool));
+            match shortcut {
+                Ok(cut) if !LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) => {
+                    result = cut;
+                    batched = true;
+                }
+                _ => log::debug!("compound_cut: contact-thin shortcut declined"),
+            }
+        }
         // Tools that merely TOUCH (a plate's edge-tangent preview pockets)
         // cluster together by AABB, and their union is genuinely non-manifold,
         // so every pairwise fuse below "succeeds" through the mesh fallback —
@@ -953,28 +974,30 @@ pub fn compound_cut(
         // Taint propagates as Err from `fuse_cluster` and from the cross-
         // cluster merge fuses below, so a discarded merge never touches the
         // public fallback counter.
-        let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
-            let fused = fuse_cluster(topo, cluster)?;
-            match acc {
-                None => Ok(Some(fused)),
-                Some(prev) => {
-                    let m = boolean_inner(topo, BooleanOp::Fuse, prev, fused)?;
-                    if LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
-                        return Err(crate::OperationsError::InvalidInput {
-                            reason: "cluster merge degraded to mesh fallback".to_string(),
-                        });
+        if !batched {
+            let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
+                let fused = fuse_cluster(topo, cluster)?;
+                match acc {
+                    None => Ok(Some(fused)),
+                    Some(prev) => {
+                        let m = boolean_inner(topo, BooleanOp::Fuse, prev, fused)?;
+                        if LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
+                            return Err(crate::OperationsError::InvalidInput {
+                                reason: "cluster merge degraded to mesh fallback".to_string(),
+                            });
+                        }
+                        Ok(Some(m))
                     }
-                    Ok(Some(m))
                 }
+            });
+            if let Ok(Some(tool)) = merged
+                && let Ok(cut) = boolean(topo, BooleanOp::Cut, target, tool)
+            {
+                result = cut;
+                batched = true;
+            } else {
+                log::debug!("compound_cut: batched tool path failed, using sequential cuts");
             }
-        });
-        if let Ok(Some(tool)) = merged
-            && let Ok(cut) = boolean(topo, BooleanOp::Cut, target, tool)
-        {
-            result = cut;
-            batched = true;
-        } else {
-            log::debug!("compound_cut: batched tool path failed, using sequential cuts");
         }
     }
     if !batched {
@@ -1031,6 +1054,37 @@ pub(crate) fn fuse_cluster(
         }
         Ok(fused)
     })
+}
+
+/// True when no pair of tools shares volume beyond a weld-scale sliver:
+/// every pairwise AABB intersection is at most `100·tol` thick in some
+/// axis, so tools can touch face-to-face or rim-to-rim but never nest or
+/// interpenetrate. The discriminant for the contact-thin compound-cut
+/// shortcut — a coaxial magnet+screw drill pair (screw box nested inside
+/// the magnet box) fails it, a pitch-aligned pocket grid passes.
+fn tools_at_most_touch(topo: &Topology, tools: &[SolidId]) -> bool {
+    let band = brepkit_math::tolerance::Tolerance::new().linear * 100.0;
+    let mut boxes = Vec::with_capacity(tools.len());
+    for &t in tools {
+        let Ok(b) = crate::measure::solid_bounding_box(topo, t) else {
+            return false;
+        };
+        boxes.push(b);
+    }
+    for i in 0..boxes.len() {
+        for j in (i + 1)..boxes.len() {
+            let ix =
+                boxes[i].max.x().min(boxes[j].max.x()) - boxes[i].min.x().max(boxes[j].min.x());
+            let iy =
+                boxes[i].max.y().min(boxes[j].max.y()) - boxes[i].min.y().max(boxes[j].min.y());
+            let iz =
+                boxes[i].max.z().min(boxes[j].max.z()) - boxes[i].min.z().max(boxes[j].min.z());
+            if ix > band && iy > band && iz > band {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Group tools into AABB-overlap clusters (union-find over tolerance-
