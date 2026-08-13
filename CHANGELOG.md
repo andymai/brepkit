@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.35](https://github.com/andymai/brepkit/compare/v3.2.34...v3.2.35) (2026-08-13)
+
+
+### Bug Fixes
+
+* **algo:** close the spacer foot fuse — hole probes, in-hole sections, orientation vote ([#1578](https://github.com/andymai/brepkit/issues/1578)) ([9d47b18](https://github.com/andymai/brepkit/commit/9d47b189ef1a23d776c48678e23adc84d068ca6b))
+
 ## [3.2.34](https://github.com/andymai/brepkit/compare/v3.2.33...v3.2.34) (2026-08-13)
 
 
