@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786711497981,
+  "lastUpdate": 1786712324049,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31913,6 +31913,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26215331,
             "range": "± 93164",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "46b24df5be72d41f4f4b929bc690704dc70b33ae",
+          "message": "test(algo): pin the junction-band discriminant on marched sections (#1608)\n\nFollow-up to #1606 addressing the review comment: pins that an on-curve\npoint midway between the finder's 64 samples is rejected with\njunction_bands=false (the boundary-split calibration the honeycomb foil\nguards) and accepted with junction_bands=true (the T-junction path).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins the junction-band discriminant for marched NURBS sections by adding\na test that proves behavior. Previously unguarded, the mid-sample\non-curve case is now enforced: narrow bands reject it; junction bands\naccept it, protecting boundary-split calibration and the T-junction\npath.\n\n- Adds `junction_bands_accept_on_curve_points_between_samples` in\n`crates/algo/src/builder/face_splitter/edge_splitting.rs`. It evaluates\na parabola section at t=0.507 with tol=1e-7, asserts no split when\n`junction_bands=false`, and one split near the probe when\n`junction_bands=true`.\n- No behavior change; increases coverage and prevents regressions in the\ncoarse-sample discriminant on marched sections.\n\n<sup>Written for commit 0c9d3a60f011cf8db59eed9f7c1a30f764944d53.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1608?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T12:56:05Z",
+          "tree_id": "5b99fa5c7d4eb74e496f6ea0b4362124ed0bb381",
+          "url": "https://github.com/andymai/brepkit/commit/46b24df5be72d41f4f4b929bc690704dc70b33ae"
+        },
+        "date": 1786712320785,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 936014,
+            "range": "± 8264",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1020140,
+            "range": "± 13316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11826,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 679400,
+            "range": "± 1185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25320875,
+            "range": "± 109308",
             "unit": "ns/iter"
           }
         ]
