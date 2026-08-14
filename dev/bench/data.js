@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786739897061,
+  "lastUpdate": 1786740473589,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32183,6 +32183,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45178876,
             "range": "± 164062",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0458036939adf5ea5e29abce44893197f1dbac96",
+          "message": "chore(main): release 3.3.6 (#1613)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.3.6](https://github.com/andymai/brepkit/compare/v3.3.5...v3.3.6)\n(2026-08-14)\n\n\n### Bug Fixes\n\n* **algo:** weld wire vertices across faces at the marched-drift band\n([#1612](https://github.com/andymai/brepkit/issues/1612))\n([feb8ef2](https://github.com/andymai/brepkit/commit/feb8ef272f52a524c20f9ef987d2a2832ad7979b))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.3.6: welds wire vertices across faces in the marched-drift\nband to improve continuity and prevent seam splits. Previously vertices\nwere not welded in this band; now they are welded, which can reduce\nvertex count and change indices.\n\n- Outputs may change: expect fewer duplicate vertices and different\nvertex indices in topology/serialized models.\n- Bumps all workspace crates to `3.3.6` (`brepkit-algo`,\n`brepkit-geometry`, `brepkit-topology`, etc.). Consumers pinning exact\nversions must update.\n\n<sup>Written for commit c9a4bf3a95206274cd48ea8a567fc4fb534442f0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1613?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-14T20:45:18Z",
+          "tree_id": "8424ce8ddd86782b1528d3b09fcbcf53ca5f7ed7",
+          "url": "https://github.com/andymai/brepkit/commit/0458036939adf5ea5e29abce44893197f1dbac96"
+        },
+        "date": 1786740470309,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1025901,
+            "range": "± 1459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1115496,
+            "range": "± 8993",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13169,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 729398,
+            "range": "± 1782",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45105072,
+            "range": "± 495111",
             "unit": "ns/iter"
           }
         ]
