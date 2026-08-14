@@ -39,7 +39,9 @@ pub(super) fn split_boundary_edges_at_3d_points(
             // partition anchors on it — the chord-based line fallback rejects
             // on-curve points by the sagitta, leaving the shared edge whole on
             // one face and split on the other (cross-face desync).
-            EdgeCurve::NurbsCurve(_) => find_splits_on_nurbs_section(&edge, split_pts_3d, tol),
+            EdgeCurve::NurbsCurve(_) => {
+                find_splits_on_nurbs_section(&edge, split_pts_3d, tol, false)
+            }
             EdgeCurve::Line => find_splits_on_line(&edge, split_pts_3d, tol),
         };
 
@@ -325,6 +327,7 @@ pub(super) fn find_splits_on_nurbs_section(
     edge: &OrientedPCurveEdge,
     split_pts_3d: &[Point3],
     tol: f64,
+    junction_bands: bool,
 ) -> Vec<(f64, Point3)> {
     let n_samples = 64usize;
     // Hoist the domain: `evaluate_edge_at_t` re-derives `domain_with_endpoints`
@@ -347,6 +350,23 @@ pub(super) fn find_splits_on_nurbs_section(
             eval_at(i as f64 / n_samples as f64)
         })
         .collect();
+    // T-junction candidates are OTHER SECTIONS' ENDPOINTS: genuine on-curve
+    // junctions whose nearest of 64 samples can sit half a sample step away,
+    // and whose positions carry marched (~1e-6) rounding — so that caller
+    // widens the broad phase to sampling resolution and the fine gate to the
+    // weld scale. The boundary-split caller keeps the narrow bands: its
+    // candidate set is arbitrary and the honeycomb pcut1 thin walls carry
+    // real structure at the widened scale (foil-refuted, twice).
+    let max_gap = if junction_bands {
+        samples
+            .windows(2)
+            .map(|w| (w[1] - w[0]).length())
+            .fold(0.0_f64, f64::max)
+    } else {
+        0.0
+    };
+    let broad_band = max_gap.max(tol * 100.0);
+    let fine_band = if junction_bands { tol * 100.0 } else { tol };
     let mut splits: Vec<(f64, Point3)> = Vec::new();
     for &sp in split_pts_3d {
         crate::perf::bump_face_split_probe();
@@ -360,7 +380,7 @@ pub(super) fn find_splits_on_nurbs_section(
                 best_i = i;
             }
         }
-        if best_d > tol * 100.0 {
+        if best_d > broad_band {
             continue;
         }
         #[allow(clippy::cast_precision_loss)]
@@ -378,7 +398,7 @@ pub(super) fn find_splits_on_nurbs_section(
             }
         }
         let t = f64::midpoint(lo, hi);
-        if (eval_at(t) - sp).length() > tol {
+        if (eval_at(t) - sp).length() > fine_band {
             continue;
         }
         if t <= tol || t >= 1.0 - tol {
@@ -566,7 +586,7 @@ mod tests {
         let edge = parabola_section_edge(false);
         let eval = |t: f64| evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
         let (sp_a, sp_b) = (eval(0.3), eval(0.7));
-        let splits = find_splits_on_nurbs_section(&edge, &[sp_b, sp_a], 1e-3);
+        let splits = find_splits_on_nurbs_section(&edge, &[sp_b, sp_a], 1e-3, false);
         assert_eq!(splits.len(), 2);
         assert!((splits[0].1 - sp_a).length() < 1e-6);
         assert!((splits[1].1 - sp_b).length() < 1e-6);
@@ -795,7 +815,7 @@ mod tests {
         let edge = parabola_section_edge(true);
         let eval = |t: f64| evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
         let (sp_a, sp_b) = (eval(0.3), eval(0.7));
-        let splits = find_splits_on_nurbs_section(&edge, &[sp_a, sp_b], 1e-3);
+        let splits = find_splits_on_nurbs_section(&edge, &[sp_a, sp_b], 1e-3, false);
         assert_eq!(splits.len(), 2);
         assert!((splits[0].1 - sp_b).length() < 1e-6);
         assert!((splits[1].1 - sp_a).length() < 1e-6);

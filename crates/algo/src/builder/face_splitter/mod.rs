@@ -276,7 +276,7 @@ fn split_sections_at_t_junctions(
             // chord like an arc — a junction endpoint mid-curve is invisible
             // to the chord-based search, so use sampled point-to-curve
             // projection over the full endpoint set (conics are rare).
-            EdgeCurve::NurbsCurve(_) => find_splits_on_nurbs_section(&edge, &endpoints, tol),
+            EdgeCurve::NurbsCurve(_) => find_splits_on_nurbs_section(&edge, &endpoints, tol, true),
             // Only endpoints near a line section's bounding box can land on it;
             // the grid query returns exactly that subset, preserving the former
             // full scan's result.
