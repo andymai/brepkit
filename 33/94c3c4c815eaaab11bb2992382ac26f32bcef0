@@ -1,0 +1,24 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_69aaeee2c3f165::t_8fca8baad42ec2 6090-6108
+  s_69aaeee2c3f165::t_c94158fa362504 5697-5732
+.claude/skills/roadmap/SKILL.md
+  s_69aaeee2c3f165::t_0959153ccb8c27 134
+crates/io/tests/kumiko_strut_fuse_inmem.rs
+  s_69aaeee2c3f165::t_04ed6239132796 118-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3394c3c4c815eaaab11bb2992382ac26f32bcef0",
+  "prompts": {},
+  "sessions": {
+    "s_69aaeee2c3f165": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21fc02d1-9d5a-4042-9667-142c49e8d284",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
