@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786710922550,
+  "lastUpdate": 1786711497981,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31859,6 +31859,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18122224,
             "range": "± 178413",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "28922d86ba42d3d5552bd9439ae5c4d70e72f2e9",
+          "message": "chore(main): release 3.3.4 (#1607)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.3.4](https://github.com/andymai/brepkit/compare/v3.3.3...v3.3.4)\n(2026-08-14)\n\n\n### Bug Fixes\n\n* **algo:** junction-gated bands for T-splits on marched sections\n([#1606](https://github.com/andymai/brepkit/issues/1606))\n([fd4fa9e](https://github.com/andymai/brepkit/commit/fd4fa9e9877bd4936228d2753ecef3c656d66e50))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.3.4 across the workspace to fix T-splits on marched sections\nby gating bands at junctions in `brepkit-algo`. Previously, bands\ncrossed T-junctions and produced incorrect or unstable splits; now they\nstop at junctions for correct, deterministic results.\n\n**Review and rollout**\n- Updates versions in `.release-please-manifest.json` and `Cargo.toml`\nto `3.3.4` for all `brepkit-*` crates; no API changes.\n- Source code in this PR is unchanged aside from versioning and\n`CHANGELOG.md`; the fix ships in `brepkit-algo@3.3.4`.\n- Consumers must bump to `3.3.4` to get the fix; expect localized split\ndifferences near junctions.\n\n<sup>Written for commit f8e909d79bf7550549f6e40ff1bac6852e904ec4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1607?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-14T12:42:13Z",
+          "tree_id": "5faceb58bcb86ed409a52e6138298e93ea30c274",
+          "url": "https://github.com/andymai/brepkit/commit/28922d86ba42d3d5552bd9439ae5c4d70e72f2e9"
+        },
+        "date": 1786711494266,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 975364,
+            "range": "± 5718",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1059590,
+            "range": "± 16338",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12088,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 719085,
+            "range": "± 1228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26215331,
+            "range": "± 93164",
             "unit": "ns/iter"
           }
         ]
