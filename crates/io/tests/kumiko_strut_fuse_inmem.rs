@@ -115,6 +115,33 @@ fn kumiko_wedge_strut_pair_fuse_is_exact() {
     assert_eq!(cylinders, 6, "the crossing wedges should keep 6 cylinders");
 }
 
+/// The wedge's outer cylinder must PARTITION at the strut's marched section
+/// chains: below-chain and above-chain pieces kept, the in-strut band cut
+/// out (4 cylinder faces in the raw GFA result, 2 per wedge cylinder). The
+/// chain ends and the boundary split vertices share one 3D junction but
+/// carry UVs from different paths (~1e-6 apart, above the wire graph's
+/// exact-tol weld); without the splitter's 3D-identity UV co-registration
+/// the pendant pruner eats both chains and the face survives unsplit with
+/// its in-strut corner span still in a kept wire.
+#[test]
+fn kumiko_wedge_outer_cylinder_partitions_at_strut_chains() {
+    let mut topo = Topology::new();
+    let v = load("kumiko_strut_vertical.bin", &mut topo);
+    let d = load("kumiko_strut_diag_up_ruled.bin", &mut topo);
+
+    let result = brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, v, d)
+        .expect("raw GFA fuse should assemble");
+    let cylinders = solid_faces(&topo, result)
+        .unwrap()
+        .iter()
+        .filter(|&&fid| topo.face(fid).unwrap().surface().type_tag() == "cylinder")
+        .count();
+    assert!(
+        cylinders >= 4,
+        "both wedge cylinders must split at the strut chains (got {cylinders} cylinder faces)"
+    );
+}
+
 /// READY-REPRO: fusing a wedge strut with the honest (ruled-patch) diagonal
 /// strut must stay exact. Today the wedge's kept pieces fail to weld to the
 /// strut's marched-NURBS section seams and detach as a 5-face open growth
