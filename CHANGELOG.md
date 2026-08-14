@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.6](https://github.com/andymai/brepkit/compare/v3.3.5...v3.3.6) (2026-08-14)
+
+
+### Bug Fixes
+
+* **algo:** weld wire vertices across faces at the marched-drift band ([#1612](https://github.com/andymai/brepkit/issues/1612)) ([feb8ef2](https://github.com/andymai/brepkit/commit/feb8ef272f52a524c20f9ef987d2a2832ad7979b))
+
 ## [3.3.5](https://github.com/andymai/brepkit/compare/v3.3.4...v3.3.5) (2026-08-14)
 
 
