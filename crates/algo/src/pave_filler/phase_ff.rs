@@ -3964,12 +3964,13 @@ fn nurbs_nurbs_intersection(
 }
 
 /// Quadric × NURBS intersection: convert the analytic surface to its NURBS
-/// representation over the face's v-range (exact rational for cylinder and
-/// cone) and march it against the partner. This arm used to return no curves
-/// ("deferred to later phases" — no such phase existed), so any boolean
-/// pairing a quadric with a NURBS face silently never split either side:
-/// the NURBS solid's kept pieces and the quadric's kept pieces shared no
-/// seam and the result shelled apart (the kumiko wedge × ruled-strut fuse).
+/// representation over the face's v-range (exact rational for the cylinder;
+/// cone, sphere and torus use their sampled conversions) and march it
+/// against the partner. This arm used to return no curves ("deferred to
+/// later phases" — no such phase existed), so any boolean pairing a quadric
+/// with a NURBS face silently never split either side: the NURBS solid's
+/// kept pieces and the quadric's kept pieces shared no seam and the result
+/// shelled apart (the kumiko wedge × ruled-strut fuse).
 fn analytic_nurbs_intersection(
     surf: &FaceSurface,
     v_range: Option<(f64, f64)>,
@@ -4005,10 +4006,7 @@ fn analytic_nurbs_intersection(
         FaceSurface::Torus(t) => t.to_nurbs(),
         _ => return Ok(Vec::new()),
     };
-    match converted {
-        Ok(as_nurbs) => nurbs_nurbs_intersection(&as_nurbs, nurbs),
-        Err(_) => Ok(Vec::new()),
-    }
+    nurbs_nurbs_intersection(&converted?, nurbs)
 }
 
 /// Compute AABB for a circle.
