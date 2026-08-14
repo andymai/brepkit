@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786704600534,
+  "lastUpdate": 1786710922550,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31805,6 +31805,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26241200,
             "range": "± 60798",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fd4fa9e9877bd4936228d2753ecef3c656d66e50",
+          "message": "fix(algo): junction-gated bands for T-splits on marched sections (#1606)\n\nFifth root on the kumiko strut-fuse frontier (#1599, #1601, #1603). The\nsideways-exiting strut quads need a T-junction split of the side-plane\nsection at the wedge corner, and find_splits_on_nurbs_section carried\ntwo band mismatches suppressing it: the broad phase gated nearest-SAMPLE\ndistance at weld scale (an on-curve point mid-segment sits ~len/128 from\nits nearest of 64 samples), and the post-ternary fine gate used the bare\nexact tolerance against ~1e-6 marched geometry.\n\nA GLOBAL widening broke the honeycomb pcut1 foil twice (its thin walls\ncarry real structure at the widened scale), so the widening is gated per\ncall site: split_sections_at_t_junctions passes junction_bands=true (its\ncandidates are other sections' endpoints — genuine junctions), while\nsplit_boundary_edges_at_3d_points keeps the narrow bands.\n\nResult: the wedge-corner T-split fires; strut fuse free 26 -> 25 with\nhoneycomb green. The remaining wire-builder routing dig is recorded in\nthe roadmap.\n\nVerification: full sweep green — algo, operations, io (honeycomb foil\nincluded), wasm gridfinity 27/27; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nJunction-gated tolerance bands enable T-splits on marched NURBS sections\nwithout regressing thin-wall cases. Previously, narrow sampling and\nexact-tol gates (or a global widening) either missed genuine junctions\nor broke the honeycomb foil; now, widened bands apply only to\nsection-endpoint candidates while boundary splits keep narrow bands.\n\n- find_splits_on_nurbs_section adds `junction_bands: bool`;\n`split_sections_at_t_junctions` passes `true`,\n`split_boundary_edges_at_3d_points` passes `false`.\n- Broad phase uses the max inter-sample gap or `tol*100` when\n`junction_bands` is true; otherwise unchanged.\n- Fine gate is weld-scale (`tol*100`) when `junction_bands` is true,\nexact `tol` otherwise.\n- Result: the wedge-corner T-split on the kumiko strut quads now fires\n(fuse free 26 -> 25) and honeycomb pcut1 stays green.\n- Tests updated to pass the new flag; no public API changes.\n\n<sup>Written for commit a89bbeb0e0063d9ee53b1e48ffea849a46ff4a8e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1606?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T12:33:08Z",
+          "tree_id": "e912e45533961ef70f557b9cc1a0f42e03679fce",
+          "url": "https://github.com/andymai/brepkit/commit/fd4fa9e9877bd4936228d2753ecef3c656d66e50"
+        },
+        "date": 1786710919248,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 650080,
+            "range": "± 5370",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 715397,
+            "range": "± 3145",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8149,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 470563,
+            "range": "± 963",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18122224,
+            "range": "± 178413",
             "unit": "ns/iter"
           }
         ]
