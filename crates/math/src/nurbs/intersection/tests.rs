@@ -272,6 +272,42 @@ fn tilted_intersects_flat() {
     }
 }
 
+/// A marched section that leaves the domain must end ON the exact domain
+/// boundary, not at the marcher's 0.1%-of-span interior clamp margin. Two
+/// faces sharing a boundary edge each march their own section; if both stop
+/// a margin short, the chain ends miss by twice the margin scaled by patch
+/// size (~2e-3 on the kumiko strut quads) and no downstream weld can close
+/// the junction.
+#[test]
+fn marched_section_ends_on_exact_domain_boundary() {
+    let s1 = flat_surface();
+    let s2 = tilted_surface();
+
+    // Intersection: the line x=0.5 on z=0, crossing v (= y) from 0 to 1.
+    let result = intersect_nurbs_nurbs(&s1, &s2, 10, 0.05).unwrap();
+    assert!(!result.is_empty());
+
+    let mut y_min = f64::MAX;
+    let mut y_max = f64::MIN;
+    for curve in &result {
+        for pt in [curve.points.first(), curve.points.last()]
+            .into_iter()
+            .flatten()
+        {
+            y_min = y_min.min(pt.point.y());
+            y_max = y_max.max(pt.point.y());
+        }
+    }
+    assert!(
+        y_min.abs() < 1e-6,
+        "chain end must reach the v=0 boundary exactly, got y_min={y_min:.9}"
+    );
+    assert!(
+        (y_max - 1.0).abs() < 1e-6,
+        "chain end must reach the v=1 boundary exactly, got y_max={y_max:.9}"
+    );
+}
+
 #[test]
 fn ssi_points_lie_on_both_surfaces() {
     let s1 = flat_surface();
