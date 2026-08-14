@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786678980891,
+  "lastUpdate": 1786688809587,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31427,6 +31427,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27002152,
             "range": "± 27910",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5687f3303b2606b6e1b6f6354194a66acdc78e33",
+          "message": "fix(algo): close marched-section junction gaps and split non-periodic no-seam quads (#1599)\n\n## Problem\n\nThe kumiko wedge x ruled diagonal strut fuse (the corner-window\nfrontier, ready-repro `kumiko_diagonal_strut_fuse_is_exact`) aborted\nassembly with \"open growth shell with 7 faces\" and paid the mesh\nfallback. The roadmap's live root was the outer cylinder's 7 sections\narriving as two chains whose consecutive endpoints miss by ~2e-3, so no\nclosed cut forms.\n\n## Root 1 (math): marched sections stall one clamp margin short of the\ndomain edge\n\n`constrain_param` clamps every non-periodic parameter a 0.1%-of-span\nmargin inside the domain, and `refine_ssi_point` re-clamps every Newton\niteration, so no marched point can ever reach a domain boundary. A\nsection that leaves the patch stalls at the margin; two faces sharing\nthat edge each stall on their own side, and their sections miss by twice\nthe margin scaled by patch size. The probe\n(`crates/io/examples/strut_junction_probe.rs`) shows every strut-patch\nsection ending at exactly v=0.001/v=0.999 pre-fix, and the ~2.4e-3\njunction gaps match the margin arithmetic. This also settles the roadmap\nhypothesis that the pieces were minted downstream:\n`make_blocks`/`link_existing` cannot split section pave-blocks at all\n(only VE/EE/EF add extra paves, and only to operand edges).\n\nFix: `finish_chain`/`refine_onto_boundary` in `surface_marching.rs`.\nWhen a march terminates inside the clamp band, the exited parameters are\npinned to the exact domain edge and the free parameters Newton-solved\n(boundary evaluation is safe; `find_span` clamps). Degenerate boundaries\n(sphere poles) bail on the singular reduced system and keep the stalled\nendpoint. Post-fix, adjacent patches' sections share their junction\npoints to 6+ decimals.\n\n## Root 2 (algo): non-periodic no-seam NURBS quads never split\n\nThe no-seam shortcut intercepted every all-Line-boundary curved face,\nand its disjoint-section fallback (`split_noseam_by_arrangement`) is\nsphere-only — a non-periodic bilinear strut quad crossed by two wedge\nplanes returned unsplit (\"split into 1\"), its in-wedge piece classified\nwhole and dropped. Only periodic surfaces (and spheres) genuinely need\nthe shortcut's seam machinery; the gate now requires that, so\nnon-periodic quads take the generic arrangement and split.\n\n## Result\n\nThe wedge x diagonal strut raw GFA fuse goes from a hard abort to an\nexact-typed 59-face assembly (3 cylinders + 50 NURBS + 6 planes) with 45\nfree edges remaining. The remaining roots (near-tangential plane x\nend-patch marching fragments; section/corner edge sharing between kept\nsub-faces) are recorded in the roadmap; the acceptance repro stays\nignored.\n\n## Verification\n\n- New pins: `marched_section_ends_on_exact_domain_boundary` (math),\n`nonperiodic_line_bounded_nurbs_quad_splits_by_disjoint_sections` (algo)\n- Suites green: math, algo, operations, io (30 binaries), `wasm --lib\ngridfinity` 27/27\n- Clippy clean on changed crates; approx census unchanged (all boolean\nrows exact analytic)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCloses SSI-marched section junction gaps and splits non-periodic,\nline-bounded NURBS quads via the generic arrangement. Previously, chains\nstopped ~0.1% inside non-periodic boundaries and missed adjacent\nsections by ~2e-3; and the no-seam shortcut returned non-periodic\nbilinear quads unsplit. Now, chain ends refine onto the exact boundary,\nand the no-seam shortcut is gated to periodic surfaces and `Sphere`. The\nkumiko wedge × diagonal strut fuse assembles exact-typed (59 faces),\nthough free edges remain.\n\n- Review focus:\n- `crates/math/src/nurbs/intersection/surface_marching.rs`: new\n`finish_chain` and `refine_onto_boundary` replace margin-stalled\nendpoints with boundary-refined points; degenerate boundaries bail and\nkeep the stalled end. The boundary-refinement band is now derived from\nthe `NONPERIODIC_CLAMP_MARGIN` so both move together.\n- `crates/algo/src/builder/face_splitter/mod.rs`: no-seam path now\nrequires periodic U/V or `Sphere`; non-periodic, all-Line-boundary faces\ntake the generic arrangement and split. Adds test\n`nonperiodic_line_bounded_nurbs_quad_splits_by_disjoint_sections`.\n- Tests/probe: `marched_section_ends_on_exact_domain_boundary`; probe\n`crates/io/examples/strut_junction_probe.rs`. Side effects: section\nendpoints may snap to exact boundaries; non-periodic quads that\npreviously returned “split into 1” now split. No API changes.\n\n<sup>Written for commit c948522c2e9249af68569e0e70901c1ec3e71950.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1599?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T06:24:12Z",
+          "tree_id": "5bbfde14008cbe670026f66158f7e492993e1cb8",
+          "url": "https://github.com/andymai/brepkit/commit/5687f3303b2606b6e1b6f6354194a66acdc78e33"
+        },
+        "date": 1786688806353,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 940812,
+            "range": "± 1636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1024682,
+            "range": "± 6109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12053,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 681885,
+            "range": "± 2586",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25367793,
+            "range": "± 36753",
             "unit": "ns/iter"
           }
         ]
