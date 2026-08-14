@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.2](https://github.com/andymai/brepkit/compare/v3.3.1...v3.3.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **math:** chain plane-NURBS grid crossings by cell connectivity ([#1601](https://github.com/andymai/brepkit/issues/1601)) ([61d2a4e](https://github.com/andymai/brepkit/commit/61d2a4e843c7f46567c34f62486d5108066ee058))
+
 ## [3.3.1](https://github.com/andymai/brepkit/compare/v3.3.0...v3.3.1) (2026-08-14)
 
 
