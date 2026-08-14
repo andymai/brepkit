@@ -5773,7 +5773,12 @@ fn split_face_2d_impl(
                 };
                 let adopted = canon
                     .iter()
-                    .find(|(q3, _)| (*q3 - p3).length_squared() <= weld3_sq)
+                    .filter(|(q3, _)| (*q3 - p3).length_squared() <= weld3_sq)
+                    .min_by(|(a3, _), (b3, _)| {
+                        (*a3 - p3)
+                            .length_squared()
+                            .total_cmp(&(*b3 - p3).length_squared())
+                    })
                     .map(|&(_, quv)| quv);
                 let new_uv = adopted.unwrap_or_else(|| {
                     canon.push((p3, uv));
