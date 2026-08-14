@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786740473589,
+  "lastUpdate": 1786741566610,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32237,6 +32237,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45105072,
             "range": "± 495111",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "858554f4d9d9baf5716fd86e7d23a1c6c3a19ed7",
+          "message": "refactor(algo): polish the wire-vertex weld per review (#1614)\n\nFollow-up to #1612 addressing the review comments: squared-distance\ncomparison in the weld scan, accurate pool comment (resolved-or-minted),\nand a captured VCORNER flag in replay_pair.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSwitches the wire-vertex weld scan to squared-distance comparisons and\ncaptures the `VCORNER` flag once in the replay example. This keeps weld\nsemantics while removing sqrt costs and clarifying the FRESH vertex pool\ncomment.\n\n- Weld scan: compare `length_squared()` against a squared band\n(`(tol.linear * 250.0)^2`). Old behavior used `length()` and a linear\nband. This avoids sqrt and makes threshold math consistent; borderline\npicks may shift slightly due to float precision.\n- Update comment to “resolved or minted” for the cross-face vertex pool.\n- Replay tool: read `VCORNER` once into `vcorner_enabled` and close over\nit. Old behavior re-read the env var on each scan; changing the env at\nruntime now has no effect.\n\n<sup>Written for commit a10904525263a39e8f5632119ff6308a3315f272.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1614?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T21:03:32Z",
+          "tree_id": "16cc150994205aa1ca5531e6fa6194348809552d",
+          "url": "https://github.com/andymai/brepkit/commit/858554f4d9d9baf5716fd86e7d23a1c6c3a19ed7"
+        },
+        "date": 1786741563156,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1040994,
+            "range": "± 101529",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1114828,
+            "range": "± 18398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13116,
+            "range": "± 163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 728697,
+            "range": "± 3910",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45037938,
+            "range": "± 75984",
             "unit": "ns/iter"
           }
         ]
