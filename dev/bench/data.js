@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786716453470,
+  "lastUpdate": 1786717314327,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32075,6 +32075,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27440147,
             "range": "± 107643",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "06d06cc7890c7fa6cae985d1908b72e05611b426",
+          "message": "refactor(algo): adopt the nearest canon UV at interior junctions (#1611)\n\nFollow-up to #1609 addressing the review comment: the interior-junction\ncanonicalization now adopts the MINIMUM-distance representative within\nthe weld band (consistent with the boundary co-registration) instead of\nthe first match, so dense junction clusters cannot adopt a farther\nrepresentative.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdopts the nearest canonical UV at interior junctions instead of the\nfirst match within the weld band. This aligns interior-junction\ncanonicalization with boundary co-registration and prevents dense\njunction clusters from adopting a farther representative.\n\n- When multiple `canon` candidates are within `weld3_sq`, select the one\nwith minimum squared distance to `p3`; otherwise fall back to pushing\nthe new UV as before.\n- Removes order dependence from adoption and slightly increases\nper-junction work by scanning all candidates within the band. No API or\nmigration changes.\n\n<sup>Written for commit 8d42dbf66ea922192546eb83023f068cfeb3bd03.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1611?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T14:19:22Z",
+          "tree_id": "d8e930936c82a29f139382abd0a554585705a1b3",
+          "url": "https://github.com/andymai/brepkit/commit/06d06cc7890c7fa6cae985d1908b72e05611b426"
+        },
+        "date": 1786717311203,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 972954,
+            "range": "± 2197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1053461,
+            "range": "± 757",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11991,
+            "range": "± 437",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713920,
+            "range": "± 1068",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25953129,
+            "range": "± 45722",
             "unit": "ns/iter"
           }
         ]
