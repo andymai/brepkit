@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786715892542,
+  "lastUpdate": 1786716453470,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32021,6 +32021,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25826265,
             "range": "± 70515",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "73185560957f3791f4e13bd262d53666c61e48b4",
+          "message": "chore(main): release 3.3.5 (#1610)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.3.5](https://github.com/andymai/brepkit/compare/v3.3.4...v3.3.5)\n(2026-08-14)\n\n\n### Bug Fixes\n\n* **algo:** co-register interior junction UVs after T-splits\n([#1609](https://github.com/andymai/brepkit/issues/1609))\n([c78629e](https://github.com/andymai/brepkit/commit/c78629e4beb00a9c9499f69b1114342689efdb0d))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.3.5 to fix UV misregistration at interior junctions after\nT-splits in `brepkit-algo`. Previously, T-splits could leave junction\nUVs unaligned; now they are co-registered, improving texture continuity\nwith no API changes.\n\n**Review and rollout**\n- Bumps workspace and `brepkit-*` crate versions from 3.3.4 to 3.3.5 and\nupdates `CHANGELOG.md`; no other code changes here.\n- If you pin versions, update all `brepkit-*` crates to `3.3.5` and\nrebuild (including WASM) to pick up the fix.\n- Spot-check models that use T-splits for reduced UV seams and no\nregressions.\n\n<sup>Written for commit e6347ba83686625ac09b838f200ed37a16c21890.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1610?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-14T14:04:54Z",
+          "tree_id": "d3aa612104756648686e3502d6dfe9fe511c3d95",
+          "url": "https://github.com/andymai/brepkit/commit/73185560957f3791f4e13bd262d53666c61e48b4"
+        },
+        "date": 1786716449282,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1054265,
+            "range": "± 18489",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1110428,
+            "range": "± 7074",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13390,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 733879,
+            "range": "± 1344",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27440147,
+            "range": "± 107643",
             "unit": "ns/iter"
           }
         ]
