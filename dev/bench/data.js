@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786717314327,
+  "lastUpdate": 1786739897061,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32129,6 +32129,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25953129,
             "range": "± 45722",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "feb8ef272f52a524c20f9ef987d2a2832ad7979b",
+          "message": "fix(algo): weld wire vertices across faces at the marched-drift band (#1612)\n\nEighth root on the kumiko strut-fuse frontier. The coincident twin edges\n(one FF section span emitted by both adjacent faces, endpoints 1.65e-5\napart) traced to resolve_edge_vertices' mint fallback: each face's wires\nmint vertices from their own drifted endpoints against exactly-quantized\ncaches, so four distinct vertices existed at one junction and\nmerge_duplicate_edges (1e-7) could never collapse the seam copies.\n\nFix: a shared per-build pool of minted wire vertices, consulted at the\nfallback with a weld-scale band (250x tol) and the junction registry's\n10x ambiguity guard. Path elimination that located the mint (EE/EF\nprobes, all phase-FF sites, the registry-empty refutation) is recorded\nin the roadmap/task history; the TWIN=2, VCORNER, and RAW_ONLY\ninstruments land in replay_pair.\n\nResult: zero coincident twin pairs; strut fuse free 24 -> 21, over 3 ->\n2.\n\nVerification: full sweep green — algo, operations, io (honeycomb\nguardian included), wasm gridfinity 27/27; clippy clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nWelds wire vertices across faces during topology build to collapse\ncoincident seam copies. Previously each face minted vertices from its\nown drifted endpoints (~1e-5 apart), producing multiple vertices at one\njunction; now a shared per-build pool with weld-band adoption replaces\nthe mint, yielding zero TWIN pairs and reducing free edges 24 -> 21\n(over 3 -> 2).\n\n- Implementation: `fill_images_faces` introduces a `wire_vertex_pool`\nconsulted in `resolve_edge_vertices` after the position-based registry.\nAdoption uses a 250×`tol` band with a 10× nearest-neighbor ambiguity\nguard; minted vertices are added back into the pool. This preserves\nexact-cache behavior while welding cross-face junctions so\n`merge_duplicate_edges` can collapse coincident edges.\n- Instrumentation: `replay_pair` gains `TWIN=2` endpoint dumps and\n`VCORNER` scans (including a post-raw pass) to locate drifted junction\nmints.\n- Verification: full sweep green across algo/ops/io (including wasm\ngridfinity 27/27). No API changes or migrations required.\n\n<sup>Written for commit 80be08f135793728511f968a894f4824e7bc99f6.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1612?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T20:35:39Z",
+          "tree_id": "9323657c425210607348ddaf1be9bfd11282fb14",
+          "url": "https://github.com/andymai/brepkit/commit/feb8ef272f52a524c20f9ef987d2a2832ad7979b"
+        },
+        "date": 1786739893207,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1061417,
+            "range": "± 1598",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1099797,
+            "range": "± 8581",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13226,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 723258,
+            "range": "± 925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45178876,
+            "range": "± 164062",
             "unit": "ns/iter"
           }
         ]
