@@ -635,8 +635,9 @@ fn main() {
             }
         }
     }
+    let vcorner_enabled = std::env::var("VCORNER").is_ok();
     let vcorner_scan = |topo: &Topology, tag: &str| {
-        if std::env::var("VCORNER").is_ok() {
+        if vcorner_enabled {
             for i in 0..topo.num_vertices() {
                 let Some(vid) = topo.vertex_id_from_index(i) else {
                     continue;
