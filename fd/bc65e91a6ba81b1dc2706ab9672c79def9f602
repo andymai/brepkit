@@ -1,0 +1,29 @@
+crates/math/src/nurbs/intersection/chaining.rs
+  s_69aaeee2c3f165::t_a8847057bcf205 41
+  s_69aaeee2c3f165::t_9c73be039da967 27-38
+crates/math/src/nurbs/intersection/tests.rs
+  s_69aaeee2c3f165::t_88317039c4e3a5 283,290-292,294-297
+  s_69aaeee2c3f165::t_8aa8a43e6e204a 275-282,284-289,293
+crates/math/src/nurbs/intersection/plane.rs
+  s_69aaeee2c3f165::t_7c84a7d7cc8de9 55-67,70-71,74-81,83-90,92-93,95-97,99-104,106-145,150-154,156-158,160-165,169-173,175-195,199,203-204
+  s_69aaeee2c3f165::t_76270b2f98f074 166-168
+  s_69aaeee2c3f165::t_ad045d083d3b40 7
+  s_69aaeee2c3f165::t_4e6d6db168ccc3 105,155
+  s_69aaeee2c3f165::t_8237f28ad3ce3b 159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "fdbc65e91a6ba81b1dc2706ab9672c79def9f602",
+  "prompts": {},
+  "sessions": {
+    "s_69aaeee2c3f165": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21fc02d1-9d5a-4042-9667-142c49e8d284",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
