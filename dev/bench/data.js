@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786699945799,
+  "lastUpdate": 1786700490177,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31697,6 +31697,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25891425,
             "range": "± 72042",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4518f44cc3800bc6becae497395aefb2fa22cafe",
+          "message": "chore(main): release 3.3.3 (#1604)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.3.3](https://github.com/andymai/brepkit/compare/v3.3.2...v3.3.3)\n(2026-08-14)\n\n\n### Bug Fixes\n\n* **algo:** co-register section UVs with the boundary graph on curved\nfaces ([#1603](https://github.com/andymai/brepkit/issues/1603))\n([de911f8](https://github.com/andymai/brepkit/commit/de911f8bd753296ab2846e421ca77fb0f3b900dd))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.3.3 fixes section UV registration on curved faces. Previously,\nsection UVs could diverge from the boundary graph; now they are\nco-registered, improving trim alignment and consistency. Expect small,\ndeterministic shifts in UVs and tessellation on curved surfaces; no API\nchanges.\n\n**Review notes**\n- Bumps `brepkit` and all workspace crates to 3.3.3; updates the release\nmanifest and changelog.\n- Behavior-only fix lives in `brepkit-algo`; public APIs are unchanged.\n- Action: update to 3.3.3 and rebaseline tests that assert\nUVs/tessellation/topology on curved faces.\n\n<sup>Written for commit 1374c3ac2dfeed2a17e211e60642a6b32b5705c0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1604?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-14T09:39:01Z",
+          "tree_id": "009170322f947addf0d0141f52ca6a641a60d0af",
+          "url": "https://github.com/andymai/brepkit/commit/4518f44cc3800bc6becae497395aefb2fa22cafe"
+        },
+        "date": 1786700487288,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 974919,
+            "range": "± 2253",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1055699,
+            "range": "± 51074",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12089,
+            "range": "± 202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 717169,
+            "range": "± 1011",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26026657,
+            "range": "± 86403",
             "unit": "ns/iter"
           }
         ]
