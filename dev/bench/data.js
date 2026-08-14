@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786689430868,
+  "lastUpdate": 1786695792009,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31535,6 +31535,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25927706,
             "range": "± 106238",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61d2a4e843c7f46567c34f62486d5108066ee058",
+          "message": "fix(math): chain plane-NURBS grid crossings by cell connectivity (#1601)\n\n## Problem\n\nFollow-up to #1599 on the kumiko strut-fuse frontier. The wedge side\nplane x strut end-patch intersection came back as a dashed line: 10\nfragments of 2-3 points with ~0.05 gaps where one ~0.75-long transversal\ncrossing exists (probe: `crates/io/examples/strut_plane_probe.rs`; the\ncontact is genuinely transversal, signed-distance span 1.29 — not a\ngraze).\n\n## Root\n\n`intersect_plane_nurbs` dumped its grid-scan crossings into the\nproximity chainer, and the two are incompatible by construction:\n\n- The scan visited every interior cell edge from both adjacent cells, so\nevery crossing arrived duplicated and refined to an identical point.\nEach point's nearest neighbor was its own twin,\n`estimate_chain_threshold`'s average-spacing statistic collapsed to ~0,\nand the threshold degenerated to its floor (5% of cloud diagonal) —\nbelow the real row pitch, so one branch chained as dashes.\n- Removing the duplicates (either at the scan or before the estimate)\ninflates the average and over-chains genuinely-close branches: the\nhoneycomb pcut1 thin-wall foil regresses to over-shared=7. The two\ncalibrations are coupled; no distance statistic serves both.\n\n## Fix\n\nMarching-squares connectivity: each crossing is computed once per unique\ngrid edge, linked through shared cells (saddle cells resolved by the\ncenter sample sign), and the ordered chains bypass the threshold chainer\nentirely via a new `build_curves_from_chains`. Sampling gaps along one\nbranch connect and distinct branches never bridge, both by construction.\nThe proximity chainer is untouched for marched (NURBS x NURBS) clouds.\n\n## Result\n\n- Patch x plane: one 25-point curve (was 10 dashes); honeycomb foil\ngreen (was over=7 under the dedup variant).\n- Strut fuse: 64 faces, free=26 over=2 (was 62/free=36); remaining root\ntracked in the roadmap (neighbors disagree about boundary-edge splits;\nthe free edges have no coincident twin — new `TWIN=1` instrument in\nreplay_pair).\n\n## Verification\n\n- New pin: `plane_crossing_between_grid_columns_is_one_curve` (10-sample\nsetup where the row pitch exceeds the old threshold floor)\n- Suites green: math, algo, operations, io (incl. the honeycomb foil),\nwasm gridfinity 27/27; clippy clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nChains plane–NURBS intersections by per‑cell connectivity (marching\nsquares) instead of proximity threshold chaining, eliminating dashed\nartifacts and over‑chaining. Previously `intersect_plane_nurbs` fed\nduplicated interior‑edge crossings into the proximity chainer,\ncollapsing its spacing estimate (single crossings returned as dashes);\ndedup inflated the estimate and bridged thin‑wall branches. Now each\ncrossing is computed once per unique grid edge, linked through shared\ncells (saddles resolved by a center sample), and curves are fit from\nordered chains via `build_curves_from_chains`.\n\n- Behavior: plane×patch now returns one continuous curve (was 10\ndashes); honeycomb thin‑wall case passes; kumiko strut fuse reports 64\nfaces with free=26, over=2.\n- Scope/review: `crates/math/src/nurbs/intersection/plane.rs` implements\nunique‑edge crossing maps, per‑cell linking, degree‑1‑first walks, and\nsplits chains on Newton‑refine failure;\n`crates/math/src/nurbs/intersection/chaining.rs` adds\n`build_curves_from_chains`. Proximity chainer remains for NURBS×NURBS\nintersections.\n- Tests/tools: adds `plane_crossing_between_grid_columns_is_one_curve`;\nadds `crates/io/examples/strut_plane_probe.rs`; adds `TWIN=1` instrument\nin `crates/io/examples/replay_pair.rs`.\n- Internal: counts cell‑edge crossings in a stack buffer to reduce\nallocations (no behavior change).\n\n<sup>Written for commit 3512dec3ed724b085c82c3dbe86dbdcb70d04120.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1601?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T08:20:33Z",
+          "tree_id": "f6151b6eba4df0b286ae8ce5e7251bb7181883ee",
+          "url": "https://github.com/andymai/brepkit/commit/61d2a4e843c7f46567c34f62486d5108066ee058"
+        },
+        "date": 1786695788797,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1048050,
+            "range": "± 14344",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1101284,
+            "range": "± 45668",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13133,
+            "range": "± 64",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 728794,
+            "range": "± 1935",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26988375,
+            "range": "± 24403",
             "unit": "ns/iter"
           }
         ]
