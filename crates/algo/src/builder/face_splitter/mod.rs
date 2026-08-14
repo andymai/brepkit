@@ -5704,8 +5704,11 @@ fn split_face_2d_impl(
     // cylinder kept its in-strut corner span for exactly this reason).
     // Junction identity is the 3D point, so adopt the boundary's UV
     // wherever the 3D positions coincide within the weld-scale band.
-    if !is_plane && all_edges.len() > n_boundary_edges {
-        let weld3 = tol.linear * 100.0;
+    // Non-periodic faces only: a periodic face's seam carries TWO boundary
+    // vertices at the same 3D position whose UVs differ by a full period,
+    // and nearest-3D adoption could pick the wrong copy.
+    if !is_plane && !u_periodic && !v_periodic && all_edges.len() > n_boundary_edges {
+        let weld3_sq = (tol.linear * 100.0) * (tol.linear * 100.0);
         let boundary_uvs: Vec<(Point3, Point2)> = all_edges[..n_boundary_edges]
             .iter()
             .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
@@ -5713,8 +5716,8 @@ fn split_face_2d_impl(
         let adopt = |p3: Point3| -> Option<Point2> {
             let mut best: Option<(f64, Point2)> = None;
             for &(q3, quv) in &boundary_uvs {
-                let d = (q3 - p3).length();
-                if d <= weld3 && best.is_none_or(|(bd, _)| d < bd) {
+                let d = (q3 - p3).length_squared();
+                if d <= weld3_sq && best.is_none_or(|(bd, _)| d < bd) {
                     best = Some((d, quv));
                 }
             }
