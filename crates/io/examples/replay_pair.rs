@@ -77,6 +77,54 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
             }
         }
     }
+    // TWIN=1: for each free edge, scan the solid for a coincident partner
+    // edge (both endpoints within 1e-3, either order) and print the endpoint
+    // and midpoint separations — the instrument for seam copies that miss
+    // the position-quantized merge.
+    if std::env::var("TWIN").is_ok() {
+        let all_eids: Vec<EdgeId> = uses.keys().copied().collect();
+        let ends = |eid: EdgeId| -> Option<(brepkit_math::vec::Point3, brepkit_math::vec::Point3)> {
+            let e = topo.edge(eid).ok()?;
+            Some((
+                topo.vertex(e.start()).ok()?.point(),
+                topo.vertex(e.end()).ok()?.point(),
+            ))
+        };
+        let mid = |eid: EdgeId| -> Option<brepkit_math::vec::Point3> {
+            let e = topo.edge(eid).ok()?;
+            let (sp, ep) = ends(eid)?;
+            let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+            Some(
+                e.curve()
+                    .evaluate_with_endpoints(f64::midpoint(t0, t1), sp, ep),
+            )
+        };
+        for (&eid, &n) in &uses {
+            if n != 1 {
+                continue;
+            }
+            let Some((sp, ep)) = ends(eid) else { continue };
+            for &oid in &all_eids {
+                if oid == eid {
+                    continue;
+                }
+                let Some((os, oe2)) = ends(oid) else { continue };
+                let fwd = (sp - os).length().max((ep - oe2).length());
+                let rev = (sp - oe2).length().max((ep - os).length());
+                let d = fwd.min(rev);
+                if d < 1e-3 {
+                    let md = match (mid(eid), mid(oid)) {
+                        (Some(a), Some(b)) => (a - b).length(),
+                        _ => f64::NAN,
+                    };
+                    println!(
+                        "  TWIN {eid:?} <-> {oid:?} (uses={}) end_d={d:.3e} mid_d={md:.3e}",
+                        uses.get(&oid).copied().unwrap_or(0)
+                    );
+                }
+            }
+        }
+    }
     if std::env::var("FREE_EDGES").is_ok() {
         for (eid, n) in &uses {
             if *n != 2

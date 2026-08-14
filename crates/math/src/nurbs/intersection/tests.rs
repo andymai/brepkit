@@ -272,6 +272,29 @@ fn tilted_intersects_flat() {
     }
 }
 
+/// A plane crossing that runs between grid columns (one crossing per row,
+/// each on an interior horizontal edge) must come back as ONE curve. The
+/// scan used to visit every interior cell edge from both adjacent cells, so
+/// every crossing refined to an identical duplicate; each point's nearest
+/// neighbor was its own twin, `estimate_chain_threshold`'s average-spacing
+/// statistic collapsed to ~0, and the threshold degenerated to its floor —
+/// below the real row pitch, so the crossing chained as dashes (the kumiko
+/// strut end-patch x wedge plane).
+#[test]
+fn plane_crossing_between_grid_columns_is_one_curve() {
+    // tilted_surface: z from -0.5 at x=0 to +0.5 at x=1; plane z=0 cuts it
+    // along the vertical UV line u=0.5. At 10 samples the row pitch (0.111)
+    // exceeds the 5%-of-diagonal threshold floor (0.05).
+    let surface = tilted_surface();
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 10).unwrap();
+    assert_eq!(
+        curves.len(),
+        1,
+        "one transversal plane crossing must chain into one curve, got {}",
+        curves.len()
+    );
+}
+
 /// A marched section that leaves the domain must end ON the exact domain
 /// boundary, not at the marcher's 0.1%-of-span interior clamp margin. Two
 /// faces sharing a boundary edge each march their own section; if both stop

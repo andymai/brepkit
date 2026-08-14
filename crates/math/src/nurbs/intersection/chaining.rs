@@ -24,9 +24,21 @@ pub(super) fn build_curves_from_points(
     // Chain points into connected components.
     let chains = chain_intersection_points(points, threshold);
 
+    build_curves_from_chains(&chains)
+}
+
+/// Fit a NURBS curve through each ALREADY-ORDERED chain of points.
+///
+/// The proximity chainer above cannot serve callers that know connectivity
+/// exactly (the plane x NURBS grid scan links crossings through shared
+/// cells): its distance threshold cannot separate a sampling gap along one
+/// branch from two genuinely-close branches, and no statistic fixes that.
+pub(super) fn build_curves_from_chains(
+    chains: &[Vec<IntersectionPoint>],
+) -> Result<Vec<IntersectionCurve>, MathError> {
     let mut curves = Vec::with_capacity(chains.len());
 
-    for chain in &chains {
+    for chain in chains {
         // Deduplicate closely spaced points within the chain.
         let mut deduped: Vec<IntersectionPoint> = Vec::new();
         for pt in chain {

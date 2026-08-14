@@ -21,11 +21,11 @@
 //!   domain-clamp margin used to leave ~2e-3 junction gaps) and the no-seam
 //!   splitter shortcut gated to periodic/sphere faces (a non-periodic
 //!   bilinear quad now splits via the generic arrangement), the fuse
-//!   assembles exact-typed (59 faces keeping all cylinders and NURBS) but
-//!   still leaks ~45 free edges: the wedge-plane x end-patch graze marches
-//!   as millimetre fragments, and kept sub-faces don't share their
-//!   section/corner edge pieces. The ignored test below remains the
-//!   acceptance bar.
+//!   assembles exact-typed (64 faces keeping all cylinders and NURBS) but
+//!   still leaks ~26 free edges: neighbors disagree about boundary-edge
+//!   splits, so seam pieces bound only one side (the free edges have no
+//!   coincident twin — see TWIN=1 in replay_pair). The ignored test below
+//!   remains the acceptance bar.
 //!
 //! The prior dig recorded four roots (band rescue, graze scaling,
 //! chord-represented NURBS boundaries, reverse-twin misread) before its
