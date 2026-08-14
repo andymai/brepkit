@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.3](https://github.com/andymai/brepkit/compare/v3.3.2...v3.3.3) (2026-08-14)
+
+
+### Bug Fixes
+
+* **algo:** co-register section UVs with the boundary graph on curved faces ([#1603](https://github.com/andymai/brepkit/issues/1603)) ([de911f8](https://github.com/andymai/brepkit/commit/de911f8bd753296ab2846e421ca77fb0f3b900dd))
+
 ## [3.3.2](https://github.com/andymai/brepkit/compare/v3.3.1...v3.3.2) (2026-08-14)
 
 
