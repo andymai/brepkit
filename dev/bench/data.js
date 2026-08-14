@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786663224097,
+  "lastUpdate": 1786665718317,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31103,6 +31103,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25971837,
             "range": "± 98914",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4bdb4570f04c6653c402705dd127277d03d74e09",
+          "message": "test(io): re-capture the kumiko corner-window strut-fuse fixtures (#1593)\n\n## Result\n\nThe kumiko corner-window frontier has a stable in-repo repro again. Its\noriginal fixtures died with the parked `fix/kumiko-corner-window-cut`\nbranch; these are fresh captures from the tool's kumikoWrapSpike probe,\nwhich still fails on 3.2.38 (`fuseAll` of the corner struts errors with\n\"cluster fuse degraded to mesh fallback\").\n\n## What the fixtures pin\n\n- `kumiko_strut_operands_are_well_formed` (active): all four captured\noperands are closed.\n- `kumiko_wedge_strut_pair_fuse_is_exact` (active): the coaxial vertical\nx horizontal wedge-strut fuse is exact, watertight, keeps its 6\ncylinders — a regression canary for the coaxial-wedge path that works\ntoday.\n- `kumiko_diagonal_strut_fuse_is_exact` (ignored ready-repro): fusing a\nwedge strut with the helix-swept diagonal (serialized as a ~42-face\nsegmented prism) must stay exact. Today the raw GFA result carries 15+\nfree edges (including ellipse sections where the strut's slanted segment\nplanes cross the wedge cylinders) and the op pays the mesh fallback.\nThis is the acceptance bar for a future fix, gated on the full\nface-splitter foil set.\n\nThe roadmap OPEN row and the #[ignore] inventory record the re-capture\nand the new deferred pin.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRestores a stable in-repo repro for the kumiko corner-window strut fuses\nby re-capturing fixtures and adding tests. The lost fixtures are\nreplaced; the coaxial wedge-strut fuse is pinned exact, and the\ndiagonal-strut fuse regression is captured as an ignored acceptance test\nwith ignore text aligned to the repo’s mesh-fallback phrasing.\n\n- Adds four binary operands and\n`crates/io/tests/kumiko_strut_fuse_inmem.rs` using\n`brepkit_io`/`brepkit_operations`.\n- `kumiko_strut_operands_are_well_formed`: all operands have zero free\nedges.\n- `kumiko_wedge_strut_pair_fuse_is_exact`: asserts no mesh fallback and\n6 cylinders remain.\n- `kumiko_diagonal_strut_fuse_is_exact` (ignored): acceptance bar for\nfixing diagonal-strut fuses that currently degrade to the mesh fallback.\n- Updates `.claude/skills/roadmap/SKILL.md`: inventory now shows ONE\ndeferred-defect pin and records the fixture re-capture.\n\n<sup>Written for commit b9caf82e44ae4c8211e8523d1934e880bea1655a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1593?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-13T23:59:26Z",
+          "tree_id": "740322999a41240aa3061ae2a730ae5849bfe76a",
+          "url": "https://github.com/andymai/brepkit/commit/4bdb4570f04c6653c402705dd127277d03d74e09"
+        },
+        "date": 1786665715221,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 980335,
+            "range": "± 32456",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1061037,
+            "range": "± 1183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12347,
+            "range": "± 422",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 718255,
+            "range": "± 1005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26026847,
+            "range": "± 110612",
             "unit": "ns/iter"
           }
         ]
