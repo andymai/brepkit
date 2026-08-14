@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786674252924,
+  "lastUpdate": 1786676871297,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31265,6 +31265,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26005068,
             "range": "± 28694",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80135e6eb4a7accf3acf97063e1935f702140cc5",
+          "message": "feat(algo): march quadric x NURBS face pairs into real sections (#1596)\n\n## Result\n\nBooleans pairing a quadric face (cylinder, cone, sphere, torus) with a\nNURBS face now produce intersection sections. The FF dispatch arm for\nthat pairing returned no curves with a \"deferred to later phases\"\ncomment (no such phase existed), so both faces silently survived unsplit\nand the result shelled apart: on the kumiko wedge x ruled-strut fuse the\nentire wedge detached as an open growth shell because its cylinders\nnever received a single section.\n\n## Fix\n\nConvert the quadric to its NURBS representation (exact rational for\ncylinder and cone, over the face's stored v-range, or the partner's\ncontrol-point extent projected on the axis when no range is stored) and\nmarch it with the existing NURBS x NURBS intersector. Sphere and torus\nuse their existing conversions.\n\n## Scope and verification\n\n- With the arm live, the wedge's cylinders split (3 and 7 sections)\nwhere they previously stayed whole. The kumiko strut ready-repro stays\nignored: its remaining roots are section chaining and seam welding, not\nsection existence — the failure signature improves from a 5-face to a\n7-face detached shell as splitting progresses.\n- Full battery green: operations (33 binaries, incl. every sweep/boolean\nfoil), algo, io (all captured-operand fixtures incl.\ncompartscoop/labelbracket/bp64), wasm gridfinity canary 27/27.\n- approx_census: all boolean rows exact analytic, unchanged.\n- clippy -D warnings green.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMarch quadric × NURBS face pairs into real intersection sections so\nbooleans split correctly. Previously this dispatch returned no curves,\nleaving both faces unsplit and causing detached shells (e.g., kumiko\nwedge × ruled-strut).\n\n- Convert the quadric to NURBS and reuse the existing NURBS × NURBS\nintersector; cylinders use an exact rational form over the face’s\nv-range or, if absent, a range from the NURBS partner’s projected\ncontrol-point extent with padding. Cones, spheres, and tori use existing\nsampled conversions.\n- Both analytic→NURBS and NURBS→analytic arms now call this path;\nconversion errors are propagated to prevent silent no-section fallbacks.\n- Behavior: wedge cylinders now split (3 and 7 sections) instead of\nstaying whole; remaining issues are in section chaining/seam welding,\nnot section existence.\n- Verification: full suite green; `approx_census` unchanged; `clippy -D`\nclean.\n- No migrations or API changes.\n\n<sup>Written for commit 4c570691e640611ad62ebb0164ceec6dbfe7c039.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1596?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T03:05:23Z",
+          "tree_id": "8bb2e5a1b4a48781ba2abaa5597788be37224100",
+          "url": "https://github.com/andymai/brepkit/commit/80135e6eb4a7accf3acf97063e1935f702140cc5"
+        },
+        "date": 1786676868280,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 967962,
+            "range": "± 2033",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1052520,
+            "range": "± 2148",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12198,
+            "range": "± 627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 714227,
+            "range": "± 806",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25911216,
+            "range": "± 46808",
             "unit": "ns/iter"
           }
         ]
