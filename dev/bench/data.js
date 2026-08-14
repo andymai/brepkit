@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786741566610,
+  "lastUpdate": 1786746988575,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32291,6 +32291,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45037938,
             "range": "± 75984",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1e7562addae3b1628e2558d6e3f0cca0dc60fd5d",
+          "message": "docs(roadmap): record the strut walker grand-tour frontier and refutations (#1615)\n\nRecords the ninth-frontier diagnosis on the kumiko strut fuse (face 25's\ndegree-6 junction grand-tour) and the two refuted DCEL-adoption\napproaches, per the roadmap's living-document rule.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap entry for Kumiko strut fuses to record the\nninth-frontier diagnosis: the greedy loop walker grand-tours a degree-6\njunction and misses sub-faces. This matters because the 21 remaining\nfree edges are traced to loop construction, not section generation,\nfocusing fixes on the walker/loop builder.\n\n- Adds the diagnosed failure mode on face 25 (one n=13 loop revisiting\nthe junction UV three times). Neighbors partition at degree-4 as\nexpected.\n- Records two refuted adoptions: (a) non-periodic DCEL at equal loop\ncount yields 2 clean loops but drops a 0.111780-area outer orbit and\nregresses free 21->26 (over 2->0); (b) strictly-more adoption never\nfires (both paths produce 2 loops).\n- Captures next steps: fix the greedy successor’s rotation at co-located\njunction clusters, or fix `build_wire_loops_dcel` outer-orbit\nidentification for this input.\n- Acceptance gates unchanged: `kumiko_diagonal_strut_fuse_is_exact` and\nthe full splitter foil suite.\n\n<sup>Written for commit a8234eb42bbae3f1e5d6b2ae227dd4815a3063cf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1615?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T22:33:57Z",
+          "tree_id": "c593c15174626708098b3f9a5b56ddb091b6de05",
+          "url": "https://github.com/andymai/brepkit/commit/1e7562addae3b1628e2558d6e3f0cca0dc60fd5d"
+        },
+        "date": 1786746986453,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 984517,
+            "range": "± 53185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1064509,
+            "range": "± 1392",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11967,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 722003,
+            "range": "± 26177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41976532,
+            "range": "± 97798",
             "unit": "ns/iter"
           }
         ]
