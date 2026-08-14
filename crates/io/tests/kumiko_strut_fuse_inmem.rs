@@ -4,17 +4,28 @@
 //!
 //! The corner-wrap cutter is `annular wedge − fuse_all(struts)`. The vertical
 //! and horizontal struts are coaxial annular wedges (2 cylinders + 4 planes
-//! each) and their pairwise fuse is exact. The two diagonal struts are
-//! helix-swept rectangles serialized as ~42-face segmented prisms (all
-//! planar, slight dihedral steps), and EVERY fuse involving one degrades to
-//! the mesh fallback: the raw GFA result carries 15+ free edges, including
-//! ellipse sections where the strut's slanted segment planes cross the
-//! wedge's cylinders, scattered across many faces. Via `fuse_all`'s
-//! fallback bail the whole strut fuse then errors, which is what
-//! kumikoWrapSpike trips over. The prior dig recorded four roots (band
-//! rescue, graze scaling, chord-represented NURBS boundaries, reverse-twin
-//! misread) before its branch was lost; treat this as a fresh multi-root
-//! investigation with these fixtures as the stable repro.
+//! each) and their pairwise fuse is exact. The diagonal strut is a
+//! helix-swept rectangle; every fuse involving one degrades to the mesh
+//! fallback, which `fuse_all`'s bail turns into the hard error
+//! kumikoWrapSpike trips over.
+//!
+//! Two capture generations of the diagonal exist:
+//! - `kumiko_strut_diag_up.bin` / `_down.bin`: the pre-twist-guard sweep,
+//!   whose side quads were emitted as fitted PLANES with corners up to
+//!   ~6e-5 off-plane. Booleans against these dirty operands mis-clip every
+//!   seam (kept as tolerance-robustness history; the module keeps only the
+//!   operand well-formedness pin for them).
+//! - `kumiko_strut_diag_up_ruled.bin`: the honest sweep (twisted quads emit
+//!   exact bilinear patches, 40 NURBS + 2 plane faces). The fuse with the
+//!   vertical wedge strut now fails cleanly in assembly: the wedge's kept
+//!   pieces never weld to the strut's marched-NURBS section seams and
+//!   detach as a 5-face open growth shell ("open growth shell with 5 faces
+//!   would be dropped"). That seam welding is the live frontier; the
+//!   ignored test below is its acceptance bar.
+//!
+//! The prior dig recorded four roots (band rescue, graze scaling,
+//! chord-represented NURBS boundaries, reverse-twin misread) before its
+//! branch was lost; treat this as a fresh investigation.
 //!
 //! The ignored test is the acceptance bar for a fix. It stays ignored until
 //! a fix clears the full face-splitter foil set (d4 gridfinity, honeycomb
@@ -63,6 +74,7 @@ fn kumiko_strut_operands_are_well_formed() {
         "kumiko_strut_horizontal.bin",
         "kumiko_strut_diag_up.bin",
         "kumiko_strut_diag_down.bin",
+        "kumiko_strut_diag_up_ruled.bin",
     ] {
         let sid = load(name, &mut topo);
         assert_eq!(free_edge_count(&topo, sid), 0, "{name} has free edges");
@@ -99,15 +111,17 @@ fn kumiko_wedge_strut_pair_fuse_is_exact() {
     assert_eq!(cylinders, 6, "the crossing wedges should keep 6 cylinders");
 }
 
-/// READY-REPRO: fusing a wedge strut with the segmented diagonal strut must
-/// stay exact. Today the raw GFA result comes back open and the op pays the
-/// mesh fallback (the kumiko corner-window frontier).
+/// READY-REPRO: fusing a wedge strut with the honest (ruled-patch) diagonal
+/// strut must stay exact. Today the wedge's kept pieces fail to weld to the
+/// strut's marched-NURBS section seams and detach as a 5-face open growth
+/// shell, so the op pays the mesh fallback (the kumiko corner-window
+/// frontier).
 #[test]
-#[ignore = "corner-window frontier: faceted-strut fuses degrade to the mesh fallback (see module doc)"]
+#[ignore = "corner-window frontier: NURBS-strut seam welding degrades to the mesh fallback (see module doc)"]
 fn kumiko_diagonal_strut_fuse_is_exact() {
     let mut topo = Topology::new();
     let v = load("kumiko_strut_vertical.bin", &mut topo);
-    let d = load("kumiko_strut_diag_up.bin", &mut topo);
+    let d = load("kumiko_strut_diag_up_ruled.bin", &mut topo);
 
     let before = brepkit_operations::boolean::mesh_fallback_count();
     let result = brepkit_operations::boolean::boolean(
