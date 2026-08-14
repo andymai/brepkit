@@ -3526,13 +3526,10 @@ fn compute_raw_curves(
         }
 
         (analytic_surf, FaceSurface::Nurbs(nurbs)) if analytic_surf.as_analytic().is_some() => {
-            // Deferred to later phases -- analytic-NURBS is complex
-            let _ = nurbs;
-            Ok(Vec::new())
+            analytic_nurbs_intersection(analytic_surf, v_range_a, nurbs)
         }
         (FaceSurface::Nurbs(nurbs), analytic_surf) if analytic_surf.as_analytic().is_some() => {
-            let _ = nurbs;
-            Ok(Vec::new())
+            analytic_nurbs_intersection(analytic_surf, v_range_b, nurbs)
         }
 
         (FaceSurface::Nurbs(na), FaceSurface::Nurbs(nb)) => nurbs_nurbs_intersection(na, nb),
@@ -3964,6 +3961,54 @@ fn nurbs_nurbs_intersection(
     }
 
     Ok(results)
+}
+
+/// Quadric × NURBS intersection: convert the analytic surface to its NURBS
+/// representation over the face's v-range (exact rational for cylinder and
+/// cone) and march it against the partner. This arm used to return no curves
+/// ("deferred to later phases" — no such phase existed), so any boolean
+/// pairing a quadric with a NURBS face silently never split either side:
+/// the NURBS solid's kept pieces and the quadric's kept pieces shared no
+/// seam and the result shelled apart (the kumiko wedge × ruled-strut fuse).
+fn analytic_nurbs_intersection(
+    surf: &FaceSurface,
+    v_range: Option<(f64, f64)>,
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> Result<Vec<RawCurve>, AlgoError> {
+    // Cylinder and cone are unbounded along their axis; without a stored
+    // v-range, bound the band by the NURBS partner's control-point extent
+    // projected on the axis (convex hull property), padded so a curve
+    // grazing the ends is not clipped.
+    let axial_range = |origin: Point3, axis: Vec3| -> (f64, f64) {
+        let mut lo = f64::MAX;
+        let mut hi = f64::MIN;
+        for row in nurbs.control_points() {
+            for p in row {
+                let v = (*p - origin).dot(axis);
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        let pad = (hi - lo).abs().mul_add(0.1, 1.0);
+        (lo - pad, hi + pad)
+    };
+    let converted = match surf {
+        FaceSurface::Cylinder(c) => {
+            let (v0, v1) = v_range.unwrap_or_else(|| axial_range(c.origin(), c.axis()));
+            c.to_nurbs(v0, v1)
+        }
+        FaceSurface::Cone(c) => {
+            let (v0, v1) = v_range.unwrap_or_else(|| axial_range(c.apex(), c.axis()));
+            c.to_nurbs(v0, v1)
+        }
+        FaceSurface::Sphere(s) => s.to_nurbs(),
+        FaceSurface::Torus(t) => t.to_nurbs(),
+        _ => return Ok(Vec::new()),
+    };
+    match converted {
+        Ok(as_nurbs) => nurbs_nurbs_intersection(&as_nurbs, nurbs),
+        Err(_) => Ok(Vec::new()),
+    }
 }
 
 /// Compute AABB for a circle.
