@@ -1,0 +1,25 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_5511e9ebcd4d22::t_09bbd4f956e140 2242-2250
+  s_5511e9ebcd4d22::t_8867abbea4cf5d 2421
+  s_5511e9ebcd4d22::t_fd212f851688d5 2313,2323,2329-2360,2365-2382
+  s_5511e9ebcd4d22::t_07cdebdcc622d0 2361-2364
+  s_5511e9ebcd4d22::t_f878bd5bfd2cdd 2384-2390
+  s_5511e9ebcd4d22::t_c1dbfb30176f0e 2231-2239,2241
+  s_5511e9ebcd4d22::t_e237c1841eee00 2383
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a08d9130f7f5f485cb6da2552b7cad172f249560",
+  "prompts": {},
+  "sessions": {
+    "s_5511e9ebcd4d22": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71b94051-2c50-4fd2-8261-b5d80b549276",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
