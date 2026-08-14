@@ -1,0 +1,25 @@
+crates/io/examples/strut_plane_probe.rs
+  s_69aaeee2c3f165::t_12f951cfab43f4 1-105
+crates/io/tests/kumiko_strut_fuse_inmem.rs
+  s_69aaeee2c3f165::t_5d6fe8df0a552c 24-28
+.claude/skills/roadmap/SKILL.md
+  s_69aaeee2c3f165::t_87ee559f182f4a 134
+crates/io/examples/replay_pair.rs
+  s_69aaeee2c3f165::t_2e40e4b1074384 80-127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d4733cfac08e6379d13a3670282a290695da6920",
+  "prompts": {},
+  "sessions": {
+    "s_69aaeee2c3f165": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21fc02d1-9d5a-4042-9667-142c49e8d284",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
