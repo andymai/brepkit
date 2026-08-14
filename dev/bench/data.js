@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786695792009,
+  "lastUpdate": 1786696326207,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31589,6 +31589,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26988375,
             "range": "± 24403",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "88394ea898b3023b7dcc2e9e54593d8125bd6d87",
+          "message": "chore(main): release 3.3.2 (#1602)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.3.2](https://github.com/andymai/brepkit/compare/v3.3.1...v3.3.2)\n(2026-08-14)\n\n\n### Bug Fixes\n\n* **math:** chain plane-NURBS grid crossings by cell connectivity\n([#1601](https://github.com/andymai/brepkit/issues/1601))\n([61d2a4e](https://github.com/andymai/brepkit/commit/61d2a4e843c7f46567c34f62486d5108066ee058))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases 3.3.2 with a bug fix in `brepkit-math`: plane–NURBS grid\ncrossings are now chained across cell connectivity. Previously crossings\ncould break at cell boundaries, producing fragmented contours or missed\nintersections; now paths are contiguous with negligible performance\nimpact.\n\n- Bumps all workspace crates to 3.3.2 in `Cargo.toml` and\n`.release-please-manifest.json`; updates `CHANGELOG.md`.\n- No public API changes. If tests assert exact intersection segment\norder or counts, update expectations to reflect contiguous chaining.\n\n<sup>Written for commit dc74ede89858e0031404388c90adc1d9b82400a2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1602?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-14T08:29:36Z",
+          "tree_id": "82efb545fa9a0937708feb7026ce87b39f1a3ca2",
+          "url": "https://github.com/andymai/brepkit/commit/88394ea898b3023b7dcc2e9e54593d8125bd6d87"
+        },
+        "date": 1786696323181,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1009507,
+            "range": "± 2964",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1101615,
+            "range": "± 1937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12970,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 727876,
+            "range": "± 20953",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26972758,
+            "range": "± 44222",
             "unit": "ns/iter"
           }
         ]
