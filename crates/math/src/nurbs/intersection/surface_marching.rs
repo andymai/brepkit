@@ -480,6 +480,13 @@ fn perturbation_tangent(
     best_dir
 }
 
+/// Relative interior margin for non-periodic parameter clamping: marched
+/// states stay this fraction of the domain span away from the boundary so
+/// mid-march tangent evaluation never lands on a degenerate edge. The
+/// boundary-refinement band in [`refine_onto_boundary`] is derived from this
+/// — the two must move together.
+const NONPERIODIC_CLAMP_MARGIN: f64 = 0.001;
+
 /// Constrain a parameter value to the domain, wrapping if periodic or
 /// clamping if not.
 ///
@@ -498,7 +505,7 @@ pub(super) fn constrain_param(v: f64, min: f64, max: f64, periodic: bool) -> f64
         let margin = 1e-10 * span;
         wrapped.clamp(min + margin, max - margin)
     } else {
-        let margin = 0.001 * (max - min);
+        let margin = NONPERIODIC_CLAMP_MARGIN * (max - min);
         v.clamp(min + margin, max - margin)
     }
 }
@@ -822,7 +829,10 @@ fn refine_onto_boundary(
             continue;
         }
         let (min, max) = domains[i];
-        let band = 0.0015 * (max - min);
+        // 1.5x the clamp margin: covers a stalled endpoint sitting exactly at
+        // the margin plus Newton wobble, without reaching genuinely interior
+        // endpoints.
+        let band = 1.5 * NONPERIODIC_CLAMP_MARGIN * (max - min);
         if state[i] <= min + band {
             state[i] = min;
             pinned[i] = true;
