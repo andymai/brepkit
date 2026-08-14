@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786676871297,
+  "lastUpdate": 1786677435525,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31319,6 +31319,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25911216,
             "range": "± 46808",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7c3539add69796c005ff460767befc1c08d4960f",
+          "message": "chore(main): release 3.3.0 (#1597)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.3.0](https://github.com/andymai/brepkit/compare/v3.2.39...v3.3.0)\n(2026-08-14)\n\n\n### Features\n\n* **algo:** march quadric x NURBS face pairs into real sections\n([#1596](https://github.com/andymai/brepkit/issues/1596))\n([80135e6](https://github.com/andymai/brepkit/commit/80135e6eb4a7accf3acf97063e1935f702140cc5))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.3.0 exposing new `brepkit-algo` support for marching quadric ×\nNURBS face intersections into real section curves. Previously these\npairs did not yield real sections; now they do, which can change\nintersection outputs in affected cases.\n\n- Scope: version bumps and CHANGELOG only; the feature ships via updated\ncrates.\n- Consumers should update to `brepkit-*` version `3.3.0` to use the new\nintersections.\n- Expect changed results in `brepkit-algo` when a quadric meets a NURBS\nface; review tolerances and tests that assert exact section geometry.\n\n<sup>Written for commit 4cf28e42b0598e4185610f2769ecb9671e2a57b0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1597?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-14T03:14:48Z",
+          "tree_id": "008648acf6a69a5ee7ad1a1e24b0d8d7273c7208",
+          "url": "https://github.com/andymai/brepkit/commit/7c3539add69796c005ff460767befc1c08d4960f"
+        },
+        "date": 1786677432669,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 979470,
+            "range": "± 17903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1059342,
+            "range": "± 3108",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11985,
+            "range": "± 208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 722184,
+            "range": "± 1458",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26051423,
+            "range": "± 90459",
             "unit": "ns/iter"
           }
         ]
