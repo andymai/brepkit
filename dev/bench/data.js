@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786673459136,
+  "lastUpdate": 1786674252924,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31211,6 +31211,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27022051,
             "range": "± 33854",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d9b402cd16ca4e084744e5d3297312d951a4ffb3",
+          "message": "chore(main): release 3.2.39 (#1595)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.2.39](https://github.com/andymai/brepkit/compare/v3.2.38...v3.2.39)\n(2026-08-14)\n\n\n### Bug Fixes\n\n* **operations:** emit the exact bilinear patch for twisted sweep quads\n([#1594](https://github.com/andymai/brepkit/issues/1594))\n([64f54f8](https://github.com/andymai/brepkit/commit/64f54f8fa049ab81960910cdc82dcc63f217d7fb))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.2.39 updates all workspace crate versions and fixes twisted\nsweep quad handling in `brepkit-operations` by emitting the exact\nbilinear patch. Geometry for twisted sweep quads will now be more\naccurate than in 3.2.38.\n\n- Version bumps in `Cargo.toml`, `.release-please-manifest.json`, and\n`CHANGELOG.md`; no API changes.\n- Geometry output may change for twisted sweep quads; re-run affected\ntests and sample models.\n- No migration required; update all `brepkit-*` crates to `3.2.39`.\n\n<sup>Written for commit 073cf32b02b8ecb7570de44a0cff9d5fd3205050.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1595?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-14T02:21:45Z",
+          "tree_id": "7993fe652761b215e0d6ca4e662209ae22f93202",
+          "url": "https://github.com/andymai/brepkit/commit/d9b402cd16ca4e084744e5d3297312d951a4ffb3"
+        },
+        "date": 1786674249486,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 976070,
+            "range": "± 2774",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1062539,
+            "range": "± 28072",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11986,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 721538,
+            "range": "± 1599",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26005068,
+            "range": "± 28694",
             "unit": "ns/iter"
           }
         ]
