@@ -5749,6 +5749,45 @@ fn split_face_2d_impl(
         );
     }
 
+    // Interior-junction UV co-registration, the T-split counterpart of the
+    // boundary pass above: a T-split mints its vertex UV by projecting the
+    // junction endpoint, while the CROSSING section's own endpoint UV came
+    // from an independent projection of a 3D point that differs by marched
+    // rounding (~1e-6) — above the wire graph's weld, so the pendant pruner
+    // reads the crossing section as dangling and eats it (the wedge-corner
+    // junction: the cylinder section pruned, two loops instead of three).
+    // Canonicalize section endpoint UVs by 3D identity, seeding with the
+    // boundary vertices so the boundary pass's welds are preserved.
+    if !is_plane && !u_periodic && !v_periodic && all_edges.len() > n_boundary_edges {
+        let weld3_sq = (tol.linear * 100.0) * (tol.linear * 100.0);
+        let mut canon: Vec<(Point3, Point2)> = all_edges[..n_boundary_edges]
+            .iter()
+            .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
+            .collect();
+        for e in &mut all_edges[n_boundary_edges..] {
+            for pick_end in [false, true] {
+                let (p3, uv) = if pick_end {
+                    (e.end_3d, e.end_uv)
+                } else {
+                    (e.start_3d, e.start_uv)
+                };
+                let adopted = canon
+                    .iter()
+                    .find(|(q3, _)| (*q3 - p3).length_squared() <= weld3_sq)
+                    .map(|&(_, quv)| quv);
+                let new_uv = adopted.unwrap_or_else(|| {
+                    canon.push((p3, uv));
+                    uv
+                });
+                if pick_end {
+                    e.end_uv = new_uv;
+                } else {
+                    e.start_uv = new_uv;
+                }
+            }
+        }
+    }
+
     // Split BOUNDARY arc edges where a section endpoint lands strictly on their
     // interior. A section clipped out to a convex rounded corner's TRUE arc (a
     // notch corner straddling a wall's top edge) ends MID-ARC on the boundary;
