@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.1](https://github.com/andymai/brepkit/compare/v3.3.0...v3.3.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **algo:** close marched-section junction gaps and split non-periodic no-seam quads ([#1599](https://github.com/andymai/brepkit/issues/1599)) ([5687f33](https://github.com/andymai/brepkit/commit/5687f3303b2606b6e1b6f6354194a66acdc78e33))
+
 ## [3.3.0](https://github.com/andymai/brepkit/compare/v3.2.39...v3.3.0) (2026-08-14)
 
 
