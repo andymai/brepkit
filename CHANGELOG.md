@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0](https://github.com/andymai/brepkit/compare/v3.2.39...v3.3.0) (2026-08-14)
+
+
+### Features
+
+* **algo:** march quadric x NURBS face pairs into real sections ([#1596](https://github.com/andymai/brepkit/issues/1596)) ([80135e6](https://github.com/andymai/brepkit/commit/80135e6eb4a7accf3acf97063e1935f702140cc5))
+
 ## [3.2.39](https://github.com/andymai/brepkit/compare/v3.2.38...v3.2.39) (2026-08-14)
 
 
