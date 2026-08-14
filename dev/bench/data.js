@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786665718317,
+  "lastUpdate": 1786673459136,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31157,6 +31157,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26026847,
             "range": "± 110612",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "64f54f8fa049ab81960910cdc82dcc63f217d7fb",
+          "message": "fix(operations): emit the exact bilinear patch for twisted sweep quads (#1594)\n\n## Result\n\nSweeps along curved spines no longer emit lying planar side faces, and\nthe kumiko corner-window strut fuse moved from silent corruption to a\nclean, diagnosable failure. Two kernel fixes plus a hardened\nready-repro:\n\n1. **Sweep honesty (operations):** a side quad's plane was fitted\nthrough three corners and emitted unconditionally; a frenet sweep along\na helix twists the quad, leaving the fourth corner up to ~6e-5\noff-plane. Every boolean against such an operand mis-clipped every seam\n(24 free edges on the strut x wedge fuse, then mesh fallback). Twisted\nquads now emit the exact degree-1x1 bilinear ruled patch through all\nfour corners; flat quads keep the analytic plane, so extrudes and\nstraight sweeps are untouched. All three side-face emission sites share\nthe guard.\n\n2. **Ellipse-trim hardening (algo):** the plane x cylinder/cone trim\nrejected true boundary crossings through a 1e-6 on-curve gate that\nfitted-scale operands cannot meet (observed misses 1.2e-5 to 6e-5,\nincluding the inter-segment triple point), leaving an odd crossing count\non a closed section and an over-long arc. The band is now\nfitted-geometry scale (1e-4; the far-nappe and seam-miss rejects it\nexists for land millimetres away), and interval midpoints are\nadditionally tested against the plane face's exact outer polygon instead\nof only the FaceExtent margin box. New instrument: BK_TRIM_ELL.\n\n3. **Ready-repro re-pinned (io):** with honest operands the live failure\nis assembly-stage seam welding — the wedge's kept pieces fail to weld to\nthe strut's marched-NURBS sections and detach as a 5-face open growth\nshell. The ignored acceptance test now loads the ruled-patch capture;\nmodule doc records both capture generations.\n\n## Verification\n\n- Full operations suite (33 binaries, all sweep/pipe/helix tests), algo,\nio (all captured-operand foils incl. compartscoop, the trim arm's\noriginal case), wasm gridfinity canary: green.\n- approx_census: unchanged (the documented by-design fallback set).\n- End-to-end: rebuilt wasm overlaid into the tool worktree; the\nre-captured diagonal strut now serializes as 40 NURBS + 2 plane faces\nand the wrap-spike failure signature moved from the silent 24-free-edge\nopen shell to the explicit assembly abort.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nEmit exact bilinear side surfaces for twisted sweep quads and harden\nellipse–plane trimming at fitted scale. Previously side faces used a\nthree-corner fitted plane and could miss the fourth corner by ~6e-5; now\ntwisted quads emit a degree‑1×1 ruled patch while flat quads stay\nplanar, preventing mis‑clipped seams and open shells on helix-swept\nstruts.\n\n- **Review notes**\n- `crates/operations/src/sweep.rs`: add `side_quad_surface` guard to\nemit a ruled surface when the fourth corner is off the fitted plane;\nused in `sweep_placed`, `sweep_with_options`, inner side-face builder,\nand `sweep_miter` transition quads. Extrudes and straight sweeps stay\nplanar.\n- `crates/algo/src/pave_filler/phase_ff.rs`: widen on-curve gate to\nfitted scale (~1e-4); add exact containment against the plane face’s\nouter polygon; add `BK_TRIM_ELL` logging; compute the off-curve distance\nonce in `push_crossing`.\n- Tests/fixtures: add `kumiko_strut_diag_up_ruled.bin` and switch the\nignored acceptance test to use it; legacy diagonal captures are kept for\nhistory.\n\n- **Impact and verification**\n- Curved-spine sweeps now serialize ruled patches where needed; boolean\nseams stay consistent. The diagonal strut now serializes as 40 NURBS + 2\nplane faces; the failure moves to an assembly seam-weld abort (clean,\ndiagnosable).\n- Full operations/algo/io suites and the wasm canary pass on local runs.\n\n<sup>Written for commit 289c7bedac8c777a91b0fab789fd0118bdb34810.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1594?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T02:08:27Z",
+          "tree_id": "b6d1850d11a19bb0d669d95141b9f17556d1bd0f",
+          "url": "https://github.com/andymai/brepkit/commit/64f54f8fa049ab81960910cdc82dcc63f217d7fb"
+        },
+        "date": 1786673455675,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1011482,
+            "range": "± 3203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1102556,
+            "range": "± 1645",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13328,
+            "range": "± 707",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 727420,
+            "range": "± 1245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27022051,
+            "range": "± 33854",
             "unit": "ns/iter"
           }
         ]
