@@ -2079,6 +2079,7 @@ fn sweep_miter(
                 let p0 = topo.vertex(prev_ring[i])?.point();
                 let p1 = topo.vertex(prev_ring[next_i])?.point();
                 let p_next = topo.vertex(miter_ring[i])?.point();
+                let p_diag = topo.vertex(miter_ring[next_i])?.point();
                 let edge_dir = p1 - p0;
                 let path_dir = p_next - p0;
                 let side_normal = edge_dir
@@ -2102,10 +2103,7 @@ fn sweep_miter(
                 all_faces.push(topo.add_face(Face::new(
                     side_wire_id,
                     vec![],
-                    FaceSurface::Plane {
-                        normal: side_normal,
-                        d: side_d,
-                    },
+                    side_quad_surface(p0, p1, p_next, p_diag, side_normal, side_d),
                 )));
             }
 
@@ -2205,6 +2203,7 @@ fn sweep_miter(
                 let p0 = topo.vertex(ring_verts[seg][i])?.point();
                 let p1 = topo.vertex(ring_verts[seg][next_i])?.point();
                 let p_next = topo.vertex(ring_verts[seg + 1][i])?.point();
+                let p_diag = topo.vertex(ring_verts[seg + 1][next_i])?.point();
                 let edge_dir = p1 - p0;
                 let path_dir = p_next - p0;
                 let side_normal = edge_dir
@@ -2228,10 +2227,7 @@ fn sweep_miter(
                 all_faces.push(topo.add_face(Face::new(
                     side_wire_id,
                     vec![],
-                    FaceSurface::Plane {
-                        normal: side_normal,
-                        d: side_d,
-                    },
+                    side_quad_surface(p0, p1, p_next, p_diag, side_normal, side_d),
                 )));
             }
         }

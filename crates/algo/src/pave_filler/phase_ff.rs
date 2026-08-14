@@ -2238,11 +2238,11 @@ fn trim_ellipse_to_boundary_crossings(
         // and the surviving over-long arc split the analytic partner along
         // a curve its neighbours never shared (the kumiko strut slivers).
         let foot = sec.evaluate(sec.project(p));
-        if (foot - p).length() > 1e-4 {
+        let off_curve = (foot - p).length();
+        if off_curve > 1e-4 {
             if std::env::var("BK_TRIM_ELL").is_ok() {
                 log::debug!(
-                    "TRIM_ELL reject off-curve d={:.3e} p=({:.4},{:.4},{:.4})",
-                    (foot - p).length(),
+                    "TRIM_ELL reject off-curve d={off_curve:.3e} p=({:.4},{:.4},{:.4})",
                     p.x(),
                     p.y(),
                     p.z()
