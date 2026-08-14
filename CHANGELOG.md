@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.39](https://github.com/andymai/brepkit/compare/v3.2.38...v3.2.39) (2026-08-14)
+
+
+### Bug Fixes
+
+* **operations:** emit the exact bilinear patch for twisted sweep quads ([#1594](https://github.com/andymai/brepkit/issues/1594)) ([64f54f8](https://github.com/andymai/brepkit/commit/64f54f8fa049ab81960910cdc82dcc63f217d7fb))
+
 ## [3.2.38](https://github.com/andymai/brepkit/compare/v3.2.37...v3.2.38) (2026-08-13)
 
 
