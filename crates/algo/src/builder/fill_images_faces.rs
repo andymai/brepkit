@@ -146,7 +146,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     };
 
     // PB vertex registry: cross-face pool of FRESH vertices at CB positions.
-    // Wire vertices minted by THIS build, by position. The layered caches
+    // Wire vertices this build has resolved or minted, by position. The layered caches
     // quantize exactly (1e-10 cells), but each face's sub-face wires carry
     // their own marched endpoint drift (~1e-5 at the kumiko strut corner:
     // four distinct vertices minted at one junction), so the mint fallback
@@ -3283,11 +3283,11 @@ fn resolve_edge_vertices(
     )],
                 p: brepkit_math::vec::Point3|
      -> Option<brepkit_topology::vertex::VertexId> {
-        let band = tol.linear * 250.0;
+        let band = (tol.linear * 250.0) * (tol.linear * 250.0);
         let mut best: Option<(f64, brepkit_topology::vertex::VertexId)> = None;
         let mut second = f64::INFINITY;
         for &(q, vid) in wire_pool {
-            let d = (q - p).length();
+            let d = (q - p).length_squared();
             match best {
                 Some((bd, _)) if d < bd => {
                     second = bd;
