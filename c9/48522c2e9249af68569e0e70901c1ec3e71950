@@ -1,0 +1,21 @@
+crates/math/src/nurbs/intersection/surface_marching.rs
+  s_69aaeee2c3f165::t_7815abbb277308 832-835
+  s_69aaeee2c3f165::t_b4d70eb1636dbc 483-489
+  s_69aaeee2c3f165::t_893bbfa09eec32 508
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c948522c2e9249af68569e0e70901c1ec3e71950",
+  "prompts": {},
+  "sessions": {
+    "s_69aaeee2c3f165": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21fc02d1-9d5a-4042-9667-142c49e8d284",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
