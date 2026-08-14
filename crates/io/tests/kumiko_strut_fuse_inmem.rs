@@ -16,12 +16,16 @@
 //!   seam (kept as tolerance-robustness history; the module keeps only the
 //!   operand well-formedness pin for them).
 //! - `kumiko_strut_diag_up_ruled.bin`: the honest sweep (twisted quads emit
-//!   exact bilinear patches, 40 NURBS + 2 plane faces). The fuse with the
-//!   vertical wedge strut now fails cleanly in assembly: the wedge's kept
-//!   pieces never weld to the strut's marched-NURBS section seams and
-//!   detach as a 5-face open growth shell ("open growth shell with 5 faces
-//!   would be dropped"). That seam welding is the live frontier; the
-//!   ignored test below is its acceptance bar.
+//!   exact bilinear patches, 40 NURBS + 2 plane faces). With marched chain
+//!   ends refined onto the exact patch boundary (the SSI marcher's 0.1%
+//!   domain-clamp margin used to leave ~2e-3 junction gaps) and the no-seam
+//!   splitter shortcut gated to periodic/sphere faces (a non-periodic
+//!   bilinear quad now splits via the generic arrangement), the fuse
+//!   assembles exact-typed (59 faces keeping all cylinders and NURBS) but
+//!   still leaks ~45 free edges: the wedge-plane x end-patch graze marches
+//!   as millimetre fragments, and kept sub-faces don't share their
+//!   section/corner edge pieces. The ignored test below remains the
+//!   acceptance bar.
 //!
 //! The prior dig recorded four roots (band rescue, graze scaling,
 //! chord-represented NURBS boundaries, reverse-twin misread) before its

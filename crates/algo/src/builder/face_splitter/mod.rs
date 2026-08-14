@@ -4840,7 +4840,18 @@ fn split_face_2d_impl(
     let has_open_section = sections
         .iter()
         .any(|s| (s.start - s.end).length() > tol.linear);
-    if all_boundary_line && !is_plane && has_open_section {
+    // Gated to periodic surfaces (and spheres, whose disjoint-arc
+    // arrangement fallback is sphere-specific): only there does the wire
+    // builder genuinely need seam connections it cannot get from an
+    // all-Line boundary. A NON-periodic no-seam face (a ruled strut's
+    // bilinear quad crossed by two wedge planes) is topologically a plane
+    // face in UV, and the generic arrangement below splits it — the
+    // shortcut's disjoint-section fallback would return it unsplit.
+    if all_boundary_line
+        && !is_plane
+        && has_open_section
+        && (u_periodic || v_periodic || matches!(surface, FaceSurface::Sphere(_)))
+    {
         return split_noseam_face_direct(
             &surface,
             &boundary_edges,
@@ -7907,6 +7918,96 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A NON-periodic all-Line-boundary NURBS quad (a ruled strut's bilinear
+    /// side patch) crossed by two disjoint transversal sections must split
+    /// into three pieces via the generic arrangement. The no-seam shortcut
+    /// used to intercept every all-Line-boundary curved face, and its
+    /// disjoint-section fallback is sphere-only — the quad came back
+    /// unsplit, the in-wedge piece classified whole, and the fuse shelled
+    /// apart (the kumiko diagonal strut).
+    #[test]
+    fn nonperiodic_line_bounded_nurbs_quad_splits_by_disjoint_sections() {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let corners = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        let vids: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let eids: Vec<_> = (0..4)
+            .map(|i| topo.add_edge(Edge::new(vids[i], vids[(i + 1) % 4], EdgeCurve::Line)))
+            .collect();
+        let wire = Wire::new(
+            eids.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![corners[0], corners[3]], vec![corners[1], corners[2]]],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let face_id = topo.add_face(Face::new(
+            wid,
+            vec![],
+            brepkit_topology::face::FaceSurface::Nurbs(surface),
+        ));
+
+        let uv_line_section = |x: f64| -> SectionEdge {
+            SectionEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve_a: brepkit_math::curves2d::Curve2D::Line(
+                    Line2D::new(Point2::new(x, 0.0), Vec2::new(0.0, 1.0)).unwrap(),
+                ),
+                pcurve_b: dummy_pcurve(),
+                start: Point3::new(x, 0.0, 0.0),
+                end: Point3::new(x, 1.0, 0.0),
+                start_uv_a: Some(Point2::new(x, 0.0)),
+                end_uv_a: Some(Point2::new(x, 1.0)),
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: None,
+                pave_block_id: None,
+            }
+        };
+        let sections = [uv_line_section(0.3), uv_line_section(0.6)];
+        let tol = brepkit_math::tolerance::Tolerance::new();
+        let edge_images: std::collections::HashMap<
+            brepkit_topology::edge::EdgeId,
+            Vec<brepkit_topology::edge::EdgeId>,
+        > = std::collections::HashMap::new();
+        let subs = split_face_2d(
+            &topo,
+            face_id,
+            &sections,
+            Rank::A,
+            &tol,
+            None,
+            None,
+            &edge_images,
+            None,
+        );
+        assert_eq!(
+            subs.len(),
+            3,
+            "two disjoint transversal sections must split the quad into 3 pieces"
+        );
     }
 
     fn line_section(start: Point3, end: Point3) -> SectionEdge {
