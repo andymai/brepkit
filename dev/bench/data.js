@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786696326207,
+  "lastUpdate": 1786699945799,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31643,6 +31643,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26972758,
             "range": "± 44222",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "de911f8bd753296ab2846e421ca77fb0f3b900dd",
+          "message": "fix(algo): co-register section UVs with the boundary graph on curved faces (#1603)\n\n## Problem\n\nThird follow-up on the kumiko strut-fuse frontier (#1599, #1601). With\nthe section chains welded and the plane crossings whole, the wedge's\nouter cylinder still came back UNSPLIT (\"split into 1\" with 7 sections\npresent), keeping its in-strut corner span inside a kept wire — the\nassembly's free corner pieces.\n\n## Root\n\nOn the demoted-to-non-periodic wedge cylinder, the marched chain ends\nand the boundary split vertices sit at the SAME 3D junction (the pave\nmachinery welded them; the z coordinates match to the last digit), but\ntheir UVs are computed through different paths — surface projection for\nthe sections, boundary pcurve evaluation for the boundary pieces — and\ndisagree at marched precision: u=11.6309715 vs u=11.6309725.\n`remove_pendant_sections` welds at the exact linear tolerance, so every\nchain end read as dangling and the iterative pruner ate both chains\nwhole.\n\nSame trap class as the roadmap documents (\"marched geometry is good to\n~1e-6; every exact-tol gate it meets needs a weld-scale band\"), one gate\nfurther downstream than #1599.\n\n## Fix\n\nJunction identity is the 3D point. Before the pendant pruner, section\nendpoints adopt the boundary vertex's UV wherever their 3D positions\ncoincide within the weld band (100x tolerance), co-registering the\nsection and boundary graphs exactly. Curved faces only; plane faces\nshare one frame projection and have no such mismatch.\n\n## Result\n\nThe wedge's outer cylinder partitions three ways (below-chain and\nabove-chain kept, the in-strut band classified Inside and dropped); both\nwedge cylinders now split, and the fused result keeps 4 cylinder faces.\nThe remaining free edges have moved inside the strut (adjacent patches\ndisagreeing about ruling-edge spans) — tracked in the roadmap.\n\n## Verification\n\n- New active pin:\n`kumiko_wedge_outer_cylinder_partitions_at_strut_chains` (raw GFA fuse\non the captured fixtures must keep >= 4 cylinder faces)\n- Suites green: algo, operations, io (30 binaries), wasm gridfinity\n27/27; clippy clean\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCo-registers section endpoint UVs with the boundary graph on curved,\nnon‑periodic faces so valid section chains survive pendant pruning and\nwedge cylinders partition at strut chains. Previously, chain ends and\nboundary vertices at the same 3D junction carried ~1e‑6‑different UVs,\nso `remove_pendant_sections` treated ends as dangling and kept the\nin‑strut band; now endpoints adopt the boundary vertex UV when their 3D\npositions match within a weld‑scale band.\n\n- Runs in `split_face_2d_impl` before pendant pruning; adopts within\n100× linear tolerance; skips periodic faces to avoid choosing the wrong\nseam copy; plane faces are unaffected.\n- Emits a pre‑prune debug dump labeled \"STRACE-PRE\" when `trace_split`\nis enabled.\n- Adds `kumiko_wedge_outer_cylinder_partitions_at_strut_chains` (expects\n≥ 4 cylinder faces); roadmap notes T‑junction band mismatches and\nrouting frontier. No migration required.\n\n<sup>Written for commit 7600cd05adba451d3ecc866616263a308ec48c2e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1603?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T09:29:57Z",
+          "tree_id": "d95b2bc741f4b4ec18b0b86595e2b4ac84df0b15",
+          "url": "https://github.com/andymai/brepkit/commit/de911f8bd753296ab2846e421ca77fb0f3b900dd"
+        },
+        "date": 1786699942899,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 967653,
+            "range": "± 2954",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1051078,
+            "range": "± 3144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11744,
+            "range": "± 120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 711408,
+            "range": "± 764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25891425,
+            "range": "± 72042",
             "unit": "ns/iter"
           }
         ]
