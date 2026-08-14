@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.4](https://github.com/andymai/brepkit/compare/v3.3.3...v3.3.4) (2026-08-14)
+
+
+### Bug Fixes
+
+* **algo:** junction-gated bands for T-splits on marched sections ([#1606](https://github.com/andymai/brepkit/issues/1606)) ([fd4fa9e](https://github.com/andymai/brepkit/commit/fd4fa9e9877bd4936228d2753ecef3c656d66e50))
+
 ## [3.3.3](https://github.com/andymai/brepkit/compare/v3.3.2...v3.3.3) (2026-08-14)
 
 
