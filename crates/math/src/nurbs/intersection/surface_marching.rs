@@ -596,6 +596,7 @@ fn march_direction(
     let mut total_evals = 0_usize;
     let max_evals = max_steps * 3;
     let mut turning_points_count = 0_usize;
+    let mut closed_loop = false;
 
     for _ in 0..max_steps {
         let y = [
@@ -609,11 +610,11 @@ fn march_direction(
         let (y4, accepted_h) = loop {
             total_evals += 1;
             if total_evals > max_evals {
-                return points;
+                return finish_chain(points, s1, s2, tolerance, false);
             }
 
             let Some(result) = rkf45_step(s1, s2, &y, h, sign) else {
-                return points;
+                return finish_chain(points, s1, s2, tolerance, false);
             };
 
             let (y4, y5) = result;
@@ -749,6 +750,7 @@ fn march_direction(
                 if near_seed || near_first_seg {
                     // Close the loop by adding the seed point.
                     points.push(*seed);
+                    closed_loop = true;
                     break;
                 }
             }
@@ -760,7 +762,164 @@ fn march_direction(
         }
     }
 
+    finish_chain(points, s1, s2, tolerance, closed_loop)
+}
+
+/// Finalize a marched chain: if the march terminated inside the domain-clamp
+/// margin band next to a non-periodic boundary, replace the final point with
+/// one refined onto the EXACT boundary.
+///
+/// `constrain_state` keeps every marched state a 0.1%-of-span margin inside
+/// the domain (mid-march tangent evaluation near degenerate boundaries needs
+/// it), so a chain that leaves the domain stalls one margin short of the true
+/// edge. Two faces sharing that edge each stall on their own side, and their
+/// sections miss each other by twice the margin — a gap that scales with
+/// patch size and defeats every downstream junction weld (the kumiko strut
+/// fuse chains). Point evaluation AT a boundary is safe (`find_span` clamps),
+/// so the endpoint itself may sit exactly on the edge.
+fn finish_chain(
+    mut points: Vec<IntersectionPoint>,
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    tolerance: f64,
+    closed_loop: bool,
+) -> Vec<IntersectionPoint> {
+    if !closed_loop
+        && let Some(&last) = points.last()
+        && let Some(end) = refine_onto_boundary(s1, s2, &last, tolerance)
+        && let Some(slot) = points.last_mut()
+    {
+        *slot = end;
+    }
     points
+}
+
+/// Refine a margin-stalled chain end onto the exact domain boundary.
+///
+/// Pins every non-periodic parameter lying within 1.5x the clamp margin of
+/// its domain edge to that exact edge value, then Newton-solves the free
+/// parameters to bring the two surface points together. Returns `None` when
+/// no parameter is near a boundary, the reduced system is singular (e.g. a
+/// degenerate pole edge), or the solve does not reach `tolerance` — callers
+/// keep the original endpoint in those cases.
+fn refine_onto_boundary(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    last: &IntersectionPoint,
+    tolerance: f64,
+) -> Option<IntersectionPoint> {
+    let domains = [s1.domain_u(), s1.domain_v(), s2.domain_u(), s2.domain_v()];
+    let periodic = [
+        s1.is_periodic_u(),
+        s1.is_periodic_v(),
+        s2.is_periodic_u(),
+        s2.is_periodic_v(),
+    ];
+    let mut state = [last.param1.0, last.param1.1, last.param2.0, last.param2.1];
+    let mut pinned = [false; 4];
+    for i in 0..4 {
+        if periodic[i] {
+            continue;
+        }
+        let (min, max) = domains[i];
+        let band = 0.0015 * (max - min);
+        if state[i] <= min + band {
+            state[i] = min;
+            pinned[i] = true;
+        } else if state[i] >= max - band {
+            state[i] = max;
+            pinned[i] = true;
+        }
+    }
+    if !pinned.iter().any(|&p| p) {
+        return None;
+    }
+    let free: Vec<usize> = (0..4).filter(|&i| !pinned[i]).collect();
+
+    for _ in 0..super::MAX_NEWTON_ITER {
+        let p1 = s1.evaluate(state[0], state[1]);
+        let p2 = s2.evaluate(state[2], state[3]);
+        let r = p1 - p2;
+        if r.length() < tolerance {
+            return Some(IntersectionPoint {
+                point: p1,
+                param1: (state[0], state[1]),
+                param2: (state[2], state[3]),
+            });
+        }
+        if free.is_empty() {
+            return None;
+        }
+
+        let d1 = s1.derivatives(state[0], state[1], 1);
+        let d2 = s2.derivatives(state[2], state[3], 1);
+        let cols = [d1[1][0], d1[0][1], -d2[1][0], -d2[0][1]];
+
+        // Normal equations over the free columns: (JtJ) d = -Jt r.
+        let m = free.len();
+        let mut a = [[0.0_f64; 3]; 3];
+        let mut b = [0.0_f64; 3];
+        for (row, &ir) in free.iter().enumerate() {
+            for (col, &ic) in free.iter().enumerate() {
+                a[row][col] = cols[ir].dot(cols[ic]);
+            }
+            b[row] = -cols[ir].dot(r);
+        }
+        let delta = solve_normal_system(&mut a, &mut b, m)?;
+        for (row, &ir) in free.iter().enumerate() {
+            state[ir] += delta[row];
+        }
+        // Keep free parameters evaluable: wrap periodic ones, clamp
+        // non-periodic ones to the exact domain.
+        for i in 0..4 {
+            if pinned[i] {
+                continue;
+            }
+            let (min, max) = domains[i];
+            if periodic[i] {
+                state[i] = constrain_param(state[i], min, max, true);
+            } else {
+                state[i] = state[i].clamp(min, max);
+            }
+        }
+    }
+    None
+}
+
+/// Solve an `m x m` (m <= 3) linear system in-place via Gaussian elimination
+/// with partial pivoting. Returns `None` on a (near-)singular matrix.
+fn solve_normal_system(a: &mut [[f64; 3]; 3], b: &mut [f64; 3], m: usize) -> Option<[f64; 3]> {
+    for k in 0..m {
+        let mut piv = k;
+        for row in (k + 1)..m {
+            if a[row][k].abs() > a[piv][k].abs() {
+                piv = row;
+            }
+        }
+        if a[piv][k].abs() < 1e-14 {
+            return None;
+        }
+        if piv != k {
+            a.swap(piv, k);
+            b.swap(piv, k);
+        }
+        for row in (k + 1)..m {
+            let f = a[row][k] / a[k][k];
+            for col in k..m {
+                a[row][col] -= f * a[k][col];
+            }
+            b[row] -= f * b[k];
+        }
+    }
+    let mut x = [0.0_f64; 3];
+    for k in (0..m).rev() {
+        let mut s = b[k];
+        for col in (k + 1)..m {
+            s -= a[k][col] * x[col];
+        }
+        x[k] = s / a[k][k];
+    }
+    Some(x)
 }
 
 /// Perform one RKF45 step. Returns `(y_4th, y_5th)` or `None` if
