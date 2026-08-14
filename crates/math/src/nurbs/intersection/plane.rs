@@ -115,8 +115,13 @@ pub fn intersect_plane_nurbs(
             let top = horiz[i][j + 1];
             let left = vert[i][j];
             let right = vert[i + 1][j];
-            let present: Vec<usize> = [bottom, top, left, right].into_iter().flatten().collect();
-            match present.len() {
+            let mut present = [0_usize; 4];
+            let mut n_present = 0_usize;
+            for e in [bottom, top, left, right].into_iter().flatten() {
+                present[n_present] = e;
+                n_present += 1;
+            }
+            match n_present {
                 2 => connect(present[0], present[1], &mut links),
                 4 => {
                     // Saddle: the center sample decides which corners the
