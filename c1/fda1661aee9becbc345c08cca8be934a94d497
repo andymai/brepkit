@@ -1,0 +1,23 @@
+crates/io/tests/data/kumiko_strut_diag_up_ruled.bin
+  s_5511e9ebcd4d22::t_3c543459901cc5 1
+crates/io/tests/kumiko_strut_fuse_inmem.rs
+  s_5511e9ebcd4d22::t_450c97c74a82d3 114-118,120,124
+  s_5511e9ebcd4d22::t_d6f28e31ec9083 7-28
+  s_5511e9ebcd4d22::t_6888ab14912aeb 77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c1fda1661aee9becbc345c08cca8be934a94d497",
+  "prompts": {},
+  "sessions": {
+    "s_5511e9ebcd4d22": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "71b94051-2c50-4fd2-8261-b5d80b549276",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
