@@ -581,6 +581,26 @@ mod tests {
         }
     }
 
+    /// The junction-band discriminant: an on-curve point midway between the
+    /// finder's 64 samples sits ~half a sample step from its nearest sample,
+    /// so the narrow broad phase (boundary-split calibration, honeycomb
+    /// foil) must reject it while the junction bands (T-splits at other
+    /// sections' endpoints — the wedge-corner junction) must accept it.
+    #[test]
+    fn junction_bands_accept_on_curve_points_between_samples() {
+        let edge = parabola_section_edge(false);
+        let eval = |t: f64| evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+        let sp = eval(0.507);
+        let tol = 1e-7;
+        assert!(
+            find_splits_on_nurbs_section(&edge, &[sp], tol, false).is_empty(),
+            "narrow bands must reject a mid-segment candidate"
+        );
+        let splits = find_splits_on_nurbs_section(&edge, &[sp], tol, true);
+        assert_eq!(splits.len(), 1, "junction bands must accept the junction");
+        assert!((splits[0].1 - sp).length() < 1e-6);
+    }
+
     #[test]
     fn nurbs_section_splits_ordered_along_forward_edge() {
         let edge = parabola_section_edge(false);
