@@ -2228,9 +2228,26 @@ fn trim_ellipse_to_boundary_crossings(
     let mut crossings: Vec<Point3> = Vec::new();
     let push_crossing = |p: Point3, crossings: &mut Vec<Point3>| {
         // Keep only points actually on the section curve (rejects a cone's
-        // far-nappe root or a seam-line crossing that misses the ellipse).
+        // far-nappe root or a seam-line crossing that misses the ellipse —
+        // both land millimetres away). The band is fitted-geometry scale,
+        // not exact scale: a swept faceted solid's boundary edges sit up to
+        // ~6e-5 off its own fitted face planes, so the edge x surface
+        // crossing lands that far off the plane x surface section. A 1e-6
+        // gate rejected the TRUE crossing (including the inter-segment
+        // triple point), left an ODD crossing count on a closed section,
+        // and the surviving over-long arc split the analytic partner along
+        // a curve its neighbours never shared (the kumiko strut slivers).
         let foot = sec.evaluate(sec.project(p));
-        if (foot - p).length() > 1e-6 {
+        if (foot - p).length() > 1e-4 {
+            if std::env::var("BK_TRIM_ELL").is_ok() {
+                log::debug!(
+                    "TRIM_ELL reject off-curve d={:.3e} p=({:.4},{:.4},{:.4})",
+                    (foot - p).length(),
+                    p.x(),
+                    p.y(),
+                    p.z()
+                );
+            }
             return;
         }
         // Dedup tolerance: the SAME geometric crossing reached two ways (an
@@ -2293,6 +2310,7 @@ fn trim_ellipse_to_boundary_crossings(
         }
     }
 
+    let mut plane_poly: Vec<Point3> = Vec::new();
     for oe in topo.wire(face.outer_wire()).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         if !matches!(edge.curve(), EdgeCurve::Line) {
@@ -2302,11 +2320,74 @@ fn trim_ellipse_to_boundary_crossings(
         }
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
+        plane_poly.push(if oe.is_forward() { sp } else { ep });
         for p in line_segment_surface_crossings(sp, ep, analytic_surf) {
             push_crossing(p, &mut crossings);
         }
     }
 
+    // Exact containment on the PLANE face: its boundary is all straight
+    // edges (guaranteed above), so its outer polygon decides whether an arc
+    // interval actually lies on the face. The FaceExtent test alone is a
+    // boundary-margin box: an arc overshooting past the face's edge into a
+    // NEIGHBOURING coplanar-ish segment (a helix-swept strut's next tread)
+    // stays inside the box, survives, and splits the analytic partner along
+    // a curve the neighbour's own splitter does not share — the two sides
+    // then bound the same seam along curves ~0.05 apart (the kumiko strut
+    // free-edge slivers). Project along the plane normal's dominant axis;
+    // a point within weld distance of the boundary counts as inside so a
+    // legitimate arc ending exactly on an edge is never rejected.
+    let plane_contains = |p: Point3| -> bool {
+        if plane_poly.len() < 3 {
+            return true;
+        }
+        let (ax0, ax1) = {
+            let (nx, ny, nz) = (plane_n.x().abs(), plane_n.y().abs(), plane_n.z().abs());
+            if nx >= ny && nx >= nz {
+                (1, 2)
+            } else if ny >= nx && ny >= nz {
+                (0, 2)
+            } else {
+                (0, 1)
+            }
+        };
+        let c = |q: Point3, a: usize| [q.x(), q.y(), q.z()][a];
+        let (px, py) = (c(p, ax0), c(p, ax1));
+        let mut inside = false;
+        let mut min_d2 = f64::MAX;
+        let n = plane_poly.len();
+        for i in 0..n {
+            let (x0, y0) = (c(plane_poly[i], ax0), c(plane_poly[i], ax1));
+            let (x1, y1) = (
+                c(plane_poly[(i + 1) % n], ax0),
+                c(plane_poly[(i + 1) % n], ax1),
+            );
+            if (y0 > py) != (y1 > py) {
+                let t = (py - y0) / (y1 - y0);
+                if px < (x1 - x0).mul_add(t, x0) {
+                    inside = !inside;
+                }
+            }
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            let len2 = dx.mul_add(dx, dy * dy);
+            let t = if len2 > 1e-18 {
+                ((px - x0).mul_add(dx, (py - y0) * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let (ex, ey) = (dx.mul_add(t, x0) - px, dy.mul_add(t, y0) - py);
+            min_d2 = min_d2.min(ex.mul_add(ex, ey * ey));
+        }
+        inside || min_d2 < 1e-12
+    };
+
+    if std::env::var("BK_TRIM_ELL").is_ok() {
+        log::debug!(
+            "TRIM_ELL plane={plane_face:?} analytic={analytic_face:?} crossings={} poly={}",
+            crossings.len(),
+            plane_poly.len()
+        );
+    }
     // Need at least two crossings to bound an arc.
     if crossings.len() < 2 {
         return None;
@@ -2337,7 +2418,7 @@ fn trim_ellipse_to_boundary_crossings(
         }
         let t_mid = 0.5 * (t0 + t1);
         let mid = sec.evaluate(t_mid);
-        if !(ext_a.contains(mid) && ext_b.contains(mid)) {
+        if !(ext_a.contains(mid) && ext_b.contains(mid) && plane_contains(mid)) {
             continue;
         }
         // Skip a degenerate sliver (the two crossings coincide angularly).
