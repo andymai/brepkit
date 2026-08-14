@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786677435525,
+  "lastUpdate": 1786678980891,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31373,6 +31373,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26051423,
             "range": "± 90459",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "623ec475c720b45cb75f4c19091ab7804a32c95c",
+          "message": "docs(roadmap): record the strut dig's shipped roots and the live junction root (#1598)\n\nUpdates the corner-window OPEN row: three roots shipped today (#1594\nsweep honesty and trim hardening, #1596 quadric x NURBS sections), and\nthe live root is pinned precisely — the outer cylinder's section pieces\narrive at fill_face_info with ~2e-3 endpoint gaps minted downstream of\nthe restrict (the raw-endpoint snap experiment fired 3 times and moved\nnothing, refuted at that altitude; the split points most likely come\nfrom make_blocks/link_existing T-junction splitting at sampled\nprecision). The next session starts at instrumenting where face 45's\nsection pave-blocks get their split points.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRefines the roadmap entry for Kumiko corner‑window strut fuses to record\nshipped roots and pin the live failure to marched‑section junction\nconsistency. Also backticks code identifiers and removes a reverted\nhelper reference to avoid confusion.\n\n- Shipped roots: #1594 sweep honesty + trim hardening (3.2.39), #1596\nquadric×NURBS sectioning (pending 3.3.0), and wedge cylinder split; the\nruled strut now serializes 40 NURBS + 2 planes. Failure is a clean\nassembly abort (“open growth shell”), 7 faces detaching; cut reads\n“split into 1.”\n- Live root: the outer cylinder’s 7 sections reach `fill_face_info` as\ntwo chains with ~2e‑3 endpoint gaps; widening the junction‑registry\ntrigger band to 5e‑3 and snapping did nothing, indicating splits minted\ndownstream by `make_blocks`/`link_existing` at sampled‑precision\nT‑junctions.\n- Next action: instrument where the outer cylinder’s section pave‑blocks\nget their split points (consumed by `fill_face_info`) and weld those to\nshared exact junctions; keep `kumiko_diagonal_strut_fuse_is_exact` as\nthe acceptance bar and run the full splitter foil set on any change.\n\n<sup>Written for commit 4cb762b7784c1b23e0c6c1949250e5eb8e0f7035.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1598?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T03:40:37Z",
+          "tree_id": "040a88b429e9bfbaeabb44d89283156e4838e9ae",
+          "url": "https://github.com/andymai/brepkit/commit/623ec475c720b45cb75f4c19091ab7804a32c95c"
+        },
+        "date": 1786678978065,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1061739,
+            "range": "± 15068",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1104736,
+            "range": "± 11323",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13282,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 729127,
+            "range": "± 5568",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27002152,
+            "range": "± 27910",
             "unit": "ns/iter"
           }
         ]
