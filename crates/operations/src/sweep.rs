@@ -326,6 +326,51 @@ fn sweep_wire_through_frames(
 }
 
 /// Build inward-facing side faces for an inner wire swept through frames.
+/// Surface for one swept side quad: `p0`/`p1` on ring `seg` (profile columns
+/// `i`, `i+1`), `p2`/`p3` the same columns on ring `seg+1`. `normal`/`d` is
+/// the three-corner plane the callers already fitted.
+///
+/// A frenet sweep along a curved spine twists the quad: the fourth corner
+/// sits off that plane at fitted scale (~1e-4 on a helix-swept strut), so a
+/// `Plane` face lies about its own boundary — downstream booleans, whose
+/// gates are exact-scale, then split the two sides of every seam along
+/// different curves and the result shells open. Emit the exact bilinear
+/// ruled patch instead; a flat quad keeps the analytic plane.
+fn side_quad_surface(
+    p0: Point3,
+    p1: Point3,
+    p2: Point3,
+    p3: Point3,
+    normal: Vec3,
+    d: f64,
+) -> FaceSurface {
+    let planar = FaceSurface::Plane { normal, d };
+    if (dot_normal_point(normal, p3) - d).abs() <= Tolerance::new().linear * 10.0 {
+        return planar;
+    }
+    // Grid rows are the u direction: [[p0,p1],[p2,p3]] has du ~ p2-p0 and
+    // dv ~ p1-p0, a path x edge natural normal; transpose when the caller's
+    // normal points the other way so orientation checks see a consistent
+    // face.
+    let n_pat = (p2 - p0).cross(p1 - p0);
+    let rows = if n_pat.dot(normal) >= 0.0 {
+        vec![vec![p0, p1], vec![p2, p3]]
+    } else {
+        vec![vec![p0, p2], vec![p1, p3]]
+    };
+    match brepkit_math::nurbs::surface::NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        rows,
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    ) {
+        Ok(s) => FaceSurface::Nurbs(s),
+        Err(_) => planar,
+    }
+}
+
 fn build_inner_side_faces(
     topo: &mut Topology,
     iwd: &SweptWireData,
@@ -340,6 +385,7 @@ fn build_inner_side_faces(
             let p0 = topo.vertex(iwd.ring_verts[seg][i])?.point();
             let p1 = topo.vertex(iwd.ring_verts[seg][next_i])?.point();
             let p_next = topo.vertex(iwd.ring_verts[seg + 1][i])?.point();
+            let p_diag = topo.vertex(iwd.ring_verts[seg + 1][next_i])?.point();
             let edge_dir = p1 - p0;
             let path_dir = p_next - p0;
             // Reversed normal (inward-facing).
@@ -365,10 +411,7 @@ fn build_inner_side_faces(
             let fid = topo.add_face(Face::new(
                 side_wire_id,
                 vec![],
-                FaceSurface::Plane {
-                    normal: side_normal,
-                    d: side_d,
-                },
+                side_quad_surface(p0, p1, p_next, p_diag, side_normal, side_d),
             ));
             faces.push(fid);
         }
@@ -821,6 +864,7 @@ pub(crate) fn sweep_placed(
             let p0 = topo.vertex(ring_verts[seg][i])?.point();
             let p1 = topo.vertex(ring_verts[seg][next_i])?.point();
             let p_next = topo.vertex(ring_verts[seg + 1][i])?.point();
+            let p_diag = topo.vertex(ring_verts[seg + 1][next_i])?.point();
             let edge_dir = p1 - p0;
             let path_dir = p_next - p0;
             let side_normal = edge_dir
@@ -844,10 +888,7 @@ pub(crate) fn sweep_placed(
             let side_face = topo.add_face(Face::new(
                 side_wire_id,
                 vec![],
-                FaceSurface::Plane {
-                    normal: side_normal,
-                    d: side_d,
-                },
+                side_quad_surface(p0, p1, p_next, p_diag, side_normal, side_d),
             ));
             all_faces.push(side_face);
         }
@@ -1549,6 +1590,7 @@ pub fn sweep_with_options(
             let p0 = topo.vertex(ring_verts[seg][i])?.point();
             let p1 = topo.vertex(ring_verts[seg][next_i])?.point();
             let p_next = topo.vertex(ring_verts[seg + 1][i])?.point();
+            let p_diag = topo.vertex(ring_verts[seg + 1][next_i])?.point();
             let edge_dir = p1 - p0;
             let path_dir = p_next - p0;
             let side_normal = edge_dir
@@ -1572,10 +1614,7 @@ pub fn sweep_with_options(
             let side_face = topo.add_face(Face::new(
                 side_wire_id,
                 vec![],
-                FaceSurface::Plane {
-                    normal: side_normal,
-                    d: side_d,
-                },
+                side_quad_surface(p0, p1, p_next, p_diag, side_normal, side_d),
             ));
             all_faces.push(side_face);
         }
@@ -2040,6 +2079,7 @@ fn sweep_miter(
                 let p0 = topo.vertex(prev_ring[i])?.point();
                 let p1 = topo.vertex(prev_ring[next_i])?.point();
                 let p_next = topo.vertex(miter_ring[i])?.point();
+                let p_diag = topo.vertex(miter_ring[next_i])?.point();
                 let edge_dir = p1 - p0;
                 let path_dir = p_next - p0;
                 let side_normal = edge_dir
@@ -2063,10 +2103,7 @@ fn sweep_miter(
                 all_faces.push(topo.add_face(Face::new(
                     side_wire_id,
                     vec![],
-                    FaceSurface::Plane {
-                        normal: side_normal,
-                        d: side_d,
-                    },
+                    side_quad_surface(p0, p1, p_next, p_diag, side_normal, side_d),
                 )));
             }
 
@@ -2166,6 +2203,7 @@ fn sweep_miter(
                 let p0 = topo.vertex(ring_verts[seg][i])?.point();
                 let p1 = topo.vertex(ring_verts[seg][next_i])?.point();
                 let p_next = topo.vertex(ring_verts[seg + 1][i])?.point();
+                let p_diag = topo.vertex(ring_verts[seg + 1][next_i])?.point();
                 let edge_dir = p1 - p0;
                 let path_dir = p_next - p0;
                 let side_normal = edge_dir
@@ -2189,10 +2227,7 @@ fn sweep_miter(
                 all_faces.push(topo.add_face(Face::new(
                     side_wire_id,
                     vec![],
-                    FaceSurface::Plane {
-                        normal: side_normal,
-                        d: side_d,
-                    },
+                    side_quad_surface(p0, p1, p_next, p_diag, side_normal, side_d),
                 )));
             }
         }
