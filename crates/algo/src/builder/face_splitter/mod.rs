@@ -5694,6 +5694,42 @@ fn split_face_2d_impl(
         }
     }
 
+    // Co-register section endpoints with the boundary graph on curved
+    // faces. A marched chain end and the boundary split vertex at the same
+    // junction share ONE 3D vertex (the pave machinery welded them), but
+    // their UVs come from different paths — surface projection vs boundary
+    // pcurve — and disagree at marched precision (~1e-6), far above the
+    // wire graph's exact-tol weld. Left apart, the pendant pruner reads
+    // every chain end as dangling and eats whole section chains (the wedge
+    // cylinder kept its in-strut corner span for exactly this reason).
+    // Junction identity is the 3D point, so adopt the boundary's UV
+    // wherever the 3D positions coincide within the weld-scale band.
+    if !is_plane && all_edges.len() > n_boundary_edges {
+        let weld3 = tol.linear * 100.0;
+        let boundary_uvs: Vec<(Point3, Point2)> = all_edges[..n_boundary_edges]
+            .iter()
+            .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
+            .collect();
+        let adopt = |p3: Point3| -> Option<Point2> {
+            let mut best: Option<(f64, Point2)> = None;
+            for &(q3, quv) in &boundary_uvs {
+                let d = (q3 - p3).length();
+                if d <= weld3 && best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, quv));
+                }
+            }
+            best.map(|(_, uv)| uv)
+        };
+        for e in &mut all_edges[n_boundary_edges..] {
+            if let Some(uv) = adopt(e.start_3d) {
+                e.start_uv = uv;
+            }
+            if let Some(uv) = adopt(e.end_3d) {
+                e.end_uv = uv;
+            }
+        }
+    }
+
     // Split section edges where another section's endpoint lands on their
     // interior (L/T junctions). Needs ≥ 2 distinct sections (one pair to cross
     // another); runs after the partial-band u-unwrap so split UVs match the
@@ -6051,6 +6087,25 @@ fn split_face_2d_impl(
     // in, the traversal walks out and back along them, spuriously
     // over-splitting the face (boundary edges are never removed, so the
     // boundary prefix and `n_boundary_edges` stay valid).
+    if trace_split {
+        let mut rows: Vec<String> = all_edges
+            .iter()
+            .map(|e| {
+                format!(
+                    "STRACE-PRE ({:.7},{:.7})->({:.7},{:.7}) src={:?}",
+                    e.start_uv.x(),
+                    e.start_uv.y(),
+                    e.end_uv.x(),
+                    e.end_uv.y(),
+                    e.source_edge_idx
+                )
+            })
+            .collect();
+        rows.sort();
+        for r in rows {
+            log::debug!("{r}");
+        }
+    }
     let all_edges = super::wire_builder::remove_pendant_sections(
         &all_edges, tol.linear, u_periodic, v_periodic,
     );
