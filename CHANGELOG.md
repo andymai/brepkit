@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.5](https://github.com/andymai/brepkit/compare/v3.3.4...v3.3.5) (2026-08-14)
+
+
+### Bug Fixes
+
+* **algo:** co-register interior junction UVs after T-splits ([#1609](https://github.com/andymai/brepkit/issues/1609)) ([c78629e](https://github.com/andymai/brepkit/commit/c78629e4beb00a9c9499f69b1114342689efdb0d))
+
 ## [3.3.4](https://github.com/andymai/brepkit/compare/v3.3.3...v3.3.4) (2026-08-14)
 
 
