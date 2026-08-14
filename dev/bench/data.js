@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786700490177,
+  "lastUpdate": 1786704600534,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31751,6 +31751,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26026657,
             "range": "± 86403",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "216c9de7e5c088c2b932a957d1ad72f80300052a",
+          "message": "docs(roadmap): honeycomb refutes global T-junction band widening (#1605)\n\nRecords the foil-sweep verdict on the re-applied T-junction band fixes:\nhoneycomb pcut1 breaks again (the same foil that refuted the chaining\ndedup), so a global band widening in find_splits_on_nurbs_section is\nrefuted; the resume plan is a junction-targeted split. Working-tree\nchange was reverted; this is the roadmap record only.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap to record that globally widening the T‑junction\nbands in `find_splits_on_nurbs_section` was refuted: reapplying the\nbroad/fine band increase broke the honeycomb pcut1 foil again, so a\nglobal approach is not viable. The plan now is a junction‑targeted split\nthat uses widened sampling‑resolution broad phase and weld‑scale fine\ngate only at other sections’ endpoints, keeping narrow bands for\narbitrary candidates.\n\nDocs-only; the prior working change was reverted. Next work remains to\nroute wires at the junction and re-run the full splitter foil set.\n\n<sup>Written for commit 337bdbb3ef6ff6c88aa9ffc652028fbe46e6f790.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1605?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T10:47:29Z",
+          "tree_id": "a6b9728f0e00ed6cf050d27711d37b365928417b",
+          "url": "https://github.com/andymai/brepkit/commit/216c9de7e5c088c2b932a957d1ad72f80300052a"
+        },
+        "date": 1786704597631,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 975755,
+            "range": "± 2747",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1055460,
+            "range": "± 3117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12010,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 720772,
+            "range": "± 2818",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26241200,
+            "range": "± 60798",
             "unit": "ns/iter"
           }
         ]
