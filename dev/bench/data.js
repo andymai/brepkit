@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786712324049,
+  "lastUpdate": 1786715892542,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -31967,6 +31967,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25320875,
             "range": "± 109308",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c78629e4beb00a9c9499f69b1114342689efdb0d",
+          "message": "fix(algo): co-register interior junction UVs after T-splits (#1609)\n\nSeventh root on the kumiko strut-fuse frontier (#1599, #1601, #1603,\n#1606). With the junction-gated T-split firing, the crossing cylinder\nsection still vanished at the wedge-corner junction: the T-split vertex\nUV and the crossing section's endpoint UV are two independent\nprojections of marched-rounded 3D points (~2e-6 apart, measured\n0.1153739/0.7797842 vs 0.1153728/0.7797818), above the pendant pruner's\nweld.\n\nFix: canonicalize section endpoint UVs by 3D identity after the T-splits\n(non-periodic curved faces only, seeded with boundary vertex UVs so the\n#1603 boundary welds are preserved). The sideways-exiting strut quad now\npartitions three ways with the in-wedge sliver dropped; strut fuse free\n25 -> 24.\n\nVerification: full sweep green — algo, operations, io (honeycomb\nguardian included), wasm gridfinity 27/27; clippy clean. Remaining\ninventory recorded in the roadmap.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCo-registers interior-junction UVs after T-splits on non‑periodic curved\nfaces so crossing endpoints weld instead of being pruned. Previously,\nthe T‑split vertex UV and the crossing section’s endpoint UV came from\nindependent projections (~1e‑6 apart), so the pendant pruner dropped the\ncrossing segment and the corner split produced two loops; now the quad\npartitions three ways and the in‑wedge sliver is removed.\n\n- Adds a UV co-registration pass in `split_face_2d_impl` after T-splits:\nendpoints adopt a canonical UV by 3D identity within `100 × tol`, seeded\nwith boundary vertices to preserve earlier boundary welds.\n- Gated to `!is_plane && !u_periodic && !v_periodic && all_edges.len() >\nn_boundary_edges` to avoid affecting planes and periodic faces.\n- Practical effect: prevents junction mis-welds at wedge corners;\nreduces one free edge in the kumiko strut fuse case.\n\n<sup>Written for commit 0822336d90c5ebb921951c038206ec22bf012104.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1609?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-14T13:55:46Z",
+          "tree_id": "f7f9127f85492dd2b9c05d2523204b5fb69a995a",
+          "url": "https://github.com/andymai/brepkit/commit/c78629e4beb00a9c9499f69b1114342689efdb0d"
+        },
+        "date": 1786715889738,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 972573,
+            "range": "± 3456",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1059138,
+            "range": "± 12804",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12054,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 715029,
+            "range": "± 11434",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25826265,
+            "range": "± 70515",
             "unit": "ns/iter"
           }
         ]
