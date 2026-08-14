@@ -146,6 +146,15 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     };
 
     // PB vertex registry: cross-face pool of FRESH vertices at CB positions.
+    // Wire vertices minted by THIS build, by position. The layered caches
+    // quantize exactly (1e-10 cells), but each face's sub-face wires carry
+    // their own marched endpoint drift (~1e-5 at the kumiko strut corner:
+    // four distinct vertices minted at one junction), so the mint fallback
+    // consults this pool with a weld-scale band before creating a vertex.
+    let mut wire_vertex_pool: Vec<(
+        brepkit_math::vec::Point3,
+        brepkit_topology::vertex::VertexId,
+    )> = Vec::new();
     let mut pb_vertex_registry: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         BTreeMap::new();
 
@@ -562,6 +571,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &vv_vertex_seed,
                 rank_pool,
                 &mut pb_vertex_registry,
+                &mut wire_vertex_pool,
                 arena,
             );
             let resolved_face_id = new_face_id.unwrap_or(face_id);
@@ -3180,6 +3190,10 @@ fn resolve_edge_vertices(
     seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    wire_pool: &mut Vec<(
+        brepkit_math::vec::Point3,
+        brepkit_topology::vertex::VertexId,
+    )>,
     edge: &super::split_types::OrientedPCurveEdge,
     arena: &crate::ds::GfaArena,
     quantize: &dyn Fn(Point3) -> (i64, i64, i64),
@@ -3257,25 +3271,61 @@ fn resolve_edge_vertices(
     // Fallback: position-based cache lookup.
     // Consult the PB registry first — if another face's PaveBlock
     // vertex was registered at this position, reuse it to ensure
-    // cross-face vertex sharing.
-    let start_vid = {
-        let key = quantize(edge.start_3d);
-        layered_vertex(local, seed, pool, key, || {
-            pb_registry
+    // cross-face vertex sharing. Then the wire-vertex pool with a
+    // weld-scale band: another face's wire may have minted this junction
+    // from its own drifted endpoint (~1e-5 apart), and adopting it is what
+    // lets merge_duplicate_edges collapse the coincident seam copies.
+    // Guarded by the 10x ambiguity rule so dense junction clusters never
+    // adopt across genuinely distinct vertices.
+    let weld = |wire_pool: &[(
+        brepkit_math::vec::Point3,
+        brepkit_topology::vertex::VertexId,
+    )],
+                p: brepkit_math::vec::Point3|
+     -> Option<brepkit_topology::vertex::VertexId> {
+        let band = tol.linear * 250.0;
+        let mut best: Option<(f64, brepkit_topology::vertex::VertexId)> = None;
+        let mut second = f64::INFINITY;
+        for &(q, vid) in wire_pool {
+            let d = (q - p).length();
+            match best {
+                Some((bd, _)) if d < bd => {
+                    second = bd;
+                    best = Some((d, vid));
+                }
+                Some(_) => second = second.min(d),
+                None => best = Some((d, vid)),
+            }
+        }
+        let (d1, vid) = best?;
+        (d1 <= band && second >= d1 * 10.0).then_some(vid)
+    };
+    let mut resolve_end =
+        |topo: &mut Topology,
+         local: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+         p: brepkit_math::vec::Point3|
+         -> brepkit_topology::vertex::VertexId {
+            let key = quantize(p);
+            let welded = pb_registry
                 .get(&key)
                 .copied()
-                .unwrap_or_else(|| topo.add_vertex(Vertex::new(edge.start_3d, tol.linear)))
-        })
-    };
-    let end_vid = {
-        let key = quantize(edge.end_3d);
-        layered_vertex(local, seed, pool, key, || {
-            pb_registry
-                .get(&key)
-                .copied()
-                .unwrap_or_else(|| topo.add_vertex(Vertex::new(edge.end_3d, tol.linear)))
-        })
-    };
+                .or_else(|| weld(wire_pool, p));
+            let vid = layered_vertex(local, seed, pool, key, || {
+                welded.unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear)))
+            });
+            if let Ok(v) = topo.vertex(vid) {
+                let q = v.point();
+                if !wire_pool
+                    .iter()
+                    .any(|&(r, rv)| rv == vid && (r - q).length() < tol.linear)
+                {
+                    wire_pool.push((q, vid));
+                }
+            }
+            vid
+        };
+    let start_vid = resolve_end(topo, local, edge.start_3d);
+    let end_vid = resolve_end(topo, local, edge.end_3d);
     (start_vid, end_vid)
 }
 
@@ -3294,6 +3344,10 @@ fn build_topology_face(
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     rank_pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_vertex_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    wire_vertex_pool: &mut Vec<(
+        brepkit_math::vec::Point3,
+        brepkit_topology::vertex::VertexId,
+    )>,
     arena: &crate::ds::GfaArena,
 ) -> Option<FaceId> {
     if split.outer_wire.is_empty() {
@@ -3330,6 +3384,7 @@ fn build_topology_face(
             vv_vertex_seed,
             rank_pool,
             pb_vertex_registry,
+            wire_vertex_pool,
             pcurve_edge,
             arena,
             &quantize,
@@ -3380,6 +3435,7 @@ fn build_topology_face(
                 vv_vertex_seed,
                 rank_pool,
                 pb_vertex_registry,
+                wire_vertex_pool,
                 pcurve_edge,
                 arena,
                 &quantize,

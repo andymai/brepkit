@@ -121,6 +121,26 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
                         "  TWIN {eid:?} <-> {oid:?} (uses={}) end_d={d:.3e} mid_d={md:.3e}",
                         uses.get(&oid).copied().unwrap_or(0)
                     );
+                    if std::env::var("TWIN").is_ok_and(|v| v == "2") {
+                        println!(
+                            "    {eid:?} ({:.9},{:.9},{:.9})->({:.9},{:.9},{:.9})",
+                            sp.x(),
+                            sp.y(),
+                            sp.z(),
+                            ep.x(),
+                            ep.y(),
+                            ep.z()
+                        );
+                        println!(
+                            "    {oid:?} ({:.9},{:.9},{:.9})->({:.9},{:.9},{:.9})",
+                            os.x(),
+                            os.y(),
+                            os.z(),
+                            oe2.x(),
+                            oe2.y(),
+                            oe2.z()
+                        );
+                    }
                 }
             }
         }
@@ -600,9 +620,48 @@ fn main() {
         }
     }
 
+    if std::env::var("VCORNER").is_ok() {
+        for i in 0..topo.num_vertices() {
+            let Some(vid) = topo.vertex_id_from_index(i) else {
+                continue;
+            };
+            let Ok(v) = topo.vertex(vid) else { continue };
+            let q = v.point();
+            if (q.x() - 2.9675).abs() < 1e-3
+                && (q.y() - 4.0242).abs() < 1e-3
+                && (q.z() - 13.962).abs() < 5e-2
+            {
+                println!("  VCORNER {vid:?} ({:.9},{:.9},{:.9})", q.x(), q.y(), q.z());
+            }
+        }
+    }
+    let vcorner_scan = |topo: &Topology, tag: &str| {
+        if std::env::var("VCORNER").is_ok() {
+            for i in 0..topo.num_vertices() {
+                let Some(vid) = topo.vertex_id_from_index(i) else {
+                    continue;
+                };
+                let Ok(v) = topo.vertex(vid) else { continue };
+                let q = v.point();
+                if (q.x() - 2.9675).abs() < 1e-3
+                    && (q.y() - 4.0242).abs() < 1e-3
+                    && (q.z() - 13.962).abs() < 5e-2
+                {
+                    println!(
+                        "  VCORNER[{tag}] {vid:?} ({:.9},{:.9},{:.9})",
+                        q.x(),
+                        q.y(),
+                        q.z()
+                    );
+                }
+            }
+        }
+    };
     println!("-- raw GFA {op} --");
     let t = std::time::Instant::now();
-    match brepkit_algo::gfa::boolean(&mut topo, bop, a, b) {
+    let raw_res = brepkit_algo::gfa::boolean(&mut topo, bop, a, b);
+    vcorner_scan(&topo, "post-raw");
+    match raw_res {
         Ok(sid) => {
             describe(
                 &topo,
