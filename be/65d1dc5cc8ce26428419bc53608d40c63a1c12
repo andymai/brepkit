@@ -1,0 +1,23 @@
+crates/algo/src/builder/wire_builder.rs
+  s_69aaeee2c3f165::t_5e254ef2f41a63 646,648
+.claude/skills/roadmap/SKILL.md
+  s_69aaeee2c3f165::t_5e254ef2f41a63 142-146
+crates/io/tests/kumiko_strut_fuse_inmem.rs
+  s_69aaeee2c3f165::t_5e254ef2f41a63 145-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "be65d1dc5cc8ce26428419bc53608d40c63a1c12",
+  "prompts": {},
+  "sessions": {
+    "s_69aaeee2c3f165": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21fc02d1-9d5a-4042-9667-142c49e8d284",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
