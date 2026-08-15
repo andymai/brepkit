@@ -142,11 +142,9 @@ fn kumiko_wedge_outer_cylinder_partitions_at_strut_chains() {
     );
 }
 
-/// READY-REPRO: fusing a wedge strut with the honest (ruled-patch) diagonal
-/// strut must stay exact. Today the wedge's kept pieces fail to weld to the
-/// strut's marched-NURBS section seams and detach as a 5-face open growth
-/// shell, so the op pays the mesh fallback (the kumiko corner-window
-/// frontier).
+/// The campaign's acceptance pin: fusing a wedge strut with the honest
+/// (ruled-patch) diagonal strut stays exact — no mesh fallback, zero free
+/// edges (the kumiko corner-window frontier, closed over ten roots).
 #[test]
 fn kumiko_diagonal_strut_fuse_is_exact() {
     let mut topo = Topology::new();

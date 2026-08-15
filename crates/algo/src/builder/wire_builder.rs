@@ -643,8 +643,9 @@ fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64
             let anchor = if at_start { edge.start_uv } else { edge.end_uv };
             let t_anchor = if at_start { t_start } else { t_end };
             let pe = nurbs.evaluate(t_anchor);
+            let stale_eps_sq: f64 = 1e-9 * 1e-9;
             let stale =
-                ((pe.x() - anchor.x()).powi(2) + (pe.y() - anchor.y()).powi(2)).sqrt() > 1e-9;
+                (pe.x() - anchor.x()).powi(2) + (pe.y() - anchor.y()).powi(2) > stale_eps_sq;
             if !stale {
                 if at_start {
                     let p0 = nurbs.evaluate(t_start);
