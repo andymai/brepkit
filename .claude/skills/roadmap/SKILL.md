@@ -139,23 +139,11 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **Kumiko corner-window strut fuse (CLOSED 2026-08-15; ten roots over #1594-#1616-era PRs; acceptance pin `kumiko_diagonal_strut_fuse_is_exact` ACTIVE)** —
-  the ruled diagonal strut x wedge fuse is exact and watertight (70 faces, free=0
-  over=0, all quadrics + NURBS kept). The arc: marcher domain-clamp margin
-  (#1599), no-seam gate for non-periodic quads (#1599), marching-squares
-  plane-NURBS connectivity (#1601), UV co-registration by 3D junction identity
-  at boundaries (#1603) and interior T-junctions (#1609), junction-gated
-  T-split bands (#1606, honeycomb-guarded), cross-face wire-vertex weld
-  (#1612), and the closer: STALE-PCURVE tangents — junction co-registration
-  moves edge UVs without refitting pcurves, so walkers' departure angles
-  disagreed with welded endpoints and grand-toured degree-6 junctions;
-  `pcurve_tangent_at_endpoint` now falls back to the chord when the stored
-  pcurve's endpoint is off the welded UV. Durable lesson: marched geometry is
-  ~1e-6-to-1e-5 off at EVERY altitude (endpoints, vertices, tangents), and
-  each exact-tol gate it meets needs either a weld-scale band with a 10x
-  ambiguity guard or a shared-anchor adoption. Fixtures
-  `crates/io/tests/kumiko_strut_fuse_inmem.rs` (4 active pins); instruments
-  TWIN=2/VCORNER/RAW_ONLY in replay_pair, strut probes in io/examples.
+- **Kumiko corner-window strut fuse (CLOSED 2026-08-15, ten roots, #1599-#1616; pin `kumiko_diagonal_strut_fuse_is_exact` ACTIVE)** —
+  exact watertight fuse (70 faces, free=0 over=0); every root was marched-geometry
+  ~1e-6..1e-5 drift meeting an exact-tol gate (endpoints, vertices, tangents) — fixed by
+  weld-scale bands with 10x ambiguity guards or shared-anchor adoption at each altitude.
+  Fixtures and instrument census: `crates/io/tests/kumiko_strut_fuse_inmem.rs` + replay_pair.
 
 - **bp 6x4 magnets residual + every baseplate row (CLOSED 2026-08-13 on released 3.2.38; row 775 vs 1383ms = 0.56x, was 1.10x; aggregate 0.45x, faster 25/26)** —
   the #1488-era "no dominant stage" reading had rotted: pocketsCut owned the
