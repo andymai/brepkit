@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786755056948,
+  "lastUpdate": 1786758897775,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32507,6 +32507,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41590808,
             "range": "± 660533",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e9ac17969871fd2a365980f368bef815a972daa6",
+          "message": "docs(roadmap): record the tool-side verification of the strut campaign (#1619)\n\nSame-day tool-side verification of the closed kumiko strut campaign:\ngenerator suite 2883/2883 (292 files) on brepkit-wasm 3.3.7 vs a\n2883/2883 control on 3.3.0, wall 221s vs 229s. Measurement worktrees per\nthe parity-benchmarking recipe, since removed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments same-day tool-side verification of the closed kumiko strut\ncampaign in `.claude/skills/roadmap/SKILL.md`. Adds the comparison on\n`brepkit-wasm` 3.3.7 vs 3.3.0—generator suite 2883/2883 (292 files) vs\n2883/2883 control, wall 221s vs 229s—to make the roadmap entry\nauditable; no runtime changes.\n\n<sup>Written for commit 2e04d0d72529b52a306b1667656ac493c4b4e849.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1619?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-15T01:52:31Z",
+          "tree_id": "f03d488e4a348ecce0e98435939faed346c6686e",
+          "url": "https://github.com/andymai/brepkit/commit/e9ac17969871fd2a365980f368bef815a972daa6"
+        },
+        "date": 1786758895797,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1019873,
+            "range": "± 3774",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1105963,
+            "range": "± 1240",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13280,
+            "range": "± 80",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 735479,
+            "range": "± 1588",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45265237,
+            "range": "± 277928",
             "unit": "ns/iter"
           }
         ]
