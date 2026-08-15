@@ -632,15 +632,30 @@ fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64
             let span = (t_end - t_start).abs();
             let delta = span * 0.01;
 
-            if at_start {
-                let p0 = nurbs.evaluate(t_start);
-                let p1 = nurbs.evaluate(t_start + (t_end - t_start).signum() * delta);
+            // The stored pcurve can be STALE relative to the edge's UV
+            // endpoints: junction co-registration welds start_uv/end_uv
+            // across faces without refitting the pcurve, so a short
+            // T-split piece's sampled departure direction disagrees with
+            // where the edge actually starts — and one bad angle in the
+            // rotation mis-orders every walker at that junction. When the
+            // pcurve's own endpoint sits measurably off the stored UV,
+            // fall through to the chord, which follows the welded points.
+            let anchor = if at_start { edge.start_uv } else { edge.end_uv };
+            let t_anchor = if at_start { t_start } else { t_end };
+            let pe = nurbs.evaluate(t_anchor);
+            let stale =
+                ((pe.x() - anchor.x()).powi(2) + (pe.y() - anchor.y()).powi(2)).sqrt() > 1e-9;
+            if !stale {
+                if at_start {
+                    let p0 = nurbs.evaluate(t_start);
+                    let p1 = nurbs.evaluate(t_start + (t_end - t_start).signum() * delta);
+                    return (p1.x() - p0.x(), p1.y() - p0.y());
+                }
+                // at_end: incoming direction (from end back toward start).
+                let p0 = nurbs.evaluate(t_end);
+                let p1 = nurbs.evaluate(t_end - (t_end - t_start).signum() * delta);
                 return (p1.x() - p0.x(), p1.y() - p0.y());
             }
-            // at_end: incoming direction (from end back toward start).
-            let p0 = nurbs.evaluate(t_end);
-            let p1 = nurbs.evaluate(t_end - (t_end - t_start).signum() * delta);
-            return (p1.x() - p0.x(), p1.y() - p0.y());
         }
     }
 
