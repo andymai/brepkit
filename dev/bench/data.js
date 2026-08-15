@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786754155947,
+  "lastUpdate": 1786755056948,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32453,6 +32453,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45116158,
             "range": "± 229305",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "63413dcfd6f5321197f71dbbd332fc9c1c8b5b81",
+          "message": "refactor(algo): polish the stale-pcurve check per review (#1618)\n\nFollow-up to #1616 addressing the review comments: squared-distance\nstale check without the sqrt, the acceptance pin's doc comment updated\nto what it now validates, and the roadmap Closed entry collapsed toward\nthe one-line rule.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUses squared UV distance to flag stale p-curve endpoints in\n`pcurve_tangent_at_endpoint`, replacing sqrt(distance) > 1e-9 with\ndistance_sq > 1e-18. Behavior is unchanged; we simply avoid sqrt while\nkeeping the same tolerance, and the tangent fallback remains the same.\nAlso updates the acceptance pin comment and collapses the roadmap entry.\n\n**Review notes**\n- Check `wire_builder.rs`: verify the `stale_eps_sq` threshold matches\nthe previous 1e-9 norm and that fallback-on-stale still gates as before.\n- No test logic changes; only the acceptance pin docstring was\nclarified.\n- No config, migration, or rollout steps required.\n\n<sup>Written for commit be65d1dc5cc8ce26428419bc53608d40c63a1c12.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1618?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-15T00:48:28Z",
+          "tree_id": "cc4f814dcf30ad503c70908c1b0480fda99a4b98",
+          "url": "https://github.com/andymai/brepkit/commit/63413dcfd6f5321197f71dbbd332fc9c1c8b5b81"
+        },
+        "date": 1786755054595,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 976687,
+            "range": "± 2212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1059814,
+            "range": "± 17173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12000,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 732240,
+            "range": "± 2283",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41590808,
+            "range": "± 660533",
             "unit": "ns/iter"
           }
         ]
