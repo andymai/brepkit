@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786758897775,
+  "lastUpdate": 1786760625146,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32561,6 +32561,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45265237,
             "range": "± 277928",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2f35ca042f51f44fefb9ab60d03fee250a6bef88",
+          "message": "docs(roadmap): record the 3.3.7 head-to-head matrix (#1620)\n\nSame-day head-to-head on 3.3.7: 0.49x aggregate (10476ms reference vs\n5155ms brepkit), non-manifold 0 vs 5, and only the three documented\nscoop-family volume flags (the reference's double-cover over-count).\nCompletes the post-campaign verification checklist.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRecords the 3.3.7 head-to-head matrix in the roadmap entry to capture\nperformance and validation results from the same-day run. Previously the\nentry only listed suite pass counts and wall times; now it adds 0.49x\naggregate (10476ms vs 5155ms), non-manifold 0 vs 5, and the three known\nscoop-family volume flags (reference double-cover), completing the\npost-campaign verification checklist.\n\n**Review notes**\n- Single-line docs edit in `.claude/skills/roadmap/SKILL.md`; no runtime\nimpact or migration.\n\n<sup>Written for commit 522b2055faaa3a50aba8e346cff406d3a5e9d553.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1620?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-15T02:21:14Z",
+          "tree_id": "9d54f9b89250f66b516c63e4e6c686c4329a5d96",
+          "url": "https://github.com/andymai/brepkit/commit/2f35ca042f51f44fefb9ab60d03fee250a6bef88"
+        },
+        "date": 1786760622332,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1063256,
+            "range": "± 9534",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112419,
+            "range": "± 3159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13219,
+            "range": "± 115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 733217,
+            "range": "± 1247",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44655101,
+            "range": "± 269870",
             "unit": "ns/iter"
           }
         ]
