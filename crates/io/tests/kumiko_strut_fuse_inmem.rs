@@ -148,7 +148,6 @@ fn kumiko_wedge_outer_cylinder_partitions_at_strut_chains() {
 /// shell, so the op pays the mesh fallback (the kumiko corner-window
 /// frontier).
 #[test]
-#[ignore = "corner-window frontier: NURBS-strut seam welding degrades to the mesh fallback (see module doc)"]
 fn kumiko_diagonal_strut_fuse_is_exact() {
     let mut topo = Topology::new();
     let v = load("kumiko_strut_vertical.bin", &mut topo);
