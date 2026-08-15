@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786746988575,
+  "lastUpdate": 1786753592111,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32345,6 +32345,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41976532,
             "range": "± 97798",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "34dc75931f8c34aa189248df094cb89bb1e2e363",
+          "message": "fix(algo): fall back to the chord when a pcurve is stale at a welded junction (#1616)\n\nTenth and closing root of the kumiko corner-window strut-fuse campaign\n(#1599, #1601, #1603, #1606, #1609, #1612). Junction co-registration\nwelds edge UV endpoints without refitting stored pcurves, so\npcurve-sampled departure angles disagreed with the welded endpoints —\none bad angle at a co-located degree-6 junction mis-routed every walker\n(greedy grand-tour; DCEL orbit merge). The tangent falls back to the\nchord when the stored pcurve's endpoint is measurably off the stored UV.\n\nResult: the wedge x ruled diagonal strut fuse is exact and watertight —\n70 faces, free=0 over=0, all quadrics and NURBS kept — and the\ncampaign's acceptance pin kumiko_diagonal_strut_fuse_is_exact is ACTIVE\n(the workspace's last deferred-defect pin). The roadmap entry is\ncollapsed to Closed.\n\nVerification: full sweep green — algo, operations, io (acceptance pin\nactive, honeycomb guardian included), wasm gridfinity 27/27; clippy\nclean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFalls back to the chord when a stored pcurve is stale at a welded\njunction so walkers use the correct departure angle. Previously\n`pcurve_tangent_at_endpoint` always sampled the pcurve; at co-registered\ndegree-6 junctions the pcurve endpoint could disagree with the welded\n`start_uv`/`end_uv`, mis-ordering successors and merging real regions.\nNow we detect staleness and use the chord when the evaluated pcurve\nendpoint differs by >1e-9. This closes the kumiko diagonal strut x wedge\nfuse as exact and watertight.\n\n- Review notes\n- `crates/algo/src/builder/wire_builder.rs`: detect endpoint staleness\nagainst welded UV and compute the chord direction when stale; start/end\norientation preserved.\n- `crates/io/tests/kumiko_strut_fuse_inmem.rs`:\n`kumiko_diagonal_strut_fuse_is_exact` is active; verify fuse is 70\nfaces, free=0, over=0, quadrics + NURBS kept.\n- `.claude/skills/roadmap/SKILL.md`: inventory updated to zero\ndeferred-defect pins; campaign marked closed.\n\n<sup>Written for commit 440f84523c1d28041212f03c586c45bbbc9feb7f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1616?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-15T00:23:48Z",
+          "tree_id": "ea2d74ff54b636da55e7b0bd55f0fe3498eb71d2",
+          "url": "https://github.com/andymai/brepkit/commit/34dc75931f8c34aa189248df094cb89bb1e2e363"
+        },
+        "date": 1786753589281,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1067827,
+            "range": "± 6018",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1109054,
+            "range": "± 2498",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13174,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 732523,
+            "range": "± 830",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44884217,
+            "range": "± 314588",
             "unit": "ns/iter"
           }
         ]
