@@ -1,0 +1,21 @@
+crates/algo/src/builder/wire_builder.rs
+  s_69aaeee2c3f165::t_eca15121835dd9 635-656
+.claude/skills/roadmap/SKILL.md
+  s_69aaeee2c3f165::t_8fe42291a51d25 29-32,142-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "440f84523c1d28041212f03c586c45bbbc9feb7f",
+  "prompts": {},
+  "sessions": {
+    "s_69aaeee2c3f165": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21fc02d1-9d5a-4042-9667-142c49e8d284",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
