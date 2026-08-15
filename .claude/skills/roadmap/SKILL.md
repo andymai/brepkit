@@ -143,7 +143,7 @@ One line each; the fixture/PR carries the story. Newest first.
   exact watertight fuse (70 faces, free=0 over=0); every root was marched-geometry
   ~1e-6..1e-5 drift meeting an exact-tol gate (endpoints, vertices, tangents) — fixed by
   weld-scale bands with 10x ambiguity guards or shared-anchor adoption at each altitude.
-  Fixtures and instrument census: `crates/io/tests/kumiko_strut_fuse_inmem.rs` + replay_pair.
+  Fixtures and instrument census: `crates/io/tests/kumiko_strut_fuse_inmem.rs` + replay_pair. Tool-side verified same-day on 3.3.7: generator suite 2883/2883 (292 files) vs a 2883/2883 control on 3.3.0, wall 221s vs 229s.
 
 - **bp 6x4 magnets residual + every baseplate row (CLOSED 2026-08-13 on released 3.2.38; row 775 vs 1383ms = 0.56x, was 1.10x; aggregate 0.45x, faster 25/26)** —
   the #1488-era "no dominant stage" reading had rotted: pocketsCut owned the
