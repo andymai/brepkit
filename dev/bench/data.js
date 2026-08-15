@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786753592111,
+  "lastUpdate": 1786754155947,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32399,6 +32399,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44884217,
             "range": "± 314588",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38271f6774b875a629f070fc56b73e493ace8e1d",
+          "message": "chore(main): release 3.3.7 (#1617)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.3.7](https://github.com/andymai/brepkit/compare/v3.3.6...v3.3.7)\n(2026-08-15)\n\n\n### Bug Fixes\n\n* **algo:** fall back to the chord when a pcurve is stale at a welded\njunction ([#1616](https://github.com/andymai/brepkit/issues/1616))\n([34dc759](https://github.com/andymai/brepkit/commit/34dc75931f8c34aa189248df094cb89bb1e2e363))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 3.3.7 updates all workspace crates and fixes welded-junction\nhandling in `brepkit-algo`: when a pcurve is stale, we now fall back to\nthe edge chord to keep geometry evaluation robust. Previously we used\nthe stale pcurve, which could cause invalid results around welded\njunctions; the chord fallback may slightly change tessellation in those\nareas.\n\n- Bumps `version` in `Cargo.toml` and all `brepkit-*` workspace crates\nto 3.3.7; updates `.release-please-manifest.json` and `CHANGELOG.md`.\n- Behavior change is limited to `brepkit-algo`; expect minor\nnumeric/tessellation differences near welded junctions; no migration\nrequired.\n\n<sup>Written for commit 55ee8498175e0f403802289ba1285c4c5dbb3989.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1617?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-15T00:33:30Z",
+          "tree_id": "3c0b953c0ca78bab2f782f4f31c9a2bc1b43ef8f",
+          "url": "https://github.com/andymai/brepkit/commit/38271f6774b875a629f070fc56b73e493ace8e1d"
+        },
+        "date": 1786754154155,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1024295,
+            "range": "± 1314",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112655,
+            "range": "± 19118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13231,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 732841,
+            "range": "± 1596",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45116158,
+            "range": "± 229305",
             "unit": "ns/iter"
           }
         ]
