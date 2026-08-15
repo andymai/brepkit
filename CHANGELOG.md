@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.7](https://github.com/andymai/brepkit/compare/v3.3.6...v3.3.7) (2026-08-15)
+
+
+### Bug Fixes
+
+* **algo:** fall back to the chord when a pcurve is stale at a welded junction ([#1616](https://github.com/andymai/brepkit/issues/1616)) ([34dc759](https://github.com/andymai/brepkit/commit/34dc75931f8c34aa189248df094cb89bb1e2e363))
+
 ## [3.3.6](https://github.com/andymai/brepkit/compare/v3.3.5...v3.3.6) (2026-08-14)
 
 
