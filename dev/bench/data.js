@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1786995680233,
+  "lastUpdate": 1787599697512,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32723,6 +32723,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41482597,
             "range": "± 130219",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7cafa150a7e4f69945b0aacacc48d41899b9db61",
+          "message": "fix(ci): drop stale criterion dir before the tracking bench (#1627)\n\n`Publish benchmark` has been failing on `main` and every PR with:\n\n> No benchmark result was found in bench-output.txt\n\n## The benchmark was never actually broken\n\nThe `bench:` numbers are produced correctly. `Boolean perf` exits 0 and\nthe values are all there — but Criterion writes its baseline-load error\n**mid-line**, so what reaches the parser is:\n\n```\ntest boolean/cut_box_box ... Criterion.rs ERROR: error: Failed to access file \".../base/sample.json\": No such file or directory (os error 2)\nbench:   1,024,312 ns/iter (+/- 919)\n```\n\ninstead of the single line `test boolean/cut_box_box ... bench:\n1,024,312 ns/iter (+/- 919)` that github-action-benchmark's `cargo`\nparser matches. Every one of the five benches is split this way, so it\nsees zero results.\n\n## Why the file is missing\n\n`rust-cache` restores `target/` (the failing run logs `full match:\ntrue`) and its pruning leaves `target/criterion/<group>/<bench>/base/`\nas an empty directory. Criterion sees the directory, tries to load the\nbaseline, and fails. A clean checkout never hits this, which is why it\nonly shows up in CI.\n\n## Verified locally\n\nReproduced byte-for-byte by deleting just the `base/sample.json` files\nand leaving the directories:\n\n```\ntest boolean/cut_box_box ... Criterion.rs ERROR: error: Failed to access file \".../base/sample.json\" ...\nbench:   1,012,794 ns/iter (+/- 18,127)\n```\n\nWith `rm -rf target/criterion` first, all 5 lines match the parser's\nshape again (`grep -cE '^test .+ \\.\\.\\. bench: +[0-9,]+ ns/iter'` → 5).\n\nDropping the directory costs nothing: the trend baseline this pipeline\nactually compares against lives on `gh-pages` via\ngithub-action-benchmark, as the workflow header describes.\n`target/criterion` is scratch.\n\nhttps://claude.ai/code/session_01MQidAeF7vzMhiX248ah5XL\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRestores CI benchmark publishing by removing stale `target/criterion`\nbefore running the tracking bench. Before: `rust-cache` left `.../base/`\nwithout `sample.json`, `Criterion` logged a baseline-load error\nmid-line, and `github-action-benchmark` found zero results; after:\nbenches emit single-line bencher output and the job passes. Side\neffects: none—the trend baseline stays on `gh-pages`.\n\n**Review notes**\n- Adds `rm -rf target/criterion` before `cargo bench` in\n`.github/workflows/benchmark.yml`.\n- CI-only change; no benchmark code or thresholds modified.\n\n<sup>Written for commit ee01a9b8065855a4d5bba6f44180a237e0d221bc.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1627?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-24T12:25:37-07:00",
+          "tree_id": "4d1f9af8a5727b640382416ef0474ada9fccc800",
+          "url": "https://github.com/andymai/brepkit/commit/7cafa150a7e4f69945b0aacacc48d41899b9db61"
+        },
+        "date": 1787599693220,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1066373,
+            "range": "± 7769",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1109777,
+            "range": "± 2607",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13332,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 731680,
+            "range": "± 1390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44843430,
+            "range": "± 106164",
             "unit": "ns/iter"
           }
         ]
