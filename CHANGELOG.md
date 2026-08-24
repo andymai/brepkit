@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.8](https://github.com/andymai/brepkit/compare/v3.3.7...v3.3.8) (2026-08-24)
+
+
+### Bug Fixes
+
+* **wasm:** drop deprecated tsify into_wasm_abi impls ([#1625](https://github.com/andymai/brepkit/issues/1625)) ([ddb9804](https://github.com/andymai/brepkit/commit/ddb98049c6661ed805ce1e4f1d6ff3503f53d551))
+
 ## [3.3.7](https://github.com/andymai/brepkit/compare/v3.3.6...v3.3.7) (2026-08-15)
 
 
