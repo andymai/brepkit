@@ -24,4 +24,3 @@ pub struct UvMeshResult {
     pub indices: Vec<u32>,
     pub uvs: Vec<f64>,
 }
-
