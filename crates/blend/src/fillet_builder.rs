@@ -716,14 +716,18 @@ impl SolidSnapshot {
                 .into_iter()
                 .map(|wire| topo.add_wire(wire))
                 .collect();
-            let (&outer_wire, inner_wires) = wire_ids
-                .split_first()
-                .ok_or(brepkit_topology::TopologyError::Empty {
-                    entity: "face wires",
-                })?;
+            let (&outer_wire, inner_wires) =
+                wire_ids
+                    .split_first()
+                    .ok_or(brepkit_topology::TopologyError::Empty {
+                        entity: "face wires",
+                    })?;
 
-            let mut replacement =
-                Face::new(outer_wire, inner_wires.to_vec(), source_face.surface().clone());
+            let mut replacement = Face::new(
+                outer_wire,
+                inner_wires.to_vec(),
+                source_face.surface().clone(),
+            );
             replacement.set_reversed(source_face.is_reversed());
             let replacement_id = topo.add_face(replacement);
 
@@ -747,7 +751,6 @@ impl SolidSnapshot {
         }
         Ok(())
     }
-
 }
 
 /// Geometry of a full-revolution rim fillet (a closed circular edge between a
