@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.9](https://github.com/andymai/brepkit/compare/v3.3.8...v3.3.9) (2026-08-28)
+
+
+### Performance
+
+* **math:** solve plane-torus sections in closed form, not a 2D grid ([#1628](https://github.com/andymai/brepkit/issues/1628)) ([de626dd](https://github.com/andymai/brepkit/commit/de626dd1b3438cea3a28d0399dd7c8bed9f5ed5a))
+
 ## [3.3.8](https://github.com/andymai/brepkit/compare/v3.3.7...v3.3.8) (2026-08-24)
 
 
