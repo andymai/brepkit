@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787599697512,
+  "lastUpdate": 1787904747024,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32777,6 +32777,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44843430,
             "range": "± 106164",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "de626dd1b3438cea3a28d0399dd7c8bed9f5ed5a",
+          "message": "perf(math): solve plane-torus sections in closed form, not a 2D grid (#1628)\n\n## What\n\nPlane-torus intersection drove every case through a 128×128 sign-change\ngrid with Newton refinement (~49K torus evaluations), then fit a NURBS\nthe sampling caller discarded. The section has a per-`v` closed form:\n\n```\ncos(u − φ) = (d − n·center − r·c·sin v) / (s·(R + r·cos v))\n```\n\nso scan `v` and solve `u` directly, mirroring\n`intersect_plane_cylinder`, and route the sample path around the wasted\nfit.\n\n- Perpendicular planes (normal ∥ axis) fall out as exact-circle\nsampling.\n- A `chain_self_touches` gate keeps the inner-tangent figure-eight open\n(the #1010 guard), where the old code relied on its grid half-cell\noffset.\n\n## Result\n\n`torus − box` boolean: **12.4ms → 5.0ms (2.46x)**, still exact analytic\n(faces=5). No other census row moved.\n\n## Validation\n\n- math: 470 lib + integration, 0 failed (incl.\n`plane_torus_lobe_closes_and_stays_on_surface`,\n`plane_torus_inner_tangent_figure_eight_stays_open`)\n- operations torus 25/0 (incl.\n`cut_torus_by_box_notch_is_analytic_watertight`), section 21/0\n- offset 38/0, algo 216/0\n- **wasm gridfinity canary 27/0**\n- clippy `-D warnings` clean (pre-commit, full workspace)\n\nhttps://claude.ai/code/session_01HwqgJctdCevSv4N4u4khfy\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSolves plane-torus sections with a per-`v` closed form instead of a\n128×128 sign-change grid with Newton refinement, speeding up the `torus\n− box` boolean from 12.4 ms to 5.0 ms (2.46×). Points land on the torus\nby construction and on the plane to floating-point precision.\n\n- Replaces ~49K torus evaluations per section with an O(n) v-scan that\nsolves `u` directly; perpendicular planes fall out as exact-circle\nsampling.\n- Adds a `chain_self_touches` gate so the inner-tangent figure-eight\nsection stays open (the #1010 guard), where the old grid's half-cell\noffset prevented premature closure.\n- Routes the sampling path around the NURBS fit that callers discarded;\nthe fit path now also skips loops whose fit fails instead of erroring\nout.\n- Swaps the private intra-doc link in `intersect_plane_torus`'s docs for\nplain code text so rustdoc passes under `-D warnings`.\n- Updates the roadmap skill file with a pinned entry warning not to\nreintroduce the 2D grid.\n\n<sup>Written for commit 9f303d097db8938a442b77fc236a916a35049eda.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1628?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-08-28T08:09:37Z",
+          "tree_id": "be6891a741598701f13643328cdcd106e8728e83",
+          "url": "https://github.com/andymai/brepkit/commit/de626dd1b3438cea3a28d0399dd7c8bed9f5ed5a"
+        },
+        "date": 1787904744174,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1065373,
+            "range": "± 14314",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1108118,
+            "range": "± 989",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13179,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 727564,
+            "range": "± 1289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44884536,
+            "range": "± 78445",
             "unit": "ns/iter"
           }
         ]
