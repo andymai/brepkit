@@ -84,11 +84,7 @@ impl<'a> FilletBuilder<'a> {
     /// lookups fail. Individual edge failures are recorded in
     /// [`BlendResult::failed`] rather than aborting the whole operation.
     pub fn build(self) -> Result<BlendResult, BlendError> {
-        if self
-            .edge_sets
-            .iter()
-            .all(|(edges, _)| edges.is_empty())
-        {
+        if self.edge_sets.iter().all(|(edges, _)| edges.is_empty()) {
             return Err(BlendError::Topology(
                 brepkit_topology::TopologyError::Empty {
                     entity: "fillet edge set",
@@ -553,8 +549,8 @@ impl SolidGraph {
         let mut seen_wires = HashSet::new();
         for &face_id in &face_ids {
             let face = topo.face(face_id)?;
-            for wire_id in std::iter::once(face.outer_wire())
-                .chain(face.inner_wires().iter().copied())
+            for wire_id in
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
             {
                 if seen_wires.insert(wire_id) {
                     wire_ids.push(wire_id);
@@ -602,7 +598,6 @@ impl SolidGraph {
             pcurves,
         })
     }
-
 }
 struct SolidSnapshot {
     graph: SolidGraph,
@@ -683,7 +678,6 @@ impl SolidSnapshot {
         Ok(())
     }
 }
-
 
 /// Geometry of a full-revolution rim fillet (a closed circular edge between a
 /// bounded disc cap and an axisymmetric wall), recovered from a stripe whose
