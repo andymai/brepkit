@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1787904747024,
+  "lastUpdate": 1787905333095,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -32831,6 +32831,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44884536,
             "range": "± 78445",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c14be7838bbde2af6a350cac9d6a4d38ef2f53c4",
+          "message": "chore(main): release 3.3.9 (#1629)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.3.9](https://github.com/andymai/brepkit/compare/v3.3.8...v3.3.9)\n(2026-08-28)\n\n\n### Performance\n\n* **math:** solve plane-torus sections in closed form, not a 2D grid\n([#1628](https://github.com/andymai/brepkit/issues/1628))\n([de626dd](https://github.com/andymai/brepkit/commit/de626dd1b3438cea3a28d0399dd7c8bed9f5ed5a))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` 3.3.9, bumping the workspace and crate versions from\n3.3.8. The `brepkit-math` crate now solves plane-torus sections in\nclosed form instead of sampling a 2D grid.\n\n- Improves plane-torus intersection performance with no change in\nresults.\n\n<sup>Written for commit ff8c17344f7da1e71514cc20fe255790e84c90ca.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1629?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-08-28T08:19:47Z",
+          "tree_id": "86a44d270fbce889325a6a836a3c76fa2df6d6a8",
+          "url": "https://github.com/andymai/brepkit/commit/c14be7838bbde2af6a350cac9d6a4d38ef2f53c4"
+        },
+        "date": 1787905330196,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1018401,
+            "range": "± 13288",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1105946,
+            "range": "± 4319",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12893,
+            "range": "± 85",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 730796,
+            "range": "± 12123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45233124,
+            "range": "± 239941",
             "unit": "ns/iter"
           }
         ]
