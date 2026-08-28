@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "ceeray",
+      "id": 6075534,
+      "comment_id": 5457031295,
+      "created_at": "2026-08-28T19:45:17Z",
+      "repoId": 1170311365,
+      "pullRequestNo": 1630
+    }
+  ]
 }
