@@ -1,7 +1,5 @@
 //! Shell fixing — face-level fixes, orientation consistency.
 
-use std::collections::HashMap;
-
 use brepkit_topology::Topology;
 use brepkit_topology::shell::ShellId;
 
@@ -66,110 +64,22 @@ pub fn fix_shell(
     Ok(result)
 }
 
-/// Check and repair face orientation consistency within a shell.
+/// Check and repair effective face orientation within a shell.
 ///
-/// For each edge shared by exactly two faces, the two faces should
-/// traverse that edge in opposite directions. If they traverse it in the
-/// same direction, one face is flipped (its `reversed` flag is toggled).
-///
-/// Uses a BFS traversal starting from the first face: each visited face
-/// is considered "correctly oriented", and neighbors that disagree are
-/// flipped to match.
-#[allow(clippy::too_many_lines)]
+/// For each edge shared by exactly two faces, the two effective edge senses
+/// should oppose. A breadth-first traversal anchors the first face and toggles
+/// neighbors whose raw wire sense XOR reversal flag disagrees.
 fn fix_orientation(
     topo: &mut Topology,
     shell_id: ShellId,
     ctx: &mut HealContext,
 ) -> Result<FixResult, HealError> {
-    let shell = topo.shell(shell_id)?;
-    let face_ids: Vec<_> = shell.faces().to_vec();
-
-    if face_ids.is_empty() {
+    let face_ids = topo.shell(shell_id)?.faces().to_vec();
+    let Some(&seed) = face_ids.first() else {
         return Ok(FixResult::ok());
-    }
-
-    let _face_idx_map: HashMap<usize, usize> = face_ids
-        .iter()
-        .enumerate()
-        .map(|(i, fid)| (fid.index(), i))
-        .collect();
-
-    let mut face_edge_info: Vec<(usize, usize, bool)> = Vec::new();
-
-    for (i, &fid) in face_ids.iter().enumerate() {
-        let face = topo.face(fid)?;
-        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
-            .chain(face.inner_wires().iter().copied())
-            .collect();
-
-        for wid in wire_ids {
-            let wire = topo.wire(wid)?;
-            for oe in wire.edges() {
-                face_edge_info.push((i, oe.edge().index(), oe.is_forward()));
-            }
-        }
-    }
-
-    // Key: edge index. Value: vec of (face_position, is_forward).
-    let mut edge_faces: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
-    for &(face_pos, edge_idx, is_forward) in &face_edge_info {
-        edge_faces
-            .entry(edge_idx)
-            .or_default()
-            .push((face_pos, is_forward));
-    }
-
-    // Build per-face edge list for efficient BFS neighbor lookup.
-    let n = face_ids.len();
-    let mut face_edges: Vec<Vec<(usize, bool)>> = vec![Vec::new(); n];
-    for &(face_pos, edge_idx, is_forward) in &face_edge_info {
-        face_edges[face_pos].push((edge_idx, is_forward));
-    }
-
-    let mut visited = vec![false; n];
-    let mut needs_flip = vec![false; n];
-    let mut queue = std::collections::VecDeque::new();
-
-    visited[0] = true;
-    queue.push_back(0);
-
-    while let Some(current) = queue.pop_front() {
-        for &(edge_idx, is_forward) in &face_edges[current] {
-            if let Some(neighbors) = edge_faces.get(&edge_idx) {
-                for &(neighbor_pos, neighbor_fwd) in neighbors {
-                    if neighbor_pos == current || visited[neighbor_pos] {
-                        continue;
-                    }
-                    visited[neighbor_pos] = true;
-
-                    // In a consistently oriented shell, adjacent faces
-                    // traverse the shared edge in opposite directions.
-                    let current_effective_fwd = if needs_flip[current] {
-                        !is_forward
-                    } else {
-                        is_forward
-                    };
-
-                    if current_effective_fwd == neighbor_fwd {
-                        // Same direction: neighbor needs to be flipped.
-                        needs_flip[neighbor_pos] = true;
-                    }
-
-                    queue.push_back(neighbor_pos);
-                }
-            }
-        }
-    }
-
-    let mut flipped_count = 0usize;
-    for (i, &fid) in face_ids.iter().enumerate() {
-        if needs_flip[i] {
-            let face = topo.face_mut(fid)?;
-            let current_reversed = face.is_reversed();
-            face.set_reversed(!current_reversed);
-            flipped_count += 1;
-        }
-    }
+    };
+    let flipped_count =
+        brepkit_topology::orientation::propagate_orientation(topo, &face_ids, &[seed])?;
 
     if flipped_count > 0 {
         ctx.info(format!(
@@ -181,5 +91,45 @@ fn fix_orientation(
         })
     } else {
         Ok(FixResult::ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use brepkit_topology::orientation::propagate_orientation;
+    use brepkit_topology::test_utils::make_unit_cube_manifold;
+
+    #[test]
+    fn propagation_repairs_effective_face_senses() {
+        let mut topo = brepkit_topology::Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let face_ids = topo.shell(shell_id).unwrap().faces().to_vec();
+        assert!(
+            crate::analysis::shell::analyze_shell(&topo, shell_id)
+                .unwrap()
+                .orientation_consistent
+        );
+
+        let wrong_face = *face_ids.last().unwrap();
+        let was_reversed = topo.face(wrong_face).unwrap().is_reversed();
+        topo.face_mut(wrong_face)
+            .unwrap()
+            .set_reversed(!was_reversed);
+        assert!(
+            !crate::analysis::shell::analyze_shell(&topo, shell_id)
+                .unwrap()
+                .orientation_consistent
+        );
+
+        let flipped = propagate_orientation(&mut topo, &face_ids, &face_ids[..1]).unwrap();
+        assert!(flipped > 0);
+        assert!(
+            crate::analysis::shell::analyze_shell(&topo, shell_id)
+                .unwrap()
+                .orientation_consistent
+        );
     }
 }

@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
@@ -367,6 +368,54 @@ fn rolling_ball_fillet_multiple_edges() {
         "expected 9 faces after two-edge shared-corner rolling-ball fillet"
     );
     validate_shell_manifold(sh, &topo).expect("two-edge fillet should be manifold");
+}
+/// A fully selected hole contour must be rebuilt globally with the blend
+/// strips. Preserving the original cap holes left duplicate open boundaries;
+/// orienting independently built faces left same-sense shared edges.
+#[test]
+fn rolling_ball_fillet_square_hole_is_valid() {
+    let mut topo = Topology::new();
+    let plate = crate::primitives::make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+    let cutter = crate::primitives::make_box(&mut topo, 4.0, 4.0, 10.0).unwrap();
+    crate::transform::transform_solid(&mut topo, cutter, &Mat4::translation(8.0, 8.0, 0.0))
+        .unwrap();
+    let source =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, plate, cutter).unwrap();
+    let source_volume = crate::measure::solid_volume(&topo, source, 0.01).unwrap();
+    assert!((source_volume - 3840.0).abs() < 1e-8);
+    assert!(
+        crate::validate::validate_solid(&topo, source)
+            .unwrap()
+            .is_valid(),
+        "boolean-cut fixture must start valid"
+    );
+
+    let hole_edges: Vec<_> = brepkit_topology::explorer::solid_edges(&topo, source)
+        .unwrap()
+        .into_iter()
+        .filter(|&edge_id| {
+            let edge = topo.edge(edge_id).unwrap();
+            [edge.start(), edge.end()].into_iter().all(|vertex_id| {
+                let point = topo.vertex(vertex_id).unwrap().point();
+                point.x() > 1.0 && point.x() < 19.0 && point.y() > 1.0 && point.y() < 19.0
+            })
+        })
+        .collect();
+    assert_eq!(hole_edges.len(), 12, "square hole has twelve edges");
+
+    let result =
+        fillet_rolling_ball(&mut topo, source, &hole_edges, 0.5).expect("full hole-contour fillet");
+    assert_ne!(result, source);
+    let report = crate::validate::validate_solid(&topo, result).unwrap();
+    assert!(
+        report.is_valid(),
+        "filleted hole must be a valid closed, oriented solid: {report:?}"
+    );
+    let result_volume = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        result_volume > source_volume && result_volume < 4000.0,
+        "concave hole fillet should add only corner material: {result_volume}"
+    );
 }
 
 /// Regression for #841: filleting two edges that share a corner vertex in a
@@ -1442,10 +1491,11 @@ fn fillet_edge_adjacent_to_nurbs_blend_is_watertight() {
         .expect("second fillet on a NURBS-blend-adjacent edge must be watertight");
 
     let vol2 = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
-    // Concave end-cap edge → the fillet fills; volume stays sane (between the
-    // first fillet and the original box).
+    // Depending on which NURBS-adjacent end edge the topology traversal finds,
+    // this is either a convex removal or a concave fill. Both must stay close
+    // to, and never inflate beyond, the original box.
     assert!(
-        vol2 > vol1 - 1e-6 && vol2 <= 1000.0 + 1e-6,
-        "filled fillet volume out of range: first={vol1}, second={vol2}"
+        vol2 > 900.0 && vol2 <= 1000.0 + 1e-6,
+        "second fillet volume out of range: first={vol1}, second={vol2}"
     );
 }

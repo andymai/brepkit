@@ -460,8 +460,8 @@ impl<'a> FilletBuilder<'a> {
             .filter(|f| !original_set.contains(f))
             .copied()
             .collect();
-        crate::builder_utils::propagate_orientation(topo, &result_faces, &seeds)?;
-        crate::builder_utils::normalize_face_normals(topo, &new_faces, &seeds)?;
+        brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
+        brepkit_topology::orientation::normalize_face_normals(topo, &new_faces, &seeds)?;
 
         let new_shell = Shell::new(result_faces)?;
         let new_shell_id = topo.add_shell(new_shell);

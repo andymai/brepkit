@@ -152,11 +152,12 @@ pub fn json_f64(val: &serde_json::Value, key: &str) -> Result<f64, JsError> {
 /// is watertight too (#834). It runs first; the `FilletBuilder` and a flat
 /// bevel are fallbacks.
 ///
-/// Every candidate is validated as a closed (watertight) solid before being
-/// accepted, so a malformed result is rejected in favour of the next engine
-/// and, if none qualifies, the solid is returned unchanged. This guard lets
-/// `filter_filletable_edges` be permissive about curved neighbours without ever
-/// returning a degenerate solid.
+/// Every candidate is validated as a changed, closed (watertight), outward-
+/// oriented solid before being accepted, so a malformed result is rejected in
+/// favour of the next engine and, if none qualifies, an error is returned.
+/// This guard lets `filter_filletable_edges` be permissive about curved
+/// neighbours without ever reporting an unchanged input or returning a
+/// degenerate solid.
 #[allow(deprecated)]
 pub fn try_fillet(
     topo: &mut brepkit_topology::Topology,
@@ -165,46 +166,62 @@ pub fn try_fillet(
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
     // Drop tangent / degenerate edges (e.g. a fillet face's G1 contact line with
-    // its planar neighbour). If none qualify, the solid is returned unchanged.
+    // its planar neighbour). An empty filtered set means no requested edge can
+    // be changed, which is an operation failure rather than a successful no-op.
     let edges = brepkit_operations::query::filter_filletable_edges(topo, solid_id, edge_ids)?;
     if edges.is_empty() {
-        return Ok(solid_id);
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "none of the requested edges are filletable".to_owned(),
+        });
     }
     let edges = edges.as_slice();
 
     // A candidate is acceptable only if its outer shell is a CLOSED 2-manifold
-    // (every edge used by exactly two faces — no free/boundary edges). The
-    // weaker manifold-only check silently accepted open shells (e.g. a fillet
-    // that leaves a cap untrimmed at a contact circle), which tessellate to a
-    // plausible-but-wrong volume; reject them so the next engine or the
-    // unchanged input is used.
-    let is_valid =
-        |topo: &brepkit_topology::Topology, s: brepkit_topology::solid::SolidId| -> bool {
-            topo.solid(s)
-                .and_then(|sd| topo.shell(sd.outer_shell()))
-                .map(|sh| brepkit_topology::validation::validate_shell_closed(sh, topo).is_ok())
-                .unwrap_or(false)
+    // (every edge used by exactly two faces — no free/boundary edges) with
+    // opposite effective edge senses on adjacent faces and positive oriented
+    // volume. Edge senses alone cannot detect a globally inverted shell, which
+    // sends the next boolean through a corrupt mesh fallback.
+    let orientation_deflection = (radius * 0.1).clamp(0.01, 0.1);
+    let is_valid = |topo: &brepkit_topology::Topology,
+                    s: brepkit_topology::solid::SolidId|
+     -> bool {
+        let Ok(solid) = topo.solid(s) else {
+            return false;
         };
+        let shell_id = solid.outer_shell();
+        let Ok(shell) = topo.shell(shell_id) else {
+            return false;
+        };
+        brepkit_topology::validation::validate_shell_closed(shell, topo).is_ok()
+            && brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
+                .is_ok_and(|issues| issues.is_empty())
+            && brepkit_operations::measure::oriented_solid_volume(topo, s, orientation_deflection)
+                .is_ok_and(|volume| volume > 1e-12)
+    };
 
-    // Try engines in preference order; accept the first valid result.
+    // Try engines in preference order; accept the first changed, valid result.
     if let Ok(s) = brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edges, radius)
+        && s != solid_id
         && is_valid(topo, s)
     {
         return Ok(s);
     }
     if let Ok(r) = brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edges, radius)
+        && r.solid != solid_id
         && is_valid(topo, r.solid)
     {
         return Ok(r.solid);
     }
     if let Ok(s) = brepkit_operations::fillet::fillet(topo, solid_id, edges, radius)
+        && s != solid_id
         && is_valid(topo, s)
     {
         return Ok(s);
     }
 
-    // No engine produced a valid solid — leave the input unchanged.
-    Ok(solid_id)
+    Err(brepkit_operations::OperationsError::InvalidInput {
+        reason: "no fillet engine produced a changed, closed, outward-oriented result".to_owned(),
+    })
 }
 
 /// Extract a human-readable message from a `catch_unwind` panic payload.
@@ -610,7 +627,6 @@ mod fillet_tests {
         let cube = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let edges = solid_edge_ids(&topo, cube);
         let first = try_fillet(&mut topo, cube, &[edges[0], edges[1]], 1.0).expect("first fillet");
-        let v1 = brepkit_operations::measure::solid_volume(&topo, first, 0.05).unwrap();
 
         // The scenario under test only exists if the first fillet produced NURBS
         // blend faces for the later edges to border.
@@ -622,27 +638,51 @@ mod fillet_tests {
         });
         assert!(has_blend, "first fillet should create NURBS blend faces");
 
-        // Filleting any single result edge must stay a manifold solid and must
-        // not self-intersect/inflate past the original box volume (the #813 bug
-        // grew it to 1000.30). A blend-adjacent *concave* end-cap edge validly
-        // *fills* (volume rises toward — but never beyond — the box), so the
-        // guard is the box volume, not the pre-fillet volume.
-        let _ = v1;
+        // Filleting any filter-eligible single result edge must either return a
+        // consistently oriented manifold that does not inflate past the
+        // original box (the #813 bug grew it to 1000.30), or report that no
+        // engine could construct one. Tangent result edges fail earlier.
         let r_edges = solid_edge_ids(&topo, first);
+        let mut attempted = 0usize;
+        let mut rejected = 0usize;
         for &e in &r_edges {
+            if brepkit_operations::query::filter_filletable_edges(&topo, first, &[e])
+                .expect("filter second-pass edge")
+                .is_empty()
+            {
+                continue;
+            }
+            attempted += 1;
             let mut t = topo.clone();
-            let s = try_fillet(&mut t, first, &[e], 0.5).expect("second fillet");
-            let v2 = brepkit_operations::measure::solid_volume(&t, s, 0.05).unwrap();
-            assert!(
-                v2 <= 1000.0 + 0.1,
-                "second fillet on edge {} inflated past the box: second={v2:.2}",
-                e.index()
-            );
-            let ssd = t.solid(s).expect("result solid");
-            let ssh = t.shell(ssd.outer_shell()).expect("shell");
-            brepkit_topology::validation::validate_shell_manifold(ssh, &t)
-                .expect("second fillet result must remain a manifold solid");
+            match try_fillet(&mut t, first, &[e], 0.5) {
+                Ok(s) => {
+                    let v2 = brepkit_operations::measure::solid_volume(&t, s, 0.05).unwrap();
+                    assert!(
+                        v2 <= 1000.0 + 0.1,
+                        "second fillet on edge {} inflated past the box: second={v2:.2}",
+                        e.index()
+                    );
+                    let ssd = t.solid(s).expect("result solid");
+                    let ssh = t.shell(ssd.outer_shell()).expect("shell");
+                    brepkit_topology::validation::validate_shell_manifold(ssh, &t)
+                        .expect("second fillet result must remain a manifold solid");
+                }
+                Err(error) => {
+                    assert!(
+                        error.to_string().contains(
+                            "no fillet engine produced a changed, closed, outward-oriented result"
+                        ),
+                        "unexpected second-fillet error: {error}"
+                    );
+                    rejected += 1;
+                }
+            }
         }
+        assert!(attempted > 0, "fixture should retain filter-eligible edges");
+        assert!(
+            rejected > 0,
+            "fixture should exercise explicit rejection instead of unchanged success"
+        );
     }
 
     #[test]
@@ -725,5 +765,37 @@ mod fillet_tests {
         validate_shell_manifold(sh, &topo).expect("second fillet must be manifold");
         validate_shell_closed(sh, &topo)
             .expect("second fillet on a NURBS-blend-adjacent edge must be watertight");
+    }
+
+    #[test]
+    fn try_fillet_rejects_unchanged_batch() {
+        let mut topo = Topology::new();
+        let cube = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let edges = solid_edge_ids(&topo, cube);
+        let first = try_fillet(&mut topo, cube, &[edges[0], edges[1]], 1.0).expect("first fillet");
+        let result_edges = solid_edge_ids(&topo, first);
+        let supported: HashSet<_> =
+            brepkit_operations::query::filter_filletable_edges(&topo, first, &result_edges)
+                .expect("filter result edges")
+                .iter()
+                .map(|edge| edge.index())
+                .collect();
+        let unsupported: Vec<_> = result_edges
+            .into_iter()
+            .filter(|edge| !supported.contains(&edge.index()))
+            .collect();
+        assert!(
+            !unsupported.is_empty(),
+            "first fillet should create tangent contact edges"
+        );
+
+        let error = try_fillet(&mut topo, first, &unsupported, 0.5)
+            .expect_err("an unchanged batch must not report the input solid as success");
+        assert!(
+            error
+                .to_string()
+                .contains("none of the requested edges are filletable"),
+            "unexpected error: {error}"
+        );
     }
 }

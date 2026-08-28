@@ -250,7 +250,8 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if radius is non-positive or edges are invalid.
+    /// Returns an error if radius is non-positive, edges are invalid, or no
+    /// fillet engine can produce a valid changed solid.
     #[wasm_bindgen(js_name = "fillet")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn fillet_solid(
@@ -274,19 +275,18 @@ impl BrepKernel {
         // WASM FFI boundary, which would abort the entire WASM instance.
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let solid = if let Ok(s) = try_fillet(self.topo_mut(), solid_id, &edge_ids, radius)
-                {
-                    s
-                } else {
-                    // Filter to edges where both adjacent faces are planar.
-                    let planar_edges = brepkit_operations::query::filter_planar_edges(
-                        &self.topo, solid_id, &edge_ids,
-                    )?;
-                    if planar_edges.is_empty() {
-                        solid_id
-                    } else {
+                let solid = match try_fillet(self.topo_mut(), solid_id, &edge_ids, radius) {
+                    Ok(solid) => solid,
+                    Err(error) => {
+                        // Filter to edges where both adjacent faces are planar.
+                        let planar_edges = brepkit_operations::query::filter_planar_edges(
+                            &self.topo, solid_id, &edge_ids,
+                        )?;
+                        if planar_edges.is_empty() {
+                            return Err(JsError::new(&error.to_string()));
+                        }
                         try_fillet(self.topo_mut(), solid_id, &planar_edges, radius)
-                            .map_err(|e| JsError::new(&e.to_string()))?
+                            .map_err(|retry_error| JsError::new(&retry_error.to_string()))?
                     }
                 };
                 Ok(solid_id_to_u32(solid))
