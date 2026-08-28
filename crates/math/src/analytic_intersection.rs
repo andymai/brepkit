@@ -584,18 +584,18 @@ fn sample_plane_cone(
 
 /// Sample the plane-torus intersection as ordered 3D points.
 ///
-/// Uses the same Newton-refined sampling grid as `intersect_plane_torus`
-/// but skips NURBS curve fitting.
-#[allow(clippy::cast_precision_loss)]
+/// Uses the same closed-form crossings and chaining as `intersect_plane_torus`
+/// but skips NURBS curve fitting (the callers here only need the points).
+#[allow(clippy::unnecessary_wraps)] // sibling match-arms and `?` callers need `Result`
 fn sample_plane_torus(
     torus: &ToroidalSurface,
     normal: Vec3,
     d: f64,
 ) -> Result<Vec<Vec<Point3>>, MathError> {
-    let curves = intersect_plane_torus(torus, normal, d)?;
-    Ok(curves
+    let crossing_pts = plane_torus_crossings(torus, normal, d, 128);
+    Ok(chain_torus_crossings(&crossing_pts)
         .into_iter()
-        .map(|c| c.points.into_iter().map(|p| p.point).collect())
+        .map(|run| run.into_iter().map(|p| p.point).collect())
         .collect())
 }
 
@@ -759,74 +759,54 @@ pub fn intersect_plane_cone(
 
 /// Intersect a plane with a toroidal surface.
 ///
-/// The torus-plane intersection is a degree-4 curve with no simple closed form.
-/// Uses grid sampling with sign-change detection and Newton refinement.
+/// The section is a degree-4 curve, but for each `v` the `u` values solve in
+/// closed form (see [`plane_torus_crossings`]), so it is sampled by a v-scan
+/// and each connected loop is fitted to a NURBS curve.
 ///
 /// # Errors
 ///
-/// Returns an error if curve fitting fails.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::too_many_lines,
-    clippy::unnecessary_wraps
-)]
+/// Never returns an error today (curve-fit failures drop the affected loop);
+/// the `Result` is kept for signature parity with the other plane-analytic
+/// intersectors.
+#[allow(clippy::unnecessary_wraps)]
 pub fn intersect_plane_torus(
     torus: &ToroidalSurface,
     normal: Vec3,
     d: f64,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
-    let n_grid = 128_usize;
+    // The section satisfies a per-v closed form (see `plane_torus_crossings`),
+    // so scan v and solve u directly instead of a 2D sign-change grid with
+    // Newton refinement: O(n) rather than O(n²), and every point is exact.
+    let crossing_pts = plane_torus_crossings(torus, normal, d, 128);
 
-    // Signed distance to plane for a torus point.
-    let sdf = |u: f64, v: f64| -> f64 { dot_np(normal, torus.evaluate(u, v)) - d };
-
-    // Collect zero-crossing points by scanning edges of a (u,v) grid.
-    let mut crossing_pts: Vec<(f64, f64, Point3)> = Vec::new();
-
-    let du = TAU / (n_grid as f64);
-    let dv = TAU / (n_grid as f64);
-
-    // Offset grid by half a cell to avoid landing exactly on zero crossings
-    // (e.g. sin(0) = 0.0 exactly in IEEE 754, which defeats sign-change detection).
-    let u_off = du * 0.5;
-    let v_off = dv * 0.5;
-
-    for iu in 0..n_grid {
-        for iv in 0..n_grid {
-            let u0 = (iu as f64).mul_add(du, u_off);
-            let v0 = (iv as f64).mul_add(dv, v_off);
-            let u1 = u0 + du;
-            let v1 = v0 + dv;
-
-            let f00 = sdf(u0, v0);
-            let f10 = sdf(u1, v0);
-            let f01 = sdf(u0, v1);
-
-            // Check horizontal edge (u0,v0)-(u1,v0).
-            if f00 * f10 < 0.0 {
-                let t = f00 / (f00 - f10);
-                let u = t.mul_add(u1 - u0, u0);
-                let (u_r, v_r) = newton_refine_torus(torus, normal, d, u, v0);
-                crossing_pts.push((u_r, v_r, torus.evaluate(u_r, v_r)));
-            }
-
-            // Check vertical edge (u0,v0)-(u0,v1).
-            if f00 * f01 < 0.0 {
-                let t = f00 / (f00 - f01);
-                let v = t.mul_add(v1 - v0, v0);
-                let (u_r, v_r) = newton_refine_torus(torus, normal, d, u0, v);
-                crossing_pts.push((u_r, v_r, torus.evaluate(u_r, v_r)));
-            }
+    let mut curves = Vec::new();
+    for ipts in chain_torus_crossings(&crossing_pts) {
+        let pts: Vec<Point3> = ipts.iter().map(|p| p.point).collect();
+        if let Ok(curve) = interpolate(&pts, 3.min(pts.len() - 1)) {
+            curves.push(IntersectionCurve {
+                curve,
+                points: ipts,
+            });
         }
     }
 
-    if crossing_pts.is_empty() {
-        return Ok(vec![]);
-    }
+    Ok(curves)
+}
 
-    // Group nearby points into connected curves via greedy chaining.
+/// Greedy nearest-neighbour chaining of torus-plane crossing points into
+/// closed section loops. Runs shorter than four points are dropped.
+///
+/// Plane × full torus is always a set of CLOSED loops, but the greedy walk
+/// stops one step short of closing (the first point is already `used`, so it
+/// is never re-added and the last point sits ~one step from the start).
+/// A loop whose end-to-start gap is within ~2 point-spacings is closed by
+/// repeating its first point, so a fitted NURBS closes exactly and downstream
+/// consumers see a closed curve. A fragmented chain (greedy walk broke a loop
+/// at a near-tangency) ends far from its start and is left open — it must not
+/// be force-closed into a wrong loop.
+fn chain_torus_crossings(crossing_pts: &[(f64, f64, Point3)]) -> Vec<Vec<IntersectionPoint>> {
     let mut used = vec![false; crossing_pts.len()];
-    let mut curves = Vec::new();
+    let mut runs = Vec::new();
 
     for start in 0..crossing_pts.len() {
         if used[start] {
@@ -860,86 +840,148 @@ pub fn intersect_plane_torus(
             }
         }
 
-        if chain.len() >= 4 {
-            let mut pts: Vec<Point3> = chain.iter().map(|&i| crossing_pts[i].2).collect();
-            let mut ipts: Vec<IntersectionPoint> = chain
-                .iter()
-                .map(|&i| IntersectionPoint {
-                    point: crossing_pts[i].2,
-                    param1: (crossing_pts[i].0, crossing_pts[i].1),
-                    param2: (0.0, 0.0),
-                })
+        if chain.len() < 4 {
+            continue;
+        }
+        let mut ipts: Vec<IntersectionPoint> = chain
+            .iter()
+            .map(|&i| IntersectionPoint {
+                point: crossing_pts[i].2,
+                param1: (crossing_pts[i].0, crossing_pts[i].1),
+                param2: (0.0, 0.0),
+            })
+            .collect();
+
+        let closing_gap = (ipts[ipts.len() - 1].point - ipts[0].point).length();
+        let median_spacing = {
+            let mut spac: Vec<f64> = ipts
+                .windows(2)
+                .map(|w| (w[1].point - w[0].point).length())
                 .collect();
+            spac.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            spac.get(spac.len() / 2).copied().unwrap_or(0.0)
+        };
+        // Wrap when the closing gap is within ~2 point-spacings (measured
+        // ratio ≈ 1.0 for the census ovals) and not already coincident — but
+        // only for a SIMPLE loop. A self-touching section (the inner/outer
+        // tangent figure-eight) is traced as one chain that folds back through
+        // its node and also ends near its start; sealing it would misrepresent
+        // a non-manifold singularity as a closed loop, so leave it open.
+        if closing_gap > 1e-9
+            && median_spacing > 1e-12
+            && closing_gap <= 2.0 * median_spacing
+            && !chain_self_touches(&ipts, median_spacing)
+        {
+            ipts.push(ipts[0]);
+        }
+        runs.push(ipts);
+    }
 
-            // Plane × full torus is always a set of CLOSED loops, but the greedy
-            // nearest-neighbour chaining stops one step short of closing: the
-            // first point is already `used`, so the walk never re-adds it and the
-            // last point sits ~one grid step from the start. Detect that wrap (the
-            // end-to-start gap is comparable to the chain's own point spacing) and
-            // append the exact start point, so the fitted NURBS closes
-            // (`evaluate(0) == evaluate(1)`) and downstream consumers see a closed
-            // section curve instead of a near-closed open one. A fragmented chain
-            // (greedy walk broke a loop at a near-tangency) ends FAR from its
-            // start (gap ≫ spacing) and is left open — it must not be force-closed
-            // into a wrong loop.
-            let closing_gap = (pts[pts.len() - 1] - pts[0]).length();
-            let median_spacing = {
-                let mut spac: Vec<f64> = pts.windows(2).map(|w| (w[1] - w[0]).length()).collect();
-                spac.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                spac.get(spac.len() / 2).copied().unwrap_or(0.0)
-            };
-            // Wrap when the closing gap is within ~2 point-spacings (measured
-            // ratio ≈ 1.0 for the census ovals) and not already coincident.
-            let wrapped =
-                closing_gap > 1e-9 && median_spacing > 1e-12 && closing_gap <= 2.0 * median_spacing;
-            if wrapped {
-                pts.push(pts[0]);
-                ipts.push(ipts[0]);
-            }
+    runs
+}
 
-            if let Ok(curve) = interpolate(&pts, 3.min(pts.len() - 1)) {
-                curves.push(IntersectionCurve {
-                    curve,
-                    points: ipts,
-                });
+/// Whether a chain folds back on itself in its interior — the signature of a
+/// self-touching section (a tangent figure-eight), as opposed to a simple
+/// loop whose only near-return is the intended closure at its two ends.
+///
+/// Checks whether two chain points far apart in index (and both away from the
+/// endpoints, so the closure region is excluded) come within ~1.5 spacings of
+/// each other. A convex/simple oval never does; a figure-eight does, at its
+/// node. Only called when a chain already looks closeable, so the O(m²) scan
+/// is rare.
+fn chain_self_touches(ipts: &[IntersectionPoint], median_spacing: f64) -> bool {
+    let m = ipts.len();
+    let k = (m / 4).clamp(1, 6);
+    if m < 3 * k || median_spacing <= 0.0 {
+        return false;
+    }
+    let thresh = median_spacing * 1.5;
+    for i in k..(m - k) {
+        for j in (i + k)..(m - k) {
+            if (ipts[i].point - ipts[j].point).length() < thresh {
+                return true;
             }
         }
     }
-
-    Ok(curves)
+    false
 }
 
-/// Newton-refine a torus parameter to lie on the cutting plane.
-fn newton_refine_torus(
+/// Closed-form `(u, v, point)` crossings of a plane with a torus.
+///
+/// In the torus's own frame let `a = n·X`, `b = n·Y`, `c = n·Z`,
+/// `s = hypot(a, b)`, `phi = atan2(b, a)`. Substituting the torus
+/// parameterization into `n·P = d` gives
+///   `(R + r·cos v)·s·cos(u − phi) + r·c·sin v = d − n·center`,
+/// so for each `v` the two `u` branches solve directly as
+/// `u = phi ± acos((d − n·center − r·c·sin v) / (s·(R + r·cos v)))`.
+/// Scanning `v` at `n_v` samples replaces a 2D sign-change grid plus Newton
+/// refinement; every returned point lies exactly on both surfaces.
+///
+/// When `s ≈ 0` the plane is perpendicular to the axis and the section is up
+/// to two full circles at the `v` values solving `r·c·sin v = d − n·center`;
+/// those are sampled by scanning `u`.
+#[allow(clippy::cast_precision_loss)]
+fn plane_torus_crossings(
     torus: &ToroidalSurface,
     normal: Vec3,
     d: f64,
-    mut u: f64,
-    mut v: f64,
-) -> (f64, f64) {
-    let eps = 1e-6;
-    for _ in 0..10 {
-        let f = dot_np(normal, torus.evaluate(u, v)) - d;
-        if f.abs() < 1e-12 {
-            break;
-        }
-        // Numerical gradient via central differences.
-        let fu = (dot_np(normal, torus.evaluate(u + eps, v))
-            - dot_np(normal, torus.evaluate(u - eps, v)))
-            / (2.0 * eps);
-        let fv = (dot_np(normal, torus.evaluate(u, v + eps))
-            - dot_np(normal, torus.evaluate(u, v - eps)))
-            / (2.0 * eps);
+    n_v: usize,
+) -> Vec<(f64, f64, Point3)> {
+    let big_r = torus.major_radius();
+    let small_r = torus.minor_radius();
+    let a = normal.dot(torus.x_axis());
+    let b = normal.dot(torus.y_axis());
+    let c = normal.dot(torus.z_axis());
+    let s = a.hypot(b);
+    let phi = b.atan2(a);
+    let d_local = d - dot_np(normal, torus.center());
 
-        let grad_sq = fu.mul_add(fu, fv * fv);
-        if grad_sq < 1e-20 {
-            break;
+    let mut pts: Vec<(f64, f64, Point3)> = Vec::new();
+
+    // Plane perpendicular to the axis: the section is up to two full circles.
+    if s < 1e-12 {
+        if c.abs() < 1e-12 {
+            return pts;
         }
-        let step = f / grad_sq;
-        u -= step * fu;
-        v -= step * fv;
+        let sin_v = d_local / (small_r * c);
+        if sin_v.abs() > 1.0 + 1e-9 {
+            return pts;
+        }
+        let v0 = sin_v.clamp(-1.0, 1.0).asin();
+        let v1 = std::f64::consts::PI - v0;
+        let mut vs = vec![v0];
+        // Skip the mirror circle when the plane is tangent (v0 == v1).
+        if (v1 - v0).abs() > 1e-9 {
+            vs.push(v1);
+        }
+        for v in vs {
+            for i in 0..n_v {
+                let u = TAU * (i as f64) / (n_v as f64);
+                pts.push((u, v, torus.evaluate(u, v)));
+            }
+        }
+        return pts;
     }
-    (u, v)
+
+    // General plane: scan v, solve the two u branches per v. Offset the scan
+    // by half a step so it never lands exactly on a tangency node (e.g. the
+    // inner-tangent figure-eight at v = π, where the two u branches collapse
+    // to one point) — a coincident node lets greedy chaining thread through
+    // and wrongly seal a self-touching section into a closed loop.
+    let v_off = TAU / (n_v as f64) * 0.5;
+    for i in 0..n_v {
+        let v = (i as f64).mul_add(TAU / (n_v as f64), v_off);
+        let tube_r = small_r.mul_add(v.cos(), big_r); // R + r·cos v > 0
+        let rhs = (d_local - small_r * c * v.sin()) / (s * tube_r);
+        if rhs.abs() > 1.0 {
+            continue;
+        }
+        let delta = rhs.clamp(-1.0, 1.0).acos();
+        for u in [phi + delta, phi - delta] {
+            pts.push((u, v, torus.evaluate(u, v)));
+        }
+    }
+    pts
 }
 
 /// Real intersection parameters `t` of the line `origin + t·dir` with a torus.

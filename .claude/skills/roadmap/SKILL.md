@@ -139,6 +139,15 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Plane-torus section perf (CLOSED 2026-08-28; torus−box boolean 12.4ms → 5.0ms, 2.46x, still exact analytic)** —
+  `exact_plane_analytic`/`intersect_plane_torus` sent every plane-torus through a
+  128² sign-change grid + Newton refinement (~49K torus evals), then a NURBS fit the
+  sample path discarded. Replaced with the per-v closed form
+  `cos(u−φ) = (d − n·center − r·c·sin v) / (s·(R + r·cos v))` (scan v, solve u directly,
+  as `intersect_plane_cylinder` already did), routing the sample path around the wasted
+  fit; a `chain_self_touches` gate keeps the inner-tangent figure-eight open. Perpendicular
+  planes fall out as exact-circle sampling. Pins: `analytic_intersection::tests::plane_torus_{lobe_closes_and_stays_on_surface,inner_tangent_figure_eight_stays_open}`,
+  `cut_torus_by_box_notch_is_analytic_watertight`. Do NOT reintroduce the 2D grid.
 - **Kumiko corner-window strut fuse (CLOSED 2026-08-15, ten roots, #1599-#1616; pin `kumiko_diagonal_strut_fuse_is_exact` ACTIVE)** —
   exact watertight fuse (70 faces, free=0 over=0); every root was marched-geometry
   ~1e-6..1e-5 drift meeting an exact-tol gate (endpoints, vertices, tangents) — fixed by
