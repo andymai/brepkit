@@ -915,7 +915,9 @@ fn chain_self_touches(ipts: &[IntersectionPoint], median_spacing: f64) -> bool {
 /// so for each `v` the two `u` branches solve directly as
 /// `u = phi ± acos((d − n·center − r·c·sin v) / (s·(R + r·cos v)))`.
 /// Scanning `v` at `n_v` samples replaces a 2D sign-change grid plus Newton
-/// refinement; every returned point lies exactly on both surfaces.
+/// refinement: each point is `torus.evaluate(u, v)` (on the torus by
+/// construction) with `u` solved so it lies on the plane to floating-point
+/// precision, so no iterative refinement is needed.
 ///
 /// When `s ≈ 0` the plane is perpendicular to the axis and the section is up
 /// to two full circles at the `v` values solving `r·c·sin v = d − n·center`;
