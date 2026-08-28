@@ -100,8 +100,12 @@ impl<'a> FilletBuilder<'a> {
         let result = build_in_place(topo, solid, edge_sets);
         match result {
             Ok(result) => {
-                snapshot.restore(topo)?;
-                Ok(result)
+                let preserve = snapshot.clone_result_source_faces(topo, result.solid);
+                let restore = snapshot.restore(topo);
+                match (preserve, restore) {
+                    (Ok(()), Ok(())) => Ok(result),
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                }
             }
             Err(error) => {
                 snapshot.restore(topo)?;
@@ -677,6 +681,73 @@ impl SolidSnapshot {
         }
         Ok(())
     }
+    /// Clone source faces that the result shell still references before the
+    /// source graph is restored. Trimming propagates boundary splits through
+    /// every wire using the split edge, so a result that carries an
+    /// untrimmed source face must retain that face's current wire while the
+    /// original face and wire are put back for the caller.
+    fn clone_result_source_faces(
+        &self,
+        topo: &mut Topology,
+        result_solid: SolidId,
+    ) -> Result<(), BlendError> {
+        if result_solid == self.graph.solid_id {
+            return Ok(());
+        }
+
+        let shell_id = topo.solid(result_solid)?.outer_shell();
+        let result_faces = topo.shell(shell_id)?.faces().to_vec();
+        let source_faces: HashSet<FaceId> = self.graph.face_ids.iter().copied().collect();
+        let mut replacements = std::collections::HashMap::new();
+
+        for face_id in result_faces {
+            if !source_faces.contains(&face_id) || replacements.contains_key(&face_id) {
+                continue;
+            }
+
+            let source_face = topo.face(face_id)?.clone();
+            let source_wires: Vec<WireId> = std::iter::once(source_face.outer_wire())
+                .chain(source_face.inner_wires().iter().copied())
+                .collect();
+            let wire_ids: Vec<WireId> = source_wires
+                .iter()
+                .map(|&wire_id| topo.wire(wire_id).cloned())
+                .collect::<Result<Vec<Wire>, _>>()?
+                .into_iter()
+                .map(|wire| topo.add_wire(wire))
+                .collect();
+            let (&outer_wire, inner_wires) = wire_ids
+                .split_first()
+                .ok_or(brepkit_topology::TopologyError::Empty {
+                    entity: "face wires",
+                })?;
+
+            let mut replacement =
+                Face::new(outer_wire, inner_wires.to_vec(), source_face.surface().clone());
+            replacement.set_reversed(source_face.is_reversed());
+            let replacement_id = topo.add_face(replacement);
+
+            let pcurves: Vec<(EdgeId, brepkit_topology::pcurve::PCurve)> = topo
+                .pcurves()
+                .pcurves_for_face(face_id)
+                .into_iter()
+                .map(|(edge_id, pcurve)| (edge_id, pcurve.clone()))
+                .collect();
+            for (edge_id, pcurve) in pcurves {
+                topo.pcurves_mut().set(edge_id, replacement_id, pcurve);
+            }
+            replacements.insert(face_id, replacement_id);
+        }
+
+        let shell = topo.shell_mut(shell_id)?;
+        for face_id in shell.faces_mut() {
+            if let Some(&replacement_id) = replacements.get(face_id) {
+                *face_id = replacement_id;
+            }
+        }
+        Ok(())
+    }
+
 }
 
 /// Geometry of a full-revolution rim fillet (a closed circular edge between a
