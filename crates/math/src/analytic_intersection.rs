@@ -760,7 +760,7 @@ pub fn intersect_plane_cone(
 /// Intersect a plane with a toroidal surface.
 ///
 /// The section is a degree-4 curve, but for each `v` the `u` values solve in
-/// closed form (see [`plane_torus_crossings`]), so it is sampled by a v-scan
+/// closed form (see `plane_torus_crossings`), so it is sampled by a v-scan
 /// and each connected loop is fitted to a NURBS curve.
 ///
 /// # Errors
