@@ -477,6 +477,53 @@ impl BoundaryRegistry {
         self.by_edge.insert(edge, handle);
         Ok(edge)
     }
+    /// Bind a topology edge allocated by a copy-on-write face rebuild.
+    ///
+    /// Batch support-face reconstruction allocates its split/contact edges
+    /// while constructing the result wire. Binding that edge here transfers
+    /// ownership to the canonical registry without allocating a duplicate.
+    pub fn bind_existing_edge(
+        &mut self,
+        topo: &Topology,
+        handle: BoundaryHandle,
+        edge: EdgeId,
+    ) -> Result<(), BoundaryAuditError> {
+        let Some(entry) = self.entries.get_mut(handle) else {
+            return Err(BoundaryAuditError::new(
+                "preassembly",
+                vec![format!("unknown boundary handle {handle}")],
+            ));
+        };
+        let actual = topo.edge(edge).map_err(topology_audit_error)?;
+        if actual.start() != entry.start.vertex || actual.end() != entry.end.vertex {
+            return Err(BoundaryAuditError::new(
+                "preassembly",
+                vec![format!(
+                    "boundary {:?} edge {edge:?} has vertices {:?}->{:?}, expected {:?}->{:?}",
+                    entry.key,
+                    actual.start(),
+                    actual.end(),
+                    entry.start.vertex,
+                    entry.end.vertex
+                )],
+            ));
+        }
+        if let Some(existing) = entry.edge {
+            if existing != edge {
+                return Err(BoundaryAuditError::new(
+                    "preassembly",
+                    vec![format!(
+                        "boundary {:?} already bound to edge {existing:?}, not {edge:?}",
+                        entry.key
+                    )],
+                ));
+            }
+            return Ok(());
+        }
+        entry.edge = Some(edge);
+        self.by_edge.insert(edge, handle);
+        Ok(())
+    }
 
     /// Return an owner-oriented edge and record its planned use.
     pub fn oriented_edge(

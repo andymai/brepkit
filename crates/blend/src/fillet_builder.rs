@@ -18,7 +18,9 @@ use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::analytic;
 use crate::blend_func::{ConstRadBlend, EvolRadBlend};
+use crate::boundary_registry::{BoundaryKey, BoundaryOwner, BoundaryRegistry, PlannedVertex};
 use crate::builder_utils::{FlippedNormalSurface, sample_nurbs_endpoints, surface_ref_or_adapter};
+
 use crate::corner;
 use crate::fillet_plan::FilletPlan;
 use crate::radius_law::RadiusLaw;
@@ -229,89 +231,121 @@ impl<'a> FilletBuilder<'a> {
             corner_face_ids.push(cr.face_id);
         }
 
+        let mut boundary_registry = BoundaryRegistry::new();
+        let mut stripe_contact_handles: Vec<(
+            Option<crate::boundary_registry::BoundaryHandle>,
+            Option<crate::boundary_registry::BoundaryHandle>,
+        )> = regular_results.iter().map(|_| (None, None)).collect();
         let mut stripe_contact_edges: Vec<(
             Option<brepkit_topology::edge::EdgeId>,
             Option<brepkit_topology::edge::EdgeId>,
-        )> = Vec::new();
+        )> = regular_results
+            .iter()
+            .enumerate()
+            .map(|(si, sr)| {
+                (
+                    rim_contact_edges.get(&(sr.stripe.face1, si)).copied(),
+                    rim_contact_edges.get(&(sr.stripe.face2, si)).copied(),
+                )
+            })
+            .collect();
+
+        // Collect all planar restrictions first. Each support face is then
+        // rebuilt exactly once, independent of stripe input order.
+        let mut restrictions_by_face: std::collections::HashMap<
+            FaceId,
+            Vec<(usize, trimmer::PlanarRestriction)>,
+        > = std::collections::HashMap::new();
         for (si, sr) in regular_results.iter().enumerate() {
             let stripe = &sr.stripe;
-            stripe_contact_edges.push((
-                rim_contact_edges.get(&(stripe.face1, si)).copied(),
-                rim_contact_edges.get(&(stripe.face2, si)).copied(),
-            ));
-            let (rim1, rim2) = (
-                rim_contact_edges.contains_key(&(stripe.face1, si)),
-                rim_contact_edges.contains_key(&(stripe.face2, si)),
-            );
-
-            let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
-            let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
-
-            // Keep the side of the contact line AWAY from the spine edge: the
-            // strip between the contact line and the old edge is what the
-            // blend face replaces. The side is resolved inside the trimmer,
-            // whose Left/Right frame follows each face's wire traversal and
-            // cannot be predicted here; a ball-centre plane-side test flips
-            // for concave edges even though the in-plane keep side does not.
             let spine_pt = stripe.spine.evaluate(topo, 0.0)?;
             let keep = trimmer::TrimKeep::AwayFrom(spine_pt);
-
-            // Trim face 1 — use current replacement if face was already trimmed.
-            let current_face1 = face_replacements
-                .get(&stripe.face1)
-                .copied()
-                .unwrap_or(stripe.face1);
-            let trim1 = if rim1 {
-                Ok(trimmer::TrimResult {
-                    trimmed_face: current_face1,
-                    new_edges: Vec::new(),
-                    new_vertices: Vec::new(),
-                    contact_edge: None,
-                })
-            } else {
-                trimmer::trim_face_general(topo, current_face1, &contact1_pts, keep)
-            };
-
-            match trim1 {
-                Ok(tr) if tr.trimmed_face != current_face1 => {
-                    if let Some(slot) = stripe_contact_edges.last_mut() {
-                        slot.0 = tr.contact_edge;
-                    }
-                    face_replacements.insert(stripe.face1, tr.trimmed_face);
+            for (face_id, contact) in [
+                (stripe.face1, stripe.contact1.clone()),
+                (stripe.face2, stripe.contact2.clone()),
+            ] {
+                if rim_contact_edges.contains_key(&(face_id, si)) {
+                    continue;
                 }
-                Ok(_) => {} // untrimmed (non-planar), keep original
-                Err(e) => {
-                    log::warn!("trimming failed on face {:?}: {e}", stripe.face1);
-                    // Trimming is best-effort in v1. Non-planar faces and complex
-                    // geometries may fail to trim. We continue with the original face.
+                if !topo.face(face_id)?.surface().is_planar() {
+                    return Err(BlendError::TrimmingFailure { face: face_id });
                 }
+                let mut restriction =
+                    trimmer::PlanarRestriction::new(sample_nurbs_endpoints(&contact), keep);
+                restriction.curve = Some(EdgeCurve::NurbsCurve(contact));
+                restrictions_by_face
+                    .entry(face_id)
+                    .or_default()
+                    .push((si, restriction));
             }
-
-            let current_face2 = face_replacements
-                .get(&stripe.face2)
-                .copied()
-                .unwrap_or(stripe.face2);
-            let trim2 = if rim2 {
-                Ok(trimmer::TrimResult {
-                    trimmed_face: current_face2,
-                    new_edges: Vec::new(),
-                    new_vertices: Vec::new(),
-                    contact_edge: None,
-                })
-            } else {
-                trimmer::trim_face_general(topo, current_face2, &contact2_pts, keep)
-            };
-
-            match trim2 {
-                Ok(tr) if tr.trimmed_face != current_face2 => {
-                    if let Some(slot) = stripe_contact_edges.last_mut() {
-                        slot.1 = tr.contact_edge;
-                    }
-                    face_replacements.insert(stripe.face2, tr.trimmed_face);
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    log::warn!("trimming failed on face {:?}: {e}", stripe.face2);
+        }
+        let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();
+        restriction_faces.sort_unstable_by_key(|face| face.index());
+        for face_id in restriction_faces {
+            let restrictions = restrictions_by_face
+                .remove(&face_id)
+                .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+            let plan: Vec<trimmer::PlanarRestriction> = restrictions
+                .iter()
+                .map(|(_, restriction)| restriction.clone())
+                .collect();
+            let batch = trimmer::trim_planar_face_batch(topo, face_id, &plan)?;
+            face_replacements.insert(face_id, batch.trimmed_face);
+            for &(source, replacement) in &batch.incident_replacements {
+                face_replacements.entry(source).or_insert(replacement);
+            }
+            for (index, &(si, _)) in restrictions.iter().enumerate() {
+                let Some(&contact_edge) = batch.contact_edges.get(index) else {
+                    return Err(BlendError::TrimmingFailure { face: face_id });
+                };
+                let stripe = &regular_results[si].stripe;
+                let support_forward = std::iter::once(topo.face(batch.trimmed_face)?.outer_wire())
+                    .chain(topo.face(batch.trimmed_face)?.inner_wires().iter().copied())
+                    .find_map(|wire_id| {
+                        topo.wire(wire_id)
+                            .ok()?
+                            .edges()
+                            .iter()
+                            .find_map(|oriented| {
+                                (oriented.edge() == contact_edge).then_some(oriented.is_forward())
+                            })
+                    })
+                    .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+                let side = if stripe.face1 == face_id { 0 } else { 1 };
+                let edge = topo.edge(contact_edge)?;
+                let start = edge.start();
+                let end = edge.end();
+                let curve = restrictions[index]
+                    .1
+                    .curve
+                    .clone()
+                    .unwrap_or(EdgeCurve::Line);
+                let start_point = topo.vertex(start)?.point();
+                let end_point = topo.vertex(end)?.point();
+                let handle = boundary_registry.register(
+                    BoundaryKey::contact(si, 0, side),
+                    PlannedVertex::new(start),
+                    PlannedVertex::new(end),
+                    curve.clone(),
+                    curve.domain_with_endpoints(start_point, end_point),
+                    [
+                        BoundaryOwner::planned(
+                            format!("support face {face_id:?} stripe {si}"),
+                            support_forward,
+                        ),
+                        BoundaryOwner::planned(
+                            format!("blend stripe {si} contact {side}"),
+                            side == 0,
+                        ),
+                    ],
+                )?;
+                boundary_registry.bind_existing_edge(topo, handle, contact_edge)?;
+                if side == 0 {
+                    stripe_contact_handles[si].0 = Some(handle);
+                    stripe_contact_edges[si].0 = Some(contact_edge);
+                } else {
+                    stripe_contact_handles[si].1 = Some(handle);
+                    stripe_contact_edges[si].1 = Some(contact_edge);
                 }
             }
         }
@@ -324,14 +358,28 @@ impl<'a> FilletBuilder<'a> {
         for (si, sr) in regular_results.iter().enumerate() {
             let stripe = &sr.stripe;
 
-            // Reuse the trimmed neighbours' contact edges so the blend flank
-            // shares one edge entity per contact instead of minting a
-            // duplicate that leaves both faces' copies use-1.
-            let (c1, c2) = stripe_contact_edges
-                .get(si)
-                .copied()
-                .unwrap_or((None, None));
-            let info = crate::builder_utils::create_blend_face_with_contacts(topo, stripe, c1, c2)?;
+            // Every batched planar contact is already registered and bound to
+            // the support replacement. Build the new blend face from those
+            // exact edges; only legacy closed-rim compatibility contacts use
+            // the endpoint-adopting constructor.
+            let info = if let (Some(contact1), Some(contact2)) = stripe_contact_handles[si] {
+                let info = crate::builder_utils::create_blend_face_from_registry_contacts(
+                    topo,
+                    stripe,
+                    &mut boundary_registry,
+                    contact1,
+                    contact2,
+                )?;
+                boundary_registry.set_owner_face(contact1, 1, info.face)?;
+                boundary_registry.set_owner_face(contact2, 1, info.face)?;
+                info
+            } else {
+                let (c1, c2) = stripe_contact_edges
+                    .get(si)
+                    .copied()
+                    .unwrap_or((None, None));
+                crate::builder_utils::create_blend_face_with_contacts(topo, stripe, c1, c2)?
+            };
             blend_face_ids.push(info.face);
             blend_cross_edges.extend(info.cross_end);
             blend_cross_edges.extend(info.cross_start);
@@ -441,6 +489,7 @@ impl<'a> FilletBuilder<'a> {
         // still cover the scooped corner (the untouched end caps): replace
         // each cap's two-edge corner path with the blend's own cross edge so
         // both sides share one edge entity.
+
         for arc in &blend_cross_edges {
             let candidates: Vec<(FaceId, FaceId)> = original_faces
                 .iter()
@@ -454,6 +503,35 @@ impl<'a> FilletBuilder<'a> {
                 }
             }
         }
+        // Commit support-side uses after notch surgery has selected the final
+        // replacement face IDs. The blend-side uses are recorded by the
+        // registry-backed blend constructor below.
+        for (si, sr) in regular_results.iter().enumerate() {
+            let stripe = &sr.stripe;
+            let support_faces = [
+                face_replacements
+                    .get(&stripe.face1)
+                    .copied()
+                    .unwrap_or(stripe.face1),
+                face_replacements
+                    .get(&stripe.face2)
+                    .copied()
+                    .unwrap_or(stripe.face2),
+            ];
+            for (side, support_face) in support_faces.into_iter().enumerate() {
+                let handle = match side {
+                    0 => stripe_contact_handles[si].0,
+                    1 => stripe_contact_handles[si].1,
+                    _ => unreachable!("support side is always 0 or 1"),
+                };
+                let Some(handle) = handle else {
+                    continue;
+                };
+                boundary_registry.set_owner_face(handle, 0, support_face)?;
+                let _ = boundary_registry.oriented_edge(topo, handle, 0)?;
+            }
+        }
+        boundary_registry.preassembly_audit()?;
 
         let mut result_faces: Vec<FaceId> = Vec::new();
 

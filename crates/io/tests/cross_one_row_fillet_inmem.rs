@@ -19,6 +19,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
+use brepkit_blend::BlendError;
 use brepkit_blend::fillet_plan::FilletPlan;
 use brepkit_blend::radius_law::RadiusLaw;
 use brepkit_io::arena_io::{deserialize_solid, serialize_solid};
@@ -336,29 +337,24 @@ fn stage1_plan_is_complete_order_independent_and_read_only() {
     assert_eq!(original.restrictions.len(), selected.len() * 2);
     assert_eq!(source_fingerprint(&topo, solid), source);
 }
-
 #[test]
-fn v2_failure_is_measurable_and_audited() {
+fn v2_nonplanar_failure_is_explicit_and_audited() {
     let mut topo = Topology::new();
     let solid = load(&mut topo);
     let source = source_fingerprint(&topo, solid);
     let edges = filter_filletable_edges(&topo, solid, &all_edges(&topo, solid)).unwrap();
-    let result = brepkit_operations::blend_ops::fillet_v2(&mut topo, solid, &edges, RADIUS)
-        .expect("v2 reports its malformed result as a BlendResult");
-    let counts = solid_entity_counts(&topo, result.solid).unwrap();
-    let health = shell_audit::shell_health(&topo, result.solid);
-    assert_eq!(counts, (520, 1_167, 1_114));
-    assert_eq!(result.succeeded.len(), 186);
-    assert!(result.failed.is_empty());
-    assert!(!result.is_partial);
-    assert_eq!(health, (272, 8));
-    assert_eq!(components(&topo, result.solid), 32);
-    let volume = oriented_solid_volume(&topo, result.solid, DEFLECTION).unwrap();
-    assert!((volume - 4_994.913_637).abs() < 1e-3, "v2 volume {volume}");
-    let audit = shell_audit::audit_shell(&topo, result.solid);
-    assert_eq!(audit.len(), 280);
-    assert!(audit.iter().all(|entry| !entry.category.is_empty()));
-    assert!(audit.iter().all(|entry| !entry.owners.is_empty()));
+    let result = brepkit_operations::blend_ops::fillet_v2(&mut topo, solid, &edges, RADIUS);
+    assert!(
+        matches!(
+            result,
+            Err(brepkit_operations::OperationsError::Blend(
+                BlendError::TrimmingFailure { .. },
+            ))
+        ),
+        "expected explicit non-planar trimming failure",
+    );
+    // An explicit failure is transactional: no result shell is published and
+    // the source graph remains byte-for-byte equivalent to its fingerprint.
     assert_eq!(solid_entity_counts(&topo, solid).unwrap(), (68, 189, 126));
     assert_eq!(source_fingerprint(&topo, solid), source);
 }

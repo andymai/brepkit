@@ -237,6 +237,49 @@ pub struct BlendFaceInfo {
     /// stripe pinches to a point at that end and no cross edge exists.
     pub cross_start: Option<(brepkit_topology::edge::EdgeId, VertexId, VertexId)>,
 }
+/// Create a blend face using contact boundaries already owned by the
+/// canonical registry.
+///
+/// The registry records the blend-side use of each contact edge before the
+/// face is constructed. Cross-section edges remain local to this helper until
+/// their junction/corner ownership is planned by the later assembly stages;
+/// the two support/blend contact edges are never endpoint-welded or duplicated.
+pub fn create_blend_face_from_registry_contacts(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    registry: &mut crate::boundary_registry::BoundaryRegistry,
+    contact1: crate::boundary_registry::BoundaryHandle,
+    contact2: crate::boundary_registry::BoundaryHandle,
+) -> Result<BlendFaceInfo, BlendError> {
+    let contact1_edge = registry.oriented_edge(topo, contact1, 1)?;
+    let contact2_edge = registry.oriented_edge(topo, contact2, 1)?;
+    let info = create_blend_face_with_contacts(
+        topo,
+        stripe,
+        Some(contact1_edge.edge()),
+        Some(contact2_edge.edge()),
+    )?;
+    let wire = topo.wire(topo.face(info.face)?.outer_wire())?;
+    let uses_contact1 = wire
+        .edges()
+        .iter()
+        .any(|oriented| oriented.edge() == contact1_edge.edge());
+    let uses_contact2 = wire
+        .edges()
+        .iter()
+        .any(|oriented| oriented.edge() == contact2_edge.edge());
+    if !uses_contact1 || !uses_contact2 {
+        return Err(BlendError::PlanningFailure {
+            reason: format!(
+                "blend face {:?} did not consume registry contact edges {:?}/{:?}",
+                info.face,
+                contact1_edge.edge(),
+                contact2_edge.edge()
+            ),
+        });
+    }
+    Ok(info)
+}
 
 #[allow(dead_code)]
 /// Build a face directly from canonical registry boundaries.

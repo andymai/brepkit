@@ -61,6 +61,8 @@ const VERTEX_TOL: f64 = 1e-7;
 
 /// Tolerance for the 2D segment intersection parameter test.
 const PARAM_TOL: f64 = 1e-10;
+/// Number of carrier-curve samples used to locate UV boundary crossings.
+const BATCH_CURVE_SAMPLES: usize = 64;
 
 /// A point where the contact line crosses a face boundary edge.
 struct BoundaryHit {
@@ -993,6 +995,599 @@ fn untrimmed_result(face_id: FaceId) -> TrimResult {
     }
 }
 
+/// One restriction consumed atomically by [`trim_planar_face_batch`].
+#[derive(Debug, Clone)]
+pub struct PlanarRestriction {
+    /// Endpoints of the contact curve, in traversal order.
+    pub contact_3d: Vec<Point3>,
+    /// Side of the restriction retained in the result.
+    pub keep: TrimKeep,
+    /// Exact contact geometry, when available.
+    pub curve: Option<EdgeCurve>,
+}
+
+impl PlanarRestriction {
+    /// Construct a line restriction from sampled contact points.
+    #[must_use]
+    pub fn new(contact_3d: Vec<Point3>, keep: TrimKeep) -> Self {
+        Self {
+            contact_3d,
+            keep,
+            curve: None,
+        }
+    }
+}
+
+/// Result of one atomic planar support-face reconstruction.
+#[derive(Debug, Clone)]
+pub struct BatchTrimResult {
+    /// Replacement for the requested source face.
+    pub trimmed_face: FaceId,
+    /// Contact edges in restriction order.
+    pub contact_edges: Vec<EdgeId>,
+    /// Edges copied from source boundaries and contact edges.
+    pub new_edges: Vec<EdgeId>,
+    /// Vertices minted at arrangement intersections.
+    pub new_vertices: Vec<VertexId>,
+    /// Copy-on-write replacements for other incident result faces.
+    pub incident_replacements: Vec<(FaceId, FaceId)>,
+}
+
+#[derive(Clone)]
+struct BatchSegment {
+    a: usize,
+    b: usize,
+    edge: EdgeId,
+}
+
+/// Rebuild one planar face from all restrictions in one UV arrangement.
+///
+/// The source wires are read-only. Boundary edges are split once, and any
+/// source neighbour that needs one of those pieces receives a cloned result
+/// face. A projection/arrangement failure is returned to the caller.
+type BatchWireEdges = Vec<(OrientedEdge, Vec<(f64, usize)>)>;
+
+fn batch_node_for_point(
+    topo: &mut Topology,
+    nodes: &mut Vec<((f64, f64), Point3, VertexId)>,
+    node_for_vertex: &mut std::collections::HashMap<VertexId, usize>,
+    q: (f64, f64),
+    point: Point3,
+    vertex: Option<VertexId>,
+) -> usize {
+    if let Some(vtx) = vertex
+        && let Some(&n) = node_for_vertex.get(&vtx)
+    {
+        return n;
+    }
+    if let Some((n, _)) = nodes
+        .iter()
+        .enumerate()
+        .find(|(_, (old, _, _))| (old.0 - q.0).hypot(old.1 - q.1) < 1e-7)
+    {
+        if let Some(vtx) = vertex {
+            node_for_vertex.insert(vtx, n);
+        }
+        return n;
+    }
+    let vtx = vertex.unwrap_or_else(|| topo.add_vertex(Vertex::new(point, VERTEX_TOL)));
+    let n = nodes.len();
+    nodes.push((q, point, vtx));
+    if let Some(old) = vertex {
+        node_for_vertex.insert(old, n);
+    }
+    n
+}
+
+pub fn trim_planar_face_batch(
+    topo: &mut Topology,
+    face_id: FaceId,
+    restrictions: &[PlanarRestriction],
+) -> Result<BatchTrimResult, BlendError> {
+    if restrictions.is_empty() {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    }
+    let source_face_ids: Vec<FaceId> = topo.faces().iter().map(|(id, _)| id).collect();
+    let face = topo.face(face_id)?.clone();
+    let FaceSurface::Plane { normal, d } = face.surface() else {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    };
+    let normal = *normal;
+    let plane_d = *d;
+    let reversed = face.is_reversed();
+    let arbitrary = if normal.x().abs() < 0.9 {
+        brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        brepkit_math::vec::Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u = normal
+        .cross(arbitrary)
+        .normalize()
+        .map_err(|_| BlendError::TrimmingFailure { face: face_id })?;
+    let v = normal.cross(u);
+    let origin = normal * plane_d;
+    let uv = |p: Point3| {
+        let q = brepkit_math::vec::Vec3::new(
+            p.x() - origin.x(),
+            p.y() - origin.y(),
+            p.z() - origin.z(),
+        );
+        (u.dot(q), v.dot(q))
+    };
+    let p3 = |q: (f64, f64)| origin + u * q.0 + v * q.1;
+
+    let wire_ids: Vec<WireId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    let mut nodes: Vec<((f64, f64), Point3, VertexId)> = Vec::new();
+    let mut node_for_vertex = std::collections::HashMap::<VertexId, usize>::new();
+    let mut original: Vec<BatchWireEdges> = Vec::new();
+    for &wid in &wire_ids {
+        let oriented_edges = topo.wire(wid)?.edges().to_vec();
+        let mut edges = Vec::new();
+        for oe in oriented_edges {
+            let edge = topo.edge(oe.edge())?;
+            let sv = oe.oriented_start(edge);
+            let ev = oe.oriented_end(edge);
+            let sp = topo.vertex(sv)?.point();
+            let ep = topo.vertex(ev)?.point();
+            let a = match node_for_vertex.get(&sv).copied() {
+                Some(n) => n,
+                None => batch_node_for_point(
+                    &mut *topo,
+                    &mut nodes,
+                    &mut node_for_vertex,
+                    uv(sp),
+                    sp,
+                    Some(sv),
+                ),
+            };
+            let b = match node_for_vertex.get(&ev).copied() {
+                Some(n) => n,
+                None => batch_node_for_point(
+                    &mut *topo,
+                    &mut nodes,
+                    &mut node_for_vertex,
+                    uv(ep),
+                    ep,
+                    Some(ev),
+                ),
+            };
+            edges.push((oe, vec![(0.0, a), (1.0, b)]));
+        }
+        original.push(edges);
+    }
+
+    let on_plane = |p: Point3| {
+        let q = brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z());
+        (normal.dot(q) - plane_d).abs() <= 1e-5
+    };
+    let mut restriction_lines = Vec::with_capacity(restrictions.len());
+    for restriction in restrictions {
+        if restriction.contact_3d.len() < 2
+            || restriction.contact_3d.iter().copied().any(|p| !on_plane(p))
+        {
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
+        let a3 = restriction.contact_3d[0];
+        let b3 = restriction.contact_3d[restriction.contact_3d.len() - 1];
+        let a = uv(a3);
+        let b = uv(b3);
+        if (a.0 - b.0).hypot(a.1 - b.1) < PARAM_TOL {
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
+        let na = batch_node_for_point(&mut *topo, &mut nodes, &mut node_for_vertex, a, a3, None);
+        let nb = batch_node_for_point(&mut *topo, &mut nodes, &mut node_for_vertex, b, b3, None);
+        restriction_lines.push((a, b, na, nb));
+    }
+
+    // Collect every boundary split before allocating any result wire. Curved
+    // boundary edges are sampled in their native parameter domain instead of
+    // intersecting their endpoint chord. The minted split point is evaluated
+    // on the carrier curve, so the resulting Circle/NURBS sub-edge retains
+    // the exact span inferred by `domain_with_endpoints`.
+    for edges in &mut original {
+        for (oe, splits) in edges {
+            let edge = topo.edge(oe.edge())?.clone();
+            let stored_start = topo.vertex(edge.start())?.point();
+            let stored_end = topo.vertex(edge.end())?.point();
+            let (d0, d1) = edge.curve().domain_with_endpoints(stored_start, stored_end);
+            let mut previous: Option<((f64, f64), f64)> = None;
+            for sample_index in 0..BATCH_CURVE_SAMPLES {
+                let f0 = sample_index as f64 / BATCH_CURVE_SAMPLES as f64;
+                let f1 = (sample_index + 1) as f64 / BATCH_CURVE_SAMPLES as f64;
+                let native_f0 = if oe.is_forward() { f0 } else { 1.0 - f0 };
+                let native_f1 = if oe.is_forward() { f1 } else { 1.0 - f1 };
+                let t0 = d0 + (d1 - d0) * native_f0;
+                let t1 = d0 + (d1 - d0) * native_f1;
+                let p0 = edge
+                    .curve()
+                    .evaluate_with_endpoints(t0, stored_start, stored_end);
+                let p1 = edge
+                    .curve()
+                    .evaluate_with_endpoints(t1, stored_start, stored_end);
+                let q0 = uv(p0);
+                let q1 = uv(p1);
+                for (line_a, line_b, _, _) in &restriction_lines {
+                    let Some(alpha) = line_segment_intersect_2d(q0, q1, *line_a, *line_b) else {
+                        continue;
+                    };
+                    let sample_f = f0 + (f1 - f0) * alpha;
+                    let native_f = if oe.is_forward() {
+                        sample_f
+                    } else {
+                        1.0 - sample_f
+                    };
+                    let curve_t = d0 + (d1 - d0) * native_f;
+                    let point =
+                        edge.curve()
+                            .evaluate_with_endpoints(curve_t, stored_start, stored_end);
+                    let oriented_t = sample_f;
+                    let point_uv = uv(point);
+                    if previous.is_some_and(|(old_uv, old_t)| {
+                        (old_uv.0 - point_uv.0).hypot(old_uv.1 - point_uv.1) < 1e-8
+                            || (old_t - oriented_t).abs() < 1e-8
+                    }) {
+                        continue;
+                    }
+                    let n = batch_node_for_point(
+                        &mut *topo,
+                        &mut nodes,
+                        &mut node_for_vertex,
+                        point_uv,
+                        point,
+                        None,
+                    );
+                    if !splits
+                        .iter()
+                        .any(|(old_t, _)| (*old_t - oriented_t).abs() < 1e-8)
+                    {
+                        splits.push((oriented_t, n));
+                        previous = Some((point_uv, oriented_t));
+                    }
+                }
+            }
+            splits.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+        }
+    }
+
+    let mut segments = Vec::<BatchSegment>::new();
+    let mut split_edges = Vec::<(EdgeId, Vec<EdgeId>)>::new();
+    let mut split_spans = Vec::<(EdgeId, Vec<(EdgeId, f64, f64)>)>::new();
+    let mut new_edges = Vec::new();
+    for edges in &original {
+        for (oe, splits) in edges {
+            let old = topo.edge(oe.edge())?.clone();
+            let mut pieces = Vec::new();
+            let mut piece_spans = Vec::new();
+            for pair in splits.windows(2) {
+                let (t0, n0) = pair[0];
+                let (t1, n1) = pair[1];
+                if (t1 - t0).abs() < PARAM_TOL {
+                    continue;
+                }
+                let (start, end, forward) = if oe.is_forward() {
+                    (n0, n1, true)
+                } else {
+                    (n1, n0, false)
+                };
+                let edge_id =
+                    topo.add_edge(Edge::new(nodes[start].2, nodes[end].2, old.curve().clone()));
+                pieces.push(edge_id);
+                let (stored_t0, stored_t1) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+                piece_spans.push((edge_id, stored_t0, stored_t1));
+                new_edges.push(edge_id);
+                segments.push(BatchSegment {
+                    a: start,
+                    b: end,
+                    edge: edge_id,
+                });
+                // Preserve traversal orientation in the segment graph.
+                if !forward {
+                    if let Some(last) = segments.last_mut() {
+                        std::mem::swap(&mut last.a, &mut last.b);
+                    } else {
+                        return Err(BlendError::TrimmingFailure { face: face_id });
+                    }
+                }
+            }
+            if pieces.len() > 1 || splits.len() > 2 {
+                split_edges.push((oe.edge(), pieces));
+                split_spans.push((oe.edge(), piece_spans));
+            }
+        }
+    }
+
+    let mut contact_edges = Vec::with_capacity(restrictions.len());
+    for (index, restriction) in restrictions.iter().enumerate() {
+        let (_, _, start, end) = restriction_lines[index];
+        let curve = restriction.curve.clone().unwrap_or(EdgeCurve::Line);
+        let edge = topo.add_edge(Edge::new(nodes[start].2, nodes[end].2, curve));
+        contact_edges.push(edge);
+        new_edges.push(edge);
+        segments.push(BatchSegment {
+            a: start,
+            b: end,
+            edge,
+        });
+    }
+
+    // Half-edge walk: predecessor of the reverse edge keeps the cell on left.
+    let mut outgoing = vec![Vec::<usize>::new(); nodes.len()];
+    let mut half = Vec::<(usize, usize, bool)>::new();
+    for segment in &segments {
+        let i = half.len();
+        half.push((segment.a, segment.b, true));
+        half.push((segment.b, segment.a, false));
+        outgoing[segment.a].push(i);
+        outgoing[segment.b].push(i + 1);
+    }
+    for (node, list) in outgoing.iter_mut().enumerate() {
+        list.sort_by(|a, b| {
+            let aa = (nodes[half[*a].1].0.1 - nodes[node].0.1)
+                .atan2(nodes[half[*a].1].0.0 - nodes[node].0.0);
+            let bb = (nodes[half[*b].1].0.1 - nodes[node].0.1)
+                .atan2(nodes[half[*b].1].0.0 - nodes[node].0.0);
+            aa.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    let mut next = vec![usize::MAX; half.len()];
+    for (i, &(_, to, _)) in half.iter().enumerate() {
+        let reverse = half
+            .iter()
+            .enumerate()
+            .find(|&(_, &(from, end, _))| from == to && end == half[i].0)
+            .map(|(j, _)| j)
+            .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+        let list = &outgoing[to];
+        let pos = list
+            .iter()
+            .position(|&j| j == reverse)
+            .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+        next[i] = list[(pos + list.len() - 1) % list.len()];
+    }
+    let mut seen = vec![false; half.len()];
+    let mut cycles = Vec::<Vec<usize>>::new();
+    for start in 0..half.len() {
+        if seen[start] {
+            continue;
+        }
+        let mut cycle = Vec::new();
+        let mut current = start;
+        while !seen[current] {
+            seen[current] = true;
+            cycle.push(current);
+            current = next[current];
+            if cycle.len() > half.len() {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+        }
+        if current == start && cycle.len() >= 3 {
+            cycles.push(cycle);
+        }
+    }
+
+    let loop_uv: Vec<Vec<(f64, f64)>> = original
+        .iter()
+        .map(|edges| {
+            edges
+                .iter()
+                .map(|(_, s)| nodes[s[0].1].0)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let point_in = |p: (f64, f64), polygon: &[(f64, f64)]| {
+        let mut inside = false;
+        for i in 0..polygon.len() {
+            let a = polygon[i];
+            let b = polygon[(i + 1) % polygon.len()];
+            if (a.1 > p.1) != (b.1 > p.1) && p.0 < (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) + a.0 {
+                inside = !inside;
+            }
+        }
+        inside
+    };
+    let mut kept = Vec::<(Vec<usize>, f64)>::new();
+    let cycle_count = cycles.len();
+    for cycle in cycles {
+        let a = nodes[half[cycle[0]].0].0;
+        let b = nodes[half[cycle[0]].1].0;
+        let dx = b.0 - a.0;
+        let dy = b.1 - a.1;
+        let scale = 1e-7_f64.max(dx.hypot(dy) * 1e-7);
+        let sample = (
+            (a.0 + b.0) * 0.5 - dy / dx.hypot(dy) * scale,
+            (a.1 + b.1) * 0.5 + dx / dx.hypot(dy) * scale,
+        );
+        let material = point_in(sample, &loop_uv[0])
+            && loop_uv[1..].iter().all(|hole| !point_in(sample, hole));
+        if !material {
+            continue;
+        }
+        let valid = restrictions.iter().enumerate().all(|(i, restriction)| {
+            let (la, lb, _, _) = restriction_lines[i];
+            let side = (lb.0 - la.0) * (sample.1 - la.1) - (lb.1 - la.1) * (sample.0 - la.0);
+            let face_normal = if reversed { -normal } else { normal };
+            let contact_dir = restriction.contact_3d[restriction.contact_3d.len() - 1]
+                - restriction.contact_3d[0];
+            let sample_dir = brepkit_math::vec::Vec3::new(
+                p3(sample).x() - restriction.contact_3d[0].x(),
+                p3(sample).y() - restriction.contact_3d[0].y(),
+                p3(sample).z() - restriction.contact_3d[0].z(),
+            );
+            let p_is_left = face_normal.dot(contact_dir.cross(sample_dir)) > 0.0;
+            let keep_left = match restriction.keep {
+                TrimKeep::Side(TrimSide::Left) => true,
+                TrimKeep::Side(TrimSide::Right) => false,
+                TrimKeep::AwayFrom(p) => {
+                    face_normal.dot(
+                        (restriction.contact_3d[restriction.contact_3d.len() - 1]
+                            - restriction.contact_3d[0])
+                            .cross(p - restriction.contact_3d[0]),
+                    ) <= 0.0
+                }
+            };
+            (side.abs() < 1e-8) || (p_is_left == keep_left)
+        });
+        if valid {
+            let area = cycle
+                .iter()
+                .map(|&h| {
+                    let p = nodes[half[h].0].0;
+                    let q = nodes[half[h].1].0;
+                    p.0 * q.1 - p.1 * q.0
+                })
+                .sum::<f64>()
+                * 0.5;
+            if area.abs() > 1e-12 {
+                kept.push((cycle, area));
+            }
+        }
+    }
+    let (outer_index, _) = kept
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| {
+            a.1.abs()
+                .partial_cmp(&b.1.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .ok_or_else(|| {
+            log::warn!(
+                "batch arrangement retained no cells: face={face_id:?} nodes={} segments={} cycles={}",
+                nodes.len(),
+                segments.len(),
+                cycle_count
+            );
+            BlendError::TrimmingFailure { face: face_id }
+        })?;
+    let make_wire = |topo: &mut Topology, cycle: &[usize]| -> Result<WireId, BlendError> {
+        let edges = cycle
+            .iter()
+            .map(|&h| {
+                let segment = segments
+                    .iter()
+                    .find(|s| s.a == half[h].0 && s.b == half[h].1)
+                    .or_else(|| {
+                        segments
+                            .iter()
+                            .find(|s| s.a == half[h].1 && s.b == half[h].0)
+                    })
+                    .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+                let forward = segment.a == half[h].0 && segment.b == half[h].1;
+                Ok(OrientedEdge::new(segment.edge, forward))
+            })
+            .collect::<Result<Vec<_>, BlendError>>()?;
+        Ok(topo.add_wire(Wire::new(edges, true)?))
+    };
+    let outer_wire = make_wire(topo, &kept[outer_index].0)?;
+    let mut inner_wires = Vec::new();
+    for (index, (cycle, _)) in kept.iter().enumerate() {
+        if index != outer_index {
+            inner_wires.push(make_wire(topo, cycle)?);
+        }
+    }
+    let mut result_face = Face::new(
+        outer_wire,
+        inner_wires,
+        FaceSurface::Plane { normal, d: plane_d },
+    );
+    result_face.set_reversed(reversed);
+    let trimmed_face = topo.add_face(result_face);
+    let copy_pcurves =
+        |topo: &mut Topology, source_face: FaceId, target_face: FaceId| -> Result<(), BlendError> {
+            let source = topo.face(source_face)?.clone();
+            let source_wires: Vec<WireId> = std::iter::once(source.outer_wire())
+                .chain(source.inner_wires().iter().copied())
+                .collect();
+            let mut curves = Vec::new();
+            for wire_id in source_wires {
+                for oriented in topo.wire(wire_id)?.edges() {
+                    if let Some(pcurve) = topo.pcurves().get(oriented.edge(), source_face) {
+                        curves.push((oriented.edge(), pcurve.clone()));
+                    }
+                }
+            }
+            for (old_edge, pcurve) in curves {
+                if let Some((_, spans)) = split_spans.iter().find(|(edge, _)| *edge == old_edge) {
+                    let start = pcurve.t_start();
+                    let delta = pcurve.t_end() - start;
+                    for &(new_edge, t0, t1) in spans {
+                        topo.pcurves_mut().set(
+                            new_edge,
+                            target_face,
+                            brepkit_topology::pcurve::PCurve::new(
+                                pcurve.curve().clone(),
+                                start + delta * t0,
+                                start + delta * t1,
+                            ),
+                        );
+                    }
+                } else {
+                    topo.pcurves_mut().set(old_edge, target_face, pcurve);
+                }
+            }
+            Ok(())
+        };
+    copy_pcurves(topo, face_id, trimmed_face)?;
+
+    // Clone only source neighbours that reference a copied boundary edge.
+    let mut incident_replacements = Vec::new();
+    for source_face in source_face_ids {
+        if source_face == face_id {
+            continue;
+        }
+        let source = topo.face(source_face)?.clone();
+        let mut changed = false;
+        let mut clone_wire = |topo: &mut Topology, wire_id: WireId| -> Result<WireId, BlendError> {
+            let wire = topo.wire(wire_id)?;
+            let mut out = Vec::new();
+            for oe in wire.edges() {
+                if let Some((_, pieces)) = split_edges.iter().find(|(old, _)| *old == oe.edge()) {
+                    changed = true;
+                    if oe.is_forward() {
+                        out.extend(pieces.iter().map(|&e| OrientedEdge::new(e, true)));
+                    } else {
+                        out.extend(pieces.iter().rev().map(|&e| OrientedEdge::new(e, false)));
+                    }
+                } else {
+                    out.push(*oe);
+                }
+            }
+            Ok(topo.add_wire(Wire::new(out, wire.is_closed())?))
+        };
+        let outer = clone_wire(topo, source.outer_wire())?;
+        let inners = source
+            .inner_wires()
+            .iter()
+            .copied()
+            .map(|w| clone_wire(topo, w))
+            .collect::<Result<Vec<_>, _>>()?;
+        if changed {
+            let mut replacement = Face::new(outer, inners, source.surface().clone());
+            replacement.set_reversed(source.is_reversed());
+            let replacement_id = topo.add_face(replacement);
+            copy_pcurves(topo, source_face, replacement_id)?;
+            incident_replacements.push((source_face, replacement_id));
+        }
+    }
+    let source_vertex_nodes: std::collections::HashSet<usize> =
+        node_for_vertex.values().copied().collect();
+    let new_vertices = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (_, _, vertex))| {
+            (!source_vertex_nodes.contains(&index)).then_some(*vertex)
+        })
+        .collect();
+    Ok(BatchTrimResult {
+        trimmed_face,
+        contact_edges,
+        new_edges,
+        new_vertices,
+        incident_replacements,
+    })
+}
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -1452,6 +2047,211 @@ mod tests {
         assert!((t - 0.5).abs() < 1e-10, "t={t}");
     }
 
+    #[test]
+    fn batch_rebuilds_one_and_two_restrictions_atomically() {
+        let mut topo = Topology::new();
+        let (face_id, _, _) = make_square_face(&mut topo);
+        let source_wire = topo.face(face_id).unwrap().outer_wire();
+        let before = topo.wire(source_wire).unwrap().clone();
+        let mut left = PlanarRestriction::new(
+            vec![Point3::new(0.25, 0.0, 0.0), Point3::new(0.25, 1.0, 0.0)],
+            TrimKeep::Side(TrimSide::Right),
+        );
+        left.curve = Some(EdgeCurve::Line);
+        let mut right = PlanarRestriction::new(
+            vec![Point3::new(0.75, 0.0, 0.0), Point3::new(0.75, 1.0, 0.0)],
+            TrimKeep::Side(TrimSide::Left),
+        );
+        right.curve = Some(EdgeCurve::Line);
+        let result = trim_planar_face_batch(&mut topo, face_id, &[left, right]).unwrap();
+        assert_ne!(result.trimmed_face, face_id);
+        let wire_edges = |wire: &Wire| {
+            wire.edges()
+                .iter()
+                .map(|oe| (oe.edge(), oe.is_forward()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            wire_edges(topo.wire(source_wire).unwrap()),
+            wire_edges(&before),
+            "source wire was rewritten"
+        );
+        assert_eq!(
+            topo.wire(topo.face(result.trimmed_face).unwrap().outer_wire())
+                .unwrap()
+                .edges()
+                .len(),
+            4
+        );
+    }
+
+    #[test]
+    fn batch_rebuilds_incident_faces_copy_on_write() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::pcurve::PCurve;
+
+        let mut topo = Topology::new();
+        let (face_id, verts, edges) = make_square_face(&mut topo);
+        let neighbor = attach_neighbor_below(&mut topo, verts[0], verts[1], edges[0]);
+        let pcurve = PCurve::new(
+            Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            0.0,
+            1.0,
+        );
+        topo.pcurves_mut().set(edges[0], face_id, pcurve.clone());
+        topo.pcurves_mut().set(edges[0], neighbor, pcurve);
+        let source_wire = topo.face(face_id).unwrap().outer_wire();
+        let neighbor_wire = topo.face(neighbor).unwrap().outer_wire();
+        let edge_signature = |wire: &Wire| {
+            wire.edges()
+                .iter()
+                .map(|oe| (oe.edge(), oe.is_forward()))
+                .collect::<Vec<_>>()
+        };
+        let source_before = edge_signature(topo.wire(source_wire).unwrap());
+        let neighbor_before = edge_signature(topo.wire(neighbor_wire).unwrap());
+        let restriction = PlanarRestriction::new(
+            vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)],
+            TrimKeep::Side(TrimSide::Right),
+        );
+
+        let result = trim_planar_face_batch(&mut topo, face_id, &[restriction]).unwrap();
+
+        assert_eq!(
+            edge_signature(topo.wire(source_wire).unwrap()),
+            source_before,
+            "source wire must remain unchanged",
+        );
+        assert_eq!(
+            edge_signature(topo.wire(neighbor_wire).unwrap()),
+            neighbor_before,
+            "incident source wire must remain unchanged",
+        );
+        let replacement = result
+            .incident_replacements
+            .iter()
+            .find(|&&(source, _)| source == neighbor)
+            .map(|&(_, replacement)| replacement)
+            .expect("split incident face must receive a COW replacement");
+        let replacement_wire = topo
+            .wire(topo.face(replacement).unwrap().outer_wire())
+            .unwrap();
+        assert!(
+            replacement_wire
+                .edges()
+                .iter()
+                .any(|oe| topo.pcurves().get(oe.edge(), replacement).is_some()),
+            "COW replacement must preserve source pcurves on split pieces",
+        );
+        let trimmed = result.trimmed_face;
+        let trimmed_wire = topo.wire(topo.face(trimmed).unwrap().outer_wire()).unwrap();
+        assert!(
+            trimmed_wire
+                .edges()
+                .iter()
+                .any(|oe| topo.pcurves().get(oe.edge(), trimmed).is_some()),
+            "trimmed face must preserve source pcurves on split pieces",
+        );
+        assert!(
+            replacement_wire
+                .edges()
+                .iter()
+                .all(|oe| oe.edge() != edges[0])
+        );
+        assert_eq!(replacement_wire.edges().len(), 5);
+    }
+    #[test]
+    fn batch_split_preserves_nurbs_parameter_range() {
+        let mut topo = Topology::new();
+        let (face_id, _verts, edges) = make_square_face(&mut topo);
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        topo.edge_mut(edges[0])
+            .unwrap()
+            .set_curve(EdgeCurve::NurbsCurve(curve));
+        let restriction = PlanarRestriction::new(
+            vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)],
+            TrimKeep::Side(TrimSide::Right),
+        );
+        let result = trim_planar_face_batch(&mut topo, face_id, &[restriction]).unwrap();
+        let wire = topo
+            .wire(topo.face(result.trimmed_face).unwrap().outer_wire())
+            .unwrap();
+        let mut found = false;
+        for oriented in wire.edges() {
+            let edge = topo.edge(oriented.edge()).unwrap();
+            if !matches!(edge.curve(), EdgeCurve::NurbsCurve(_)) {
+                continue;
+            }
+            let start = topo.vertex(edge.start()).unwrap().point();
+            let end = topo.vertex(edge.end()).unwrap().point();
+            if (start.x() - 0.5).abs() < 1e-7 || (end.x() - 0.5).abs() < 1e-7 {
+                let (a, b) = edge.curve().domain_with_endpoints(start, end);
+                assert!(
+                    (a - 0.5).abs() < 1e-7 || (b - 0.5).abs() < 1e-7,
+                    "split NURBS span must end at 0.5, got ({a}, {b})"
+                );
+                found = true;
+            }
+        }
+        assert!(found, "batch result must retain a split NURBS sub-edge");
+    }
+    #[test]
+    fn batch_split_preserves_circle_parameter_range() {
+        let mut topo = Topology::new();
+        let (face_id, _verts, edges) = make_square_face(&mut topo);
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(1.0, 0.5, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            0.5,
+        )
+        .unwrap();
+        topo.edge_mut(edges[1])
+            .unwrap()
+            .set_curve(EdgeCurve::Circle(circle));
+        let restriction = PlanarRestriction::new(
+            vec![Point3::new(0.0, 0.5, 0.0), Point3::new(1.5, 0.5, 0.0)],
+            TrimKeep::Side(TrimSide::Right),
+        );
+        let result = trim_planar_face_batch(&mut topo, face_id, &[restriction]).unwrap();
+        let split_vertex = result
+            .new_vertices
+            .iter()
+            .copied()
+            .find(|&vid| {
+                let p = topo.vertex(vid).unwrap().point();
+                (p.x() - 1.5).abs() < 1e-7 && (p.y() - 0.5).abs() < 1e-7
+            })
+            .expect("boundary crossing must be evaluated on the circle, not its chord");
+        let wire = topo
+            .wire(topo.face(result.trimmed_face).unwrap().outer_wire())
+            .unwrap();
+        let mut found = false;
+        for oriented in wire.edges() {
+            let edge = topo.edge(oriented.edge()).unwrap();
+            if !matches!(edge.curve(), EdgeCurve::Circle(_)) {
+                continue;
+            }
+            let start = topo.vertex(edge.start()).unwrap().point();
+            let end = topo.vertex(edge.end()).unwrap().point();
+            if edge.start() != split_vertex && edge.end() != split_vertex {
+                continue;
+            }
+            let (a, b) = edge.curve().domain_with_endpoints(start, end);
+            assert!(
+                (b - a).abs() < std::f64::consts::TAU - 1e-7,
+                "split circle edge must retain a sub-range, got ({a}, {b})"
+            );
+            found = true;
+        }
+        assert!(found, "batch result must retain a split circle sub-edge");
+    }
     #[test]
     fn segment_intersect_2d_parallel() {
         // Parallel segments — no intersection.
