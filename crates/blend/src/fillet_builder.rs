@@ -245,17 +245,34 @@ impl<'a> FilletBuilder<'a> {
         // the per-face line-based trimmer cannot produce (a closed interior
         // contact circle crosses no boundary edge). Regular stripes still flow
         // through the trim + corner + blend-face path below.
+        let mut boundary_registry = BoundaryRegistry::new();
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
         let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
             std::collections::HashMap::new();
         let mut regular_results: Vec<&StripeResult> = Vec::new();
-        for sr in &stripe_results {
+        for (stripe_index, sr) in stripe_results.iter().enumerate() {
             if let Some(rim) = closed_rim_info(topo, &sr.stripe)? {
-                match assemble_closed_rim(topo, &sr.stripe, &rim, &mut face_replacements) {
+                let contour_id =
+                    plan.as_ref()
+                        .and_then(|fillet_plan| {
+                            fillet_plan.contours.iter().position(|contour| {
+                                contour.spine.edges() == sr.stripe.spine_edges()
+                            })
+                        })
+                        .unwrap_or(stripe_index);
+                match assemble_closed_rim(
+                    topo,
+                    &sr.stripe,
+                    &rim,
+                    contour_id,
+                    &mut boundary_registry,
+                    &mut face_replacements,
+                ) {
                     Ok(band) => blend_face_ids.push(band),
                     Err(e) => {
-                        log::warn!("closed-rim assembly failed: {e}, falling back to trim path");
-                        regular_results.push(sr);
+                        // Closed-rim geometry is authoritative; do not hide
+                        // an assembly failure behind a sequential fallback.
+                        return Err(e);
                     }
                 }
             } else {
@@ -287,7 +304,6 @@ impl<'a> FilletBuilder<'a> {
             corner_face_ids.push(cr.face_id);
         }
 
-        let mut boundary_registry = BoundaryRegistry::new();
         let mut stripe_contact_handles: Vec<(
             Option<crate::boundary_registry::BoundaryHandle>,
             Option<crate::boundary_registry::BoundaryHandle>,
@@ -306,11 +322,11 @@ impl<'a> FilletBuilder<'a> {
             })
             .collect();
 
-        // Collect all planar restrictions first. Each support face is then
+        // Collect all parametric restrictions first. Each support face is then
         // rebuilt exactly once, independent of stripe input order.
         let mut restrictions_by_face: std::collections::HashMap<
             FaceId,
-            Vec<(usize, trimmer::PlanarRestriction)>,
+            Vec<(usize, trimmer::ParametricRestriction)>,
         > = std::collections::HashMap::new();
         for (si, sr) in regular_results.iter().enumerate() {
             let stripe = &sr.stripe;
@@ -323,12 +339,35 @@ impl<'a> FilletBuilder<'a> {
                 if rim_contact_edges.contains_key(&(face_id, si)) {
                     continue;
                 }
-                if !topo.face(face_id)?.surface().is_planar() {
+                let mut restriction =
+                    trimmer::ParametricRestriction::new(sample_nurbs_endpoints(&contact), keep);
+                restriction.curve = Some(EdgeCurve::NurbsCurve(contact));
+                let source_surface = topo.face(face_id)?.surface().clone();
+                let mut adapter = None;
+                let support = surface_ref_or_adapter(&source_surface, &mut adapter);
+                let end_uv =
+                    support.project_point(restriction.contact_3d[restriction.contact_3d.len() - 1]);
+                let pcurve = if face_id == stripe.face1 {
+                    stripe.pcurve1.clone()
+                } else {
+                    stripe.pcurve2.clone()
+                };
+                let pcurve_start = pcurve.evaluate(0.0);
+                let tangent = pcurve.tangent(0.0);
+                let target = brepkit_math::vec::Point2::new(end_uv.0, end_uv.1);
+                let delta = target - pcurve_start;
+                let tangent_sq = tangent.length_squared();
+                let pcurve_end = if tangent_sq > 1e-20 {
+                    (delta.dot(tangent) / tangent_sq).abs()
+                } else {
+                    1.0
+                };
+                if !pcurve_end.is_finite() || pcurve_end < 1e-12 {
                     return Err(BlendError::TrimmingFailure { face: face_id });
                 }
-                let mut restriction =
-                    trimmer::PlanarRestriction::new(sample_nurbs_endpoints(&contact), keep);
-                restriction.curve = Some(EdgeCurve::NurbsCurve(contact));
+                restriction.pcurve = Some(brepkit_topology::pcurve::PCurve::new(
+                    pcurve, 0.0, pcurve_end,
+                ));
                 restrictions_by_face
                     .entry(face_id)
                     .or_default()
@@ -341,11 +380,11 @@ impl<'a> FilletBuilder<'a> {
             let restrictions = restrictions_by_face
                 .remove(&face_id)
                 .ok_or(BlendError::TrimmingFailure { face: face_id })?;
-            let restriction_plan: Vec<trimmer::PlanarRestriction> = restrictions
+            let restriction_plan: Vec<trimmer::ParametricRestriction> = restrictions
                 .iter()
                 .map(|(_, restriction)| restriction.clone())
                 .collect();
-            let batch = trimmer::trim_planar_face_batch(topo, face_id, &restriction_plan)?;
+            let batch = trimmer::trim_parametric_face_batch(topo, face_id, &restriction_plan)?;
             face_replacements.insert(face_id, batch.trimmed_face);
             for &(source, replacement) in &batch.incident_replacements {
                 face_replacements.entry(source).or_insert(replacement);
@@ -387,10 +426,30 @@ impl<'a> FilletBuilder<'a> {
                     .unwrap_or(EdgeCurve::Line);
                 let start_point = topo.vertex(start)?.point();
                 let end_point = topo.vertex(end)?.point();
+                let periodic_support = matches!(
+                    topo.face(face_id)?.surface(),
+                    FaceSurface::Cylinder(_)
+                        | FaceSurface::Cone(_)
+                        | FaceSurface::Torus(_)
+                        | FaceSurface::Sphere(_)
+                ) || matches!(
+                    topo.face(face_id)?.surface(),
+                    FaceSurface::Nurbs(surface) if surface.is_periodic_u()
+                );
+                let start_vertex = if periodic_support {
+                    PlannedVertex::periodic(start, (contour_id as u64) << 32 | (side as u64) << 8)
+                } else {
+                    PlannedVertex::new(start)
+                };
+                let end_vertex = if periodic_support {
+                    PlannedVertex::periodic(end, (contour_id as u64) << 32 | (side as u64) << 8 | 1)
+                } else {
+                    PlannedVertex::new(end)
+                };
                 let handle = boundary_registry.register(
                     BoundaryKey::contact(contour_id, 0, side),
-                    PlannedVertex::new(start),
-                    PlannedVertex::new(end),
+                    start_vertex,
+                    end_vertex,
                     curve.clone(),
                     curve.domain_with_endpoints(start_point, end_point),
                     [
@@ -1276,6 +1335,8 @@ fn assemble_closed_rim(
     topo: &mut Topology,
     stripe: &Stripe,
     rim: &ClosedRimInfo,
+    contour_id: usize,
+    registry: &mut BoundaryRegistry,
     face_replacements: &mut std::collections::HashMap<FaceId, FaceId>,
 ) -> Result<FaceId, BlendError> {
     const TOL: f64 = 1e-7;
@@ -1284,7 +1345,6 @@ fn assemble_closed_rim(
     // mutating the arena.
     let plane_surf = topo.face(rim.plane_face)?.surface().clone();
     let plane_reversed = topo.face(rim.plane_face)?.is_reversed();
-
     let current_wall = face_replacements
         .get(&rim.wall_face)
         .copied()
@@ -1294,30 +1354,6 @@ fn assemble_closed_rim(
     let wall_outer_wire = topo.face(current_wall)?.outer_wire();
     let wall_inner = topo.face(current_wall)?.inner_wires().to_vec();
     let wall_oriented: Vec<OrientedEdge> = topo.wire(wall_outer_wire)?.edges().to_vec();
-
-    // Vertices for the two closed contact circles (start == end → degenerate).
-    let plate_v = topo.add_vertex(Vertex::new(rim.plate_circle.evaluate(0.0), TOL));
-    let wall_v = topo.add_vertex(Vertex::new(rim.wall_circle.evaluate(0.0), TOL));
-
-    // Shared contact-circle edges.
-    let plate_edge = topo.add_edge(Edge::new(
-        plate_v,
-        plate_v,
-        EdgeCurve::Circle(rim.plate_circle.clone()),
-    ));
-    let wall_edge = topo.add_edge(Edge::new(
-        wall_v,
-        wall_v,
-        EdgeCurve::Circle(rim.wall_circle.clone()),
-    ));
-    // Seam connecting the two circles (degenerate-seam band, as the primitive
-    // cylinder lateral uses).
-    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, EdgeCurve::Line));
-
-    // --- Rebuild the disc cap bounded by the plate-contact circle. ---
-    // The cap originally borders the rim via a single closed-circle wire; the
-    // new cap reuses the plate-contact circle with the same orientation the cap
-    // had on the original rim edge.
     let cap_orig_wire = topo.face(
         face_replacements
             .get(&rim.plane_face)
@@ -1331,11 +1367,67 @@ fn assemble_closed_rim(
         .iter()
         .find(|oe| oe.edge() == rim.rim_edge)
         .is_some_and(OrientedEdge::is_forward);
-    let cap_wire = Wire::new(vec![OrientedEdge::new(plate_edge, cap_forward)], true)?;
+
+    // Vertices for the two closed contact circles (start == end → degenerate).
+    let plate_v = topo.add_vertex(Vertex::new(rim.plate_circle.evaluate(0.0), TOL));
+    let wall_v = topo.add_vertex(Vertex::new(rim.wall_circle.evaluate(0.0), TOL));
+
+    // Shared contact-circle edges are planned and materialized through the
+    // same registry used by open contours.
+    let torus = match &stripe.surface {
+        FaceSurface::Torus(t) => t.clone(),
+        _ => {
+            return Err(BlendError::TrimmingFailure {
+                face: rim.wall_face,
+            });
+        }
+    };
+    let band_reversed = torus_band_needs_reversal(&torus, rim);
+    let wall_forward = wall_oriented
+        .iter()
+        .find(|oe| oe.edge() == rim.rim_edge)
+        .is_some_and(OrientedEdge::is_forward);
+    let plane_side = usize::from(stripe.face2 == rim.plane_face);
+    let wall_side = usize::from(stripe.face2 == rim.wall_face);
+    let cap_sense = if matches!(&wall_surf, FaceSurface::Cylinder(_)) {
+        cap_forward
+    } else {
+        !cap_forward
+    };
+    let plate_sense = (cap_forward == plane_reversed) != band_reversed;
+    let wall_sense = (wall_forward == wall_reversed) != band_reversed;
+    let plate_handle = registry.register(
+        BoundaryKey::contact(contour_id, 0, plane_side as u8),
+        PlannedVertex::new(plate_v),
+        PlannedVertex::new(plate_v),
+        EdgeCurve::Circle(rim.plate_circle.clone()),
+        (0.0, std::f64::consts::TAU),
+        [
+            // Result-face orientation propagation determines the final cap
+            // use; cylinders retain the source sense while cones reverse it.
+            BoundaryOwner::planned("closed-rim support cap", cap_sense),
+            BoundaryOwner::planned("closed-rim torus band", plate_sense),
+        ],
+    )?;
+    let wall_handle = registry.register(
+        BoundaryKey::contact(contour_id, 0, wall_side as u8),
+        PlannedVertex::new(wall_v),
+        PlannedVertex::new(wall_v),
+        EdgeCurve::Circle(rim.wall_circle.clone()),
+        (0.0, std::f64::consts::TAU),
+        [
+            BoundaryOwner::planned("closed-rim support wall", wall_forward),
+            BoundaryOwner::planned("closed-rim torus band", wall_sense),
+        ],
+    )?;
+    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, EdgeCurve::Line));
+    let cap_boundary = registry.oriented_edge(topo, plate_handle, 0)?;
+    let cap_wire = Wire::new(vec![cap_boundary], true)?;
     let cap_wire_id = topo.add_wire(cap_wire);
     let mut cap_face = Face::new(cap_wire_id, Vec::new(), plane_surf);
     cap_face.set_reversed(plane_reversed);
     let cap_face_id = topo.add_face(cap_face);
+    registry.set_owner_face(plate_handle, 0, cap_face_id)?;
     face_replacements.insert(rim.plane_face, cap_face_id);
 
     // --- Shorten the wall to the wall-contact circle. ---
@@ -1352,11 +1444,10 @@ fn assemble_closed_rim(
     let mut rebuilt: std::collections::HashMap<EdgeId, EdgeId> = std::collections::HashMap::new();
     let mut new_wall_edges: Vec<OrientedEdge> = Vec::with_capacity(wall_oriented.len());
     let mut replaced = false;
-    let mut wall_forward = true;
     for oe in &wall_oriented {
         if oe.edge() == rim.rim_edge {
-            new_wall_edges.push(OrientedEdge::new(wall_edge, oe.is_forward()));
-            wall_forward = oe.is_forward();
+            let wall_boundary = registry.oriented_edge(topo, wall_handle, 0)?;
+            new_wall_edges.push(wall_boundary);
             replaced = true;
             continue;
         }
@@ -1397,6 +1488,8 @@ fn assemble_closed_rim(
     let mut new_wall_face = Face::new(new_wall_wire_id, wall_inner, wall_surf);
     new_wall_face.set_reversed(wall_reversed);
     let new_wall_face_id = topo.add_face(new_wall_face);
+    registry.rebind_owner_face(current_wall, new_wall_face_id);
+    registry.set_owner_face(wall_handle, 0, new_wall_face_id)?;
     face_replacements.insert(rim.wall_face, new_wall_face_id);
 
     // --- Toroidal band between the two contact circles. ---
@@ -1405,39 +1498,13 @@ fn assemble_closed_rim(
     // (plate_v → plate_v → wall_v → wall_v → plate_v). The shared circle edges
     // are used opposite to the standard-wound cap and wall, keeping the shell
     // manifold.
-    let torus = match &stripe.surface {
-        FaceSurface::Torus(t) => t.clone(),
-        _ => {
-            return Err(BlendError::TrimmingFailure {
-                face: rim.wall_face,
-            });
-        }
-    };
-    // Orient the band so its outward normal points away from the solid. The
-    // solid tessellator orients a torus band's triangles from the surface's
-    // intrinsic (u, v) frame, then applies the face `reversed` flag; pick the
-    // flag that makes the geometric normal at the band's mid-arc point outward.
-    // Outward at a rim fillet points away from the cylinder axis (positive
-    // radial) and away from the material along the axis; the torus geometric
-    // normal at the mid-arc already has the correct radial sign, so we compare
-    // its axial component against the material side.
-    //
-    // The band must traverse each shared contact circle in the EFFECTIVE
-    // sense (is_forward XOR is_reversed) OPPOSITE its other user: the cap
-    // holds `plate_edge` at `cap_forward` under `plane_reversed`, the wall
-    // holds `wall_edge` at `wall_forward` under `wall_reversed`. Both
-    // circles are degenerate (start == end vertex), so the chain closes
-    // for any sense choice and the two senses are picked independently. A
-    // fixed wire order cannot serve both rims of a cylinder — their caps
-    // traverse the shared circles in opposite directions.
-    let band_reversed = torus_band_needs_reversal(&torus, rim);
-    let plate_sense = (cap_forward == plane_reversed) != band_reversed;
-    let wall_sense = (wall_forward == wall_reversed) != band_reversed;
+    let plate_boundary = registry.oriented_edge(topo, plate_handle, 1)?;
+    let wall_boundary = registry.oriented_edge(topo, wall_handle, 1)?;
     let band_wire = Wire::new(
         vec![
-            OrientedEdge::new(plate_edge, plate_sense),
+            plate_boundary,
             OrientedEdge::new(seam_edge, true),
-            OrientedEdge::new(wall_edge, wall_sense),
+            wall_boundary,
             OrientedEdge::new(seam_edge, false),
         ],
         true,
@@ -1448,6 +1515,10 @@ fn assemble_closed_rim(
         band_face.set_reversed(true);
     }
     let band_face_id = topo.add_face(band_face);
+    registry.set_owner_face(plate_handle, 1, band_face_id)?;
+    registry.set_owner_face(wall_handle, 1, band_face_id)?;
+    registry.install_pcurves(topo, plate_handle)?;
+    registry.install_pcurves(topo, wall_handle)?;
 
     Ok(band_face_id)
 }
@@ -1722,8 +1793,8 @@ fn compute_stripe_for_spine(
     let contact1 = sections_to_contact_curve(&walk_result.sections, |s| s.p1)?;
     let contact2 = sections_to_contact_curve(&walk_result.sections, |s| s.p2)?;
 
-    let pcurve1 = build_pcurve_from_contact(ps1, &contact1)?;
-    let pcurve2 = build_pcurve_from_contact(ps2, &contact2)?;
+    let pcurve1 = build_pcurve_from_contact(ps1, &contact1, face_u_period(&oriented_surf1))?;
+    let pcurve2 = build_pcurve_from_contact(ps2, &contact2, face_u_period(&oriented_surf2))?;
 
     let stripe = Stripe {
         spine,
@@ -1923,17 +1994,35 @@ fn sections_to_contact_curve(
     Ok(curve)
 }
 
+fn face_u_period(surface: &FaceSurface) -> Option<f64> {
+    match surface {
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => Some(std::f64::consts::TAU),
+        FaceSurface::Nurbs(surface) if surface.is_periodic_u() => {
+            let (u0, u1) = surface.domain_u();
+            (u1 > u0).then_some(u1 - u0)
+        }
+        _ => None,
+    }
+}
+
 /// Build a PCurve (2D UV line) by projecting 3D contact endpoints onto a surface.
 fn build_pcurve_from_contact(
     surf: &dyn brepkit_math::traits::ParametricSurface,
     contact: &brepkit_math::nurbs::curve::NurbsCurve,
+    u_period: Option<f64>,
 ) -> Result<brepkit_math::curves2d::Curve2D, BlendError> {
     let (t0, t1) = contact.domain();
     let p_start = contact.evaluate(t0);
     let p_end = contact.evaluate(t1);
 
     let (u0, v0) = surf.project_point(p_start);
-    let (u1, v1) = surf.project_point(p_end);
+    let (mut u1, v1) = surf.project_point(p_end);
+    if let Some(period) = u_period {
+        u1 -= period * ((u1 - u0) / period).round();
+    }
 
     let origin = brepkit_math::vec::Point2::new(u0, v0);
     let dir = brepkit_math::vec::Vec2::new(u1 - u0, v1 - v0);

@@ -446,6 +446,22 @@ impl BoundaryRegistry {
         }
         Ok(())
     }
+    /// Rebind every planned owner currently attached to `old_face` to a
+    /// replacement face created during copy-on-write assembly.
+    ///
+    /// A closed-rim wall can be shortened more than once (for example, the
+    /// bottom and top rims of one cylinder). Earlier registry entries must
+    /// follow the latest wall replacement so their planned owner still
+    /// describes an actual result-face use.
+    pub fn rebind_owner_face(&mut self, old_face: FaceId, new_face: FaceId) {
+        for entry in &mut self.entries {
+            for owner in &mut entry.owners {
+                if owner.face == Some(old_face) {
+                    owner.face = Some(new_face);
+                }
+            }
+        }
+    }
 
     /// Mark one owner as intentionally deferred to a later assembly stage.
     pub fn defer_owner(

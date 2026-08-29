@@ -63,6 +63,19 @@ const VERTEX_TOL: f64 = 1e-7;
 const PARAM_TOL: f64 = 1e-10;
 /// Number of carrier-curve samples used to locate UV boundary crossings.
 const BATCH_CURVE_SAMPLES: usize = 64;
+fn surface_u_period(surface: &FaceSurface) -> Option<f64> {
+    match surface {
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => Some(std::f64::consts::TAU),
+        FaceSurface::Nurbs(surface) if surface.is_periodic_u() => {
+            let (u0, u1) = surface.domain_u();
+            (u1 > u0).then_some(u1 - u0)
+        }
+        _ => None,
+    }
+}
 
 /// A point where the contact line crosses a face boundary edge.
 struct BoundaryHit {
@@ -672,19 +685,18 @@ fn line_segment_intersect_2d(
 // General trimmer (planar + non-planar)
 // ===========================================================================
 
-/// Trim a face along a 3D contact curve, handling both planar and non-planar
+/// Trim a face along a 3D contact curve, handling planar and parametric
 /// surfaces.
 ///
-/// For planar faces, delegates to [`trim_face`] using the plane's local frame
-/// to compute UV coordinates. For non-planar surfaces, projects the contact
-/// curve and boundary edges to the surface's UV space and performs 2D
-/// intersection there.
-///
-/// Falls back to returning the face untrimmed if UV projection fails.
+/// Planar faces use their local frame; every other supported face uses its
+/// native UV parameterization. Projection and arrangement failures are
+/// reported to the caller: a fillet must never publish an untrimmed
+/// non-planar support face.
 ///
 /// # Errors
+/// Returns [`BlendError::TrimmingFailure`] on topology, projection, or
+/// intersection errors.
 ///
-/// Returns [`BlendError::TrimmingFailure`] on topology or intersection errors.
 #[allow(clippy::too_many_lines)]
 pub fn trim_face_general(
     topo: &mut Topology,
@@ -737,16 +749,25 @@ pub fn trim_face_general(
         return trim_face(topo, face_id, contact_3d, &contact_uv, keep);
     }
 
-    // Non-planar path: project to UV space
-    let uv_start = surface.project_point(contact_3d[0]);
-    let uv_end = surface.project_point(contact_3d[contact_3d.len() - 1]);
-
-    let (Some(mut uv_s), Some(mut uv_e)) = (uv_start, uv_end) else {
-        log::warn!(
-            "trim_face_general: UV projection failed for non-planar face {face_id:?}, returning untrimmed"
-        );
-        return Ok(untrimmed_result(face_id));
+    // Non-planar path: project to UV space. NURBS projection has a total
+    // API with a midpoint fallback, so validate every projection by its
+    // surface round trip before accepting it.
+    let project = |point: Point3| -> Result<(f64, f64), BlendError> {
+        let uv = surface
+            .project_point(point)
+            .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+        let evaluated = surface
+            .evaluate(uv.0, uv.1)
+            .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+        if !uv.0.is_finite() || !uv.1.is_finite() || (evaluated - point).length() > 1e-5 {
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
+        Ok(uv)
     };
+    let (mut uv_s, mut uv_e) = (
+        project(contact_3d[0])?,
+        project(contact_3d[contact_3d.len() - 1])?,
+    );
 
     let face = topo.face(face_id)?;
     let reversed = face.is_reversed();
@@ -770,28 +791,14 @@ pub fn trim_face_general(
                 topo.vertex(edge.start())?.point(),
             )
         };
-        let s_uv = surface.project_point(s3);
-        let e_uv = surface.project_point(e3);
-        let (Some(s_uv), Some(e_uv)) = (s_uv, e_uv) else {
-            log::warn!(
-                "trim_face_general: boundary UV projection failed for face {face_id:?}, returning untrimmed"
-            );
-            return Ok(untrimmed_result(face_id));
-        };
+        let s_uv = project(s3)?;
+        let e_uv = project(e3)?;
         edge_data_uv.push((oe, s3, e3, s_uv, e_uv));
     }
 
-    // Periodic surfaces project u into [0, TAU), so a face crossing the
-    // parametric seam gets boundary chords that jump a full period and
-    // sweep spuriously across the contact line (3 hits instead of 2, and
-    // the trim bails). Unwrap u sequentially along the wire so consecutive
-    // chords stay continuous, then align the contact endpoints to the same
-    // branch.
-    if matches!(
-        &surface,
-        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_)
-    ) {
-        let period = std::f64::consts::TAU;
+    // Analytic surfaces wrap their angular parameter at the seam. Unwrap U
+    // along the source wire so a seam-crossing face remains one UV chart.
+    if let Some(period) = surface_u_period(&surface) {
         let align = |u: f64, reference: f64| u - period * ((u - reference) / period).round();
         let mut prev_u = edge_data_uv[0].3.0;
         for (_, _, _, s_uv, e_uv) in &mut edge_data_uv {
@@ -843,10 +850,10 @@ pub fn trim_face_general(
             }
         }
         log::warn!(
-            "trim_face_general: expected 2 boundary hits, got {} for face {face_id:?}, returning untrimmed",
+            "trim_face_general: expected 2 boundary hits, got {} for face {face_id:?}",
             hits.len()
         );
-        return Ok(untrimmed_result(face_id));
+        return Err(BlendError::TrimmingFailure { face: face_id });
     }
 
     // Sort hits by edge index (to process in wire order)
@@ -995,18 +1002,20 @@ fn untrimmed_result(face_id: FaceId) -> TrimResult {
     }
 }
 
-/// One restriction consumed atomically by [`trim_planar_face_batch`].
+/// One restriction consumed atomically by the parametric UV batch builder.
 #[derive(Debug, Clone)]
-pub struct PlanarRestriction {
-    /// Endpoints of the contact curve, in traversal order.
+pub struct ParametricRestriction {
+    /// Sampled points of the contact curve, in traversal order.
     pub contact_3d: Vec<Point3>,
     /// Side of the restriction retained in the result.
     pub keep: TrimKeep,
     /// Exact contact geometry, when available.
     pub curve: Option<EdgeCurve>,
+    /// Exact contact pcurve on the support face, when available.
+    pub pcurve: Option<brepkit_topology::pcurve::PCurve>,
 }
 
-impl PlanarRestriction {
+impl ParametricRestriction {
     /// Construct a line restriction from sampled contact points.
     #[must_use]
     pub fn new(contact_3d: Vec<Point3>, keep: TrimKeep) -> Self {
@@ -1014,11 +1023,16 @@ impl PlanarRestriction {
             contact_3d,
             keep,
             curve: None,
+            pcurve: None,
         }
     }
 }
 
-/// Result of one atomic planar support-face reconstruction.
+/// Legacy name retained for the BK4 planar API; it is the same data contract,
+/// not a separate trimming algorithm.
+pub type PlanarRestriction = ParametricRestriction;
+
+/// Result of one atomic parametric support-face reconstruction.
 #[derive(Debug, Clone)]
 pub struct BatchTrimResult {
     /// Replacement for the requested source face.
@@ -1039,8 +1053,7 @@ struct BatchSegment {
     b: usize,
     edge: EdgeId,
 }
-
-/// Rebuild one planar face from all restrictions in one UV arrangement.
+/// Rebuild one parametric face from all restrictions in one UV arrangement.
 ///
 /// The source wires are read-only. Boundary edges are split once, and any
 /// source neighbour that needs one of those pieces receives a cloned result
@@ -1078,43 +1091,114 @@ fn batch_node_for_point(
     }
     n
 }
+/// Preserve an edge carrier's native parameter span when creating an
+/// arrangement piece. NURBS carriers are exactly knot-split; analytic
+/// carriers retain their geometry and derive the trimmed domain from their
+/// endpoint vertices.
+fn edge_curve_for_span(
+    curve: &EdgeCurve,
+    curve_t0: f64,
+    curve_t1: f64,
+) -> Result<EdgeCurve, BlendError> {
+    let EdgeCurve::NurbsCurve(source) = curve else {
+        return Ok(curve.clone());
+    };
+    let (d0, d1) = source.domain();
+    let eps = (d1 - d0).abs() * 1e-10;
+    if (curve_t0 - d0).abs() <= eps && (curve_t1 - d1).abs() <= eps {
+        return Ok(curve.clone());
+    }
+    let (lo, hi) = (curve_t0.min(curve_t1), curve_t0.max(curve_t1));
+    if lo < d0 - eps || hi > d1 + eps || (hi - lo) <= eps {
+        return Err(BlendError::Math(
+            brepkit_math::MathError::ParameterOutOfRange {
+                value: lo,
+                min: d0,
+                max: d1,
+            },
+        ));
+    }
+    let mut span = source.clone();
+    if lo > d0 + eps {
+        span = brepkit_math::nurbs::knot_ops::curve_split(&span, lo)?.1;
+    }
+    if hi < d1 - eps {
+        span = brepkit_math::nurbs::knot_ops::curve_split(&span, hi)?.0;
+    }
+    if curve_t0 <= curve_t1 {
+        return Ok(EdgeCurve::NurbsCurve(span));
+    }
+    let (a, b) = span.domain();
+    let knots = span.knots().iter().rev().map(|&u| a + b - u).collect();
+    let control_points = span.control_points().iter().rev().copied().collect();
+    let weights = span.weights().iter().rev().copied().collect();
+    Ok(EdgeCurve::NurbsCurve(
+        brepkit_math::nurbs::curve::NurbsCurve::new(span.degree(), knots, control_points, weights)?,
+    ))
+}
 
-pub fn trim_planar_face_batch(
+fn trim_parametric_face_batch_in_place(
     topo: &mut Topology,
     face_id: FaceId,
-    restrictions: &[PlanarRestriction],
+    restrictions: &[ParametricRestriction],
 ) -> Result<BatchTrimResult, BlendError> {
     if restrictions.is_empty() {
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
     let source_face_ids: Vec<FaceId> = topo.faces().iter().map(|(id, _)| id).collect();
     let face = topo.face(face_id)?.clone();
-    let FaceSurface::Plane { normal, d } = face.surface() else {
-        return Err(BlendError::TrimmingFailure { face: face_id });
-    };
-    let normal = *normal;
-    let plane_d = *d;
+    let surface = face.surface().clone();
     let reversed = face.is_reversed();
-    let arbitrary = if normal.x().abs() < 0.9 {
+    let (plane_normal, plane_d) = match &surface {
+        FaceSurface::Plane { normal, d } => (*normal, *d),
+        _ => (brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0), 0.0),
+    };
+    let arbitrary = if plane_normal.x().abs() < 0.9 {
         brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0)
     } else {
         brepkit_math::vec::Vec3::new(0.0, 1.0, 0.0)
     };
-    let u = normal
-        .cross(arbitrary)
-        .normalize()
-        .map_err(|_| BlendError::TrimmingFailure { face: face_id })?;
-    let v = normal.cross(u);
-    let origin = normal * plane_d;
-    let uv = |p: Point3| {
-        let q = brepkit_math::vec::Vec3::new(
-            p.x() - origin.x(),
-            p.y() - origin.y(),
-            p.z() - origin.z(),
-        );
-        (u.dot(q), v.dot(q))
+    let (u, v, origin) = if surface.is_planar() {
+        let u = plane_normal
+            .cross(arbitrary)
+            .normalize()
+            .map_err(|_| BlendError::TrimmingFailure { face: face_id })?;
+        (u, plane_normal.cross(u), plane_normal * plane_d)
+    } else {
+        (
+            brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0),
+            brepkit_math::vec::Vec3::new(0.0, 1.0, 0.0),
+            brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0),
+        )
     };
-    let p3 = |q: (f64, f64)| origin + u * q.0 + v * q.1;
+    let uv = |p: Point3| {
+        if surface.is_planar() {
+            let q = brepkit_math::vec::Vec3::new(
+                p.x() - origin.x(),
+                p.y() - origin.y(),
+                p.z() - origin.z(),
+            );
+            (u.dot(q), v.dot(q))
+        } else {
+            surface
+                .project_point(p)
+                .map(|q| (q.0, q.1))
+                .unwrap_or((f64::NAN, f64::NAN))
+        }
+    };
+    let projection_valid = |p: Point3| {
+        if surface.is_planar() {
+            let q = brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z());
+            (plane_normal.dot(q) - plane_d).abs() <= 1e-5
+        } else {
+            let q = uv(p);
+            q.0.is_finite()
+                && q.1.is_finite()
+                && surface
+                    .evaluate(q.0, q.1)
+                    .is_some_and(|evaluated| (evaluated - p).length() <= 1e-5)
+        }
+    };
 
     let wire_ids: Vec<WireId> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
@@ -1131,6 +1215,9 @@ pub fn trim_planar_face_batch(
             let ev = oe.oriented_end(edge);
             let sp = topo.vertex(sv)?.point();
             let ep = topo.vertex(ev)?.point();
+            if !projection_valid(sp) || !projection_valid(ep) {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
             let a = match node_for_vertex.get(&sv).copied() {
                 Some(n) => n,
                 None => batch_node_for_point(
@@ -1158,27 +1245,150 @@ pub fn trim_planar_face_batch(
         original.push(edges);
     }
 
-    let on_plane = |p: Point3| {
-        let q = brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z());
-        (normal.dot(q) - plane_d).abs() <= 1e-5
-    };
     let mut restriction_lines = Vec::with_capacity(restrictions.len());
+    let mut restriction_paths: Vec<Vec<((f64, f64), Point3)>> =
+        Vec::with_capacity(restrictions.len());
     for restriction in restrictions {
         if restriction.contact_3d.len() < 2
-            || restriction.contact_3d.iter().copied().any(|p| !on_plane(p))
+            || restriction
+                .contact_3d
+                .iter()
+                .copied()
+                .any(|p| !projection_valid(p))
         {
             return Err(BlendError::TrimmingFailure { face: face_id });
         }
-        let a3 = restriction.contact_3d[0];
-        let b3 = restriction.contact_3d[restriction.contact_3d.len() - 1];
-        let a = uv(a3);
-        let b = uv(b3);
+        let mut path = Vec::with_capacity(BATCH_CURVE_SAMPLES + 1);
+        if let Some(pcurve) = restriction.pcurve.as_ref() {
+            let count = BATCH_CURVE_SAMPLES;
+            let t0 = pcurve.t_start();
+            let dt = pcurve.t_end() - t0;
+            let supplied_count = restriction.contact_3d.len() - 1;
+            if !surface.is_planar() {
+                for (index, point) in restriction.contact_3d.iter().enumerate() {
+                    let fraction = index as f64 / supplied_count as f64;
+                    let projected = pcurve.evaluate(t0 + dt * fraction);
+                    let evaluated = surface
+                        .evaluate(projected.0[0], projected.0[1])
+                        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+                    if (evaluated - *point).length() > 1e-4 {
+                        return Err(BlendError::TrimmingFailure { face: face_id });
+                    }
+                }
+            }
+            for index in 0..=count {
+                let fraction = index as f64 / count as f64;
+                let mut point = if let Some(curve) = restriction.curve.as_ref() {
+                    let (curve_start, curve_end) = curve.domain_with_endpoints(
+                        restriction.contact_3d[0],
+                        restriction.contact_3d[restriction.contact_3d.len() - 1],
+                    );
+                    let parameter = curve_start + (curve_end - curve_start) * fraction;
+                    curve.evaluate_with_endpoints(
+                        parameter,
+                        restriction.contact_3d[0],
+                        restriction.contact_3d[restriction.contact_3d.len() - 1],
+                    )
+                } else if index == 0 {
+                    restriction.contact_3d[0]
+                } else if index == count {
+                    restriction.contact_3d[restriction.contact_3d.len() - 1]
+                } else {
+                    let a = restriction.contact_3d.len() - 1;
+                    let position = fraction * a as f64;
+                    let lower = position.floor() as usize;
+                    let alpha = position - lower as f64;
+                    restriction.contact_3d[lower]
+                        + (restriction.contact_3d[lower + 1] - restriction.contact_3d[lower])
+                            * alpha
+                };
+                let projected = pcurve.evaluate(t0 + dt * fraction);
+                let q = (projected.0[0], projected.0[1]);
+                if !surface.is_planar() {
+                    let evaluated = surface
+                        .evaluate(q.0, q.1)
+                        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+                    point = evaluated;
+                }
+                path.push((q, point));
+            }
+        } else {
+            path.extend(
+                restriction
+                    .contact_3d
+                    .iter()
+                    .copied()
+                    .map(|point| (uv(point), point)),
+            );
+        }
+        let (a, b) = (path[0].0, path[path.len() - 1].0);
         if (a.0 - b.0).hypot(a.1 - b.1) < PARAM_TOL {
             return Err(BlendError::TrimmingFailure { face: face_id });
         }
-        let na = batch_node_for_point(&mut *topo, &mut nodes, &mut node_for_vertex, a, a3, None);
-        let nb = batch_node_for_point(&mut *topo, &mut nodes, &mut node_for_vertex, b, b3, None);
+        let na = batch_node_for_point(
+            &mut *topo,
+            &mut nodes,
+            &mut node_for_vertex,
+            a,
+            path[0].1,
+            None,
+        );
+        let nb = batch_node_for_point(
+            &mut *topo,
+            &mut nodes,
+            &mut node_for_vertex,
+            b,
+            path[path.len() - 1].1,
+            None,
+        );
         restriction_lines.push((a, b, na, nb));
+        restriction_paths.push(path);
+    }
+    // Unwrap the angular U coordinate across periodic seams. This preserves
+    // one logical seam identity while keeping the arrangement in a continuous
+    // UV chart.
+    if let Some(period) = surface_u_period(&surface) {
+        let align = |u: f64, reference: f64| u - period * ((u - reference) / period).round();
+        let mut previous = None;
+        for edges in &mut original {
+            for (_, splits) in edges {
+                for (index, node) in [splits[0].1, splits[1].1].into_iter().enumerate() {
+                    let reference = previous.unwrap_or(nodes[node].0.0);
+                    let aligned = align(nodes[node].0.0, reference);
+                    nodes[node].0.0 = aligned;
+                    if index == 1 {
+                        previous = Some(aligned);
+                    }
+                }
+            }
+        }
+        let reference = previous.unwrap_or(0.0);
+        for path in &mut restriction_paths {
+            let mut path_reference = reference;
+            for (q, _) in path {
+                q.0 = align(q.0, path_reference);
+                path_reference = q.0;
+            }
+        }
+        for (index, (a, b, na, nb)) in restriction_lines.iter_mut().enumerate() {
+            let path = &restriction_paths[index];
+            *a = path[0].0;
+            *b = path[path.len() - 1].0;
+            nodes[*na].0 = *a;
+            nodes[*nb].0 = *b;
+            for (node_id, target) in [(*na, path[0]), (*nb, path[path.len() - 1])] {
+                if let Some(existing) = nodes.iter().position(|(q, point, _)| {
+                    (q.0 - target.0.0).hypot(q.1 - target.0.1) < 1e-7
+                        && (*point - target.1).length() < 1e-7
+                }) {
+                    if node_id == *na {
+                        *na = existing;
+                    } else {
+                        *nb = existing;
+                    }
+                }
+            }
+        }
     }
 
     // Collect every boundary split before allocating any result wire. Curved
@@ -1193,6 +1403,7 @@ pub fn trim_planar_face_batch(
             let stored_end = topo.vertex(edge.end())?.point();
             let (d0, d1) = edge.curve().domain_with_endpoints(stored_start, stored_end);
             let mut previous: Option<((f64, f64), f64)> = None;
+            let period = surface_u_period(&surface);
             for sample_index in 0..BATCH_CURVE_SAMPLES {
                 let f0 = sample_index as f64 / BATCH_CURVE_SAMPLES as f64;
                 let f1 = (sample_index + 1) as f64 / BATCH_CURVE_SAMPLES as f64;
@@ -1206,44 +1417,60 @@ pub fn trim_planar_face_batch(
                 let p1 = edge
                     .curve()
                     .evaluate_with_endpoints(t1, stored_start, stored_end);
-                let q0 = uv(p0);
-                let q1 = uv(p1);
-                for (line_a, line_b, _, _) in &restriction_lines {
-                    let Some(alpha) = line_segment_intersect_2d(q0, q1, *line_a, *line_b) else {
-                        continue;
+                if !projection_valid(p0) || !projection_valid(p1) {
+                    return Err(BlendError::TrimmingFailure { face: face_id });
+                }
+                let mut q0 = uv(p0);
+                let mut q1 = uv(p1);
+                if let Some(period) = period {
+                    let align = |value: f64, reference: f64| {
+                        value - period * ((value - reference) / period).round()
                     };
-                    let sample_f = f0 + (f1 - f0) * alpha;
-                    let native_f = if oe.is_forward() {
-                        sample_f
-                    } else {
-                        1.0 - sample_f
-                    };
-                    let curve_t = d0 + (d1 - d0) * native_f;
-                    let point =
-                        edge.curve()
-                            .evaluate_with_endpoints(curve_t, stored_start, stored_end);
-                    let oriented_t = sample_f;
-                    let point_uv = uv(point);
-                    if previous.is_some_and(|(old_uv, old_t)| {
-                        (old_uv.0 - point_uv.0).hypot(old_uv.1 - point_uv.1) < 1e-8
-                            || (old_t - oriented_t).abs() < 1e-8
-                    }) {
-                        continue;
-                    }
-                    let n = batch_node_for_point(
-                        &mut *topo,
-                        &mut nodes,
-                        &mut node_for_vertex,
-                        point_uv,
-                        point,
-                        None,
-                    );
-                    if !splits
-                        .iter()
-                        .any(|(old_t, _)| (*old_t - oriented_t).abs() < 1e-8)
-                    {
-                        splits.push((oriented_t, n));
-                        previous = Some((point_uv, oriented_t));
+                    q0.0 = align(q0.0, nodes[splits[0].1].0.0);
+                    q1.0 = align(q1.0, q0.0);
+                }
+                for path in &restriction_paths {
+                    for pair in path.windows(2) {
+                        let (line_a, line_b) = (pair[0].0, pair[1].0);
+                        let Some(alpha) = line_segment_intersect_2d(q0, q1, line_a, line_b) else {
+                            continue;
+                        };
+                        let sample_f = f0 + (f1 - f0) * alpha;
+                        let native_f = if oe.is_forward() {
+                            sample_f
+                        } else {
+                            1.0 - sample_f
+                        };
+                        let curve_t = d0 + (d1 - d0) * native_f;
+                        let point =
+                            edge.curve()
+                                .evaluate_with_endpoints(curve_t, stored_start, stored_end);
+                        let oriented_t = sample_f;
+                        let mut point_uv = uv(point);
+                        if let Some(period) = period {
+                            point_uv.0 -= period * ((point_uv.0 - q0.0) / period).round();
+                        }
+                        if previous.is_some_and(|(old_uv, old_t)| {
+                            (old_uv.0 - point_uv.0).hypot(old_uv.1 - point_uv.1) < 1e-8
+                                || (old_t - oriented_t).abs() < 1e-8
+                        }) {
+                            continue;
+                        }
+                        let n = batch_node_for_point(
+                            &mut *topo,
+                            &mut nodes,
+                            &mut node_for_vertex,
+                            point_uv,
+                            point,
+                            None,
+                        );
+                        if !splits
+                            .iter()
+                            .any(|(old_t, _)| (*old_t - oriented_t).abs() < 1e-8)
+                        {
+                            splits.push((oriented_t, n));
+                            previous = Some((point_uv, oriented_t));
+                        }
                     }
                 }
             }
@@ -1258,6 +1485,9 @@ pub fn trim_planar_face_batch(
     for edges in &original {
         for (oe, splits) in edges {
             let old = topo.edge(oe.edge())?.clone();
+            let stored_start = topo.vertex(old.start())?.point();
+            let stored_end = topo.vertex(old.end())?.point();
+            let (d0, d1) = old.curve().domain_with_endpoints(stored_start, stored_end);
             let mut pieces = Vec::new();
             let mut piece_spans = Vec::new();
             for pair in splits.windows(2) {
@@ -1271,8 +1501,13 @@ pub fn trim_planar_face_batch(
                 } else {
                     (n1, n0, false)
                 };
-                let edge_id =
-                    topo.add_edge(Edge::new(nodes[start].2, nodes[end].2, old.curve().clone()));
+                let (curve_t0, curve_t1) = if oe.is_forward() {
+                    (d0 + (d1 - d0) * t0, d0 + (d1 - d0) * t1)
+                } else {
+                    (d0 + (d1 - d0) * (1.0 - t0), d0 + (d1 - d0) * (1.0 - t1))
+                };
+                let piece_curve = edge_curve_for_span(old.curve(), curve_t0, curve_t1)?;
+                let edge_id = topo.add_edge(Edge::new(nodes[start].2, nodes[end].2, piece_curve));
                 pieces.push(edge_id);
                 let (stored_t0, stored_t1) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
                 piece_spans.push((edge_id, stored_t0, stored_t1));
@@ -1388,7 +1623,6 @@ pub fn trim_planar_face_batch(
         inside
     };
     let mut kept = Vec::<(Vec<usize>, f64)>::new();
-    let cycle_count = cycles.len();
     for cycle in cycles {
         let a = nodes[half[cycle[0]].0].0;
         let b = nodes[half[cycle[0]].1].0;
@@ -1407,14 +1641,16 @@ pub fn trim_planar_face_batch(
         let valid = restrictions.iter().enumerate().all(|(i, restriction)| {
             let (la, lb, _, _) = restriction_lines[i];
             let side = (lb.0 - la.0) * (sample.1 - la.1) - (lb.1 - la.1) * (sample.0 - la.0);
-            let face_normal = if reversed { -normal } else { normal };
+            let sample_uv = nodes[half[cycle[0]].0].0;
+            let raw_normal = if surface.is_planar() {
+                plane_normal
+            } else {
+                surface.normal(sample_uv.0, sample_uv.1)
+            };
+            let face_normal = if reversed { -raw_normal } else { raw_normal };
             let contact_dir = restriction.contact_3d[restriction.contact_3d.len() - 1]
                 - restriction.contact_3d[0];
-            let sample_dir = brepkit_math::vec::Vec3::new(
-                p3(sample).x() - restriction.contact_3d[0].x(),
-                p3(sample).y() - restriction.contact_3d[0].y(),
-                p3(sample).z() - restriction.contact_3d[0].z(),
-            );
+            let sample_dir = nodes[half[cycle[0]].0].1 - restriction.contact_3d[0];
             let p_is_left = face_normal.dot(contact_dir.cross(sample_dir)) > 0.0;
             let keep_left = match restriction.keep {
                 TrimKeep::Side(TrimSide::Left) => true,
@@ -1452,15 +1688,7 @@ pub fn trim_planar_face_batch(
                 .partial_cmp(&b.1.abs())
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .ok_or_else(|| {
-            log::warn!(
-                "batch arrangement retained no cells: face={face_id:?} nodes={} segments={} cycles={}",
-                nodes.len(),
-                segments.len(),
-                cycle_count
-            );
-            BlendError::TrimmingFailure { face: face_id }
-        })?;
+        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
     let make_wire = |topo: &mut Topology, cycle: &[usize]| -> Result<WireId, BlendError> {
         let edges = cycle
             .iter()
@@ -1487,13 +1715,30 @@ pub fn trim_planar_face_batch(
             inner_wires.push(make_wire(topo, cycle)?);
         }
     }
-    let mut result_face = Face::new(
-        outer_wire,
-        inner_wires,
-        FaceSurface::Plane { normal, d: plane_d },
-    );
+    let mut result_face = Face::new(outer_wire, inner_wires, surface.clone());
     result_face.set_reversed(reversed);
     let trimmed_face = topo.add_face(result_face);
+    for (index, &edge) in contact_edges.iter().enumerate() {
+        if surface.is_planar() && restrictions[index].pcurve.is_none() {
+            continue;
+        }
+        let pcurve = if let Some(pcurve) = restrictions[index].pcurve.clone() {
+            pcurve
+        } else {
+            let (a, b, _, _) = restriction_lines[index];
+            let uv_curve = brepkit_math::curves2d::NurbsCurve2D::from_line(
+                brepkit_math::vec::Point2::new(a.0, a.1),
+                brepkit_math::vec::Point2::new(b.0, b.1),
+            )
+            .map_err(|_| BlendError::TrimmingFailure { face: face_id })?;
+            brepkit_topology::pcurve::PCurve::new(
+                brepkit_math::curves2d::Curve2D::Nurbs(uv_curve),
+                0.0,
+                1.0,
+            )
+        };
+        topo.pcurves_mut().set(edge, trimmed_face, pcurve);
+    }
     let copy_pcurves =
         |topo: &mut Topology, source_face: FaceId, target_face: FaceId| -> Result<(), BlendError> {
             let source = topo.face(source_face)?.clone();
@@ -1588,6 +1833,36 @@ pub fn trim_planar_face_batch(
         incident_replacements,
     })
 }
+/// Rebuild a planar or curved support face from all restrictions at once.
+///
+/// Work is performed on a copy and committed only after the complete
+/// arrangement succeeds. This keeps explicit projection/intersection
+/// failures non-destructive to the source topology.
+pub fn trim_parametric_face_batch(
+    topo: &mut Topology,
+    face_id: FaceId,
+    restrictions: &[ParametricRestriction],
+) -> Result<BatchTrimResult, BlendError> {
+    let mut working = topo.clone();
+    let result = trim_parametric_face_batch_in_place(&mut working, face_id, restrictions)?;
+    *topo = working;
+    Ok(result)
+}
+
+/// Backwards-compatible planar entry point. The implementation is the same
+/// transactional parametric arrangement, but this API rejects non-planar
+/// surfaces so existing BK4 callers retain their contract.
+pub fn trim_planar_face_batch(
+    topo: &mut Topology,
+    face_id: FaceId,
+    restrictions: &[PlanarRestriction],
+) -> Result<BatchTrimResult, BlendError> {
+    if !topo.face(face_id)?.surface().is_planar() {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    }
+    trim_parametric_face_batch(topo, face_id, restrictions)
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -2083,6 +2358,368 @@ mod tests {
                 .len(),
             4
         );
+    }
+    #[test]
+    fn curved_projection_failure_is_explicit_and_source_stable() {
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let mut topo = Topology::new();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), VERTEX_TOL));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 1.0), VERTEX_TOL));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v0, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(e0, true), OrientedEdge::new(e1, true)],
+                true,
+            )
+            .unwrap(),
+        );
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, Vec::new(), surface));
+        let counts = (topo.num_vertices(), topo.num_edges(), topo.num_faces());
+        let restriction = ParametricRestriction::new(
+            vec![Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0)],
+            TrimKeep::Side(TrimSide::Left),
+        );
+        assert!(
+            matches!(
+                trim_parametric_face_batch(&mut topo, face, &[restriction]),
+                Err(BlendError::TrimmingFailure { face: failed }) if failed == face
+            ),
+            "off-surface projection must be an explicit failure"
+        );
+        assert_eq!(
+            counts,
+            (topo.num_vertices(), topo.num_edges(), topo.num_faces()),
+            "forced curved projection failure must not mutate source topology"
+        );
+    }
+
+    #[test]
+    fn cylinder_uv_batch_rebuilds_shared_restriction() {
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let mut topo = Topology::new();
+        let surface =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let point = |u: f64, v: f64| surface.evaluate(u, v);
+        let p00 = point(0.0, 0.0);
+        let p10 = point(std::f64::consts::FRAC_PI_2, 0.0);
+        let p11 = point(std::f64::consts::FRAC_PI_2, 1.0);
+        let p01 = point(0.0, 1.0);
+        let v00 = topo.add_vertex(Vertex::new(p00, VERTEX_TOL));
+        let v10 = topo.add_vertex(Vertex::new(p10, VERTEX_TOL));
+        let v11 = topo.add_vertex(Vertex::new(p11, VERTEX_TOL));
+        let v01 = topo.add_vertex(Vertex::new(p01, VERTEX_TOL));
+        let e0 = topo.add_edge(Edge::new(
+            v00,
+            v10,
+            EdgeCurve::Circle(
+                brepkit_math::curves::Circle3D::new(
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    1.0,
+                )
+                .unwrap(),
+            ),
+        ));
+        let e1 = topo.add_edge(Edge::new(v10, v11, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(
+            v01,
+            v11,
+            EdgeCurve::Circle(
+                brepkit_math::curves::Circle3D::new(
+                    Point3::new(0.0, 0.0, 1.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    1.0,
+                )
+                .unwrap(),
+            ),
+        ));
+        let e3 = topo.add_edge(Edge::new(v00, v01, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(e0, true),
+                    OrientedEdge::new(e1, true),
+                    OrientedEdge::new(e2, false),
+                    OrientedEdge::new(e3, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(
+            wire,
+            Vec::new(),
+            FaceSurface::Cylinder(surface.clone()),
+        ));
+        let mut restriction = ParametricRestriction::new(
+            vec![
+                point(std::f64::consts::FRAC_PI_4, 0.0),
+                point(std::f64::consts::FRAC_PI_4, 1.0),
+            ],
+            TrimKeep::Side(TrimSide::Right),
+        );
+        restriction.curve = Some(EdgeCurve::Line);
+        let result = trim_parametric_face_batch(&mut topo, face, &[restriction]).unwrap();
+        assert_ne!(result.trimmed_face, face);
+        assert_eq!(result.contact_edges.len(), 1);
+        assert!(
+            topo.pcurves()
+                .get(result.contact_edges[0], result.trimmed_face)
+                .is_some()
+        );
+    }
+    fn add_parametric_quad(
+        topo: &mut Topology,
+        surface: FaceSurface,
+        points: [Point3; 4],
+        curves: [EdgeCurve; 4],
+    ) -> FaceId {
+        let vertices = points.map(|point| topo.add_vertex(Vertex::new(point, VERTEX_TOL)));
+        let edges = [
+            topo.add_edge(Edge::new(vertices[0], vertices[1], curves[0].clone())),
+            topo.add_edge(Edge::new(vertices[1], vertices[2], curves[1].clone())),
+            topo.add_edge(Edge::new(vertices[3], vertices[2], curves[2].clone())),
+            topo.add_edge(Edge::new(vertices[0], vertices[3], curves[3].clone())),
+        ];
+        let wire = topo.add_wire(
+            Wire::new(
+                [
+                    OrientedEdge::new(edges[0], true),
+                    OrientedEdge::new(edges[1], true),
+                    OrientedEdge::new(edges[2], false),
+                    OrientedEdge::new(edges[3], false),
+                ]
+                .to_vec(),
+                true,
+            )
+            .unwrap(),
+        );
+        topo.add_face(Face::new(wire, Vec::new(), surface))
+    }
+
+    #[test]
+    fn cone_support_face_uses_native_uv_batch() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+
+        let mut topo = Topology::new();
+        let cone = ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.35)
+            .unwrap();
+        let point = |u: f64, v: f64| cone.evaluate(u, v);
+        let circle = |v: f64| {
+            EdgeCurve::Circle(
+                Circle3D::new(
+                    cone.apex() + cone.axis() * (cone.half_angle().sin() * v),
+                    cone.axis(),
+                    cone.radius_at(v),
+                )
+                .unwrap(),
+            )
+        };
+        let face = add_parametric_quad(
+            &mut topo,
+            FaceSurface::Cone(cone.clone()),
+            [
+                point(0.2, 1.0),
+                point(1.4, 1.0),
+                point(1.4, 2.0),
+                point(0.2, 2.0),
+            ],
+            [circle(1.0), EdgeCurve::Line, circle(2.0), EdgeCurve::Line],
+        );
+        let result = trim_parametric_face_batch(
+            &mut topo,
+            face,
+            &[ParametricRestriction::new(
+                vec![point(0.8, 1.0), point(0.8, 2.0)],
+                TrimKeep::Side(TrimSide::Right),
+            )],
+        );
+        assert!(result.is_ok(), "native cone UV support must rebuild");
+    }
+
+    #[test]
+    fn nurbs_support_face_rebuilds_and_preserves_surface() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let face = add_parametric_quad(
+            &mut topo,
+            FaceSurface::Nurbs(surface),
+            [
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+            ],
+            [
+                EdgeCurve::Line,
+                EdgeCurve::Line,
+                EdgeCurve::Line,
+                EdgeCurve::Line,
+            ],
+        );
+        let result = trim_parametric_face_batch(
+            &mut topo,
+            face,
+            &[ParametricRestriction::new(
+                vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)],
+                TrimKeep::Side(TrimSide::Right),
+            )],
+        );
+        assert!(
+            result.is_ok(),
+            "NURBS support must use its parameterization"
+        );
+        let trimmed = result.unwrap().trimmed_face;
+        assert!(matches!(
+            topo.face(trimmed).unwrap().surface(),
+            FaceSurface::Nurbs(_)
+        ));
+    }
+
+    #[test]
+    fn torus_periodic_seam_batch_rebuilds_curved_patch() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        let mut topo = Topology::new();
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0).unwrap();
+        let point = |u: f64, v: f64| torus.evaluate(u, v);
+        let circle_u = |v: f64| {
+            EdgeCurve::Circle(
+                Circle3D::new_with_ref(
+                    Point3::new(0.0, 0.0, v.sin()),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    3.0 + v.cos(),
+                    Vec3::new(1.0, 0.0, 0.0),
+                )
+                .unwrap(),
+            )
+        };
+        let circle_v = |u: f64| {
+            let radial = Vec3::new(u.cos(), u.sin(), 0.0);
+            let tangent = Vec3::new(-u.sin(), u.cos(), 0.0);
+            EdgeCurve::Circle(
+                Circle3D::new_with_ref(
+                    Point3::new(3.0 * u.cos(), 3.0 * u.sin(), 0.0),
+                    -tangent,
+                    1.0,
+                    radial,
+                )
+                .unwrap(),
+            )
+        };
+        let u0 = std::f64::consts::TAU - 0.5;
+        let u1 = std::f64::consts::TAU + 0.5;
+        let v0 = 0.4;
+        let v1 = 1.4;
+        let face = add_parametric_quad(
+            &mut topo,
+            FaceSurface::Torus(torus.clone()),
+            [point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1)],
+            [circle_u(v0), circle_v(u1), circle_u(v1), circle_v(u0)],
+        );
+        let mut restriction = ParametricRestriction::new(
+            vec![point(6.1, v0), point(6.1, v1)],
+            TrimKeep::Side(TrimSide::Right),
+        );
+        let pcurve = brepkit_math::curves2d::Curve2D::Nurbs(
+            brepkit_math::curves2d::NurbsCurve2D::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![
+                    brepkit_math::vec::Point2::new(6.1, v0),
+                    brepkit_math::vec::Point2::new(6.4, 0.9),
+                    brepkit_math::vec::Point2::new(6.1, v1),
+                ],
+                vec![1.0, 1.0, 1.0],
+            )
+            .unwrap(),
+        );
+        restriction.pcurve = Some(brepkit_topology::pcurve::PCurve::new(pcurve, 0.0, 1.0));
+        let result = trim_parametric_face_batch(&mut topo, face, &[restriction]);
+        assert!(
+            result.is_ok(),
+            "periodic torus patch must rebuild: {result:?}"
+        );
+        let result = result.unwrap();
+        assert_ne!(result.trimmed_face, face);
+        assert_eq!(result.contact_edges.len(), 1);
+    }
+
+    #[test]
+    fn batch_rebuilds_outer_and_inner_wires() {
+        let mut topo = Topology::new();
+        let (face_id, _, _) = make_square_face(&mut topo);
+        let hole_points = [
+            Point3::new(0.25, 0.25, 0.0),
+            Point3::new(0.75, 0.25, 0.0),
+            Point3::new(0.75, 0.75, 0.0),
+            Point3::new(0.25, 0.75, 0.0),
+        ];
+        let hole_vertices =
+            hole_points.map(|point| topo.add_vertex(Vertex::new(point, VERTEX_TOL)));
+        let hole_edges = [
+            topo.add_edge(Edge::new(
+                hole_vertices[0],
+                hole_vertices[1],
+                EdgeCurve::Line,
+            )),
+            topo.add_edge(Edge::new(
+                hole_vertices[1],
+                hole_vertices[2],
+                EdgeCurve::Line,
+            )),
+            topo.add_edge(Edge::new(
+                hole_vertices[2],
+                hole_vertices[3],
+                EdgeCurve::Line,
+            )),
+            topo.add_edge(Edge::new(
+                hole_vertices[3],
+                hole_vertices[0],
+                EdgeCurve::Line,
+            )),
+        ];
+        let hole_wire = topo.add_wire(
+            Wire::new(
+                hole_edges
+                    .map(|edge| OrientedEdge::new(edge, true))
+                    .to_vec(),
+                true,
+            )
+            .unwrap(),
+        );
+        let outer_wire = topo.face(face_id).unwrap().outer_wire();
+        let surface = topo.face(face_id).unwrap().surface().clone();
+        let replacement = topo.add_face(Face::new(outer_wire, vec![hole_wire], surface));
+        let restriction = ParametricRestriction::new(
+            vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)],
+            TrimKeep::Side(TrimSide::Right),
+        );
+        let result = trim_parametric_face_batch(&mut topo, replacement, &[restriction]).unwrap();
+        let trimmed = topo.face(result.trimmed_face).unwrap();
+        assert_eq!(trimmed.inner_wires().len(), 1);
+        assert!(topo.wire(trimmed.inner_wires()[0]).unwrap().is_closed());
     }
 
     #[test]
