@@ -20,6 +20,7 @@ use crate::analytic;
 use crate::blend_func::{ConstRadBlend, EvolRadBlend};
 use crate::builder_utils::{FlippedNormalSurface, sample_nurbs_endpoints, surface_ref_or_adapter};
 use crate::corner;
+use crate::fillet_plan::FilletPlan;
 use crate::radius_law::RadiusLaw;
 use crate::spine::Spine;
 use crate::stripe::{Stripe, StripeResult};
@@ -116,6 +117,13 @@ impl<'a> FilletBuilder<'a> {
 
     #[allow(clippy::too_many_lines)]
     fn build_in_place(self) -> Result<BlendResult, BlendError> {
+        // Invalid source edges remain recoverable as per-edge failures; a
+        // valid request is planned before the legacy geometry stages run.
+        let _plan = match FilletPlan::build(self.topo, self.solid, &self.edge_sets) {
+            Ok(plan) => Some(plan),
+            Err(BlendError::PlanningFailure { .. }) => None,
+            Err(error) => return Err(error),
+        };
         // Expand edge sets: keep actual RadiusLaw references via indices.
         let mut all_edges: Vec<(EdgeId, usize)> = Vec::new();
         let mut laws: Vec<RadiusLaw> = Vec::with_capacity(self.edge_sets.len());

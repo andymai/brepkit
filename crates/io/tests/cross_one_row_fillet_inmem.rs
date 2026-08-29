@@ -19,6 +19,8 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
+use brepkit_blend::fillet_plan::FilletPlan;
+use brepkit_blend::radius_law::RadiusLaw;
 use brepkit_io::arena_io::{deserialize_solid, serialize_solid};
 use brepkit_operations::measure::oriented_solid_volume;
 use brepkit_operations::query::filter_filletable_edges;
@@ -283,6 +285,56 @@ fn cross_source_baseline_and_selection() {
     assert!(!inventory.contours.is_empty());
     assert!(!inventory.junction_valences.is_empty());
     assert!(!geometric_selector(&topo, solid, &selected).is_empty());
+}
+
+#[test]
+fn stage1_plan_is_complete_order_independent_and_read_only() {
+    let mut topo = Topology::new();
+    let solid = load(&mut topo);
+    let source = source_fingerprint(&topo, solid);
+    let selected = filter_filletable_edges(&topo, solid, &all_edges(&topo, solid)).unwrap();
+    assert_eq!(selected.len(), 186);
+
+    let original = FilletPlan::build(
+        &topo,
+        solid,
+        &[(selected.clone(), RadiusLaw::Constant(RADIUS))],
+    )
+    .unwrap();
+    let mut reversed = selected.clone();
+    reversed.reverse();
+    let reverse_plan =
+        FilletPlan::build(&topo, solid, &[(reversed, RadiusLaw::Constant(RADIUS))]).unwrap();
+    let permuted = (0..selected.len())
+        .map(|step| selected[(step * 37) % selected.len()])
+        .collect::<Vec<_>>();
+    let permutation_plan =
+        FilletPlan::build(&topo, solid, &[(permuted, RadiusLaw::Constant(RADIUS))]).unwrap();
+
+    assert_eq!(
+        original.canonical_fingerprint(),
+        reverse_plan.canonical_fingerprint()
+    );
+    assert_eq!(
+        original.canonical_fingerprint(),
+        permutation_plan.canonical_fingerprint()
+    );
+    assert_eq!(
+        original
+            .contours
+            .iter()
+            .map(|contour| contour.edges.len())
+            .sum::<usize>(),
+        selected.len()
+    );
+    let planned_edges = original
+        .contours
+        .iter()
+        .flat_map(|contour| contour.edges.iter().copied())
+        .collect::<HashSet<_>>();
+    assert_eq!(planned_edges.len(), selected.len());
+    assert_eq!(original.restrictions.len(), selected.len() * 2);
+    assert_eq!(source_fingerprint(&topo, solid), source);
 }
 
 #[test]
