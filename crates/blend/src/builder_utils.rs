@@ -23,6 +23,17 @@ pub fn sample_nurbs_endpoints(curve: &NurbsCurve) -> Vec<Point3> {
     vec![curve.evaluate(t0), curve.evaluate(t1)]
 }
 
+/// Construct the exact circular cross-section arc between two contacts.
+pub fn cross_section_curve(
+    sec: &crate::section::CircSection,
+    a: Point3,
+    b: Point3,
+) -> Option<EdgeCurve> {
+    let normal = (a - sec.center).cross(b - sec.center).normalize().ok()?;
+    let circle = brepkit_math::curves::Circle3D::new(sec.center, normal, sec.radius).ok()?;
+    Some(EdgeCurve::Circle(circle))
+}
+
 /// Create a blend face from a stripe's surface and contact curves.
 ///
 /// Builds a minimal quadrilateral wire from the four contact-curve endpoints
@@ -136,22 +147,12 @@ pub fn create_blend_face_with_contacts(
     // Cross edges carry the true end cross-section arcs when the stripe has
     // sections: the fillet's end profile is a circular arc, and a straight
     // chord both misrepresents the surface boundary and can never be shared
-    // with a notched end cap. The arc's plane normal comes from the two
-    // contact endpoints and the section centre.
-    let arc_curve =
-        |sec: &crate::section::CircSection, a: Point3, b: Point3| -> Option<EdgeCurve> {
-            let u = a - sec.center;
-            let v = b - sec.center;
-            let n = u.cross(v);
-            let n = n.normalize().ok()?;
-            let circle = brepkit_math::curves::Circle3D::new(sec.center, n, sec.radius).ok()?;
-            Some(EdgeCurve::Circle(circle))
-        };
+    // with a notched end cap.
     let end_curve = stripe
         .sections
         .last()
         .and_then(|sec| {
-            let r = arc_curve(sec, p1_end, p2_end);
+            let r = cross_section_curve(sec, p1_end, p2_end);
             if r.is_none() {
                 log::debug!(
                     "cross END line fallback: sec c={:?} r={:.5} a={p1_end:?} b={p2_end:?}",
@@ -166,7 +167,7 @@ pub fn create_blend_face_with_contacts(
         .sections
         .first()
         .and_then(|sec| {
-            let r = arc_curve(sec, p2_start, p1_start);
+            let r = cross_section_curve(sec, p2_start, p1_start);
             if r.is_none() {
                 log::debug!(
                     "cross START line fallback: sec c={:?} r={:.5} a={p2_start:?} b={p1_start:?}",
@@ -236,49 +237,6 @@ pub struct BlendFaceInfo {
     /// Cross edge at the spine start: `(edge, from, to)`. `None` when the
     /// stripe pinches to a point at that end and no cross edge exists.
     pub cross_start: Option<(brepkit_topology::edge::EdgeId, VertexId, VertexId)>,
-}
-/// Create a blend face using contact boundaries already owned by the
-/// canonical registry.
-///
-/// The registry records the blend-side use of each contact edge before the
-/// face is constructed. Cross-section edges remain local to this helper until
-/// their junction/corner ownership is planned by the later assembly stages;
-/// the two support/blend contact edges are never endpoint-welded or duplicated.
-pub fn create_blend_face_from_registry_contacts(
-    topo: &mut Topology,
-    stripe: &Stripe,
-    registry: &mut crate::boundary_registry::BoundaryRegistry,
-    contact1: crate::boundary_registry::BoundaryHandle,
-    contact2: crate::boundary_registry::BoundaryHandle,
-) -> Result<BlendFaceInfo, BlendError> {
-    let contact1_edge = registry.oriented_edge(topo, contact1, 1)?;
-    let contact2_edge = registry.oriented_edge(topo, contact2, 1)?;
-    let info = create_blend_face_with_contacts(
-        topo,
-        stripe,
-        Some(contact1_edge.edge()),
-        Some(contact2_edge.edge()),
-    )?;
-    let wire = topo.wire(topo.face(info.face)?.outer_wire())?;
-    let uses_contact1 = wire
-        .edges()
-        .iter()
-        .any(|oriented| oriented.edge() == contact1_edge.edge());
-    let uses_contact2 = wire
-        .edges()
-        .iter()
-        .any(|oriented| oriented.edge() == contact2_edge.edge());
-    if !uses_contact1 || !uses_contact2 {
-        return Err(BlendError::PlanningFailure {
-            reason: format!(
-                "blend face {:?} did not consume registry contact edges {:?}/{:?}",
-                info.face,
-                contact1_edge.edge(),
-                contact2_edge.edge()
-            ),
-        });
-    }
-    Ok(info)
 }
 
 #[allow(dead_code)]
@@ -642,6 +600,7 @@ pub fn surface_ref_or_adapter<'a>(
 /// hole, and the corner-floor triangles left by pairwise junction patches
 /// are planar by construction.
 #[allow(
+    dead_code,
     clippy::redundant_pub_crate,
     clippy::too_many_lines,
     clippy::items_after_statements,
@@ -851,6 +810,7 @@ pub(crate) fn close_residual_free_loops(
 }
 
 #[allow(
+    dead_code,
     clippy::redundant_pub_crate,
     clippy::items_after_statements,
     clippy::type_complexity

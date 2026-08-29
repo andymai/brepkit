@@ -171,6 +171,8 @@ pub struct BoundaryEntry {
     pub pcurves: [Option<PCurve>; 2],
     /// Exactly two expected owners.
     pub owners: [BoundaryOwner; 2],
+    /// Owners intentionally deferred to a later junction/runout stage.
+    deferred: [bool; 2],
     /// Materialized shared topology edge.
     pub edge: Option<EdgeId>,
     uses: Vec<BoundaryUse>,
@@ -361,6 +363,7 @@ impl BoundaryRegistry {
             parameter_range,
             pcurves: [None, None],
             owners,
+            deferred: [false, false],
             edge: None,
             uses: Vec::new(),
         });
@@ -441,6 +444,29 @@ impl BoundaryRegistry {
         } else {
             expected.face = Some(face);
         }
+        Ok(())
+    }
+
+    /// Mark one owner as intentionally deferred to a later assembly stage.
+    pub fn defer_owner(
+        &mut self,
+        handle: BoundaryHandle,
+        owner: usize,
+    ) -> Result<(), BoundaryAuditError> {
+        let Some(entry) = self.entries.get_mut(handle) else {
+            return Err(BoundaryAuditError::new(
+                "preassembly",
+                vec![format!("unknown boundary handle {handle}")],
+            ));
+        };
+        let key = entry.key;
+        let Some(deferred) = entry.deferred.get_mut(owner) else {
+            return Err(BoundaryAuditError::new(
+                "preassembly",
+                vec![format!("boundary {key:?} has invalid owner index {owner}")],
+            ));
+        };
+        *deferred = true;
         Ok(())
     }
 
@@ -600,7 +626,10 @@ impl BoundaryRegistry {
         self.by_edge.get(&edge).copied()
     }
 
-    /// Check that every planned boundary has precisely its two expected uses.
+    /// Check that every planned boundary has precisely its materialized
+    /// owner uses. A boundary with one unresolved owner is a deliberate
+    /// deferred junction/runout contract; it is required to have one use
+    /// until the later junction stage attaches the second owner.
     pub fn preassembly_audit(&self) -> Result<(), BoundaryAuditError> {
         let mut issues = Vec::new();
         for entry in &self.entries {
@@ -610,18 +639,26 @@ impl BoundaryRegistry {
                     entry.key, entry.owners[0].label, entry.owners[1].label
                 ));
             }
+            let expected_uses = entry
+                .owners
+                .iter()
+                .enumerate()
+                .filter(|(owner, owner_data)| !entry.deferred[*owner] || owner_data.face.is_some())
+                .count();
             let uses = entry.uses.len();
-            if uses != 2 {
+            if uses != expected_uses {
                 issues.push(format!(
-                    "boundary {:?} has {uses} planned uses; expected 2 from owners `{}` and `{}`",
+                    "boundary {:?} has {uses} planned uses; expected {expected_uses} from owners `{}` and `{}`",
                     entry.key, entry.owners[0].label, entry.owners[1].label
                 ));
             }
             for owner in 0..2 {
                 let count = entry.uses.iter().filter(|use_| use_.owner == owner).count();
-                if count != 1 {
+                let expected =
+                    usize::from(!entry.deferred[owner] || entry.owners[owner].face.is_some());
+                if count != expected {
                     issues.push(format!(
-                        "boundary {:?} owner `{}` has {count} planned uses; expected exactly one",
+                        "boundary {:?} owner `{}` has {count} planned uses; expected exactly {expected}",
                         entry.key, entry.owners[owner].label
                     ));
                 }
@@ -697,7 +734,19 @@ impl BoundaryRegistry {
                 expected_owners,
                 actual_owners: actual_owners.clone(),
             });
-            if uses.len() != 2 {
+            let expected_uses = handle
+                .map(|h| {
+                    self.entries[h]
+                        .owners
+                        .iter()
+                        .enumerate()
+                        .filter(|(owner, owner_data)| {
+                            !self.entries[h].deferred[*owner] || owner_data.face.is_some()
+                        })
+                        .count()
+                })
+                .unwrap_or(2);
+            if uses.len() != expected_uses {
                 let owner_labels = handle
                     .map(|h| {
                         format!(
