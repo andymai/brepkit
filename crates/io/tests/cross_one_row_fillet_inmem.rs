@@ -97,6 +97,18 @@ fn all_edges(topo: &Topology, solid: SolidId) -> Vec<EdgeId> {
     solid_edges(topo, solid).unwrap()
 }
 
+fn endpoint_key(topo: &Topology, edge_id: EdgeId) -> [f64; 6] {
+    let edge = topo.edge(edge_id).unwrap();
+    let start = topo.vertex(edge.start()).unwrap().point();
+    let end = topo.vertex(edge.end()).unwrap().point();
+    let (low, high) = if (start.x(), start.y(), start.z()) <= (end.x(), end.y(), end.z()) {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    [low.x(), low.y(), low.z(), high.x(), high.y(), high.z()]
+}
+
 #[derive(Debug)]
 struct EdgeInventory {
     curve_types: BTreeMap<String, usize>,
@@ -217,17 +229,7 @@ fn geometric_selector(topo: &Topology, solid: SolidId, selected: &[EdgeId]) -> V
     // Canonicalize by endpoint coordinates before reducing the set. This
     // remains stable when later operations rewrite arena IDs or reverse an
     // edge's orientation.
-    let endpoint_key = |eid: EdgeId| {
-        let edge = topo.edge(eid).unwrap();
-        let start = topo.vertex(edge.start()).unwrap().point();
-        let end = topo.vertex(edge.end()).unwrap().point();
-        let (low, high) = if (start.x(), start.y(), start.z()) <= (end.x(), end.y(), end.z()) {
-            (start, end)
-        } else {
-            (end, start)
-        };
-        [low.x(), low.y(), low.z(), high.x(), high.y(), high.z()]
-    };
+    let endpoint_key = |edge_id| endpoint_key(topo, edge_id);
     candidates.sort_by(|&a, &b| {
         endpoint_key(a)
             .into_iter()
@@ -408,4 +410,32 @@ fn rolling_diagnostic_bypass_result_is_measurable() {
             .all(|entry| entry.category == "missing producer/consumer")
     );
     assert_eq!(source_fingerprint(&topo, solid), source);
+}
+
+#[test]
+fn ordered_fan_cross_rib_subset_closes_without_repair() {
+    let mut topo = Topology::new();
+    let solid = load(&mut topo);
+    let selected = filter_filletable_edges(&topo, solid, &all_edges(&topo, solid)).unwrap();
+    let subset = geometric_selector(&topo, solid, &selected);
+    assert_eq!(subset.len(), 2);
+    let endpoint_keys = subset
+        .iter()
+        .map(|&edge_id| endpoint_key(&topo, edge_id))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        endpoint_keys,
+        vec![
+            [0.0, 0.0, 0.0, 0.0, 0.0, 10.0],
+            [0.0, 0.0, 0.0, 0.0, 60.0, 0.0],
+        ]
+    );
+
+    let result = brepkit_operations::blend_ops::fillet_v2(&mut topo, solid, &subset, RADIUS)
+        .expect("captured cross-rib subset must fillet");
+    assert_eq!(result.succeeded.len(), subset.len());
+    assert!(result.failed.is_empty());
+    assert!(!result.is_partial);
+    assert_eq!(shell_audit::shell_health(&topo, result.solid), (0, 0));
+    assert_eq!(components(&topo, result.solid), 1);
 }

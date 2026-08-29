@@ -687,6 +687,64 @@ impl BoundaryRegistry {
         }
     }
 
+    /// Set the planned orientation for one owner before its face is built.
+    pub fn set_owner_forward(
+        &mut self,
+        handle: BoundaryHandle,
+        owner: usize,
+        forward: bool,
+    ) -> Result<(), BoundaryAuditError> {
+        let Some(entry) = self.entries.get_mut(handle) else {
+            return Err(BoundaryAuditError::new(
+                "preassembly",
+                vec![format!("unknown boundary handle {handle}")],
+            ));
+        };
+        let key = entry.key;
+        let Some(owner_data) = entry.owners.get_mut(owner) else {
+            return Err(BoundaryAuditError::new(
+                "preassembly",
+                vec![format!("boundary {key:?} has invalid owner index {owner}")],
+            ));
+        };
+        owner_data.forward = forward;
+        Ok(())
+    }
+
+    /// Refresh planned owner orientations from the final result wires.
+    ///
+    /// Orientation propagation may reverse a reconstructed face after its
+    /// registry uses were recorded. The edge identity and owner face remain
+    /// canonical; only the raw wire sense is finalized here.
+    pub fn refresh_owner_orientations(
+        &mut self,
+        topo: &Topology,
+    ) -> Result<(), BoundaryAuditError> {
+        for entry in &mut self.entries {
+            let Some(edge) = entry.edge else {
+                continue;
+            };
+            for owner in &mut entry.owners {
+                let Some(face_id) = owner.face else {
+                    continue;
+                };
+                let face = topo.face(face_id).map_err(topology_audit_error)?;
+                let wires =
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+                let forward = wires
+                    .filter_map(|wire_id| topo.wire(wire_id).ok())
+                    .flat_map(|wire| wire.edges().iter().copied())
+                    .find_map(|oriented| {
+                        (oriented.edge() == edge).then_some(oriented.is_forward())
+                    });
+                if let Some(forward) = forward {
+                    owner.forward = forward;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Audit all result-wire incidences, including non-registry edges.
     pub fn postassembly_audit(
         &self,

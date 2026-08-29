@@ -140,6 +140,11 @@ impl<'a> FilletBuilder<'a> {
         // contour spine is then used for one coherent stripe computation.
         let plan = match FilletPlan::build(self.topo, self.solid, &self.edge_sets) {
             Ok(plan) => Some(plan),
+            Err(BlendError::PlanningFailure { reason })
+                if reason.starts_with("unsupported ordered junction valence") =>
+            {
+                return Err(BlendError::PlanningFailure { reason });
+            }
             Err(BlendError::PlanningFailure { .. }) => None,
             Err(error) => return Err(error),
         };
@@ -279,30 +284,28 @@ impl<'a> FilletBuilder<'a> {
                 regular_results.push(sr);
             }
         }
-
-        // Closed-rim faces: when every edge of a face's outer wire is some
-        // stripe's spine edge, the face's boundary is consumed whole by the
-        // fillet and its trimmed form is the CHAINED CONTACT LOOP. The
-        // per-stripe trims cannot build that (each cuts with an infinite
-        // contact line, and on a non-convex outline stripe k's line
-        // amputates territory stripe j needs). Rebuild such faces directly
-        // and record the loop edges so the blend walls share them.
+        // Rebuild closed-rim support loops before the normal trim path. This
+        // preserves the shared contact loop for single stripes as well as
+        // multi-stripe closed-rim cases.
         let (rim_contact_edges, rim_notches) =
             rebuild_closed_rim_loop_faces(topo, &regular_results, &mut face_replacements)?;
 
         let stripes: Vec<Stripe> = regular_results.iter().map(|sr| sr.stripe.clone()).collect();
-        let corner_results = match corner::compute_corners(topo, &stripes, self.solid) {
-            Ok(results) => results,
-            Err(e) => {
-                log::warn!("corner computation failed: {e}, proceeding without corner patches");
-                Vec::new()
-            }
-        };
-
+        let contour_to_stripe: Vec<Option<usize>> = plan
+            .as_ref()
+            .map(|fillet_plan| {
+                fillet_plan
+                    .contours
+                    .iter()
+                    .map(|contour| {
+                        regular_results
+                            .iter()
+                            .position(|sr| sr.stripe.spine_edges() == contour.spine.edges())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut corner_face_ids: Vec<FaceId> = Vec::new();
-        for cr in &corner_results {
-            corner_face_ids.push(cr.face_id);
-        }
 
         let mut stripe_contact_handles: Vec<(
             Option<crate::boundary_registry::BoundaryHandle>,
@@ -497,6 +500,37 @@ impl<'a> FilletBuilder<'a> {
                             .position(|contour| contour.spine.edges() == stripe.spine_edges())
                     })
                     .unwrap_or(si);
+                let support_faces = [
+                    face_replacements
+                        .get(&stripe.face1)
+                        .copied()
+                        .unwrap_or(stripe.face1),
+                    face_replacements
+                        .get(&stripe.face2)
+                        .copied()
+                        .unwrap_or(stripe.face2),
+                ];
+                let terminals = ordered_spine_endpoints(topo, &stripe.spine)?;
+                if let Some(forward) = contact_forward_for_spine(
+                    topo,
+                    &boundary_registry,
+                    contact1,
+                    support_faces[0],
+                    terminals,
+                    true,
+                )? {
+                    boundary_registry.set_owner_forward(contact1, 1, forward)?;
+                }
+                if let Some(forward) = contact_forward_for_spine(
+                    topo,
+                    &boundary_registry,
+                    contact2,
+                    support_faces[1],
+                    terminals,
+                    false,
+                )? {
+                    boundary_registry.set_owner_forward(contact2, 1, forward)?;
+                }
                 let contact_vertices =
                     |handle: crate::boundary_registry::BoundaryHandle| -> Result<
                         (VertexId, VertexId),
@@ -508,7 +542,12 @@ impl<'a> FilletBuilder<'a> {
                                     reason: format!("unknown contact boundary {handle}"),
                                 }
                             })?;
-                        Ok((entry.start.vertex, entry.end.vertex))
+                        let (start, end) = (entry.start.vertex, entry.end.vertex);
+                        Ok(if entry.owners[1].forward {
+                            (start, end)
+                        } else {
+                            (end, start)
+                        })
                     };
                 let (p1_start, p1_end) = contact_vertices(contact1)?;
                 let (p2_start, p2_end) = contact_vertices(contact2)?;
@@ -551,7 +590,7 @@ impl<'a> FilletBuilder<'a> {
                             ),
                             BoundaryOwner::planned(
                                 format!("junction/runout contour {contour_id}"),
-                                true,
+                                false,
                             ),
                         ],
                     )?;
@@ -561,8 +600,8 @@ impl<'a> FilletBuilder<'a> {
                     debug_assert_eq!(oriented.edge(), edge);
                     Ok(Some(handle))
                 };
-                let cross_start = section_curve(stripe.sections.first(), p2_start, p1_start)?;
-                let cross_end = section_curve(stripe.sections.last(), p1_end, p2_end)?;
+                let cross_start = section_curve(stripe.sections.first(), p2_end, p1_start)?;
+                let cross_end = section_curve(stripe.sections.last(), p1_end, p2_start)?;
                 let info = crate::builder_utils::create_blend_face_from_registry(
                     topo,
                     stripe,
@@ -586,35 +625,152 @@ impl<'a> FilletBuilder<'a> {
                     .unwrap_or((None, None));
                 crate::builder_utils::create_blend_face_with_contacts(topo, stripe, c1, c2)?
             };
+            // Adopt loop-rebuild edges into the registry. This is needed for
+            // curved/variable stripes where the batch trimmer did not emit a
+            // contact handle, and avoids any positional closure repair.
+            let contour_id = plan
+                .as_ref()
+                .and_then(|fillet_plan| {
+                    fillet_plan
+                        .contours
+                        .iter()
+                        .position(|contour| contour.spine.edges() == stripe.spine_edges())
+                })
+                .unwrap_or(si);
+            let support_faces = [
+                face_replacements
+                    .get(&stripe.face1)
+                    .copied()
+                    .unwrap_or(stripe.face1),
+                face_replacements
+                    .get(&stripe.face2)
+                    .copied()
+                    .unwrap_or(stripe.face2),
+            ];
+            for (side, contact_edge) in [stripe_contact_edges[si].0, stripe_contact_edges[si].1]
+                .into_iter()
+                .enumerate()
+            {
+                let existing_handle = match side {
+                    0 => stripe_contact_handles[si].0,
+                    1 => stripe_contact_handles[si].1,
+                    _ => unreachable!("support side is always 0 or 1"),
+                };
+                if existing_handle.is_some() {
+                    continue;
+                }
+                let Some(contact_edge) = contact_edge else {
+                    continue;
+                };
+                let edge_data = topo.edge(contact_edge)?.clone();
+                let support_forward = face_edge_forward(topo, support_faces[side], contact_edge)
+                    .ok_or(BlendError::TrimmingFailure {
+                        face: support_faces[side],
+                    })?;
+                let blend_forward =
+                    face_edge_forward(topo, info.face, contact_edge).unwrap_or(true);
+                let handle = boundary_registry.register(
+                    BoundaryKey::contact(contour_id, 0, side as u8),
+                    PlannedVertex::new(edge_data.start()),
+                    PlannedVertex::new(edge_data.end()),
+                    edge_data.curve().clone(),
+                    edge_data.curve().domain_with_endpoints(
+                        topo.vertex(edge_data.start())?.point(),
+                        topo.vertex(edge_data.end())?.point(),
+                    ),
+                    [
+                        BoundaryOwner::new(
+                            support_faces[side],
+                            "rim support contact",
+                            support_forward,
+                        ),
+                        BoundaryOwner::new(info.face, "rim blend contact", blend_forward),
+                    ],
+                )?;
+                boundary_registry.bind_existing_edge(topo, handle, contact_edge)?;
+                let _ = boundary_registry.oriented_edge(topo, handle, 1)?;
+                match side {
+                    0 => stripe_contact_handles[si].0 = Some(handle),
+                    1 => stripe_contact_handles[si].1 = Some(handle),
+                    _ => unreachable!("support side is always 0 or 1"),
+                }
+            }
+            for (cross_side, cross) in [info.cross_end, info.cross_start].into_iter().enumerate() {
+                let existing_handle = match cross_side {
+                    0 => blend_cross_handles[si].0,
+                    1 => blend_cross_handles[si].1,
+                    _ => unreachable!("cross side is always 0 or 1"),
+                };
+                if existing_handle.is_some() {
+                    continue;
+                }
+                let Some((cross_edge, _from, _to)) = cross else {
+                    continue;
+                };
+                let edge_data = topo.edge(cross_edge)?.clone();
+                let blend_forward = face_edge_forward(topo, info.face, cross_edge).unwrap_or(true);
+                let handle = boundary_registry.register(
+                    BoundaryKey::cross_section(contour_id, cross_side, 0),
+                    PlannedVertex::new(edge_data.start()),
+                    PlannedVertex::new(edge_data.end()),
+                    edge_data.curve().clone(),
+                    edge_data.curve().domain_with_endpoints(
+                        topo.vertex(edge_data.start())?.point(),
+                        topo.vertex(edge_data.end())?.point(),
+                    ),
+                    [
+                        BoundaryOwner::new(info.face, "rim blend cross-section", blend_forward),
+                        BoundaryOwner::planned("ordered junction or runout", false),
+                    ],
+                )?;
+                boundary_registry.defer_owner(handle, 1)?;
+                boundary_registry.bind_existing_edge(topo, handle, cross_edge)?;
+                let _ = boundary_registry.oriented_edge(topo, handle, 0)?;
+                match cross_side {
+                    0 => blend_cross_handles[si].0 = Some(handle),
+                    1 => blend_cross_handles[si].1 = Some(handle),
+                    _ => unreachable!("cross side is always 0 or 1"),
+                }
+            }
             blend_face_ids.push(info.face);
             blend_cross_by_stripe[si] = (info.cross_end, info.cross_start);
             blend_cross_edges.extend(info.cross_end);
             blend_cross_edges.extend(info.cross_start);
         }
 
+        // The ordered junction solver needs the final copy-on-write support
+        // faces so residual terminal edges can be registered as runout
+        // boundaries instead of being closed by positional repair.
+        let stripe_support_faces: Vec<(FaceId, FaceId)> = stripes
+            .iter()
+            .map(|stripe| {
+                (
+                    face_replacements
+                        .get(&stripe.face1)
+                        .copied()
+                        .unwrap_or(stripe.face1),
+                    face_replacements
+                        .get(&stripe.face2)
+                        .copied()
+                        .unwrap_or(stripe.face2),
+                )
+            })
+            .collect();
+        if let Some(fillet_plan) = plan.as_ref() {
+            let corner_results = corner::compute_ordered_corners(
+                topo,
+                &stripes,
+                &fillet_plan.junctions,
+                &contour_to_stripe,
+                &blend_cross_handles,
+                &stripe_support_faces,
+                &mut boundary_registry,
+            )?;
+            corner_face_ids.extend(corner_results.iter().map(|result| result.face_id));
+        }
         // Faces using each vertex, over the ORIGINAL shell: a stripe end
         // whose outline vertex belongs to a third face (a perpendicular
         // end face) is closed by the notch-arc path, not by a cap.
-        let mut vertex_face_count: std::collections::HashMap<
-            brepkit_topology::vertex::VertexId,
-            usize,
-        > = std::collections::HashMap::new();
-        for &fid in &original_faces {
-            let face = topo.face(fid)?;
-            let mut wires = vec![face.outer_wire()];
-            wires.extend_from_slice(face.inner_wires());
-            let mut seen: HashSet<brepkit_topology::vertex::VertexId> = HashSet::new();
-            for wid in wires {
-                for oe in topo.wire(wid)?.edges() {
-                    let e = topo.edge(oe.edge())?;
-                    seen.insert(e.start());
-                    seen.insert(e.end());
-                }
-            }
-            for v in seen {
-                *vertex_face_count.entry(v).or_insert(0) += 1;
-            }
-        }
 
         // Each abrupt stripe end that produced notch edges on BOTH adjacent
         // faces gets a cap whose terminal arc reuses the exact cross edge
@@ -638,14 +794,6 @@ impl<'a> FilletBuilder<'a> {
                     })
                     .collect();
                 if pair.len() != 2 || pair[0].outline_vid != pair[1].outline_vid {
-                    continue;
-                }
-                if vertex_face_count
-                    .get(&pair[0].outline_vid)
-                    .copied()
-                    .unwrap_or(0)
-                    > 2
-                {
                     continue;
                 }
                 let (na, nb) = if (pair[0].contact_pt - sec.p1).length() < 1e-6 {
@@ -673,12 +821,19 @@ impl<'a> FilletBuilder<'a> {
                     (*from == na.contact_vid && *to == nb.contact_vid)
                         || (*from == nb.contact_vid && *to == na.contact_vid)
                 });
-                let registry_arc = match end_index {
+                let potential_registry_arc = match end_index {
                     0 => blend_cross_handles[si].1,
                     1 => blend_cross_handles[si].0,
                     _ => None,
+                };
+                if potential_registry_arc.is_some_and(|handle| {
+                    boundary_registry
+                        .entry(handle)
+                        .is_some_and(|entry| entry.owners[1].face.is_some())
+                }) {
+                    continue;
                 }
-                .filter(|&handle| {
+                let registry_arc = potential_registry_arc.filter(|&handle| {
                     boundary_registry
                         .entry(handle)
                         .and_then(crate::boundary_registry::BoundaryEntry::edge_id)
@@ -744,6 +899,14 @@ impl<'a> FilletBuilder<'a> {
         // both sides share one edge entity.
 
         for arc in &blend_cross_edges {
+            let corner_owned = boundary_registry
+                .handle_for_edge(arc.0)
+                .and_then(|handle| boundary_registry.entry(handle))
+                .and_then(|entry| entry.owners[1].face)
+                .is_some();
+            if corner_owned {
+                continue;
+            }
             let candidates: Vec<(FaceId, FaceId)> = original_faces
                 .iter()
                 .map(|&f| (f, face_replacements.get(&f).copied().unwrap_or(f)))
@@ -756,6 +919,80 @@ impl<'a> FilletBuilder<'a> {
                 }
             }
         }
+
+        // Terminal cross-section boundaries not consumed by a corner patch
+        // belong to the support face created by notch surgery. Attach that
+        // planned owner now instead of relying on positional welding.
+        for handles in &blend_cross_handles {
+            for handle in [handles.0, handles.1].into_iter().flatten() {
+                let Some(edge) = boundary_registry
+                    .entry(handle)
+                    .and_then(crate::boundary_registry::BoundaryEntry::edge_id)
+                else {
+                    continue;
+                };
+                let owner_attached = boundary_registry
+                    .entry(handle)
+                    .and_then(|entry| entry.owners[1].face)
+                    .is_some();
+                if owner_attached {
+                    continue;
+                }
+                let support_face = original_faces.iter().find_map(|&original| {
+                    let replacement = face_replacements
+                        .get(&original)
+                        .copied()
+                        .unwrap_or(original);
+                    face_edge_forward(topo, replacement, edge).map(|_| replacement)
+                });
+                let Some(support_face) = support_face else {
+                    continue;
+                };
+                boundary_registry.set_owner_face(handle, 1, support_face)?;
+                let _ = boundary_registry.oriented_edge(topo, handle, 1)?;
+            }
+        }
+        // Runout support edges are discovered from the final support wires.
+        // Complete their deferred support owners now that notch surgery has
+        // selected the copy-on-write face IDs.
+        let runout_handles: Vec<_> = boundary_registry
+            .entries()
+            .enumerate()
+            .filter_map(|(handle, entry)| {
+                (matches!(
+                    entry.key.kind,
+                    crate::boundary_registry::BoundaryKind::Runout
+                ) && entry.owners[0].face.is_none())
+                .then_some(handle)
+            })
+            .collect();
+        for handle in runout_handles {
+            let edge = boundary_registry
+                .entry(handle)
+                .and_then(crate::boundary_registry::BoundaryEntry::edge_id)
+                .ok_or_else(|| BlendError::PlanningFailure {
+                    reason: format!("runout boundary {handle} was not materialized"),
+                })?;
+            let support = original_faces.iter().find_map(|&original| {
+                let replacement = face_replacements
+                    .get(&original)
+                    .copied()
+                    .unwrap_or(original);
+                face_edge_forward(topo, replacement, edge).map(|forward| (replacement, forward))
+            });
+            let Some((support_face, support_forward)) = support else {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "runout boundary {:?} has no result support owner",
+                        boundary_registry.entry(handle).map(|entry| entry.key)
+                    ),
+                });
+            };
+            boundary_registry.set_owner_forward(handle, 0, support_forward)?;
+            boundary_registry.set_owner_face(handle, 0, support_face)?;
+            let _ = boundary_registry.oriented_edge(topo, handle, 0)?;
+        }
+
         // Commit support-side uses after notch surgery has selected the final
         // replacement face IDs. The blend-side uses are recorded by the
         // registry-backed blend constructor below.
@@ -822,17 +1059,13 @@ impl<'a> FilletBuilder<'a> {
             .filter(|f| !original_set.contains(f))
             .copied()
             .collect();
-        // Registry-backed boundaries already carry the exact shared edge
-        // identity. Welding positional twins here would discard that identity
-        // and make a second-pass blend depend on tolerance-based repair.
-        if boundary_registry.is_empty() {
-            crate::builder_utils::weld_coincident_free_edges(topo, &result_faces)?;
-            crate::builder_utils::close_residual_free_loops(topo, &mut result_faces)?;
-        }
-
+        // Registry-backed boundaries are the sole closure mechanism for the
+        // authoritative fillet path. Positional welding and residual-loop
+        // filling are intentionally not available here.
         brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
         brepkit_topology::orientation::normalize_face_normals(topo, &new_faces, &seeds)?;
         brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
+        boundary_registry.refresh_owner_orientations(topo)?;
         let postassembly = if force_postassembly_failure {
             Err("forced postassembly incidence gate failure".to_owned())
         } else {
@@ -842,70 +1075,20 @@ impl<'a> FilletBuilder<'a> {
                 .map_err(|error| error.to_string())
         };
         if let Err(diagnostic) = postassembly {
-            // Legacy geometry has no logical boundary entries and may still
-            // need the historical positional repair. Registry-backed output
-            if boundary_registry.is_empty() && !force_postassembly_failure {
-                let repaired =
-                    crate::builder_utils::weld_coincident_free_edges(topo, &result_faces).and_then(
-                        |()| {
-                            crate::builder_utils::close_residual_free_loops(topo, &mut result_faces)
-                        },
-                    );
-                if repaired.is_ok() {
-                    if let Err(final_error) =
-                        boundary_registry.postassembly_audit(topo, &result_faces)
-                    {
-                        let diagnostic = final_error.to_string();
-                        for edge_id in
-                            succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges)
-                        {
-                            failed.push((
-                                edge_id,
-                                BlendError::PlanningFailure {
-                                    reason: format!("assembly incidence gate failed: {diagnostic}"),
-                                },
-                            ));
-                        }
-                        return Ok(BlendResult {
-                            solid: self.solid,
-                            succeeded: Vec::new(),
-                            failed,
-                            is_partial: true,
-                        });
-                    }
-                } else {
-                    for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges)
-                    {
-                        failed.push((
-                            edge_id,
-                            BlendError::PlanningFailure {
-                                reason: format!("assembly incidence gate failed: {diagnostic}"),
-                            },
-                        ));
-                    }
-                    return Ok(BlendResult {
-                        solid: self.solid,
-                        succeeded: Vec::new(),
-                        failed,
-                        is_partial: true,
-                    });
-                }
-            } else {
-                for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges) {
-                    failed.push((
-                        edge_id,
-                        BlendError::PlanningFailure {
-                            reason: format!("assembly incidence gate failed: {diagnostic}"),
-                        },
-                    ));
-                }
-                return Ok(BlendResult {
-                    solid: self.solid,
-                    succeeded: Vec::new(),
-                    failed,
-                    is_partial: true,
-                });
+            for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges) {
+                failed.push((
+                    edge_id,
+                    BlendError::PlanningFailure {
+                        reason: format!("assembly incidence gate failed: {diagnostic}"),
+                    },
+                ));
             }
+            return Ok(BlendResult {
+                solid: self.solid,
+                succeeded: Vec::new(),
+                failed,
+                is_partial: true,
+            });
         }
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
@@ -943,6 +1126,147 @@ impl<'a> FilletBuilder<'a> {
         })
     }
 }
+fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
+    let face = topo.face(face_id).ok()?;
+    std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .find_map(|wire| {
+            topo.wire(wire)
+                .ok()?
+                .edges()
+                .iter()
+                .find_map(|oriented| (oriented.edge() == edge_id).then_some(oriented.is_forward()))
+        })
+}
+fn ordered_spine_endpoints(
+    topo: &Topology,
+    spine: &Spine,
+) -> Result<Option<(VertexId, VertexId)>, BlendError> {
+    let edges = spine.edges();
+    if edges.is_empty() {
+        return Ok(None);
+    }
+    let mut directions = vec![true; edges.len()];
+    if edges.len() > 1 {
+        let first = topo.edge(edges[0])?;
+        let next = topo.edge(edges[1])?;
+        if first.end() != next.start()
+            && first.end() != next.end()
+            && (first.start() == next.start() || first.start() == next.end())
+        {
+            directions[0] = false;
+        }
+    }
+    for index in 1..edges.len() {
+        let previous = topo.edge(edges[index - 1])?;
+        let previous_end = if directions[index - 1] {
+            previous.end()
+        } else {
+            previous.start()
+        };
+        let edge = topo.edge(edges[index])?;
+        directions[index] = if edge.start() == previous_end {
+            true
+        } else {
+            edge.end() != previous_end
+        };
+    }
+    let first = topo.edge(edges[0])?;
+    let last = topo.edge(edges[edges.len() - 1])?;
+    let start = if directions[0] {
+        first.start()
+    } else {
+        first.end()
+    };
+    let end = if directions[edges.len() - 1] {
+        last.end()
+    } else {
+        last.start()
+    };
+    if start == end {
+        Ok(None)
+    } else {
+        Ok(Some((start, end)))
+    }
+}
+
+fn contact_source_vertex(
+    topo: &Topology,
+    support_face: FaceId,
+    contact_vertex: VertexId,
+    terminals: (VertexId, VertexId),
+) -> Option<VertexId> {
+    if contact_vertex == terminals.0 || contact_vertex == terminals.1 {
+        return Some(contact_vertex);
+    }
+    let face = topo.face(support_face).ok()?;
+    let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    for wire_id in wires {
+        let wire = topo.wire(wire_id).ok()?;
+        for oriented in wire.edges() {
+            let edge = topo.edge(oriented.edge()).ok()?;
+            let other = if edge.start() == contact_vertex {
+                edge.end()
+            } else if edge.end() == contact_vertex {
+                edge.start()
+            } else {
+                continue;
+            };
+            if other == terminals.0 || other == terminals.1 {
+                return Some(other);
+            }
+        }
+    }
+    None
+}
+
+fn contact_forward_for_spine(
+    topo: &Topology,
+    registry: &BoundaryRegistry,
+    handle: crate::boundary_registry::BoundaryHandle,
+    support_face: FaceId,
+    terminals: Option<(VertexId, VertexId)>,
+    starts_at_spine_start: bool,
+) -> Result<Option<bool>, BlendError> {
+    let Some((spine_start, spine_end)) = terminals else {
+        return Ok(None);
+    };
+    let entry = registry
+        .entry(handle)
+        .ok_or_else(|| BlendError::PlanningFailure {
+            reason: format!("unknown contact boundary {handle}"),
+        })?;
+    let direct_vertices = (
+        contact_source_vertex(
+            topo,
+            support_face,
+            entry.start.vertex,
+            (spine_start, spine_end),
+        ),
+        contact_source_vertex(
+            topo,
+            support_face,
+            entry.end.vertex,
+            (spine_start, spine_end),
+        ),
+    );
+    let (Some(start), Some(end)) = direct_vertices else {
+        return Ok(None);
+    };
+    let desired = if starts_at_spine_start {
+        (spine_start, spine_end)
+    } else {
+        (spine_end, spine_start)
+    };
+    if (start, end) == desired {
+        Ok(Some(true))
+    } else if (end, start) == desired {
+        Ok(Some(false))
+    } else {
+        Ok(None)
+    }
+}
+
 fn build_in_place(
     topo: &mut Topology,
     solid: SolidId,
@@ -2599,6 +2923,7 @@ mod tests {
         assert!(result.succeeded.contains(&target_edge));
         assert!(result.failed.is_empty());
         assert!(!result.is_partial);
+        assert_shell_edges_are_closed(&topo, result.solid);
 
         let mut found_cylinder = false;
         for &fid in result_shell.faces() {
@@ -2669,6 +2994,15 @@ mod tests {
         .unwrap();
         assert_eq!(plan.contours.len(), 1);
         assert_eq!(plan.contours[0].edges, vec![first, second]);
+        let midpoint_junction = plan
+            .junctions
+            .iter()
+            .find(|junction| junction.vertex == midpoint)
+            .expect("split contour midpoint must be planned");
+        assert_eq!(
+            midpoint_junction.classification,
+            crate::fillet_plan::CornerClassification::G1Continuation
+        );
 
         let mut builder = FilletBuilder::new(&mut topo, solid);
         builder.add_edges(&[second, first], 0.1);
@@ -2676,6 +3010,7 @@ mod tests {
         assert_eq!(result.succeeded, vec![first, second]);
         assert!(result.failed.is_empty());
         assert!(!result.is_partial);
+        assert_shell_edges_are_closed(&topo, result.solid);
     }
     #[test]
     fn fillet_builder_records_failed_edges() {
@@ -2768,6 +3103,16 @@ mod tests {
             },
         );
         let first_result = first.build().unwrap();
+        assert!(
+            !first_result.is_partial,
+            "first pass failed: {}",
+            first_result
+                .failed
+                .iter()
+                .map(|(_, error)| error.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         let result_shell = topo.solid(first_result.solid).unwrap().outer_shell();
         let nurbs_edge = topo
             .shell(result_shell)
@@ -2789,5 +3134,133 @@ mod tests {
         assert_eq!(second_result.succeeded, vec![nurbs_edge]);
         assert!(second_result.failed.is_empty());
         assert!(!second_result.is_partial);
+    }
+    fn assert_shell_edges_are_closed(topo: &Topology, solid: SolidId) {
+        let shell = topo.solid(solid).unwrap().outer_shell();
+        let mut uses = std::collections::HashMap::<usize, usize>::new();
+        for &face_id in topo.shell(shell).unwrap().faces() {
+            let face = topo.face(face_id).unwrap();
+            let wires =
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+            for wire_id in wires {
+                for oriented in topo.wire(wire_id).unwrap().edges() {
+                    *uses.entry(oriented.edge().index()).or_default() += 1;
+                }
+            }
+        }
+        let invalid: Vec<_> = uses.into_iter().filter(|(_, count)| *count != 2).collect();
+        assert!(
+            invalid.is_empty(),
+            "result shell has free/non-manifold edges: {invalid:?}"
+        );
+    }
+
+    fn cube_edges_at_vertex(topo: &Topology, solid: SolidId, vertex: VertexId) -> Vec<EdgeId> {
+        let shell = topo.solid(solid).unwrap().outer_shell();
+        let mut edges = Vec::new();
+        for &face_id in topo.shell(shell).unwrap().faces() {
+            let face = topo.face(face_id).unwrap();
+            let wires =
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+            for wire_id in wires {
+                for oriented in topo.wire(wire_id).unwrap().edges() {
+                    let edge_id = oriented.edge();
+                    let edge = topo.edge(edge_id).unwrap();
+                    if (edge.start() == vertex || edge.end() == vertex) && !edges.contains(&edge_id)
+                    {
+                        edges.push(edge_id);
+                    }
+                }
+            }
+        }
+        edges.sort_unstable_by_key(|edge| edge.index());
+        edges
+    }
+
+    #[test]
+    fn fillet_builder_two_non_g1_edges_use_one_junction_solution() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let shell = topo.solid(solid).unwrap().outer_shell();
+        let first_face = topo.shell(shell).unwrap().faces()[0];
+        let first_wire = topo
+            .wire(topo.face(first_face).unwrap().outer_wire())
+            .unwrap();
+        let target = first_wire.edges()[0].edge();
+        let vertex = topo.edge(target).unwrap().start();
+        let selected = cube_edges_at_vertex(&topo, solid, vertex);
+        assert_eq!(selected.len(), 3);
+
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&selected[..2], 0.1);
+        let result = builder.build().expect("two-edge fillet should build");
+        assert_eq!(result.succeeded.len(), 2);
+        assert!(result.failed.is_empty());
+        assert!(!result.is_partial);
+        assert_shell_edges_are_closed(&topo, result.solid);
+    }
+
+    #[test]
+    fn fillet_builder_trihedral_junction_reuses_registry_cross_edges() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let shell = topo.solid(solid).unwrap().outer_shell();
+        let first_face = topo.shell(shell).unwrap().faces()[0];
+        let first_wire = topo
+            .wire(topo.face(first_face).unwrap().outer_wire())
+            .unwrap();
+        let target = first_wire.edges()[0].edge();
+        let vertex = topo.edge(target).unwrap().start();
+        let selected = cube_edges_at_vertex(&topo, solid, vertex);
+        assert_eq!(selected.len(), 3);
+
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&selected, 0.1);
+        let result = builder.build().expect("three-edge fillet should build");
+        assert_eq!(result.succeeded.len(), 3);
+        assert!(result.failed.is_empty());
+        assert!(!result.is_partial);
+        let result_shell = topo.solid(result.solid).unwrap().outer_shell();
+        assert!(
+            topo.shell(result_shell)
+                .unwrap()
+                .faces()
+                .iter()
+                .any(|&face| {
+                    matches!(topo.face(face).unwrap().surface(), FaceSurface::Nurbs(_))
+                }),
+            "three-stripe junction must publish a spherical NURBS patch"
+        );
+        assert_shell_edges_are_closed(&topo, result.solid);
+    }
+
+    #[test]
+    fn fillet_builder_all_box_edges_use_ordered_fans() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let shell = topo.solid(solid).unwrap().outer_shell();
+        let mut edges = Vec::new();
+        for &face_id in topo.shell(shell).unwrap().faces() {
+            let face = topo.face(face_id).unwrap();
+            let wires =
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+            for wire_id in wires {
+                for oriented in topo.wire(wire_id).unwrap().edges() {
+                    if !edges.contains(&oriented.edge()) {
+                        edges.push(oriented.edge());
+                    }
+                }
+            }
+        }
+        edges.sort_unstable_by_key(|edge| edge.index());
+        assert_eq!(edges.len(), 12);
+
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&edges, 0.1);
+        let result = builder.build().expect("all-edge fillet should build");
+        assert_eq!(result.succeeded.len(), edges.len());
+        assert!(result.failed.is_empty());
+        assert!(!result.is_partial);
+        assert_shell_edges_are_closed(&topo, result.solid);
     }
 }

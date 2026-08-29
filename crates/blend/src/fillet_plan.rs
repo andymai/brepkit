@@ -304,15 +304,27 @@ impl FilletPlan {
             {
                 CornerClassification::Periodic
             } else if incident_contours.len() == 1 {
-                CornerClassification::Terminal
+                let contour = &contours[incident_contours[0]];
+                if contour.terminal_junctions.contains(&vertex) {
+                    CornerClassification::Terminal
+                } else {
+                    CornerClassification::G1Continuation
+                }
             } else if incident_contours.len() == 2 && sharp_edges.is_empty() {
                 CornerClassification::G1Continuation
             } else {
                 CornerClassification::Junction
             };
-            let mut face_fan = vertex_faces[&vertex_index].clone();
-            face_fan.sort_unstable_by_key(|face| face.index());
-            face_fan.dedup();
+            if incident_contours.len() > 3 {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "unsupported ordered junction valence {} at vertex {:?}",
+                        incident_contours.len(),
+                        vertex
+                    ),
+                });
+            }
+            let face_fan = ordered_face_fan(topo, vertex, &vertex_faces[&vertex_index])?;
             junctions.push(VertexJunction {
                 vertex,
                 incident_contours,
@@ -420,6 +432,90 @@ fn source_vertex_maps(topo: &Topology, solid: SolidId) -> Result<VertexMaps, Ble
         face_ids.dedup_by_key(|face| face.index());
     }
     Ok((edges, faces))
+}
+
+fn ordered_face_fan(
+    topo: &Topology,
+    vertex: VertexId,
+    incident_faces: &[FaceId],
+) -> Result<Vec<FaceId>, BlendError> {
+    let mut faces = incident_faces.to_vec();
+    faces.sort_unstable_by_key(|face| face.index());
+    faces.dedup();
+    if faces.len() <= 2 {
+        return Ok(faces);
+    }
+
+    let mut edge_faces = HashMap::<EdgeId, Vec<FaceId>>::new();
+    for &face_id in &faces {
+        let face = topo.face(face_id)?;
+        let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+        for wire_id in wires {
+            for oriented in topo.wire(wire_id)?.edges() {
+                let edge_id = oriented.edge();
+                let edge = topo.edge(edge_id)?;
+                if edge.start() == vertex || edge.end() == vertex {
+                    edge_faces.entry(edge_id).or_default().push(face_id);
+                }
+            }
+        }
+    }
+
+    let mut adjacency = HashMap::<FaceId, Vec<FaceId>>::new();
+    for owners in edge_faces.values_mut() {
+        owners.sort_unstable_by_key(|face| face.index());
+        owners.dedup();
+        if let [first, second] = owners.as_slice() {
+            adjacency.entry(*first).or_default().push(*second);
+            adjacency.entry(*second).or_default().push(*first);
+        }
+    }
+    for neighbours in adjacency.values_mut() {
+        neighbours.sort_unstable_by_key(|face| face.index());
+        neighbours.dedup();
+    }
+
+    let root = faces[0];
+    let root_neighbours = adjacency
+        .get(&root)
+        .filter(|neighbours| neighbours.len() == 2)
+        .ok_or_else(|| BlendError::PlanningFailure {
+            reason: format!("cannot order source face fan at vertex {vertex:?}"),
+        })?;
+    let mut ordered = vec![root];
+    let mut previous = root;
+    let mut current = root_neighbours[0];
+    while current != root {
+        if ordered.contains(&current) || ordered.len() == faces.len() {
+            return Err(BlendError::PlanningFailure {
+                reason: format!("source face fan is not a simple cycle at vertex {vertex:?}"),
+            });
+        }
+        ordered.push(current);
+        let neighbours = adjacency
+            .get(&current)
+            .filter(|neighbours| neighbours.len() == 2)
+            .ok_or_else(|| BlendError::PlanningFailure {
+                reason: format!("cannot order source face fan at vertex {vertex:?}"),
+            })?;
+        let next = if neighbours[0] == previous {
+            neighbours[1]
+        } else if neighbours[1] == previous {
+            neighbours[0]
+        } else {
+            return Err(BlendError::PlanningFailure {
+                reason: format!("source face fan is disconnected at vertex {vertex:?}"),
+            });
+        };
+        previous = current;
+        current = next;
+    }
+    if ordered.len() != faces.len() {
+        return Err(BlendError::PlanningFailure {
+            reason: format!("source face fan is incomplete at vertex {vertex:?}"),
+        });
+    }
+    Ok(ordered)
 }
 
 fn contour_touches_vertex(topo: &Topology, contour: &FilletContour, vertex: VertexId) -> bool {

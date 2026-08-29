@@ -3,12 +3,13 @@
 //! Vertex blend / corner solver.
 //!
 //! At vertices where multiple fillet stripes meet, gaps appear that need
-//! to be closed with smooth surface patches.  This module classifies
-//! each vertex and builds the appropriate corner patch:
+//! to be closed with ordered, registry-backed surface patches. This module
+//! classifies each vertex and builds the appropriate corner patch:
 //!
-//! - **`MultiEdge(n)`** — 3+ stripes: delegates to `spherical_triangle` for
-//!   exact rational NURBS patches on the rolling-ball sphere.
-//! - **Two-edge** — 2 stripes meeting; a simple triangular fill.
+//! - **`MultiEdge(n)`** — 3+ stripes: reuses `spherical_triangle` geometry
+//!   with the ordered fan boundaries.
+//! - **Two-edge** — 2 stripes meeting; the ordered fan consumes shared
+//!   cross-section and support boundaries.
 //! - **None** — 0-1 stripes; no corner needed.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
@@ -20,9 +21,20 @@ use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::BlendError;
+use crate::boundary_registry::{
+    BoundaryHandle, BoundaryKey, BoundaryKind, BoundaryOwner, BoundaryRegistry, PlannedVertex,
+};
+use crate::fillet_plan::{CornerClassification, VertexJunction};
 use crate::section::CircSection;
-use crate::spherical_triangle::{VertexContactData, build_n_edge_corner, build_spherical_corner};
+use crate::spherical_triangle::{
+    SphericalCornerResult, VertexContactData, build_n_edge_corner, build_spherical_corner,
+    build_spherical_corner_surface,
+};
 use crate::stripe::Stripe;
+
+/// A registry handle for a stripe's terminal cross-section, indexed by
+/// `(stripe, end)` where end `0` is the spine end and `1` is the spine start.
+pub type TerminalBoundary = (Option<BoundaryHandle>, Option<BoundaryHandle>);
 
 /// Classification of a vertex blend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,130 +293,114 @@ pub fn classify_corner(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology)
 ///
 /// # Errors
 /// Returns `BlendError` if topology lookups or patch construction fails.
-#[allow(clippy::too_many_lines)]
-fn build_multi_edge_corner(
+fn multi_edge_corner_data(
     vertex_id: VertexId,
+    indices: &[usize],
     stripes: &[Stripe],
-    topo: &mut Topology,
-) -> Result<Vec<CornerResult>, BlendError> {
-    let indices = stripes_at_vertex(vertex_id, stripes, topo);
-    let contact_pts = collect_contact_points(vertex_id, stripes, &indices, topo);
-
+    topo: &Topology,
+) -> Result<VertexContactData, BlendError> {
+    let contact_pts = collect_contact_points(vertex_id, stripes, indices, topo);
     if contact_pts.len() < 3 {
-        if std::env::var("BK_CORNER_TRACE").is_ok() {
-            for &i in &indices {
-                let cp = contact_points_at_vertex(vertex_id, &stripes[i], topo);
-                let sec = contact_section_at_vertex(vertex_id, &stripes[i], topo)
-                    .map(|s| (s.center, s.radius, s.p1, s.p2));
-                log::warn!(
-                    "CORNER-TRACE multi {vertex_id:?} stripe {i}: contacts={cp:?} sec={sec:?}"
-                );
-            }
-            log::warn!(
-                "CORNER-TRACE multi {vertex_id:?}: unique_pts={} {contact_pts:?}",
-                contact_pts.len()
-            );
-        }
         return Err(BlendError::CornerFailure { vertex: vertex_id });
     }
 
     let radius = stripe_radius_at_vertex(vertex_id, &stripes[indices[0]], topo)
         .ok_or(BlendError::CornerFailure { vertex: vertex_id })?;
-
     let mut face_normals: Vec<Vec3> = Vec::new();
-    for &idx in &indices {
+    for &idx in indices {
         let stripe = &stripes[idx];
         for face_id in [stripe.face1, stripe.face2] {
             let face_surf = topo.face(face_id)?.surface().clone();
-            let n = face_surf.normal(0.0, 0.0);
-            let is_dup = face_normals
+            let normal = face_surf.normal(0.0, 0.0);
+            let is_duplicate = face_normals
                 .iter()
-                .any(|existing| existing.dot(n).abs() > 1.0 - ORTHO_COS_TOL);
-            if !is_dup {
-                face_normals.push(n);
+                .any(|existing| existing.dot(normal).abs() > 1.0 - ORTHO_COS_TOL);
+            if !is_duplicate {
+                face_normals.push(normal);
             }
         }
     }
 
-    // Determine convexity: compute average face normal, then check if the
-    // direction from vertex to the sphere center aligns with it.
     let vertex_pos = topo.vertex(vertex_id)?.point();
     let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
-    for n in &face_normals {
-        normal_sum += *n;
+    for normal in &face_normals {
+        normal_sum += *normal;
     }
     let normal_len = normal_sum.length();
     let is_convex = if normal_len > TOL {
         let avg_normal = normal_sum * (1.0 / normal_len);
-        // For a convex vertex the sphere center is offset along the average
-        // face normal direction.  Check that the vertex-to-centroid direction
-        // of the contact points agrees with the average normal.
-        let mut cp_centroid = Vec3::new(0.0, 0.0, 0.0);
+        let mut contact_centroid = Vec3::new(0.0, 0.0, 0.0);
         #[allow(clippy::cast_precision_loss)]
-        let inv_n = 1.0 / contact_pts.len() as f64;
-        for p in &contact_pts {
-            cp_centroid += *p - vertex_pos;
+        let inverse_count = 1.0 / contact_pts.len() as f64;
+        for point in &contact_pts {
+            contact_centroid += *point - vertex_pos;
         }
-        cp_centroid = cp_centroid * inv_n;
-        avg_normal.dot(cp_centroid) > 0.0
+        contact_centroid = contact_centroid * inverse_count;
+        avg_normal.dot(contact_centroid) > 0.0
     } else {
-        true // Default to convex if normals cancel out.
+        true
     };
 
-    let data = VertexContactData {
+    Ok(VertexContactData {
         vertex_pos,
         contact_points: contact_pts,
         face_normals,
         radius,
         is_convex,
         vertex_id,
-    };
+    })
+}
 
-    let spherical_results = if data.contact_points.len() == 3 {
-        vec![build_spherical_corner(&data)?]
+fn multi_edge_corner_geometry(
+    vertex_id: VertexId,
+    indices: &[usize],
+    stripes: &[Stripe],
+    topo: &Topology,
+) -> Result<Vec<SphericalCornerResult>, BlendError> {
+    let data = multi_edge_corner_data(vertex_id, indices, stripes, topo)?;
+    if data.contact_points.len() == 3 {
+        Ok(vec![build_spherical_corner(&data)?])
     } else {
-        build_n_edge_corner(&data)?
-    };
+        build_n_edge_corner(&data)
+    }
+}
 
+fn build_multi_edge_corner(
+    vertex_id: VertexId,
+    indices: &[usize],
+    stripes: &[Stripe],
+    topo: &mut Topology,
+) -> Result<Vec<CornerResult>, BlendError> {
+    let spherical_results = multi_edge_corner_geometry(vertex_id, indices, stripes, topo)?;
     let mut results = Vec::with_capacity(spherical_results.len());
-
-    for sr in spherical_results {
-        let n_curves = sr.boundary_curves.len();
-        let mut new_vertices = Vec::with_capacity(n_curves);
-        let mut new_edges = Vec::with_capacity(n_curves);
-
-        for curve in &sr.boundary_curves {
-            let pt = curve.evaluate(0.0);
-            let vid = topo.add_vertex(Vertex::new(pt, TOL));
-            new_vertices.push(vid);
+    for spherical in spherical_results {
+        let curve_count = spherical.boundary_curves.len();
+        let mut new_vertices = Vec::with_capacity(curve_count);
+        let mut new_edges = Vec::with_capacity(curve_count);
+        for curve in &spherical.boundary_curves {
+            let point = curve.evaluate(0.0);
+            new_vertices.push(topo.add_vertex(Vertex::new(point, TOL)));
+        }
+        for index in 0..curve_count {
+            let start = new_vertices[index];
+            let end = new_vertices[(index + 1) % curve_count];
+            let curve = spherical.boundary_curves[index].clone();
+            new_edges.push(topo.add_edge(Edge::new(start, end, EdgeCurve::NurbsCurve(curve))));
         }
 
-        for i in 0..n_curves {
-            let v_start = new_vertices[i];
-            let v_end = new_vertices[(i + 1) % n_curves];
-            let curve = sr.boundary_curves[i].clone();
-            let eid = topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
-            new_edges.push(eid);
-        }
-
-        let oriented_edges: Vec<OrientedEdge> = new_edges
+        let oriented_edges = new_edges
             .iter()
-            .map(|&eid| OrientedEdge::new(eid, true))
+            .map(|&edge| OrientedEdge::new(edge, true))
             .collect();
-        let wire = Wire::new(oriented_edges, true)?;
-        let wire_id = topo.add_wire(wire);
-
-        let face = Face::new(wire_id, Vec::new(), sr.surface.clone());
-        let face_id = topo.add_face(face);
-
+        let wire_id = topo.add_wire(Wire::new(oriented_edges, true)?);
+        let face_id = topo.add_face(Face::new(wire_id, Vec::new(), spherical.surface.clone()));
         results.push(CornerResult {
             face_id,
-            surface: sr.surface,
+            surface: spherical.surface,
             new_edges,
             new_vertices,
         });
     }
-
     Ok(results)
 }
 
@@ -431,14 +427,24 @@ fn build_horn_torus_corner(
     build_horn_torus_for_pair(vertex_id, stripes, indices[0], indices[1], topo)
 }
 
-fn build_horn_torus_for_pair(
+struct HornTorusGeometry {
+    surface: FaceSurface,
+    vertex: Point3,
+    a_base: Point3,
+    pinch: Point3,
+    b_base: Point3,
+    a_center: Point3,
+    b_center: Point3,
+    radius: f64,
+}
+
+fn horn_torus_geometry_for_pair(
     vertex_id: VertexId,
     stripes: &[Stripe],
     ia: usize,
     ib: usize,
-    topo: &mut Topology,
-) -> Result<Option<CornerResult>, BlendError> {
-    use brepkit_math::curves::Circle3D;
+    topo: &Topology,
+) -> Result<Option<HornTorusGeometry>, BlendError> {
     use brepkit_math::surfaces::ToroidalSurface;
 
     let (Some(sa), Some(sb)) = (
@@ -451,11 +457,8 @@ fn build_horn_torus_for_pair(
         return Ok(Option::None);
     }
     let r = sa.radius;
-    let v = topo.vertex(vertex_id)?.point();
+    let vertex = topo.vertex(vertex_id)?.point();
 
-    // Find the pairing where one contact of each stripe coincides (the
-    // pinch on the corner edge) and the other two sit at radius r from the
-    // corner vertex on the shared base face.
     let arrangements = [
         (sa.p1, sa.p2, sb.p1, sb.p2),
         (sa.p1, sa.p2, sb.p2, sb.p1),
@@ -465,8 +468,8 @@ fn build_horn_torus_for_pair(
     let mut found = Option::None;
     for (a_base, a_pinch, b_base, b_pinch) in arrangements {
         if (a_pinch - b_pinch).length() <= 1e-6
-            && ((a_base - v).length() - r).abs() <= 1e-5
-            && ((b_base - v).length() - r).abs() <= 1e-5
+            && ((a_base - vertex).length() - r).abs() <= 1e-5
+            && ((b_base - vertex).length() - r).abs() <= 1e-5
             && (a_base - b_base).length() > 1e-6
         {
             found = Some((a_base, a_pinch, b_base));
@@ -476,19 +479,43 @@ fn build_horn_torus_for_pair(
     let Some((a_base, pinch, b_base)) = found else {
         return Ok(Option::None);
     };
-    let Ok(axis) = (pinch - v).normalize() else {
+    let Ok(axis) = (pinch - vertex).normalize() else {
         return Ok(Option::None);
     };
-    if ((pinch - v).length() - r).abs() > 1e-5 {
+    if ((pinch - vertex).length() - r).abs() > 1e-5 {
         return Ok(Option::None);
     }
-    let Ok(torus) = ToroidalSurface::with_axis(v + axis * r, r, r, axis) else {
+    let Ok(torus) = ToroidalSurface::with_axis(vertex + axis * r, r, r, axis) else {
         return Ok(Option::None);
     };
 
-    let va = topo.add_vertex(Vertex::new(a_base, TOL));
-    let vb = topo.add_vertex(Vertex::new(b_base, TOL));
-    let vp = topo.add_vertex(Vertex::new(pinch, TOL));
+    Ok(Some(HornTorusGeometry {
+        surface: FaceSurface::Torus(torus),
+        vertex,
+        a_base,
+        pinch,
+        b_base,
+        a_center: sa.center,
+        b_center: sb.center,
+        radius: r,
+    }))
+}
+
+fn build_horn_torus_for_pair(
+    vertex_id: VertexId,
+    stripes: &[Stripe],
+    ia: usize,
+    ib: usize,
+    topo: &mut Topology,
+) -> Result<Option<CornerResult>, BlendError> {
+    use brepkit_math::curves::Circle3D;
+
+    let Some(geometry) = horn_torus_geometry_for_pair(vertex_id, stripes, ia, ib, topo)? else {
+        return Ok(Option::None);
+    };
+    let va = topo.add_vertex(Vertex::new(geometry.a_base, TOL));
+    let vb = topo.add_vertex(Vertex::new(geometry.b_base, TOL));
+    let vp = topo.add_vertex(Vertex::new(geometry.pinch, TOL));
     let arc = |topo: &mut Topology,
                c: Point3,
                from: Point3,
@@ -501,9 +528,30 @@ fn build_horn_torus_for_pair(
         Some(topo.add_edge(Edge::new(v_from, v_to, EdgeCurve::Circle(circ))))
     };
     let (Some(e_base), Some(e_b), Some(e_a)) = (
-        arc(topo, v, a_base, b_base, va, vb),
-        arc(topo, sb.center, b_base, pinch, vb, vp),
-        arc(topo, sa.center, pinch, a_base, vp, va),
+        arc(
+            topo,
+            geometry.vertex,
+            geometry.a_base,
+            geometry.b_base,
+            va,
+            vb,
+        ),
+        arc(
+            topo,
+            geometry.b_center,
+            geometry.b_base,
+            geometry.pinch,
+            vb,
+            vp,
+        ),
+        arc(
+            topo,
+            geometry.a_center,
+            geometry.pinch,
+            geometry.a_base,
+            vp,
+            va,
+        ),
     ) else {
         return Ok(Option::None);
     };
@@ -516,9 +564,9 @@ fn build_horn_torus_for_pair(
         true,
     )?;
     let wid = topo.add_wire(wire);
-    let surface = FaceSurface::Torus(torus);
+    let surface = geometry.surface;
     let fid = topo.add_face(Face::new(wid, Vec::new(), surface.clone()));
-    log::debug!("horn-torus corner at {vertex_id:?} r={r}");
+    log::debug!("horn-torus corner at {vertex_id:?} r={}", geometry.radius);
     Ok(Some(CornerResult {
         face_id: fid,
         surface,
@@ -560,13 +608,25 @@ fn build_mixed_radius_band(
     build_mixed_radius_band_for_pair(vertex_id, stripes, indices[0], indices[1], topo)
 }
 
-fn build_mixed_radius_band_for_pair(
+struct MixedRadiusGeometry {
+    surface: FaceSurface,
+    a_base: Point3,
+    a_wall: Point3,
+    b_base: Point3,
+    b_wall: Point3,
+    a_center: Point3,
+    b_center: Point3,
+    a_radius: f64,
+    b_radius: f64,
+}
+
+fn mixed_radius_geometry_for_pair(
     vertex_id: VertexId,
     stripes: &[Stripe],
     ia: usize,
     ib: usize,
-    topo: &mut Topology,
-) -> Result<Option<CornerResult>, BlendError> {
+    topo: &Topology,
+) -> Result<Option<MixedRadiusGeometry>, BlendError> {
     let (Some(sa), Some(sb)) = (
         contact_section_at_vertex(vertex_id, &stripes[ia], topo).cloned(),
         contact_section_at_vertex(vertex_id, &stripes[ib], topo).cloned(),
@@ -576,10 +636,8 @@ fn build_mixed_radius_band_for_pair(
     if (sa.radius - sb.radius).abs() <= 1e-6 {
         return Ok(Option::None);
     }
-    let v = topo.vertex(vertex_id)?.point();
+    let vertex = topo.vertex(vertex_id)?.point();
 
-    // Identify (base, wall) per section: the wall contacts and the corner
-    // vertex are collinear along the corner edge.
     let mut found = Option::None;
     for (a_base, a_wall, b_base, b_wall) in [
         (sa.p1, sa.p2, sb.p1, sb.p2),
@@ -587,8 +645,8 @@ fn build_mixed_radius_band_for_pair(
         (sa.p2, sa.p1, sb.p1, sb.p2),
         (sa.p2, sa.p1, sb.p2, sb.p1),
     ] {
-        let da = a_wall - v;
-        let db = b_wall - v;
+        let da = a_wall - vertex;
+        let db = b_wall - vertex;
         let (Ok(na), Ok(nb)) = (da.normalize(), db.normalize()) else {
             continue;
         };
@@ -616,7 +674,7 @@ fn build_mixed_radius_band_for_pair(
         vec![cps_a[2], cps_b[2]],
     ];
     let weights = vec![vec![1.0, 1.0], vec![w_a, w_b], vec![1.0, 1.0]];
-    let Ok(nurbs) = brepkit_math::nurbs::surface::NurbsSurface::new(
+    let Ok(nurbs) = NurbsSurface::new(
         2,
         1,
         vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
@@ -627,10 +685,34 @@ fn build_mixed_radius_band_for_pair(
         return Ok(Option::None);
     };
 
-    let va_b = topo.add_vertex(Vertex::new(a_base, TOL));
-    let va_w = topo.add_vertex(Vertex::new(a_wall, TOL));
-    let vb_b = topo.add_vertex(Vertex::new(b_base, TOL));
-    let vb_w = topo.add_vertex(Vertex::new(b_wall, TOL));
+    Ok(Some(MixedRadiusGeometry {
+        surface: FaceSurface::Nurbs(nurbs),
+        a_base,
+        a_wall,
+        b_base,
+        b_wall,
+        a_center: sa.center,
+        b_center: sb.center,
+        a_radius: sa.radius,
+        b_radius: sb.radius,
+    }))
+}
+
+fn build_mixed_radius_band_for_pair(
+    vertex_id: VertexId,
+    stripes: &[Stripe],
+    ia: usize,
+    ib: usize,
+    topo: &mut Topology,
+) -> Result<Option<CornerResult>, BlendError> {
+    let Some(geometry) = mixed_radius_geometry_for_pair(vertex_id, stripes, ia, ib, topo)? else {
+        return Ok(Option::None);
+    };
+
+    let va_b = topo.add_vertex(Vertex::new(geometry.a_base, TOL));
+    let va_w = topo.add_vertex(Vertex::new(geometry.a_wall, TOL));
+    let vb_b = topo.add_vertex(Vertex::new(geometry.b_base, TOL));
+    let vb_w = topo.add_vertex(Vertex::new(geometry.b_wall, TOL));
     let arc_edge = |topo: &mut Topology,
                     c: Point3,
                     from: Point3,
@@ -643,8 +725,22 @@ fn build_mixed_radius_band_for_pair(
         Some(topo.add_edge(Edge::new(vf, vt, EdgeCurve::Circle(circ))))
     };
     let (Some(e_a), Some(e_b)) = (
-        arc_edge(topo, sa.center, a_base, a_wall, va_b, va_w),
-        arc_edge(topo, sb.center, b_base, b_wall, vb_b, vb_w),
+        arc_edge(
+            topo,
+            geometry.a_center,
+            geometry.a_base,
+            geometry.a_wall,
+            va_b,
+            va_w,
+        ),
+        arc_edge(
+            topo,
+            geometry.b_center,
+            geometry.b_base,
+            geometry.b_wall,
+            vb_b,
+            vb_w,
+        ),
     ) else {
         return Ok(Option::None);
     };
@@ -660,12 +756,12 @@ fn build_mixed_radius_band_for_pair(
         true,
     )?;
     let wid = topo.add_wire(wire);
-    let surface = FaceSurface::Nurbs(nurbs);
+    let surface = geometry.surface;
     let fid = topo.add_face(Face::new(wid, Vec::new(), surface.clone()));
     log::debug!(
         "mixed-radius band at {vertex_id:?} r {} -> {}",
-        sa.radius,
-        sb.radius
+        geometry.a_radius,
+        geometry.b_radius
     );
     Ok(Some(CornerResult {
         face_id: fid,
@@ -677,11 +773,11 @@ fn build_mixed_radius_band_for_pair(
 
 fn build_two_edge_patch(
     vertex_id: VertexId,
+    indices: &[usize],
     stripes: &[Stripe],
     topo: &mut Topology,
 ) -> Result<CornerResult, BlendError> {
-    let indices = stripes_at_vertex(vertex_id, stripes, topo);
-    let contact_pts = collect_contact_points(vertex_id, stripes, &indices, topo);
+    let contact_pts = collect_contact_points(vertex_id, stripes, indices, topo);
 
     // With 2 stripes we expect 3-4 unique contact points (some may merge).
     // Build a triangular patch from the first 3 unique points.
@@ -689,21 +785,6 @@ fn build_two_edge_patch(
         &contact_pts[..3]
     } else {
         // Degenerate case: not enough unique points
-        if std::env::var("BK_CORNER_TRACE").is_ok() {
-            for &i in &indices {
-                let cp = contact_points_at_vertex(vertex_id, &stripes[i], topo);
-                let sec = contact_section_at_vertex(vertex_id, &stripes[i], topo)
-                    .map(|s| (s.center, s.radius, s.p1, s.p2));
-                let nsec = stripes[i].sections.len();
-                log::warn!(
-                    "CORNER-TRACE two-edge {vertex_id:?} stripe {i}: contacts={cp:?} sec={sec:?} nsec={nsec}"
-                );
-            }
-            log::warn!(
-                "CORNER-TRACE two-edge {vertex_id:?}: unique_pts={} {contact_pts:?}",
-                contact_pts.len()
-            );
-        }
         return Err(BlendError::CornerFailure { vertex: vertex_id });
     };
 
@@ -753,13 +834,16 @@ fn build_two_edge_patch(
     })
 }
 
-/// Compute vertex blend patches for all corners where multiple stripes meet.
+/// Compute corner patches in deterministic source-plan order.
 ///
-/// Iterates over all vertices of the solid, classifies each, and builds
-/// the appropriate corner patch.
+/// This compatibility entry point derives the order from the supplied stripe
+/// order. The fillet builder uses [`compute_ordered_corners`] so periodic and
+/// G1-continuation junctions are classified from the immutable plan.
 ///
 /// # Errors
-/// Returns `BlendError` if topology lookups or patch construction fails.
+///
+/// A corner geometry failure is returned immediately. In particular, no
+/// pairwise fallback is attempted for a failed multi-stripe solve.
 pub fn compute_corners(
     topo: &mut Topology,
     stripes: &[Stripe],
@@ -767,62 +851,925 @@ pub fn compute_corners(
 ) -> Result<Vec<CornerResult>, BlendError> {
     use brepkit_topology::explorer::solid_vertices;
 
-    let vertices = solid_vertices(topo, solid)?;
+    let mut vertices = solid_vertices(topo, solid)?;
+    vertices.sort_unstable_by_key(|vertex| vertex.index());
     let mut results = Vec::new();
-
     for vid in vertices {
-        let corner_type = classify_corner(vid, stripes, topo);
+        let indices = stripes_at_vertex(vid, stripes, topo);
+        match indices.len() {
+            0 | 1 => {}
+            2 => {
+                let result = build_horn_torus_for_pair(vid, stripes, indices[0], indices[1], topo)?
+                    .or(build_mixed_radius_band_for_pair(
+                        vid, stripes, indices[0], indices[1], topo,
+                    )?)
+                    .unwrap_or(build_two_edge_patch(vid, &indices, stripes, topo)?);
+                results.push(result);
+            }
+            3 => results.extend(build_multi_edge_corner(vid, &indices, stripes, topo)?),
+            n => {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!("unsupported corner valence {n} at vertex {vid:?}"),
+                });
+            }
+        }
+    }
+    Ok(results)
+}
 
-        // A failure at one vertex must not discard every other corner
-        // patch: the caller treats an Err as "no corners at all", and on a
-        // closed rim that turns one hard junction into an open shell
-        // everywhere. Keep the corners that compute; the skipped vertex
-        // degrades locally.
-        match corner_type {
-            CornerType::None => {}
-            CornerType::TwoEdge => match build_horn_torus_corner(vid, stripes, topo) {
-                Ok(Some(result)) => results.push(result),
-                Ok(Option::None) => match build_mixed_radius_band(vid, stripes, topo) {
-                    Ok(Some(result)) => results.push(result),
-                    Ok(Option::None) => match build_two_edge_patch(vid, stripes, topo) {
-                        Ok(result) => results.push(result),
-                        Err(e) => log::warn!("corner patch at {vid:?} failed: {e}, skipping"),
-                    },
-                    Err(e) => log::warn!("mixed-radius band at {vid:?} failed: {e}, skipping"),
-                },
-                Err(e) => log::warn!("horn-torus corner at {vid:?} failed: {e}, skipping"),
-            },
-            CornerType::MultiEdge(_) => match build_multi_edge_corner(vid, stripes, topo) {
-                Ok(corner_results) => results.extend(corner_results),
-                Err(e) => {
-                    // The sphere solver cannot serve mixed radii; try
-                    // pairwise horn/band patches for each stripe pair at
-                    // the vertex instead of leaving the junction open.
-                    log::warn!("multi-edge corner at {vid:?} failed: {e}, trying pairwise patches");
-                    let idxs = stripes_at_vertex(vid, stripes, topo);
-                    for x in 0..idxs.len() {
-                        for y in (x + 1)..idxs.len() {
-                            let pair = match build_horn_torus_for_pair(
-                                vid, stripes, idxs[x], idxs[y], topo,
-                            ) {
-                                Ok(Some(r)) => Some(r),
-                                _ => match build_mixed_radius_band_for_pair(
-                                    vid, stripes, idxs[x], idxs[y], topo,
-                                ) {
-                                    Ok(Some(r)) => Some(r),
-                                    _ => Option::None,
-                                },
-                            };
-                            if let Some(r) = pair {
-                                results.push(r);
-                            }
+/// One edge in an ordered terminal runout boundary cycle.
+#[derive(Debug, Clone, Copy)]
+struct JunctionBoundary {
+    edge: EdgeId,
+    handle: BoundaryHandle,
+    start: VertexId,
+    end: VertexId,
+    required: bool,
+}
+
+fn edge_vertices(topo: &Topology, edge_id: EdgeId) -> Result<(VertexId, VertexId), BlendError> {
+    let edge = topo.edge(edge_id)?;
+    Ok((edge.start(), edge.end()))
+}
+
+fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
+    let face = topo.face(face_id).ok()?;
+    std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .find_map(|wire_id| {
+            topo.wire(wire_id)
+                .ok()?
+                .edges()
+                .iter()
+                .find_map(|oriented| (oriented.edge() == edge_id).then_some(oriented.is_forward()))
+        })
+}
+
+/// Return the source vertices at the ends of an open spine in traversal order.
+fn source_spine_endpoints(
+    topo: &Topology,
+    stripe: &Stripe,
+) -> Result<Option<(VertexId, VertexId)>, BlendError> {
+    if stripe.spine.is_closed() || stripe.spine.edges().is_empty() {
+        return Ok(None);
+    }
+    let edges = stripe.spine.edges();
+    let mut directions = vec![true; edges.len()];
+    if edges.len() > 1 {
+        let first = topo.edge(edges[0])?;
+        let next = topo.edge(edges[1])?;
+        if first.end() != next.start()
+            && first.end() != next.end()
+            && (first.start() == next.start() || first.start() == next.end())
+        {
+            directions[0] = false;
+        }
+    }
+    for index in 1..edges.len() {
+        let previous = topo.edge(edges[index - 1])?;
+        let previous_end = if directions[index - 1] {
+            previous.end()
+        } else {
+            previous.start()
+        };
+        let edge = topo.edge(edges[index])?;
+        directions[index] = if edge.start() == previous_end {
+            true
+        } else {
+            edge.end() == previous_end
+        };
+    }
+    let first = topo.edge(edges[0])?;
+    let last = topo.edge(edges[edges.len() - 1])?;
+    let start = if directions[0] {
+        first.start()
+    } else {
+        first.end()
+    };
+    let end = if directions[edges.len() - 1] {
+        last.end()
+    } else {
+        last.start()
+    };
+    if start == end {
+        Ok(None)
+    } else {
+        Ok(Some((start, end)))
+    }
+}
+
+/// Find a simple cycle that consumes all required (cross-section) boundaries.
+#[allow(clippy::items_after_statements)]
+fn boundary_cycle(boundaries: &[JunctionBoundary]) -> Option<Vec<(usize, bool)>> {
+    if boundaries.len() < 3 {
+        return None;
+    }
+    let mut adjacency = std::collections::HashMap::<usize, Vec<usize>>::new();
+    for (index, boundary) in boundaries.iter().enumerate() {
+        adjacency
+            .entry(boundary.start.index())
+            .or_default()
+            .push(index);
+        adjacency
+            .entry(boundary.end.index())
+            .or_default()
+            .push(index);
+    }
+    for incident in adjacency.values_mut() {
+        incident.sort_unstable();
+    }
+    let required = boundaries
+        .iter()
+        .filter(|boundary| boundary.required)
+        .count();
+    fn search(
+        start: usize,
+        current: usize,
+        boundaries: &[JunctionBoundary],
+        adjacency: &std::collections::HashMap<usize, Vec<usize>>,
+        required: usize,
+        used: &mut std::collections::HashSet<usize>,
+        path: &mut Vec<(usize, bool)>,
+    ) -> Option<Vec<(usize, bool)>> {
+        if current == start {
+            if path.len() >= 3
+                && path
+                    .iter()
+                    .filter(|(index, _)| boundaries[*index].required)
+                    .count()
+                    == required
+            {
+                return Some(path.clone());
+            }
+            return None;
+        }
+        if path.len() >= boundaries.len() {
+            return None;
+        }
+        for &index in adjacency.get(&current)? {
+            if used.contains(&index) {
+                continue;
+            }
+            let boundary = boundaries[index];
+            let (next, forward) = if boundary.start.index() == current {
+                (boundary.end.index(), true)
+            } else if boundary.end.index() == current {
+                (boundary.start.index(), false)
+            } else {
+                continue;
+            };
+            if next == start && path.len() + 1 < 3 {
+                continue;
+            }
+            used.insert(index);
+            path.push((index, forward));
+            if let Some(found) = search(start, next, boundaries, adjacency, required, used, path) {
+                return Some(found);
+            }
+            path.pop();
+            used.remove(&index);
+        }
+        None
+    }
+
+    for (index, boundary) in boundaries.iter().enumerate() {
+        for (start, end, forward) in [
+            (boundary.start.index(), boundary.end.index(), true),
+            (boundary.end.index(), boundary.start.index(), false),
+        ] {
+            let mut used = std::collections::HashSet::new();
+            let mut path = vec![(index, forward)];
+            used.insert(index);
+            if let Some(found) = search(
+                start, end, boundaries, &adjacency, required, &mut used, &mut path,
+            ) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Partition a terminal boundary graph into simple cycles. Prefer one global
+/// cycle; fall back to one local cycle per cross-section when the two ends of
+/// an open contour are independent runouts.
+fn terminal_boundary_cycles(boundaries: &[JunctionBoundary]) -> Option<Vec<Vec<(usize, bool)>>> {
+    let required_indices: Vec<_> = boundaries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, boundary)| boundary.required.then_some(index))
+        .collect();
+    if required_indices.is_empty() {
+        return None;
+    }
+    if let Some(cycle) = boundary_cycle(boundaries) {
+        return Some(vec![cycle]);
+    }
+    let mut consumed = std::collections::HashSet::new();
+    let mut cycles = Vec::new();
+    for required_index in required_indices {
+        if consumed.contains(&required_index) {
+            continue;
+        }
+        let mut candidate = Vec::new();
+        let mut original_indices = Vec::new();
+        for (index, boundary) in boundaries.iter().enumerate() {
+            if consumed.contains(&index) {
+                continue;
+            }
+            let mut boundary = *boundary;
+            boundary.required = index == required_index;
+            original_indices.push(index);
+            candidate.push(boundary);
+        }
+        let Some(cycle) = boundary_cycle(&candidate) else {
+            continue;
+        };
+        let cycle = cycle
+            .into_iter()
+            .map(|(index, forward)| (original_indices[index], forward))
+            .collect::<Vec<_>>();
+        if !cycle.iter().any(|(index, _)| *index == required_index) {
+            continue;
+        }
+        consumed.extend(cycle.iter().map(|(index, _)| *index));
+        cycles.push(cycle);
+    }
+    (!cycles.is_empty()).then_some(cycles)
+}
+
+fn runout_surface(
+    topo: &Topology,
+    boundaries: &[JunctionBoundary],
+    cycle: &[(usize, bool)],
+    vertex: VertexId,
+) -> Result<FaceSurface, BlendError> {
+    let mut points = Vec::with_capacity(cycle.len());
+    for &(index, forward) in cycle {
+        let boundary = boundaries[index];
+        let point_vertex = if forward {
+            boundary.start
+        } else {
+            boundary.end
+        };
+        points.push(topo.vertex(point_vertex)?.point());
+    }
+    let origin = *points.first().ok_or(BlendError::CornerFailure { vertex })?;
+    let mut normal = Vec3::new(0.0, 0.0, 0.0);
+    for index in 1..points.len().saturating_sub(1) {
+        normal += (points[index] - origin).cross(points[index + 1] - origin);
+    }
+    let normal = normal
+        .normalize()
+        .or_else(|_| {
+            for i in 0..points.len() {
+                for j in (i + 1)..points.len() {
+                    for k in (j + 1)..points.len() {
+                        let candidate = (points[j] - points[i]).cross(points[k] - points[i]);
+                        if let Ok(unit) = candidate.normalize() {
+                            return Ok(unit);
                         }
                     }
                 }
-            },
+            }
+            Err(())
+        })
+        .map_err(|()| BlendError::CornerFailure { vertex })?;
+    let coplanar = points
+        .iter()
+        .all(|point| normal.dot(*point - origin).abs() <= 1e-5);
+    if coplanar {
+        let d = normal.dot(Vec3::new(origin.x(), origin.y(), origin.z()));
+        return Ok(FaceSurface::Plane { normal, d });
+    }
+    let p0 = points[0];
+    let p1 = points[1];
+    let p2 = points
+        .iter()
+        .skip(2)
+        .find(|point| ((**point - p0).cross(p1 - p0)).length() > TOL)
+        .copied()
+        .unwrap_or(points[2]);
+    let nurbs = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![vec![p0, p1], vec![p2, p2]],
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .map_err(|_| BlendError::CornerFailure { vertex })?;
+    Ok(FaceSurface::Nurbs(nurbs))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_terminal_boundaries(
+    topo: &Topology,
+    stripes: &[Stripe],
+    stripe_index: usize,
+    contour_id: usize,
+    junction_vertex: VertexId,
+    cross_boundaries: &[TerminalBoundary],
+    support_faces: &[(FaceId, FaceId)],
+    registry: &mut BoundaryRegistry,
+) -> Result<Option<Vec<JunctionBoundary>>, BlendError> {
+    let stripe = stripes
+        .get(stripe_index)
+        .ok_or_else(|| BlendError::PlanningFailure {
+            reason: format!("missing stripe {stripe_index} for terminal junction"),
+        })?;
+    let Some((terminal_start, terminal_end)) = source_spine_endpoints(topo, stripe)? else {
+        return Ok(None);
+    };
+    if junction_vertex != terminal_start && junction_vertex != terminal_end {
+        return Ok(None);
+    }
+
+    let mut terminal_vertices = std::collections::HashSet::new();
+    for stripe in stripes {
+        if let Some((start, end)) = source_spine_endpoints(topo, stripe)? {
+            terminal_vertices.insert(start);
+            terminal_vertices.insert(end);
+        }
+    }
+    let mut source_edges = std::collections::HashSet::new();
+    for stripe in stripes {
+        source_edges.extend(stripe.spine.edges().iter().copied());
+    }
+
+    let &(end_handle, start_handle) =
+        cross_boundaries
+            .get(stripe_index)
+            .ok_or_else(|| BlendError::PlanningFailure {
+                reason: format!("missing cross-section boundaries for stripe {stripe_index}"),
+            })?;
+    let current_handle = if junction_vertex == terminal_start {
+        start_handle
+    } else {
+        end_handle
+    };
+    let Some(current_handle) = current_handle else {
+        return Ok(None);
+    };
+    let current_handles = std::collections::HashSet::from([current_handle]);
+    let mut cross_vertices = std::collections::HashSet::new();
+
+    let mut boundaries = Vec::new();
+    let mut seen_edges = std::collections::HashSet::new();
+    let mut active_current = 0usize;
+    for pair in cross_boundaries {
+        for handle in [pair.0, pair.1].into_iter().flatten() {
+            let Some(entry) = registry.entry(handle) else {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!("unknown cross-section boundary {handle}"),
+                });
+            };
+            let edge = entry.edge_id().ok_or_else(|| BlendError::PlanningFailure {
+                reason: format!(
+                    "cross-section boundary {:?} was not materialized",
+                    entry.key
+                ),
+            })?;
+            let (start, end) = edge_vertices(topo, edge)?;
+            if start == end {
+                return Err(BlendError::CornerFailure {
+                    vertex: junction_vertex,
+                });
+            }
+            cross_vertices.insert(start);
+            cross_vertices.insert(end);
+            if entry.owners[1].face.is_some() {
+                continue;
+            }
+            if seen_edges.insert(edge) {
+                let required = current_handles.contains(&handle);
+                active_current += usize::from(required);
+                boundaries.push(JunctionBoundary {
+                    edge,
+                    handle,
+                    start,
+                    end,
+                    required,
+                });
+            }
+        }
+    }
+    if active_current == 0 {
+        return Ok(None);
+    }
+
+    let mut visited_support_edges = std::collections::HashSet::new();
+    let mut faces = Vec::new();
+    for &(face1, face2) in support_faces {
+        faces.extend([face1, face2]);
+    }
+    faces.sort_unstable_by_key(|face| face.index());
+    faces.dedup();
+    let terminal_side = u8::from(junction_vertex == terminal_end);
+    let mut runout_segment = 0usize;
+    for support_face in faces {
+        let face = topo.face(support_face)?;
+        let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+        for wire_id in wires {
+            for oriented in topo.wire(wire_id)?.edges() {
+                let edge = oriented.edge();
+                if !visited_support_edges.insert(edge) || source_edges.contains(&edge) {
+                    continue;
+                }
+                let (start, end) = edge_vertices(topo, edge)?;
+                let joins_boundary = (cross_vertices.contains(&start)
+                    && (cross_vertices.contains(&end) || terminal_vertices.contains(&end)))
+                    || (cross_vertices.contains(&end)
+                        && (cross_vertices.contains(&start) || terminal_vertices.contains(&start)));
+                if !joins_boundary {
+                    continue;
+                }
+                let segment = runout_segment;
+                runout_segment += 1;
+                let forward = face_edge_forward(topo, support_face, edge)
+                    .ok_or(BlendError::TrimmingFailure { face: support_face })?;
+                let edge_data = topo.edge(edge)?.clone();
+                let handle = if let Some(handle) = registry.handle_for_edge(edge) {
+                    let entry =
+                        registry
+                            .entry(handle)
+                            .ok_or_else(|| BlendError::PlanningFailure {
+                                reason: format!("unknown boundary handle {handle}"),
+                            })?;
+                    if !matches!(
+                        entry.key.kind,
+                        crate::boundary_registry::BoundaryKind::Runout
+                    ) {
+                        continue;
+                    }
+                    handle
+                } else {
+                    let handle = registry.register(
+                        BoundaryKey::runout(contour_id, segment, terminal_side),
+                        PlannedVertex::new(edge_data.start()),
+                        PlannedVertex::new(edge_data.end()),
+                        edge_data.curve().clone(),
+                        edge_data.curve().domain_with_endpoints(
+                            topo.vertex(edge_data.start())?.point(),
+                            topo.vertex(edge_data.end())?.point(),
+                        ),
+                        [
+                            BoundaryOwner::planned("ordered terminal support", forward),
+                            BoundaryOwner::planned("ordered terminal runout", false),
+                        ],
+                    )?;
+                    registry.defer_owner(handle, 0)?;
+                    registry.defer_owner(handle, 1)?;
+                    registry.bind_existing_edge(topo, handle, edge)?;
+                    handle
+                };
+                boundaries.push(JunctionBoundary {
+                    edge,
+                    handle,
+                    start,
+                    end,
+                    required: false,
+                });
+            }
+        }
+    }
+    if terminal_boundary_cycles(&boundaries).is_some() {
+        return Ok(Some(boundaries));
+    }
+    // A terminal may already close against the copied support face without a
+    // standalone runout patch. Leave registered candidates deferred; the
+    // final support-owner pass attaches that closure, and its audit rejects
+    // any boundary that remains open.
+    Ok(None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_terminal_runout(
+    topo: &mut Topology,
+    stripes: &[Stripe],
+    stripe_index: usize,
+    contour_id: usize,
+    junction_vertex: VertexId,
+    cross_boundaries: &[TerminalBoundary],
+    support_faces: &[(FaceId, FaceId)],
+    registry: &mut BoundaryRegistry,
+) -> Result<Vec<CornerResult>, BlendError> {
+    let Some(boundaries) = collect_terminal_boundaries(
+        topo,
+        stripes,
+        stripe_index,
+        contour_id,
+        junction_vertex,
+        cross_boundaries,
+        support_faces,
+        registry,
+    )?
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(cycles) = terminal_boundary_cycles(&boundaries) else {
+        return Ok(Vec::new());
+    };
+    let mut results = Vec::with_capacity(cycles.len());
+    for cycle in cycles {
+        let mut wire_edges = Vec::with_capacity(cycle.len());
+        for &(index, forward) in &cycle {
+            let boundary = boundaries[index];
+            registry.set_owner_forward(boundary.handle, 1, forward)?;
+            wire_edges.push(OrientedEdge::new(boundary.edge, forward));
+        }
+        let wire = Wire::new(wire_edges, true)?;
+        let surface = runout_surface(topo, &boundaries, &cycle, junction_vertex)?;
+        let wire_id = topo.add_wire(wire);
+        let face_id = topo.add_face(Face::new(wire_id, Vec::new(), surface.clone()));
+        for &(index, _) in &cycle {
+            let handle = boundaries[index].handle;
+            registry.set_owner_face(handle, 1, face_id)?;
+            let _ = registry.oriented_edge(topo, handle, 1)?;
+        }
+        results.push(CornerResult {
+            face_id,
+            surface,
+            new_edges: cycle
+                .iter()
+                .map(|(index, _)| boundaries[*index].edge)
+                .collect(),
+            new_vertices: Vec::new(),
+        });
+    }
+    Ok(results)
+}
+
+fn collect_junction_fan_boundaries(
+    topo: &mut Topology,
+    stripes: &[Stripe],
+    stripe_indices: &[usize],
+    junction: &VertexJunction,
+    cross_boundaries: &[TerminalBoundary],
+    support_faces: &[(FaceId, FaceId)],
+    registry: &mut BoundaryRegistry,
+) -> Result<Option<Vec<JunctionBoundary>>, BlendError> {
+    let junction_vertex = junction.vertex;
+    let mut source_edges = std::collections::HashSet::new();
+    let mut cross_vertices = std::collections::HashSet::new();
+    let mut cross_edges = Vec::new();
+    let mut seen_cross_edges = std::collections::HashSet::new();
+    for &stripe_index in stripe_indices {
+        let pair =
+            cross_boundaries
+                .get(stripe_index)
+                .ok_or_else(|| BlendError::PlanningFailure {
+                    reason: format!("missing cross-section boundaries for stripe {stripe_index}"),
+                })?;
+        source_edges.extend(stripes[stripe_index].spine.edges().iter().copied());
+        for handle in [pair.0, pair.1].into_iter().flatten() {
+            let entry = registry
+                .entry(handle)
+                .ok_or_else(|| BlendError::PlanningFailure {
+                    reason: format!("unknown cross-section boundary {handle}"),
+                })?;
+            let edge = entry.edge_id().ok_or_else(|| BlendError::PlanningFailure {
+                reason: format!(
+                    "cross-section boundary {:?} was not materialized",
+                    entry.key
+                ),
+            })?;
+            let (start, end) = edge_vertices(topo, edge)?;
+            if start == end {
+                return Err(BlendError::CornerFailure {
+                    vertex: junction_vertex,
+                });
+            }
+            cross_vertices.insert(start);
+            cross_vertices.insert(end);
+            if entry.owners[1].face.is_none() && seen_cross_edges.insert(edge) {
+                cross_edges.push((handle, edge, start, end));
+            }
+        }
+    }
+    if cross_edges.is_empty() {
+        return Ok(None);
+    }
+
+    let mut planned_to_support = std::collections::HashMap::new();
+    let mut remaining_faces = Vec::new();
+    for &stripe_index in stripe_indices {
+        let &(face1, face2) =
+            support_faces
+                .get(stripe_index)
+                .ok_or_else(|| BlendError::PlanningFailure {
+                    reason: format!("missing support faces for stripe {stripe_index}"),
+                })?;
+        planned_to_support.insert(stripes[stripe_index].face1, face1);
+        planned_to_support.insert(stripes[stripe_index].face2, face2);
+        remaining_faces.extend([face1, face2]);
+    }
+    let mut faces = Vec::new();
+    for planned_face in &junction.face_fan {
+        if let Some(&support_face) = planned_to_support.get(planned_face)
+            && !faces.contains(&support_face)
+        {
+            faces.push(support_face);
+        }
+    }
+    remaining_faces.sort_unstable_by_key(|face| face.index());
+    remaining_faces.dedup();
+    for support_face in remaining_faces {
+        if !faces.contains(&support_face) {
+            faces.push(support_face);
         }
     }
 
+    let mut support_candidates = Vec::new();
+    let mut seen_support_edges = std::collections::HashSet::new();
+    for support_face in faces {
+        let face = topo.face(support_face)?;
+        let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+        for wire_id in wires {
+            for oriented in topo.wire(wire_id)?.edges() {
+                let edge = oriented.edge();
+                if !seen_support_edges.insert(edge) || source_edges.contains(&edge) {
+                    continue;
+                }
+                let (start, end) = edge_vertices(topo, edge)?;
+                let joins_fan = (cross_vertices.contains(&start)
+                    && (cross_vertices.contains(&end) || end == junction_vertex))
+                    || (cross_vertices.contains(&end)
+                        && (cross_vertices.contains(&start) || start == junction_vertex));
+                if !joins_fan {
+                    continue;
+                }
+                let existing_handle = registry.handle_for_edge(edge);
+                if let Some(handle) = existing_handle {
+                    let entry =
+                        registry
+                            .entry(handle)
+                            .ok_or_else(|| BlendError::PlanningFailure {
+                                reason: format!("unknown boundary handle {handle}"),
+                            })?;
+                    if !matches!(entry.key.kind, BoundaryKind::Corner | BoundaryKind::Runout)
+                        || entry.owners[1].face.is_some()
+                    {
+                        continue;
+                    }
+                }
+                let forward = face_edge_forward(topo, support_face, edge)
+                    .ok_or(BlendError::TrimmingFailure { face: support_face })?;
+                support_candidates.push((edge, support_face, forward, start, end, existing_handle));
+            }
+        }
+    }
+
+    let incident_handles: std::collections::HashSet<_> = cross_edges
+        .iter()
+        .filter(|(_, _, start, end)| {
+            support_candidates
+                .iter()
+                .any(|(_, _, _, support_start, support_end, _)| {
+                    [*support_start, *support_end]
+                        .into_iter()
+                        .any(|vertex| vertex == *start || vertex == *end)
+                })
+        })
+        .map(|(handle, ..)| *handle)
+        .collect();
+    if incident_handles.is_empty() {
+        return Ok(None);
+    }
+
+    let mut boundaries = Vec::new();
+    for &(handle, edge, start, end) in &cross_edges {
+        if incident_handles.contains(&handle) {
+            boundaries.push(JunctionBoundary {
+                edge,
+                handle,
+                start,
+                end,
+                required: true,
+            });
+        }
+    }
+    for (segment, &(edge, support_face, forward, start, end, existing_handle)) in
+        support_candidates.iter().enumerate()
+    {
+        let handle = if let Some(handle) = existing_handle {
+            handle
+        } else {
+            let edge_data = topo.edge(edge)?.clone();
+            let handle = registry.register(
+                BoundaryKey::corner(junction_vertex.index(), segment, 0),
+                PlannedVertex::new(edge_data.start()),
+                PlannedVertex::new(edge_data.end()),
+                edge_data.curve().clone(),
+                edge_data.curve().domain_with_endpoints(
+                    topo.vertex(edge_data.start())?.point(),
+                    topo.vertex(edge_data.end())?.point(),
+                ),
+                [
+                    BoundaryOwner::new(support_face, "ordered junction support", forward),
+                    BoundaryOwner::planned("ordered junction corner", false),
+                ],
+            )?;
+            registry.defer_owner(handle, 1)?;
+            registry.bind_existing_edge(topo, handle, edge)?;
+            let _ = registry.oriented_edge(topo, handle, 0)?;
+            handle
+        };
+        boundaries.push(JunctionBoundary {
+            edge,
+            handle,
+            start,
+            end,
+            required: false,
+        });
+    }
+    if terminal_boundary_cycles(&boundaries).is_some() {
+        Ok(Some(boundaries))
+    } else {
+        Err(BlendError::CornerFailure {
+            vertex: junction_vertex,
+        })
+    }
+}
+
+fn build_junction_fan(
+    topo: &mut Topology,
+    stripes: &[Stripe],
+    stripe_indices: &[usize],
+    junction: &VertexJunction,
+    cross_boundaries: &[TerminalBoundary],
+    support_faces: &[(FaceId, FaceId)],
+    registry: &mut BoundaryRegistry,
+) -> Result<Vec<CornerResult>, BlendError> {
+    let junction_vertex = junction.vertex;
+    let boundaries = collect_junction_fan_boundaries(
+        topo,
+        stripes,
+        stripe_indices,
+        junction,
+        cross_boundaries,
+        support_faces,
+        registry,
+    )?
+    .ok_or(BlendError::CornerFailure {
+        vertex: junction_vertex,
+    })?;
+    let cycles = terminal_boundary_cycles(&boundaries).ok_or(BlendError::CornerFailure {
+        vertex: junction_vertex,
+    })?;
+    if cycles.len() != 1 {
+        return Err(BlendError::CornerFailure {
+            vertex: junction_vertex,
+        });
+    }
+    let surface = if stripe_indices.len() == 2 {
+        if let Some(geometry) = horn_torus_geometry_for_pair(
+            junction_vertex,
+            stripes,
+            stripe_indices[0],
+            stripe_indices[1],
+            topo,
+        )? {
+            geometry.surface
+        } else if let Some(geometry) = mixed_radius_geometry_for_pair(
+            junction_vertex,
+            stripes,
+            stripe_indices[0],
+            stripe_indices[1],
+            topo,
+        )? {
+            geometry.surface
+        } else {
+            runout_surface(topo, &boundaries, &cycles[0], junction_vertex)?
+        }
+    } else if stripe_indices.len() == 3 {
+        let data = multi_edge_corner_data(junction_vertex, stripe_indices, stripes, topo)?;
+        if data.contact_points.len() != 3 {
+            return Err(BlendError::CornerFailure {
+                vertex: junction_vertex,
+            });
+        }
+        build_spherical_corner_surface(&data)?
+    } else {
+        return Err(BlendError::PlanningFailure {
+            reason: format!(
+                "unsupported ordered junction valence {} at vertex {:?}",
+                stripe_indices.len(),
+                junction_vertex
+            ),
+        });
+    };
+
+    let mut results = Vec::with_capacity(cycles.len());
+    for cycle in cycles {
+        let mut oriented_edges = Vec::with_capacity(cycle.len());
+        for &(index, forward) in &cycle {
+            let boundary = boundaries[index];
+            registry.set_owner_forward(boundary.handle, 1, forward)?;
+            oriented_edges.push(OrientedEdge::new(boundary.edge, forward));
+        }
+        let wire_id = topo.add_wire(Wire::new(oriented_edges, true)?);
+        let face_id = topo.add_face(Face::new(wire_id, Vec::new(), surface.clone()));
+        for &(index, _) in &cycle {
+            let handle = boundaries[index].handle;
+            registry.set_owner_face(handle, 1, face_id)?;
+            let _ = registry.oriented_edge(topo, handle, 1)?;
+        }
+        results.push(CornerResult {
+            face_id,
+            surface: surface.clone(),
+            new_edges: cycle
+                .iter()
+                .map(|(index, _)| boundaries[*index].edge)
+                .collect(),
+            new_vertices: Vec::new(),
+        });
+    }
+    Ok(results)
+}
+
+/// Solve every original planned junction exactly once.
+///
+/// Periodic contours have no endpoint junction. G1 continuation produces no
+/// patch. Terminal contours use the ordered runout graph or deferred
+/// support-side closure. Junctions dispatch to the ordered fan, preserving
+/// analytic two-edge and spherical three-edge surfaces. Higher valence and
+/// singular geometry fail before publication.
+pub fn compute_ordered_corners(
+    topo: &mut Topology,
+    stripes: &[Stripe],
+    junctions: &[VertexJunction],
+    contour_to_stripe: &[Option<usize>],
+    cross_boundaries: &[TerminalBoundary],
+    support_faces: &[(FaceId, FaceId)],
+    registry: &mut BoundaryRegistry,
+) -> Result<Vec<CornerResult>, BlendError> {
+    let mut results = Vec::new();
+    for junction in junctions {
+        let indices: Vec<usize> = junction
+            .incident_contours
+            .iter()
+            .filter_map(|contour| contour_to_stripe.get(*contour).copied().flatten())
+            .collect();
+        if matches!(junction.classification, CornerClassification::Periodic) {
+            continue;
+        }
+        if matches!(
+            junction.classification,
+            CornerClassification::G1Continuation
+        ) {
+            continue;
+        }
+        if matches!(junction.classification, CornerClassification::Terminal) {
+            if indices.len() != 1 {
+                return Err(BlendError::CornerFailure {
+                    vertex: junction.vertex,
+                });
+            }
+            let stripe_index = indices[0];
+            let Some(&contour_id) = junction.incident_contours.first() else {
+                return Err(BlendError::CornerFailure {
+                    vertex: junction.vertex,
+                });
+            };
+            let terminal_results = build_terminal_runout(
+                topo,
+                stripes,
+                stripe_index,
+                contour_id,
+                junction.vertex,
+                cross_boundaries,
+                support_faces,
+                registry,
+            )?;
+            results.extend(terminal_results);
+            continue;
+        }
+        if indices.len() > 3 {
+            return Err(BlendError::PlanningFailure {
+                reason: format!(
+                    "unsupported ordered junction valence {} at vertex {:?}",
+                    indices.len(),
+                    junction.vertex
+                ),
+            });
+        }
+        if indices.len() < 2 {
+            return Err(BlendError::CornerFailure {
+                vertex: junction.vertex,
+            });
+        }
+        let junction_results = build_junction_fan(
+            topo,
+            stripes,
+            &indices,
+            junction,
+            cross_boundaries,
+            support_faces,
+            registry,
+        )?;
+        results.extend(junction_results);
+    }
     Ok(results)
 }
 
@@ -1228,7 +2175,8 @@ mod tests {
     #[test]
     fn multi_edge_corner_produces_spherical_patch() {
         let (mut topo, v000, stripes, _solid_id) = setup_box_corner();
-        let results = build_multi_edge_corner(v000, &stripes, &mut topo).unwrap();
+        let indices = stripes_at_vertex(v000, &stripes, &topo);
+        let results = build_multi_edge_corner(v000, &indices, &stripes, &mut topo).unwrap();
 
         // 3-edge case should produce exactly 1 spherical triangle patch.
         assert_eq!(results.len(), 1);
@@ -1248,7 +2196,8 @@ mod tests {
     #[test]
     fn multi_edge_corner_surface_on_sphere() {
         let (mut topo, v000, stripes, _solid_id) = setup_box_corner();
-        let results = build_multi_edge_corner(v000, &stripes, &mut topo).unwrap();
+        let indices = stripes_at_vertex(v000, &stripes, &topo);
+        let results = build_multi_edge_corner(v000, &indices, &stripes, &mut topo).unwrap();
         let result = &results[0];
 
         match &result.surface {
@@ -1285,5 +2234,111 @@ mod tests {
                 other => panic!("Expected NurbsCurve edge, got {:?}", other.type_tag()),
             }
         }
+    }
+    #[test]
+    fn ordered_junction_rejects_higher_valence_before_geometry() {
+        let mut topo = Topology::new();
+        let vertex = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let published_before = (topo.num_wires(), topo.num_faces(), topo.num_shells());
+        let junction = VertexJunction {
+            vertex,
+            incident_contours: vec![0, 1, 2, 3],
+            unselected_sharp_edges: Vec::new(),
+            face_fan: Vec::new(),
+            classification: CornerClassification::Junction,
+        };
+        let error = match compute_ordered_corners(
+            &mut topo,
+            &[],
+            &[junction],
+            &[Some(0), Some(1), Some(2), Some(3)],
+            &[],
+            &[],
+            &mut BoundaryRegistry::new(),
+        ) {
+            Ok(_) => panic!("higher-valence junction must fail explicitly"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported ordered junction valence")
+        );
+        assert_eq!(
+            (topo.num_wires(), topo.num_faces(), topo.num_shells()),
+            published_before,
+            "unsupported valence must fail before face or shell publication"
+        );
+    }
+    #[test]
+    fn ordered_junction_rejects_singular_collinear_fan() {
+        let mut topo = Topology::new();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), TOL));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
+        let boundaries = vec![
+            JunctionBoundary {
+                edge: e0,
+                handle: 0,
+                start: v0,
+                end: v1,
+                required: true,
+            },
+            JunctionBoundary {
+                edge: e1,
+                handle: 1,
+                start: v1,
+                end: v2,
+                required: true,
+            },
+            JunctionBoundary {
+                edge: e2,
+                handle: 2,
+                start: v2,
+                end: v0,
+                required: true,
+            },
+        ];
+        let cycle = vec![(0, true), (1, true), (2, true)];
+        let published_before = (topo.num_wires(), topo.num_faces(), topo.num_shells());
+
+        let error = runout_surface(&topo, &boundaries, &cycle, v0)
+            .expect_err("a collinear ordered fan must fail before face creation");
+        assert!(matches!(
+            error,
+            BlendError::CornerFailure { vertex } if vertex == v0
+        ));
+        assert_eq!(
+            (topo.num_wires(), topo.num_faces(), topo.num_shells()),
+            published_before,
+            "singular geometry must fail before face or shell publication"
+        );
+    }
+
+    #[test]
+    fn ordered_periodic_junction_has_no_endpoint_patch() {
+        let mut topo = Topology::new();
+        let vertex = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let junction = VertexJunction {
+            vertex,
+            incident_contours: vec![0],
+            unselected_sharp_edges: Vec::new(),
+            face_fan: Vec::new(),
+            classification: CornerClassification::Periodic,
+        };
+        let corners = compute_ordered_corners(
+            &mut topo,
+            &[],
+            &[junction],
+            &[Some(0)],
+            &[],
+            &[],
+            &mut BoundaryRegistry::new(),
+        )
+        .expect("periodic contour bypasses endpoint solving");
+        assert!(corners.is_empty());
     }
 }
