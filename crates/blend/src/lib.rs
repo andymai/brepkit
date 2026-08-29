@@ -8,6 +8,7 @@
 pub(crate) mod adaptive_tolerance;
 pub(crate) mod analytic;
 pub(crate) mod blend_func;
+pub mod boundary_registry;
 pub(crate) mod builder_utils;
 pub mod chamfer_builder;
 pub(crate) mod corner;
@@ -89,6 +90,9 @@ pub enum BlendError {
         /// A human-readable planning diagnostic.
         reason: String,
     },
+    /// A registry planned an invalid or multiply-owned boundary.
+    #[error(transparent)]
+    BoundaryRegistry(#[from] boundary_registry::BoundaryAuditError),
     /// Topology error from underlying operations.
     #[error(transparent)]
     Topology(#[from] brepkit_topology::TopologyError),

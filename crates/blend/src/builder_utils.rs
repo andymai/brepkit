@@ -238,6 +238,113 @@ pub struct BlendFaceInfo {
     pub cross_start: Option<(brepkit_topology::edge::EdgeId, VertexId, VertexId)>,
 }
 
+#[allow(dead_code)]
+/// Build a face directly from canonical registry boundaries.
+///
+/// Every wire edge is obtained from
+/// [`crate::boundary_registry::BoundaryRegistry::oriented_edge`], so this
+/// path preserves one materialized edge and the planner's orientation on both
+/// owners. It deliberately does not convert the boundaries to a point-list
+/// `FaceSpec`.
+///
+/// # Errors
+///
+/// Returns an error when a boundary handle/owner is invalid or the wire cannot
+/// be constructed.
+pub fn create_face_from_registry(
+    topo: &mut Topology,
+    registry: &mut crate::boundary_registry::BoundaryRegistry,
+    surface: FaceSurface,
+    boundaries: &[(crate::boundary_registry::BoundaryHandle, usize)],
+) -> Result<FaceId, BlendError> {
+    if boundaries.len() < 3 {
+        return Err(BlendError::PlanningFailure {
+            reason: format!(
+                "registry face needs at least three boundaries, got {}",
+                boundaries.len()
+            ),
+        });
+    }
+    let oriented = boundaries
+        .iter()
+        .map(|&(handle, owner)| registry.oriented_edge(topo, handle, owner))
+        .collect::<Result<Vec<_>, _>>()?;
+    let wire_id = topo.add_wire(Wire::new(oriented, true)?);
+    Ok(topo.add_face(Face::new(wire_id, Vec::new(), surface)))
+}
+
+#[allow(dead_code)]
+/// Create a stripe face from four canonical registry boundaries.
+///
+/// The boundaries are ordered as contact-1, end cross-section, contact-2,
+/// start cross-section. Cross-section handles are optional for pinched ends.
+/// Unlike the compatibility constructor below, this function performs no
+/// endpoint matching or geometric welding.
+///
+/// # Errors
+/// Returns an error when a registry boundary is invalid or the wire cannot be
+/// constructed.
+pub fn create_blend_face_from_registry(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    registry: &mut crate::boundary_registry::BoundaryRegistry,
+    contact1: (crate::boundary_registry::BoundaryHandle, usize),
+    contact2: (crate::boundary_registry::BoundaryHandle, usize),
+    cross_end: Option<(crate::boundary_registry::BoundaryHandle, usize)>,
+    cross_start: Option<(crate::boundary_registry::BoundaryHandle, usize)>,
+) -> Result<BlendFaceInfo, BlendError> {
+    let mut boundaries = Vec::with_capacity(4);
+    boundaries.push(contact1);
+    if let Some(boundary) = cross_end {
+        boundaries.push(boundary);
+    }
+    boundaries.push(contact2);
+    if let Some(boundary) = cross_start {
+        boundaries.push(boundary);
+    }
+    let face = create_face_from_registry(topo, registry, stripe.surface.clone(), &boundaries)?;
+    let edge_vertices =
+        |handle: crate::boundary_registry::BoundaryHandle,
+         owner: usize,
+         topo: &Topology,
+         registry: &crate::boundary_registry::BoundaryRegistry|
+         -> Result<(brepkit_topology::edge::EdgeId, VertexId, VertexId), BlendError> {
+            let entry = registry
+                .entry(handle)
+                .ok_or_else(|| BlendError::PlanningFailure {
+                    reason: format!("unknown registry boundary handle {handle}"),
+                })?;
+            let edge_id = entry.edge_id().ok_or_else(|| BlendError::PlanningFailure {
+                reason: format!("registry boundary {:?} was not materialized", entry.key),
+            })?;
+            let forward = entry
+                .owners
+                .get(owner)
+                .ok_or_else(|| BlendError::PlanningFailure {
+                    reason: format!("boundary {:?} has invalid owner index {owner}", entry.key),
+                })?
+                .forward;
+            let edge = topo.edge(edge_id)?;
+            let (from, to) = if forward {
+                (edge.start(), edge.end())
+            } else {
+                (edge.end(), edge.start())
+            };
+            Ok((edge_id, from, to))
+        };
+    let end = cross_end
+        .map(|(handle, owner)| edge_vertices(handle, owner, topo, registry))
+        .transpose()?;
+    let start = cross_start
+        .map(|(handle, owner)| edge_vertices(handle, owner, topo, registry))
+        .transpose()?;
+    Ok(BlendFaceInfo {
+        face,
+        cross_end: end,
+        cross_start: start,
+    })
+}
+
 /// Replace a face's two-edge corner path `from -> corner -> to` with the
 /// single cross-section arc `edge`, notching the fillet's end profile out of
 /// an end cap so the cap and the blend share one edge entity. Both replaced
@@ -822,4 +929,83 @@ pub(crate) fn weld_coincident_free_edges(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::vertex::Vertex;
+
+    #[test]
+    fn registry_faces_reuse_edges_without_geometric_welding() {
+        let mut topo = Topology::new();
+        let vertices = [
+            topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7)),
+        ];
+        let mut registry = crate::boundary_registry::BoundaryRegistry::new();
+        let mut handles = Vec::new();
+        for (index, pair) in [(0, 1), (1, 2), (2, 3), (3, 0)].into_iter().enumerate() {
+            handles.push(
+                registry
+                    .register(
+                        crate::boundary_registry::BoundaryKey::contact(0, index, 0),
+                        crate::boundary_registry::PlannedVertex::new(vertices[pair.0]),
+                        crate::boundary_registry::PlannedVertex::new(vertices[pair.1]),
+                        EdgeCurve::Line,
+                        (0.0, 1.0),
+                        [
+                            crate::boundary_registry::BoundaryOwner::planned("face A", true),
+                            crate::boundary_registry::BoundaryOwner::planned("face B", false),
+                        ],
+                    )
+                    .unwrap(),
+            );
+        }
+        let face_a = create_face_from_registry(
+            &mut topo,
+            &mut registry,
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+            &handles
+                .iter()
+                .map(|&handle| (handle, 0))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let face_b = create_face_from_registry(
+            &mut topo,
+            &mut registry,
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+            &handles
+                .iter()
+                .rev()
+                .map(|&handle| (handle, 1))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        for &handle in &handles {
+            registry.set_owner_face(handle, 0, face_a).unwrap();
+            registry.set_owner_face(handle, 1, face_b).unwrap();
+        }
+        registry.preassembly_audit().unwrap();
+        let report = registry
+            .postassembly_audit(&topo, &[face_a, face_b])
+            .unwrap();
+        assert_eq!(report.len(), handles.len());
+        assert!(report.iter().all(|incidence| incidence.uses == 2));
+        assert!(report.iter().all(|incidence| incidence.key.is_some()));
+    }
 }
