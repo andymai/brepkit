@@ -709,30 +709,21 @@ fn plane_plane_chamfer(
 /// Fillet between a plane and a cylinder whose axis is parallel to the
 /// plane normal.
 ///
-/// Returns `Some(StripeResult)` with an exact toroidal blend surface for
-/// both the convex "post on plate" case (cylinder face not reversed) and
-/// the concave "hole through plate" case (cylinder face reversed). The
-/// formulas differ only in the torus major radius:
+/// Returns `Some(StripeResult)` with an exact toroidal blend surface for a
+/// convex post on a plate, a concave hole through a plate, and a bounded-disc
+/// rim. A post and a hole both contact a larger plane outside the spine, so
+/// their torus major radius is `r_c + r`. A bounded disc is the only inward
+/// case, with `major = r_c - r`.
 ///
-///   - convex: `major = r_c + r`, plate-side contact at radial `r_c + r`
-///     (outside the spine on the plate);
-///   - concave: `major = r_c - r`, plate-side contact at radial `r_c - r`
-///     (inside the spine on the plate).
+/// The axial placement follows the material side. A hole and a bounded rim
+/// move one radius along `n_p_inward`; a post moves along `-n_p_inward`.
+/// This keeps the plane contact inside the support face instead of placing a
+/// hole fillet's contact circle in the void.
 ///
-/// In both cases the torus center sits one fillet radius "above" the
-/// plane along `-n_p_inward` (the empty-wedge direction), the cylinder-
-/// side contact circle has radius `r_c`, and the torus axis is the
-/// cylinder axis. The active tube portion is a quarter of the small
-/// circle in either case — `[π/2, π]` for convex and `[3π/2, 2π]` for
-/// concave (mirror images about the equatorial plane).
-///
-/// Returns `None` (walker fallback) for cases the analytic path
-/// doesn't cover:
-///   - the cylinder axis isn't parallel to the plane normal,
-///   - the spine geometry is too short or degenerate,
-///   - the fillet radius exceeds the cylinder radius (would invert
-///     `r_c - r` for the concave case or geometrically nest the convex
-///     fillet inside the cylinder).
+/// Returns `None` (walker fallback) when the cylinder axis is not parallel to
+/// the plane normal, the spine is too short or degenerate, or the requested
+/// radius exceeds the conservative analytic bound. A bounded rim additionally
+/// rejects the spindle-torus regime `r >= r_c / 2`.
 ///
 /// # Errors
 ///
@@ -782,42 +773,31 @@ pub fn plane_cylinder_fillet(
     //     the post stands on has boundary vertices beyond `r_c`.
     let rim = !concave && plane_is_bounded_disc(topo, face_plane, cyl, r_c)?;
 
-    // 3) Radius bound depends on the case:
-    //    - Convex post: major = `r_c + r`, always > minor = `r`, so the only
-    //      regime to reject is `r ≥ r_c` (rolling ball would encircle the
-    //      cylinder axis).
-    //    - Concave hole / convex rim: major = `r_c - r`; needs `r < r_c` to
-    //      keep major positive *and* `r ≤ r_c/2` to keep major ≥ minor. Past
-    //      `r_c/2` the construction becomes a spindle (self-intersecting) torus
-    //      which is invalid as a fillet surface.
-    let inward = concave || rim;
+    // 3) Only a bounded disc rim contracts toward the axis. It must remain a
+    // ring torus (`major > minor`). Post and hole contacts expand away from
+    // the axis; retain the existing conservative `r < r_c` analytic bound.
+    let inward = rim;
     let max_radius = if inward { r_c * 0.5 } else { r_c };
     if radius <= tol_lin || radius >= max_radius {
         return Ok(None);
     }
 
     // 4) Project the cylinder origin onto the plane along axis_c. The
-    //    projection lands on the spine plane and on the cylinder axis line.
-    //    For axis_c ∥ n_p_inward, this is just `o_c ± n_p_inward * step`
-    //    where `step` solves `(o_c + n_p_inward * step) · n_p_inward = d`.
+    // projection lands on the spine plane and on the cylinder axis line.
     let o_c = cyl.origin();
     let step = d_plane - n_p_inward.dot(Vec3::new(o_c.x(), o_c.y(), o_c.z()));
     let p_axis_on_plane = o_c + n_p_inward * step;
 
-    // 5) Torus placement.
-    //    `z_axis_dir` is the side of the plate the rolling ball trajectory is
-    //    lifted toward (the cylinder-material side along the axis), and the
-    //    torus center sits one fillet radius along it.
-    //      - Concave hole / convex post: the empty wedge is on the plate side
-    //        opposite the cylinder material, so the ball lifts toward
-    //        `-n_p_inward` and the torus center is below the plate.
-    //      - Convex rim (disc bounded by the cylinder): the material *is* on
-    //        the `+n_p_inward` side, so the ball lifts INTO the material
-    //        (toward `+n_p_inward`) and the torus center sits one radius above
-    //        the plate; plate contact lands at `r_c - r`.
-    //    Major radius: `r_c + r` for a convex post (plate contact OUTSIDE the
-    //    spine), `r_c - r` for the inward cases (plate contact INSIDE).
-    let z_axis_dir = if rim { n_p_inward } else { -n_p_inward };
+    // 5) Torus placement. A reversed cylinder is a hole wall: its plane
+    // contact must move outward into the planar support (`r_c + r`) and its
+    // axial contact must move into material along `n_p_inward`. A bounded disc
+    // also moves axially inward but contracts radially. A post on a larger
+    // plate keeps the historic opposite axial direction and expands radially.
+    let z_axis_dir = if concave || rim {
+        n_p_inward
+    } else {
+        -n_p_inward
+    };
     let torus_center = p_axis_on_plane + z_axis_dir * radius;
     let major_radius = if inward { r_c - radius } else { r_c + radius };
     let minor_radius = radius;

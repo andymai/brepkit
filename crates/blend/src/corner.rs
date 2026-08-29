@@ -1644,12 +1644,22 @@ fn build_junction_fan(
         }
     } else if stripe_indices.len() == 3 {
         let data = multi_edge_corner_data(junction_vertex, stripe_indices, stripes, topo)?;
-        if data.contact_points.len() != 3 {
+        if data.contact_points.len() == 3 {
+            build_spherical_corner_surface(&data)?
+        } else if data
+            .contact_points
+            .iter()
+            .all(|point| ((*point - data.vertex_pos).length() - data.radius).abs() <= 1e-5)
+        {
+            FaceSurface::Sphere(brepkit_math::surfaces::SphericalSurface::new(
+                data.vertex_pos,
+                data.radius,
+            )?)
+        } else {
             return Err(BlendError::CornerFailure {
                 vertex: junction_vertex,
             });
         }
-        build_spherical_corner_surface(&data)?
     } else {
         return Err(BlendError::PlanningFailure {
             reason: format!(

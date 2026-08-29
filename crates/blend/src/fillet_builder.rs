@@ -255,6 +255,7 @@ impl<'a> FilletBuilder<'a> {
         let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
             std::collections::HashMap::new();
         let mut regular_results: Vec<&StripeResult> = Vec::new();
+
         for (stripe_index, sr) in stripe_results.iter().enumerate() {
             if let Some(rim) = closed_rim_info(topo, &sr.stripe)? {
                 let contour_id =
@@ -284,11 +285,15 @@ impl<'a> FilletBuilder<'a> {
                 regular_results.push(sr);
             }
         }
-        // Rebuild closed-rim support loops before the normal trim path. This
-        // preserves the shared contact loop for single stripes as well as
-        // multi-stripe closed-rim cases.
-        let (rim_contact_edges, rim_notches) =
-            rebuild_closed_rim_loop_faces(topo, &regular_results, &mut face_replacements)?;
+
+        // Planned contours are reconstructed once by the mapped batch
+        // trimmer. The legacy loop builder remains only for the recoverable
+        // unplanned fallback until the production cutover.
+        let (rim_contact_edges, rim_notches) = if plan.is_some() {
+            (std::collections::HashMap::new(), Vec::new())
+        } else {
+            rebuild_closed_rim_loop_faces(topo, &regular_results, &mut face_replacements)?
+        };
 
         let stripes: Vec<Stripe> = regular_results.iter().map(|sr| sr.stripe.clone()).collect();
         let contour_to_stripe: Vec<Option<usize>> = plan
@@ -344,32 +349,49 @@ impl<'a> FilletBuilder<'a> {
                 }
                 let mut restriction =
                     trimmer::ParametricRestriction::new(sample_nurbs_endpoints(&contact), keep);
-                restriction.curve = Some(EdgeCurve::NurbsCurve(contact));
+                restriction.source_edges = stripe.spine_edges().to_vec();
                 let source_surface = topo.face(face_id)?.surface().clone();
                 let mut adapter = None;
                 let support = surface_ref_or_adapter(&source_surface, &mut adapter);
-                let end_uv =
-                    support.project_point(restriction.contact_3d[restriction.contact_3d.len() - 1]);
-                let pcurve = if face_id == stripe.face1 {
-                    stripe.pcurve1.clone()
+                let analytic_pcurve = if face_id == stripe.face1 {
+                    &stripe.pcurve1
                 } else {
-                    stripe.pcurve2.clone()
+                    &stripe.pcurve2
                 };
-                let pcurve_start = pcurve.evaluate(0.0);
-                let tangent = pcurve.tangent(0.0);
-                let target = brepkit_math::vec::Point2::new(end_uv.0, end_uv.1);
-                let delta = target - pcurve_start;
-                let tangent_sq = tangent.length_squared();
-                let pcurve_end = if tangent_sq > 1e-20 {
-                    (delta.dot(tangent) / tangent_sq).abs()
+                let (pcurve, pcurve_start, pcurve_end) = if source_surface.is_planar() {
+                    build_planar_pcurve_from_contact(support, &contact)?
                 } else {
-                    1.0
+                    match build_pcurve_from_contact(
+                        support,
+                        &contact,
+                        face_u_period(&source_surface),
+                    ) {
+                        Ok(pcurve) => (pcurve, 0.0, 1.0),
+                        Err(BlendError::Math(brepkit_math::MathError::ZeroVector)) => {
+                            match analytic_pcurve {
+                                brepkit_math::curves2d::Curve2D::Circle(_)
+                                | brepkit_math::curves2d::Curve2D::Ellipse(_) => {
+                                    (analytic_pcurve.clone(), 0.0, std::f64::consts::TAU)
+                                }
+                                brepkit_math::curves2d::Curve2D::Nurbs(curve) => {
+                                    let (start, end) = curve.domain();
+                                    (analytic_pcurve.clone(), start, end)
+                                }
+                                brepkit_math::curves2d::Curve2D::Line(_) => {
+                                    return Err(BlendError::Math(
+                                        brepkit_math::MathError::ZeroVector,
+                                    ));
+                                }
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
                 };
-                if !pcurve_end.is_finite() || pcurve_end < 1e-12 {
-                    return Err(BlendError::TrimmingFailure { face: face_id });
-                }
+                restriction.curve = Some(EdgeCurve::NurbsCurve(contact));
                 restriction.pcurve = Some(brepkit_topology::pcurve::PCurve::new(
-                    pcurve, 0.0, pcurve_end,
+                    pcurve,
+                    pcurve_start,
+                    pcurve_end,
                 ));
                 restrictions_by_face
                     .entry(face_id)
@@ -595,29 +617,44 @@ impl<'a> FilletBuilder<'a> {
                         ],
                     )?;
                     boundary_registry.defer_owner(handle, 1)?;
-                    let edge = boundary_registry.materialize(topo, handle)?;
-                    let oriented = boundary_registry.oriented_edge(topo, handle, 0)?;
-                    debug_assert_eq!(oriented.edge(), edge);
                     Ok(Some(handle))
                 };
-                let cross_start = section_curve(stripe.sections.first(), p2_end, p1_start)?;
-                let cross_end = section_curve(stripe.sections.last(), p1_end, p2_start)?;
-                let info = crate::builder_utils::create_blend_face_from_registry(
-                    topo,
-                    stripe,
-                    &mut boundary_registry,
-                    (contact1, 1),
-                    (contact2, 1),
-                    cross_end.map(|handle| (handle, 0)),
-                    cross_start.map(|handle| (handle, 0)),
-                )?;
-                for handle in [cross_end, cross_start].into_iter().flatten() {
-                    boundary_registry.set_owner_face(handle, 0, info.face)?;
+                if stripe.spine.is_closed() {
+                    // Periodic closed-rim stripes: the two cross-sections are
+                    // the same seam traversed twice. Build the band with one
+                    // shared seam edge (canonical representation) instead of
+                    // two twin arcs that would each keep a single face use.
+                    let info = crate::builder_utils::create_periodic_blend_face(
+                        topo,
+                        stripe,
+                        &mut boundary_registry,
+                        contact1,
+                        contact2,
+                    )?;
+                    boundary_registry.set_owner_face(contact1, 1, info.face)?;
+                    boundary_registry.set_owner_face(contact2, 1, info.face)?;
+                    blend_cross_handles[si] = (None, None);
+                    info
+                } else {
+                    let cross_start = section_curve(stripe.sections.first(), p2_end, p1_start)?;
+                    let cross_end = section_curve(stripe.sections.last(), p1_end, p2_start)?;
+                    let info = crate::builder_utils::create_blend_face_from_registry(
+                        topo,
+                        stripe,
+                        &mut boundary_registry,
+                        (contact1, 1),
+                        (contact2, 1),
+                        cross_end.map(|handle| (handle, 0)),
+                        cross_start.map(|handle| (handle, 0)),
+                    )?;
+                    for handle in [cross_end, cross_start].into_iter().flatten() {
+                        boundary_registry.set_owner_face(handle, 0, info.face)?;
+                    }
+                    boundary_registry.set_owner_face(contact1, 1, info.face)?;
+                    boundary_registry.set_owner_face(contact2, 1, info.face)?;
+                    blend_cross_handles[si] = (cross_end, cross_start);
+                    info
                 }
-                boundary_registry.set_owner_face(contact1, 1, info.face)?;
-                boundary_registry.set_owner_face(contact2, 1, info.face)?;
-                blend_cross_handles[si] = (cross_end, cross_start);
-                info
             } else {
                 let (c1, c2) = stripe_contact_edges
                     .get(si)
@@ -1033,7 +1070,12 @@ impl<'a> FilletBuilder<'a> {
             }
         }
 
-        for &fid in &touched_faces {
+        // Iterate touched faces in deterministic index order: HashSet order
+        // varies run-to-run and would make the result shell's face order
+        // (and thus STEP export entity numbering) nondeterministic.
+        let mut touched: Vec<FaceId> = touched_faces.iter().copied().collect();
+        touched.sort_unstable_by_key(|f| f.index());
+        for &fid in &touched {
             let replacement = face_replacements.get(&fid).copied();
             result_faces.push(replacement.unwrap_or(fid));
         }
@@ -1066,6 +1108,23 @@ impl<'a> FilletBuilder<'a> {
         brepkit_topology::orientation::normalize_face_normals(topo, &new_faces, &seeds)?;
         brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
         boundary_registry.refresh_owner_orientations(topo)?;
+        // The post-assembly shell may come out globally inverted (every
+        // face's effective normal pointing inward) while still passing the
+        // incidence and closure gates. Detect that via the signed volume of
+        // the result shell and flip the whole shell when negative, then
+        // re-run the orientation passes so consistency is restored.
+        let signed_volume = crate::signed_volume::signed_shell_volume(topo, &result_faces)?;
+        if signed_volume < 0.0 {
+            log::debug!("orientation flip: signed shell volume {signed_volume} < 0");
+            for &face_id in &result_faces {
+                let face = topo.face_mut(face_id)?;
+                face.set_reversed(!face.is_reversed());
+            }
+            brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
+            brepkit_topology::orientation::normalize_face_normals(topo, &new_faces, &seeds)?;
+            brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
+            boundary_registry.refresh_owner_orientations(topo)?;
+        }
         let postassembly = if force_postassembly_failure {
             Err("forced postassembly incidence gate failure".to_owned())
         } else {
@@ -2332,7 +2391,39 @@ fn face_u_period(surface: &FaceSurface) -> Option<f64> {
     }
 }
 
-/// Build a PCurve (2D UV line) by projecting 3D contact endpoints onto a surface.
+/// Project a NURBS contact curve into a plane's affine UV frame exactly.
+///
+/// Projecting only the endpoints loses every closed contact and can also use
+/// the analytic helper's inward-normal frame instead of the support face's
+/// frame. An affine projection of the homogeneous control polygon preserves
+/// the degree, knots, weights, and parameter domain.
+fn build_planar_pcurve_from_contact(
+    surface: &dyn brepkit_math::traits::ParametricSurface,
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+) -> Result<(brepkit_math::curves2d::Curve2D, f64, f64), BlendError> {
+    let control_points = contact
+        .control_points()
+        .iter()
+        .map(|&point| {
+            let (u, v) = surface.project_point(point);
+            brepkit_math::vec::Point2::new(u, v)
+        })
+        .collect();
+    let curve = brepkit_math::curves2d::NurbsCurve2D::new(
+        contact.degree(),
+        contact.knots().to_vec(),
+        control_points,
+        contact.weights().to_vec(),
+    )?;
+    let (start, end) = curve.domain();
+    Ok((brepkit_math::curves2d::Curve2D::Nurbs(curve), start, end))
+}
+
+/// Build a contact pcurve in a support surface's native UV frame.
+///
+/// Open contacts use their endpoint line. Closed periodic contacts are
+/// sampled through one full carrier domain and unwrapped across the U seam;
+/// projecting equal endpoints alone would collapse them to a zero vector.
 fn build_pcurve_from_contact(
     surf: &dyn brepkit_math::traits::ParametricSurface,
     contact: &brepkit_math::nurbs::curve::NurbsCurve,
@@ -2341,18 +2432,40 @@ fn build_pcurve_from_contact(
     let (t0, t1) = contact.domain();
     let p_start = contact.evaluate(t0);
     let p_end = contact.evaluate(t1);
+    if (p_start - p_end).length() <= 1e-7 {
+        const SAMPLES: usize = 64;
+        let mut points = Vec::with_capacity(SAMPLES + 1);
+        let mut previous_u: Option<f64> = None;
+        for index in 0..=SAMPLES {
+            let fraction = index as f64 / SAMPLES as f64;
+            let point = contact.evaluate(t0 + (t1 - t0) * fraction);
+            let (mut u, v) = surf.project_point(point);
+            if let (Some(period), Some(reference)) = (u_period, previous_u) {
+                u -= period * ((u - reference) / period).round();
+            }
+            previous_u = Some(u);
+            points.push(brepkit_math::vec::Point2::new(u, v));
+        }
+        let mut knots = Vec::with_capacity(SAMPLES + 3);
+        knots.extend([0.0, 0.0]);
+        knots.extend((1..SAMPLES).map(|index| index as f64 / SAMPLES as f64));
+        knots.extend([1.0, 1.0]);
+        let weights = vec![1.0; points.len()];
+        return Ok(brepkit_math::curves2d::Curve2D::Nurbs(
+            brepkit_math::curves2d::NurbsCurve2D::new(1, knots, points, weights)?,
+        ));
+    }
 
     let (u0, v0) = surf.project_point(p_start);
     let (mut u1, v1) = surf.project_point(p_end);
     if let Some(period) = u_period {
         u1 -= period * ((u1 - u0) / period).round();
     }
-
     let origin = brepkit_math::vec::Point2::new(u0, v0);
     let dir = brepkit_math::vec::Vec2::new(u1 - u0, v1 - v0);
-
-    let line = brepkit_math::curves2d::Line2D::new(origin, dir)?;
-    Ok(brepkit_math::curves2d::Curve2D::Line(line))
+    Ok(brepkit_math::curves2d::Curve2D::Line(
+        brepkit_math::curves2d::Line2D::new(origin, dir)?,
+    ))
 }
 
 /// Rebuild faces whose entire outer wire is consumed by fillet spine edges.

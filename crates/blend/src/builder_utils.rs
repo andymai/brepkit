@@ -34,6 +34,74 @@ pub fn cross_section_curve(
     Some(EdgeCurve::Circle(circle))
 }
 
+/// Create the blend face for a periodic (closed rim) stripe.
+///
+/// The stripe is one full-revolution roll: both contacts are closed edges
+/// (start == end vertex) and the two cross-sections are the same seam segment
+/// traversed in opposite directions. Canonical solids store that seam as a
+/// single edge entity used twice in the band wire (the source cylinder's own
+/// seam does exactly this). Minting a twin arc per direction would leave each
+/// arc with a single face use and open the shell at the seam.
+///
+/// # Errors
+///
+/// Returns [`BlendError`] if the contact boundaries have no materialized
+/// edge, the seam vertices are degenerate, or wire/face construction fails.
+pub fn create_periodic_blend_face(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    registry: &mut crate::boundary_registry::BoundaryRegistry,
+    contact1: crate::boundary_registry::BoundaryHandle,
+    contact2: crate::boundary_registry::BoundaryHandle,
+) -> Result<BlendFaceInfo, BlendError> {
+    let entry1 = registry
+        .entry(contact1)
+        .ok_or_else(|| BlendError::PlanningFailure {
+            reason: format!("unknown periodic contact boundary {contact1}"),
+        })?;
+    let entry2 = registry
+        .entry(contact2)
+        .ok_or_else(|| BlendError::PlanningFailure {
+            reason: format!("unknown periodic contact boundary {contact2}"),
+        })?;
+    if entry1.edge_id().is_none() {
+        return Err(BlendError::PlanningFailure {
+            reason: format!("periodic contact boundary {contact1:?} was not materialized"),
+        });
+    }
+    if entry2.edge_id().is_none() {
+        return Err(BlendError::PlanningFailure {
+            reason: format!("periodic contact boundary {contact2:?} was not materialized"),
+        });
+    }
+    let v1 = entry1.start.vertex;
+    let v2 = entry2.start.vertex;
+    if v1 == v2 {
+        return Err(BlendError::PlanningFailure {
+            reason: "periodic blend seam vertices coincide".to_owned(),
+        });
+    }
+    let contact1_oriented = registry.oriented_edge(topo, contact1, 1)?;
+    let contact2_oriented = registry.oriented_edge(topo, contact2, 1)?;
+    let seam = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            contact1_oriented,
+            OrientedEdge::new(seam, true),
+            contact2_oriented,
+            OrientedEdge::new(seam, false),
+        ],
+        true,
+    )?;
+    let wire_id = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(wire_id, Vec::new(), stripe.surface.clone()));
+    Ok(BlendFaceInfo {
+        face,
+        cross_end: None,
+        cross_start: None,
+    })
+}
+
 /// Create a blend face from a stripe's surface and contact curves.
 ///
 /// Builds a minimal quadrilateral wire from the four contact-curve endpoints

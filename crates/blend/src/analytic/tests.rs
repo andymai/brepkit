@@ -234,7 +234,7 @@ fn non_analytic_returns_none() {
 /// Built via direct topology synthesis since `boolean(Cut)` would
 /// tessellate the cylinder lateral and yield a polygonal hole.
 #[test]
-fn plane_cylinder_fillet_concave_emits_torus_with_smaller_major() {
+fn plane_cylinder_fillet_hole_contacts_support_outside_spine() {
     use brepkit_math::curves::Circle3D;
     use brepkit_math::surfaces::CylindricalSurface;
     use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -299,30 +299,29 @@ fn plane_cylinder_fillet_concave_emits_torus_with_smaller_major() {
         other => panic!("expected Torus, got {}", other.type_tag()),
     };
 
-    // Concave: major = r_c − r_fillet = 1.7, minor = 0.3.
+    // Hole wall: both rolling-ball contacts move into material. The plane
+    // contact expands to `r_c + r`, and the center moves along the plane's
+    // inward normal.
     assert!(
         (torus.minor_radius() - r_fillet).abs() < 1e-9,
         "torus minor should equal fillet radius {r_fillet}, got {}",
         torus.minor_radius()
     );
     assert!(
-        (torus.major_radius() - (r_c - r_fillet)).abs() < 1e-9,
-        "torus major should be r_c − r_fillet = {} for concave, got {}",
-        r_c - r_fillet,
+        (torus.major_radius() - (r_c + r_fillet)).abs() < 1e-9,
+        "hole torus major should be r_c + r_fillet = {}, got {}",
+        r_c + r_fillet,
         torus.major_radius()
     );
 
-    // The torus center sits at `+r` ABOVE the plate (in the empty
-    // wedge direction = -n_p_inward = +z), distinguishing the concave
-    // case from the convex one (which would have center at `-r`).
     let center = torus.center();
     assert!(
-        (center.x()).abs() < 1e-9 && (center.y()).abs() < 1e-9,
+        center.x().abs() < 1e-9 && center.y().abs() < 1e-9,
         "torus center should be on the cylinder axis"
     );
     assert!(
-        (center.z() - r_fillet).abs() < 1e-9,
-        "concave torus center should sit at z = +r ({r_fillet}), got {}",
+        (center.z() + r_fillet).abs() < 1e-9,
+        "hole torus center should sit at z = -r (-{r_fillet}), got {}",
         center.z()
     );
 }
@@ -410,12 +409,11 @@ fn plane_cylinder_fillet_rim_emits_torus_with_smaller_major() {
     );
 }
 
-/// Concave plane-cylinder fillet rejects radii ≥ r_c/2 — past that
-/// threshold `major = r_c - r ≤ minor = r` and the construction
-/// becomes a self-intersecting spindle torus, which is invalid as a
-/// fillet surface. Convex must still accept radii up to `r_c`.
+/// A hole fillet expands to `major = r_c + r`, so it has no spindle-torus
+/// threshold at `r_c / 2`. The bounded-disc rim still contracts to
+/// `major = r_c - r` and must reject that regime.
 #[test]
-fn plane_cylinder_fillet_concave_rejects_spindle_radius() {
+fn plane_cylinder_fillet_hole_avoids_rim_spindle_bound() {
     use brepkit_math::curves::Circle3D;
     use brepkit_math::surfaces::CylindricalSurface;
     use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -456,7 +454,7 @@ fn plane_cylinder_fillet_concave_rejects_spindle_radius() {
         (spine, cyl, face_plate, face_cyl)
     };
 
-    // Concave: r > r_c/2 ⇒ would form spindle torus ⇒ reject.
+    // Hole wall: major = r_c + r, so both radii remain valid ring tori.
     let mut topo_concave = Topology::new();
     let (spine_concave, cyl_concave, fp_concave, fc_concave) = setup(&mut topo_concave, true);
     let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
@@ -466,19 +464,16 @@ fn plane_cylinder_fillet_concave_rejects_spindle_radius() {
         &cyl_concave,
         &spine_concave,
         &topo_concave,
-        // Just above r_c/2 = 1.0 — would produce major = 0.9 < minor = 1.1.
         1.1,
         fp_concave,
         fc_concave,
     )
     .unwrap();
     assert!(
-        result.is_none(),
-        "concave fillet must reject r > r_c/2 (spindle-torus regime)"
+        result.is_some(),
+        "hole fillet should accept r > r_c/2 because its major radius expands"
     );
 
-    // Concave at r exactly r_c/2 is also a degenerate equality (major
-    // = minor); rejected.
     let result_eq = plane_cylinder_fillet(
         n_p_inward,
         0.0,
@@ -491,8 +486,8 @@ fn plane_cylinder_fillet_concave_rejects_spindle_radius() {
     )
     .unwrap();
     assert!(
-        result_eq.is_none(),
-        "concave fillet must reject r = r_c/2 (degenerate major = minor)"
+        result_eq.is_some(),
+        "hole fillet should accept r = r_c/2 because major remains greater than minor"
     );
 
     // The non-reversed cylinder face here borders a bare disc cap (the rim

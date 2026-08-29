@@ -1013,6 +1013,13 @@ pub struct ParametricRestriction {
     pub curve: Option<EdgeCurve>,
     /// Exact contact pcurve on the support face, when available.
     pub pcurve: Option<brepkit_topology::pcurve::PCurve>,
+    /// Ordered source boundary edges replaced by this contact.
+    ///
+    /// An empty list selects the general UV-arrangement path. Fillet contours
+    /// populate this list so a support wire can be reconstructed from its
+    /// immutable source boundary without inferring junction ownership from
+    /// geometric intersections.
+    pub source_edges: Vec<EdgeId>,
 }
 
 impl ParametricRestriction {
@@ -1024,6 +1031,7 @@ impl ParametricRestriction {
             keep,
             curve: None,
             pcurve: None,
+            source_edges: Vec::new(),
         }
     }
 }
@@ -1137,6 +1145,527 @@ fn edge_curve_for_span(
     ))
 }
 
+fn mapped_surface_uv(
+    surface: &FaceSurface,
+    point: Point3,
+    face_id: FaceId,
+) -> Result<(f64, f64), BlendError> {
+    if let FaceSurface::Plane { normal, d } = surface {
+        let reference = if normal.x().abs() < 0.9 {
+            brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            brepkit_math::vec::Vec3::new(0.0, 1.0, 0.0)
+        };
+        let u = normal
+            .cross(reference)
+            .normalize()
+            .map_err(|_| BlendError::TrimmingFailure { face: face_id })?;
+        let v = normal.cross(u);
+        let origin = Point3::new(normal.x() * d, normal.y() * d, normal.z() * d);
+        let offset = point - origin;
+        let residual = normal.dot(brepkit_math::vec::Vec3::new(
+            point.x(),
+            point.y(),
+            point.z(),
+        )) - d;
+        if residual.abs() > 1e-5 {
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
+        return Ok((u.dot(offset), v.dot(offset)));
+    }
+    let projected = surface
+        .project_point(point)
+        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+    let evaluated = surface
+        .evaluate(projected.0, projected.1)
+        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+    if (evaluated - point).length() > 1e-4 {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    }
+    Ok(projected)
+}
+
+fn mapped_vertex_for_point(
+    topo: &mut Topology,
+    known: &mut Vec<(Point3, VertexId)>,
+    new_vertices: &mut Vec<VertexId>,
+    point: Point3,
+) -> VertexId {
+    if let Some((_, vertex)) = known
+        .iter()
+        .find(|(candidate, _)| (*candidate - point).length() <= VERTEX_TOL)
+    {
+        return *vertex;
+    }
+    let vertex = topo.add_vertex(Vertex::new(point, VERTEX_TOL));
+    known.push((point, vertex));
+    new_vertices.push(vertex);
+    vertex
+}
+
+fn mapped_connector_geometry(
+    surface: &FaceSurface,
+    start: Point3,
+    end: Point3,
+    face_id: FaceId,
+) -> Result<(EdgeCurve, brepkit_topology::pcurve::PCurve), BlendError> {
+    let start_uv = mapped_surface_uv(surface, start, face_id)?;
+    let mut end_uv = mapped_surface_uv(surface, end, face_id)?;
+    if let Some(period) = surface_u_period(surface) {
+        end_uv.0 -= period * ((end_uv.0 - start_uv.0) / period).round();
+    }
+    if surface.is_planar() {
+        let pcurve = brepkit_math::curves2d::NurbsCurve2D::from_line(
+            brepkit_math::vec::Point2::new(start_uv.0, start_uv.1),
+            brepkit_math::vec::Point2::new(end_uv.0, end_uv.1),
+        )?;
+        return Ok((
+            EdgeCurve::Line,
+            brepkit_topology::pcurve::PCurve::new(
+                brepkit_math::curves2d::Curve2D::Nurbs(pcurve),
+                0.0,
+                1.0,
+            ),
+        ));
+    }
+
+    // A connector is a short surface path between adjacent contact ends. Use
+    // the same piecewise-linear parameterization in UV and 3D. The dense
+    // sampling keeps each 3D chord within the support-surface tolerance while
+    // avoiding a second projection/fitting algorithm for analytic and NURBS
+    // supports.
+    let connector_samples = BATCH_CURVE_SAMPLES * 4;
+    let mut points = Vec::with_capacity(connector_samples + 1);
+    let mut points_uv = Vec::with_capacity(connector_samples + 1);
+    for index in 0..=connector_samples {
+        let fraction = index as f64 / connector_samples as f64;
+        let u = start_uv.0 + (end_uv.0 - start_uv.0) * fraction;
+        let v = start_uv.1 + (end_uv.1 - start_uv.1) * fraction;
+        let point = if index == 0 {
+            start
+        } else if index == connector_samples {
+            end
+        } else {
+            surface
+                .evaluate(u, v)
+                .ok_or(BlendError::TrimmingFailure { face: face_id })?
+        };
+        points.push(point);
+        points_uv.push(brepkit_math::vec::Point2::new(u, v));
+    }
+    let mut knots = Vec::with_capacity(connector_samples + 3);
+    knots.extend([0.0, 0.0]);
+    knots.extend((1..connector_samples).map(|index| index as f64 / connector_samples as f64));
+    knots.extend([1.0, 1.0]);
+    let weights = vec![1.0; points.len()];
+    let curve =
+        brepkit_math::nurbs::curve::NurbsCurve::new(1, knots.clone(), points, weights.clone())?;
+    let pcurve = brepkit_math::curves2d::NurbsCurve2D::new(1, knots, points_uv, weights)?;
+    Ok((
+        EdgeCurve::NurbsCurve(curve),
+        brepkit_topology::pcurve::PCurve::new(
+            brepkit_math::curves2d::Curve2D::Nurbs(pcurve),
+            0.0,
+            1.0,
+        ),
+    ))
+}
+
+fn mapped_planar_corner_geometry(
+    surface: &FaceSurface,
+    source_vertices: &[(Point3, VertexId)],
+    start: Point3,
+    end: Point3,
+    face_id: FaceId,
+) -> Result<Option<(EdgeCurve, brepkit_topology::pcurve::PCurve)>, BlendError> {
+    let FaceSurface::Plane { normal, .. } = surface else {
+        return Ok(None);
+    };
+    let mut best: Option<(Point3, f64, brepkit_math::vec::Vec3)> = None;
+    for &(center, _) in source_vertices {
+        let from_center = start - center;
+        let to_center = end - center;
+        let start_radius = from_center.length();
+        let end_radius = to_center.length();
+        if start_radius <= 1e-6
+            || (start_radius - end_radius).abs() > 1e-5
+            || from_center.cross(to_center).length() <= 1e-8
+        {
+            continue;
+        }
+        let Ok(circle_normal) = from_center.cross(to_center).normalize() else {
+            continue;
+        };
+        if circle_normal.dot(*normal).abs() < 1.0 - 1e-6 {
+            continue;
+        }
+        if best.is_none_or(|(_, radius, _)| start_radius < radius) {
+            best = Some((center, start_radius, circle_normal));
+        }
+    }
+    let Some((center, radius, circle_normal)) = best else {
+        return Ok(None);
+    };
+
+    let circle = brepkit_math::curves::Circle3D::new(center, circle_normal, radius)
+        .map_err(|_| BlendError::TrimmingFailure { face: face_id })?;
+    let center_uv = mapped_surface_uv(surface, center, face_id)?;
+    let start_uv = mapped_surface_uv(surface, start, face_id)?;
+    let end_uv = mapped_surface_uv(surface, end, face_id)?;
+    let circle_2d = brepkit_math::curves2d::Circle2D::new(
+        brepkit_math::vec::Point2::new(center_uv.0, center_uv.1),
+        radius,
+    )?;
+    let start_parameter = circle_2d.project(brepkit_math::vec::Point2::new(start_uv.0, start_uv.1));
+    let end_parameter = circle_2d.project(brepkit_math::vec::Point2::new(end_uv.0, end_uv.1));
+    let parameter_end = if circle_normal.dot(*normal) >= 0.0 {
+        start_parameter + (end_parameter - start_parameter).rem_euclid(std::f64::consts::TAU)
+    } else {
+        start_parameter - (start_parameter - end_parameter).rem_euclid(std::f64::consts::TAU)
+    };
+    Ok(Some((
+        EdgeCurve::Circle(circle),
+        brepkit_topology::pcurve::PCurve::new(
+            brepkit_math::curves2d::Curve2D::Circle(circle_2d),
+            start_parameter,
+            parameter_end,
+        ),
+    )))
+}
+
+fn mapped_contact_forward(
+    topo: &Topology,
+    face_id: FaceId,
+    contact_edge: EdgeId,
+    source_run: &[OrientedEdge],
+) -> Result<bool, BlendError> {
+    let source_first = source_run
+        .first()
+        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+    let source_last = source_run
+        .last()
+        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+    let first_edge = topo.edge(source_first.edge())?;
+    let last_edge = topo.edge(source_last.edge())?;
+    let source_start = topo
+        .vertex(source_first.oriented_start(first_edge))?
+        .point();
+    let source_end = topo.vertex(source_last.oriented_end(last_edge))?.point();
+    let contact = topo.edge(contact_edge)?;
+    let contact_start = topo.vertex(contact.start())?.point();
+    let contact_end = topo.vertex(contact.end())?.point();
+    if contact.start() != contact.end() {
+        let forward_distance =
+            (contact_start - source_start).length() + (contact_end - source_end).length();
+        let reverse_distance =
+            (contact_end - source_start).length() + (contact_start - source_end).length();
+        return Ok(forward_distance <= reverse_distance);
+    }
+
+    let stored_start = topo.vertex(first_edge.start())?.point();
+    let stored_end = topo.vertex(first_edge.end())?.point();
+    let (source_t0, source_t1) = first_edge
+        .curve()
+        .domain_with_endpoints(stored_start, stored_end);
+    let source_parameter = if source_first.is_forward() {
+        source_t0
+    } else {
+        source_t1
+    };
+    let mut source_tangent =
+        first_edge
+            .curve()
+            .tangent_with_endpoints(source_parameter, stored_start, stored_end);
+    if !source_first.is_forward() {
+        source_tangent = -source_tangent;
+    }
+    let (contact_t0, _) = contact
+        .curve()
+        .domain_with_endpoints(contact_start, contact_end);
+    let contact_tangent =
+        contact
+            .curve()
+            .tangent_with_endpoints(contact_t0, contact_start, contact_end);
+    Ok(contact_tangent.dot(source_tangent) >= 0.0)
+}
+
+#[allow(clippy::too_many_lines)]
+fn rebuild_mapped_parametric_face(
+    topo: &mut Topology,
+    face_id: FaceId,
+    restrictions: &[ParametricRestriction],
+) -> Result<Option<BatchTrimResult>, BlendError> {
+    if restrictions
+        .iter()
+        .any(|restriction| restriction.source_edges.is_empty())
+    {
+        return Ok(None);
+    }
+
+    let face = topo.face(face_id)?.clone();
+    let surface = face.surface().clone();
+    let wire_ids: Vec<WireId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    let mut restriction_for_edge = std::collections::HashMap::<EdgeId, usize>::new();
+    for (restriction_index, restriction) in restrictions.iter().enumerate() {
+        for &source_edge in &restriction.source_edges {
+            if let Some(previous) = restriction_for_edge.insert(source_edge, restriction_index)
+                && previous != restriction_index
+            {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+        }
+    }
+
+    let mut face_edges = std::collections::HashSet::new();
+    let mut known_vertices = Vec::<(Point3, VertexId)>::new();
+    let mut known_vertex_ids = std::collections::HashSet::new();
+    for &wire_id in &wire_ids {
+        let wire = topo.wire(wire_id)?;
+        if !wire.is_closed() {
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
+        for oriented in wire.edges() {
+            face_edges.insert(oriented.edge());
+            let edge = topo.edge(oriented.edge())?;
+            for vertex in [edge.start(), edge.end()] {
+                if known_vertex_ids.insert(vertex) {
+                    known_vertices.push((topo.vertex(vertex)?.point(), vertex));
+                }
+            }
+        }
+    }
+    let source_vertices = known_vertices.clone();
+    if restriction_for_edge
+        .keys()
+        .any(|edge| !face_edges.contains(edge))
+    {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    }
+
+    let mut new_vertices = Vec::new();
+    let mut contact_edges = Vec::with_capacity(restrictions.len());
+    for restriction in restrictions {
+        if restriction.contact_3d.len() < 2
+            || restriction
+                .contact_3d
+                .iter()
+                .copied()
+                .any(|point| mapped_surface_uv(&surface, point, face_id).is_err())
+        {
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
+        let start = restriction.contact_3d[0];
+        let end = restriction.contact_3d[restriction.contact_3d.len() - 1];
+        let pcurve_closed = restriction.pcurve.as_ref().is_some_and(|pcurve| {
+            let a = pcurve.evaluate(pcurve.t_start());
+            let b = pcurve.evaluate(pcurve.t_end());
+            (a.0[0] - b.0[0]).hypot(a.0[1] - b.0[1]) <= PARAM_TOL
+        });
+        let closed = (start - end).length() <= VERTEX_TOL || pcurve_closed;
+        if closed && (start - end).length() > 1e-4 {
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
+        let start_vertex =
+            mapped_vertex_for_point(topo, &mut known_vertices, &mut new_vertices, start);
+        let end_vertex = if closed {
+            start_vertex
+        } else {
+            mapped_vertex_for_point(topo, &mut known_vertices, &mut new_vertices, end)
+        };
+        let curve = restriction.curve.clone().unwrap_or(EdgeCurve::Line);
+        contact_edges.push(topo.add_edge(Edge::new(start_vertex, end_vertex, curve)));
+    }
+
+    let mut emitted = vec![0_usize; restrictions.len()];
+    let mut retained_source_edges = std::collections::HashSet::new();
+    // Periodic supports wrap onto themselves: the seam is one geometric
+    // segment traversed twice (forward and reverse) in the face wire, exactly
+    // as the source solid stores it. Distinct fresh edges for the two
+    // traversals would leave each with a single face use and trip the
+    // postassembly incidence audit. Reuse the first seam connector for its
+    let mut seam_edges: std::collections::HashMap<(u64, u64, u64, u64, u64, u64), EdgeId> =
+        std::collections::HashMap::new();
+    let period = surface_u_period(&surface);
+    let mut result_wires = Vec::with_capacity(wire_ids.len());
+    let mut new_edges = contact_edges.clone();
+    let mut connector_pcurves = Vec::new();
+    for &wire_id in &wire_ids {
+        let source_wire = topo.wire(wire_id)?.clone();
+        let source_edges = source_wire.edges();
+        let owners: Vec<Option<usize>> = source_edges
+            .iter()
+            .map(|oriented| restriction_for_edge.get(&oriented.edge()).copied())
+            .collect();
+        if owners.iter().all(Option::is_none) {
+            retained_source_edges.extend(source_edges.iter().map(OrientedEdge::edge));
+            result_wires.push(wire_id);
+            continue;
+        }
+
+        let transition = (0..owners.len())
+            .find(|&index| owners[index] != owners[(index + owners.len() - 1) % owners.len()]);
+        let mut pieces = Vec::<(OrientedEdge, bool)>::new();
+        if let Some(start_index) = transition {
+            let mut consumed = 0;
+            while consumed < source_edges.len() {
+                let index = (start_index + consumed) % source_edges.len();
+                if let Some(restriction_index) = owners[index] {
+                    let mut source_run = Vec::new();
+                    while consumed < source_edges.len() {
+                        let run_index = (start_index + consumed) % source_edges.len();
+                        if owners[run_index] != Some(restriction_index) {
+                            break;
+                        }
+                        source_run.push(source_edges[run_index]);
+                        consumed += 1;
+                    }
+                    emitted[restriction_index] += 1;
+                    pieces.push((
+                        OrientedEdge::new(
+                            contact_edges[restriction_index],
+                            mapped_contact_forward(
+                                topo,
+                                face_id,
+                                contact_edges[restriction_index],
+                                &source_run,
+                            )?,
+                        ),
+                        true,
+                    ));
+                } else {
+                    pieces.push((source_edges[index], false));
+                    retained_source_edges.insert(source_edges[index].edge());
+                    consumed += 1;
+                }
+            }
+        } else {
+            let restriction_index =
+                owners[0].ok_or(BlendError::TrimmingFailure { face: face_id })?;
+            emitted[restriction_index] += 1;
+            pieces.push((
+                OrientedEdge::new(
+                    contact_edges[restriction_index],
+                    mapped_contact_forward(
+                        topo,
+                        face_id,
+                        contact_edges[restriction_index],
+                        source_edges,
+                    )?,
+                ),
+                true,
+            ));
+        }
+
+        let mut reconstructed = Vec::with_capacity(pieces.len() * 2);
+        for index in 0..pieces.len() {
+            let current = pieces[index];
+            let next = pieces[(index + 1) % pieces.len()];
+            reconstructed.push(current.0);
+            let current_edge = topo.edge(current.0.edge())?;
+            let next_edge = topo.edge(next.0.edge())?;
+            let current_end = current.0.oriented_end(current_edge);
+            let next_start = next.0.oriented_start(next_edge);
+            if current_end == next_start {
+                continue;
+            }
+            let start = topo.vertex(current_end)?.point();
+            let end = topo.vertex(next_start)?.point();
+            if (start - end).length() <= VERTEX_TOL {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+            let (curve, pcurve) = if current.1 && next.1 {
+                if let Some(geometry) =
+                    mapped_planar_corner_geometry(&surface, &source_vertices, start, end, face_id)?
+                {
+                    geometry
+                } else {
+                    mapped_connector_geometry(&surface, start, end, face_id)?
+                }
+            } else {
+                mapped_connector_geometry(&surface, start, end, face_id)?
+            };
+            if let Some(_period_value) = period {
+                // Periodic supports wrap onto themselves: the seam is one
+                // geometric segment traversed twice (forward and reverse) in
+                // the face wire, exactly as the source solid stores it.
+                // Distinct fresh edges for the two traversals would each get
+                // a single face use and trip the incidence audit.
+                let key = {
+                    let sw = (start.x(), start.y(), start.z()) > (end.x(), end.y(), end.z());
+                    let (a, b) = if sw { (end, start) } else { (start, end) };
+                    (
+                        a.x().to_bits(),
+                        a.y().to_bits(),
+                        a.z().to_bits(),
+                        b.x().to_bits(),
+                        b.y().to_bits(),
+                        b.z().to_bits(),
+                    )
+                };
+                if let Some(&existing) = seam_edges.get(&key) {
+                    // Reverse twin of an already-emitted seam segment: reuse
+                    // the same edge entity so both wire traversals share one
+                    // use pair, matching the source solid's representation.
+                    let existing_edge = topo.edge(existing)?;
+                    let forward = existing_edge.start() == current_end;
+                    reconstructed.push(OrientedEdge::new(existing, forward));
+                    continue;
+                }
+                let connector = topo.add_edge(Edge::new(current_end, next_start, curve));
+                seam_edges.insert(key, connector);
+                reconstructed.push(OrientedEdge::new(connector, true));
+                connector_pcurves.push((connector, pcurve));
+                new_edges.push(connector);
+                continue;
+            }
+            let connector = topo.add_edge(Edge::new(current_end, next_start, curve));
+            reconstructed.push(OrientedEdge::new(connector, true));
+            connector_pcurves.push((connector, pcurve));
+            new_edges.push(connector);
+        }
+        result_wires.push(topo.add_wire(Wire::new(reconstructed, true)?));
+    }
+    if emitted.iter().any(|&count| count != 1) {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    }
+
+    let mut result_face = Face::new(result_wires[0], result_wires[1..].to_vec(), surface.clone());
+    result_face.set_reversed(face.is_reversed());
+    let trimmed_face = topo.add_face(result_face);
+    for source_edge in retained_source_edges {
+        if let Some(pcurve) = topo.pcurves().get(source_edge, face_id).cloned() {
+            topo.pcurves_mut().set(source_edge, trimmed_face, pcurve);
+        }
+    }
+    for (restriction_index, &contact_edge) in contact_edges.iter().enumerate() {
+        let pcurve = if let Some(pcurve) = restrictions[restriction_index].pcurve.clone() {
+            pcurve
+        } else {
+            let contact = topo.edge(contact_edge)?;
+            if contact.start() == contact.end() {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+            let start = topo.vertex(contact.start())?.point();
+            let end = topo.vertex(contact.end())?.point();
+            mapped_connector_geometry(&surface, start, end, face_id)?.1
+        };
+        topo.pcurves_mut().set(contact_edge, trimmed_face, pcurve);
+    }
+    for (connector, pcurve) in connector_pcurves {
+        topo.pcurves_mut().set(connector, trimmed_face, pcurve);
+    }
+
+    Ok(Some(BatchTrimResult {
+        trimmed_face,
+        contact_edges,
+        new_edges,
+        new_vertices,
+        incident_replacements: Vec::new(),
+    }))
+}
+
 fn trim_parametric_face_batch_in_place(
     topo: &mut Topology,
     face_id: FaceId,
@@ -1144,6 +1673,9 @@ fn trim_parametric_face_batch_in_place(
 ) -> Result<BatchTrimResult, BlendError> {
     if restrictions.is_empty() {
         return Err(BlendError::TrimmingFailure { face: face_id });
+    }
+    if let Some(result) = rebuild_mapped_parametric_face(topo, face_id, restrictions)? {
+        return Ok(result);
     }
     let source_face_ids: Vec<FaceId> = topo.faces().iter().map(|(id, _)| id).collect();
     let face = topo.face(face_id)?.clone();
@@ -1244,10 +1776,32 @@ fn trim_parametric_face_batch_in_place(
         }
         original.push(edges);
     }
+    let source_closed_wires = original
+        .iter()
+        .enumerate()
+        .map(
+            |(index, edges)| -> Result<Option<(WireId, bool, Point3)>, BlendError> {
+                if edges.len() != 1 {
+                    return Ok(None);
+                }
+                let oriented = edges[0].0;
+                let edge = topo.edge(oriented.edge())?;
+                if edge.start() != edge.end() {
+                    return Ok(None);
+                }
+                Ok(Some((
+                    wire_ids[index],
+                    oriented.is_forward(),
+                    topo.vertex(edge.start())?.point(),
+                )))
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut restriction_lines = Vec::with_capacity(restrictions.len());
     let mut restriction_paths: Vec<Vec<((f64, f64), Point3)>> =
         Vec::with_capacity(restrictions.len());
+    let mut closed_restrictions = Vec::with_capacity(restrictions.len());
     for restriction in restrictions {
         if restriction.contact_3d.len() < 2
             || restriction
@@ -1322,9 +1876,7 @@ fn trim_parametric_face_batch_in_place(
             );
         }
         let (a, b) = (path[0].0, path[path.len() - 1].0);
-        if (a.0 - b.0).hypot(a.1 - b.1) < PARAM_TOL {
-            return Err(BlendError::TrimmingFailure { face: face_id });
-        }
+        let closed = (a.0 - b.0).hypot(a.1 - b.1) < PARAM_TOL;
         let na = batch_node_for_point(
             &mut *topo,
             &mut nodes,
@@ -1333,14 +1885,19 @@ fn trim_parametric_face_batch_in_place(
             path[0].1,
             None,
         );
-        let nb = batch_node_for_point(
-            &mut *topo,
-            &mut nodes,
-            &mut node_for_vertex,
-            b,
-            path[path.len() - 1].1,
-            None,
-        );
+        let nb = if closed {
+            na
+        } else {
+            batch_node_for_point(
+                &mut *topo,
+                &mut nodes,
+                &mut node_for_vertex,
+                b,
+                path[path.len() - 1].1,
+                None,
+            )
+        };
+        closed_restrictions.push(closed);
         restriction_lines.push((a, b, na, nb));
         restriction_paths.push(path);
     }
@@ -1390,6 +1947,14 @@ fn trim_parametric_face_batch_in_place(
             }
         }
     }
+    let arrangement_anchor = if surface_u_period(&surface).is_some() {
+        original
+            .first()
+            .and_then(|edges| edges.first())
+            .map(|(_, splits)| nodes[splits[0].1].0.0)
+    } else {
+        None
+    };
 
     // Collect every boundary split before allocating any result wire. Curved
     // boundary edges are sampled in their native parameter domain instead of
@@ -1482,7 +2047,7 @@ fn trim_parametric_face_batch_in_place(
     let mut split_edges = Vec::<(EdgeId, Vec<EdgeId>)>::new();
     let mut split_spans = Vec::<(EdgeId, Vec<(EdgeId, f64, f64)>)>::new();
     let mut new_edges = Vec::new();
-    for edges in &original {
+    for (wire_index, edges) in original.iter().enumerate() {
         for (oe, splits) in edges {
             let old = topo.edge(oe.edge())?.clone();
             let stored_start = topo.vertex(old.start())?.point();
@@ -1493,6 +2058,9 @@ fn trim_parametric_face_batch_in_place(
             for pair in splits.windows(2) {
                 let (t0, n0) = pair[0];
                 let (t1, n1) = pair[1];
+                if source_closed_wires[wire_index].is_some() && n0 == n1 {
+                    continue;
+                }
                 if (t1 - t0).abs() < PARAM_TOL {
                     continue;
                 }
@@ -1540,20 +2108,22 @@ fn trim_parametric_face_batch_in_place(
         let edge = topo.add_edge(Edge::new(nodes[start].2, nodes[end].2, curve));
         contact_edges.push(edge);
         new_edges.push(edge);
-        segments.push(BatchSegment {
-            a: start,
-            b: end,
-            edge,
-        });
+        if !closed_restrictions[index] {
+            segments.push(BatchSegment {
+                a: start,
+                b: end,
+                edge,
+            });
+        }
     }
 
     // Half-edge walk: predecessor of the reverse edge keeps the cell on left.
     let mut outgoing = vec![Vec::<usize>::new(); nodes.len()];
-    let mut half = Vec::<(usize, usize, bool)>::new();
-    for segment in &segments {
+    let mut half = Vec::<(usize, usize, usize)>::new();
+    for (segment_index, segment) in segments.iter().enumerate() {
         let i = half.len();
-        half.push((segment.a, segment.b, true));
-        half.push((segment.b, segment.a, false));
+        half.push((segment.a, segment.b, segment_index));
+        half.push((segment.b, segment.a, segment_index));
         outgoing[segment.a].push(i);
         outgoing[segment.b].push(i + 1);
     }
@@ -1568,12 +2138,7 @@ fn trim_parametric_face_batch_in_place(
     }
     let mut next = vec![usize::MAX; half.len()];
     for (i, &(_, to, _)) in half.iter().enumerate() {
-        let reverse = half
-            .iter()
-            .enumerate()
-            .find(|&(_, &(from, end, _))| from == to && end == half[i].0)
-            .map(|(j, _)| j)
-            .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+        let reverse = i ^ 1;
         let list = &outgoing[to];
         let pos = list
             .iter()
@@ -1602,20 +2167,59 @@ fn trim_parametric_face_batch_in_place(
         }
     }
 
-    let loop_uv: Vec<Vec<(f64, f64)>> = original
+    let loop_uv = original
         .iter()
-        .map(|edges| {
-            edges
-                .iter()
-                .map(|(_, s)| nodes[s[0].1].0)
-                .collect::<Vec<_>>()
+        .map(|edges| -> Result<Vec<(f64, f64)>, BlendError> {
+            let mut polygon = Vec::new();
+            let period = surface_u_period(&surface);
+            let mut previous_u: Option<f64> = arrangement_anchor;
+            for (oriented, _) in edges {
+                let edge = topo.edge(oriented.edge())?;
+                let stored_start = topo.vertex(edge.start())?.point();
+                let stored_end = topo.vertex(edge.end())?.point();
+                let (domain_start, domain_end) =
+                    edge.curve().domain_with_endpoints(stored_start, stored_end);
+                for sample_index in 0..BATCH_CURVE_SAMPLES {
+                    let fraction = sample_index as f64 / BATCH_CURVE_SAMPLES as f64;
+                    let native_fraction = if oriented.is_forward() {
+                        fraction
+                    } else {
+                        1.0 - fraction
+                    };
+                    let parameter = domain_start + (domain_end - domain_start) * native_fraction;
+                    let point =
+                        edge.curve()
+                            .evaluate_with_endpoints(parameter, stored_start, stored_end);
+                    let mut projected = uv(point);
+                    if !projected.0.is_finite() || !projected.1.is_finite() {
+                        return Err(BlendError::TrimmingFailure { face: face_id });
+                    }
+                    if let (Some(period), Some(reference)) = (period, previous_u) {
+                        projected.0 -= period * ((projected.0 - reference) / period).round();
+                    }
+                    previous_u = Some(projected.0);
+                    polygon.push(projected);
+                }
+            }
+            Ok(polygon)
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     let point_in = |p: (f64, f64), polygon: &[(f64, f64)]| {
         let mut inside = false;
         for i in 0..polygon.len() {
             let a = polygon[i];
             let b = polygon[(i + 1) % polygon.len()];
+            if (a.1 > p.1) != (b.1 > p.1) && p.0 < (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) + a.0 {
+                inside = !inside;
+            }
+        }
+        inside
+    };
+    let point_in_restriction = |p: (f64, f64), path: &[((f64, f64), Point3)]| {
+        let mut inside = false;
+        for i in 0..path.len() {
+            let a = path[i].0;
+            let b = path[(i + 1) % path.len()].0;
             if (a.1 > p.1) != (b.1 > p.1) && p.0 < (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) + a.0 {
                 inside = !inside;
             }
@@ -1639,31 +2243,64 @@ fn trim_parametric_face_batch_in_place(
             continue;
         }
         let valid = restrictions.iter().enumerate().all(|(i, restriction)| {
-            let (la, lb, _, _) = restriction_lines[i];
-            let side = (lb.0 - la.0) * (sample.1 - la.1) - (lb.1 - la.1) * (sample.0 - la.0);
-            let sample_uv = nodes[half[cycle[0]].0].0;
-            let raw_normal = if surface.is_planar() {
-                plane_normal
-            } else {
-                surface.normal(sample_uv.0, sample_uv.1)
-            };
-            let face_normal = if reversed { -raw_normal } else { raw_normal };
-            let contact_dir = restriction.contact_3d[restriction.contact_3d.len() - 1]
-                - restriction.contact_3d[0];
-            let sample_dir = nodes[half[cycle[0]].0].1 - restriction.contact_3d[0];
-            let p_is_left = face_normal.dot(contact_dir.cross(sample_dir)) > 0.0;
-            let keep_left = match restriction.keep {
-                TrimKeep::Side(TrimSide::Left) => true,
-                TrimKeep::Side(TrimSide::Right) => false,
-                TrimKeep::AwayFrom(p) => {
-                    face_normal.dot(
-                        (restriction.contact_3d[restriction.contact_3d.len() - 1]
-                            - restriction.contact_3d[0])
-                            .cross(p - restriction.contact_3d[0]),
-                    ) <= 0.0
+            if closed_restrictions[i] {
+                let path = &restriction_paths[i];
+                let sample_inside = point_in_restriction(sample, path);
+                return match restriction.keep {
+                    TrimKeep::AwayFrom(point) => {
+                        let point_inside = point_in_restriction(uv(point), path);
+                        sample_inside != point_inside
+                    }
+                    TrimKeep::Side(side) => {
+                        let signed_area = path
+                            .windows(2)
+                            .map(|pair| pair[0].0.0 * pair[1].0.1 - pair[0].0.1 * pair[1].0.0)
+                            .sum::<f64>()
+                            * 0.5;
+                        let interior_is_left = signed_area > 0.0;
+                        let keep_left = matches!(side, TrimSide::Left);
+                        sample_inside == (interior_is_left == keep_left)
+                    }
+                };
+            }
+            let contains_contact = cycle.iter().any(|&half_edge| {
+                segments.iter().any(|segment| {
+                    segment.edge == contact_edges[i]
+                        && ((segment.a == half[half_edge].0 && segment.b == half[half_edge].1)
+                            || (segment.a == half[half_edge].1 && segment.b == half[half_edge].0))
+                })
+            });
+            if !contains_contact {
+                return true;
+            }
+            let (line_start, line_end, _, _) = restriction_lines[i];
+            let side = (line_end.0 - line_start.0) * (sample.1 - line_start.1)
+                - (line_end.1 - line_start.1) * (sample.0 - line_start.0);
+            if side.abs() < 1e-8 {
+                return true;
+            }
+            match restriction.keep {
+                TrimKeep::AwayFrom(point) => {
+                    let projected = uv(point);
+                    let point_side = (line_end.0 - line_start.0) * (projected.1 - line_start.1)
+                        - (line_end.1 - line_start.1) * (projected.0 - line_start.0);
+                    side * point_side <= 0.0
                 }
-            };
-            (side.abs() < 1e-8) || (p_is_left == keep_left)
+                TrimKeep::Side(TrimSide::Left) => {
+                    if reversed {
+                        side < 0.0
+                    } else {
+                        side > 0.0
+                    }
+                }
+                TrimKeep::Side(TrimSide::Right) => {
+                    if reversed {
+                        side > 0.0
+                    } else {
+                        side < 0.0
+                    }
+                }
+            }
         });
         if valid {
             let area = cycle
@@ -1680,7 +2317,7 @@ fn trim_parametric_face_batch_in_place(
             }
         }
     }
-    let (outer_index, _) = kept
+    let outer_index = kept
         .iter()
         .enumerate()
         .max_by(|(_, a), (_, b)| {
@@ -1688,33 +2325,113 @@ fn trim_parametric_face_batch_in_place(
                 .partial_cmp(&b.1.abs())
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+        .map(|(index, _)| index);
     let make_wire = |topo: &mut Topology, cycle: &[usize]| -> Result<WireId, BlendError> {
         let edges = cycle
             .iter()
-            .map(|&h| {
-                let segment = segments
-                    .iter()
-                    .find(|s| s.a == half[h].0 && s.b == half[h].1)
-                    .or_else(|| {
-                        segments
-                            .iter()
-                            .find(|s| s.a == half[h].1 && s.b == half[h].0)
-                    })
-                    .ok_or(BlendError::TrimmingFailure { face: face_id })?;
-                let forward = segment.a == half[h].0 && segment.b == half[h].1;
-                Ok(OrientedEdge::new(segment.edge, forward))
+            .map(|&half_edge| {
+                let segment = &segments[half[half_edge].2];
+                Ok(OrientedEdge::new(segment.edge, half_edge % 2 == 0))
             })
             .collect::<Result<Vec<_>, BlendError>>()?;
         Ok(topo.add_wire(Wire::new(edges, true)?))
     };
-    let outer_wire = make_wire(topo, &kept[outer_index].0)?;
+    let mut outer_wire = outer_index
+        .map(|index| make_wire(topo, &kept[index].0))
+        .transpose()?;
     let mut inner_wires = Vec::new();
     for (index, (cycle, _)) in kept.iter().enumerate() {
-        if index != outer_index {
+        if Some(index) != outer_index {
             inner_wires.push(make_wire(topo, cycle)?);
         }
     }
+
+    let mut source_closed_replacements = vec![None; source_closed_wires.len()];
+    let mut unmatched_closed_wires = Vec::new();
+    for (restriction_index, &closed) in closed_restrictions.iter().enumerate() {
+        if !closed {
+            continue;
+        }
+        let mut matched_source = None;
+        let mut best_distance = f64::INFINITY;
+        if let TrimKeep::AwayFrom(point) = restrictions[restriction_index].keep {
+            for (source_index, source) in source_closed_wires.iter().enumerate() {
+                let Some((_, _, seam)) = source else {
+                    continue;
+                };
+                if source_closed_replacements[source_index].is_some() {
+                    continue;
+                }
+                let distance = (*seam - point).length();
+                if distance < best_distance {
+                    best_distance = distance;
+                    matched_source = Some(source_index);
+                }
+            }
+            if best_distance > 1e-5 {
+                matched_source = None;
+            }
+        }
+        let forward = matched_source
+            .and_then(|index| source_closed_wires[index].as_ref().map(|source| source.1))
+            .unwrap_or(true);
+        let wire = topo.add_wire(Wire::new(
+            vec![OrientedEdge::new(contact_edges[restriction_index], forward)],
+            true,
+        )?);
+        if let Some(source_index) = matched_source {
+            source_closed_replacements[source_index] = Some(wire);
+        } else {
+            unmatched_closed_wires.push((restriction_index, wire));
+        }
+    }
+
+    for (source_index, source) in source_closed_wires.iter().enumerate() {
+        let Some((source_wire, _, _)) = source else {
+            continue;
+        };
+        let replacement = source_closed_replacements[source_index];
+        let was_split = original[source_index]
+            .iter()
+            .any(|(_, splits)| splits.len() > 2);
+        if source_index == 0 {
+            if let Some(wire) = replacement {
+                outer_wire = Some(wire);
+            } else if !was_split {
+                outer_wire = Some(*source_wire);
+            }
+        } else if let Some(wire) = replacement {
+            inner_wires.push(wire);
+        } else if !was_split {
+            inner_wires.push(*source_wire);
+        }
+    }
+
+    let mut unmatched_outer = false;
+    for (restriction_index, wire) in unmatched_closed_wires {
+        let path = &restriction_paths[restriction_index];
+        let keeps_inside = match restrictions[restriction_index].keep {
+            TrimKeep::AwayFrom(point) => !point_in_restriction(uv(point), path),
+            TrimKeep::Side(side) => {
+                let signed_area = path
+                    .windows(2)
+                    .map(|pair| pair[0].0.0 * pair[1].0.1 - pair[0].0.1 * pair[1].0.0)
+                    .sum::<f64>()
+                    * 0.5;
+                (signed_area > 0.0) == matches!(side, TrimSide::Left)
+            }
+        };
+        if keeps_inside {
+            if unmatched_outer {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+            outer_wire = Some(wire);
+            unmatched_outer = true;
+        } else {
+            inner_wires.push(wire);
+        }
+    }
+    let outer_wire = outer_wire.ok_or(BlendError::TrimmingFailure { face: face_id })?;
     let mut result_face = Face::new(outer_wire, inner_wires, surface.clone());
     result_face.set_reversed(reversed);
     let trimmed_face = topo.add_face(result_face);
@@ -2648,7 +3365,7 @@ mod tests {
                 vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
                 vec![
                     brepkit_math::vec::Point2::new(6.1, v0),
-                    brepkit_math::vec::Point2::new(6.4, 0.9),
+                    brepkit_math::vec::Point2::new(6.25, 0.9),
                     brepkit_math::vec::Point2::new(6.1, v1),
                 ],
                 vec![1.0, 1.0, 1.0],
