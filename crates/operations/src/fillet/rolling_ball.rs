@@ -33,6 +33,9 @@ struct InnerWireData {
 /// Produces true NURBS cylindrical fillet surfaces with G1 tangent
 /// continuity, replacing the flat-quad approximation of [`super::fillet`].
 ///
+/// This deprecated engine is retained as an explicit geometry/reference
+/// implementation. Production and WASM dispatch do not call it.
+///
 /// **G1 chain propagation**: the edge set is automatically expanded to
 /// include all G1-continuous neighbors that share the same face pair
 /// (< 10 degree tangent deviation).  This ensures that selecting one edge

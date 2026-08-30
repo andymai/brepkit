@@ -42,77 +42,60 @@ pub struct SphericalCornerResult {
     pub boundary_curves: Vec<NurbsCurve>,
 }
 
+/// Compute the rolling-ball sphere center from the source vertex, face
+/// normals, and requested fillet radius.
+///
+/// # Errors
+///
+/// Returns [`BlendError::CornerFailure`] when the incident face normals do
+/// not define an offset direction.
+pub fn sphere_center(data: &VertexContactData) -> Result<Point3, BlendError> {
+    let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
+    for normal in &data.face_normals {
+        normal_sum += *normal;
+    }
+    if normal_sum.length() < TOL {
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
+    }
+
+    let offset = normal_sum * data.radius;
+    Ok(if data.is_convex {
+        data.vertex_pos + offset
+    } else {
+        data.vertex_pos - offset
+    })
+}
+
 /// Compute the sphere center and actual sphere radius from vertex
 /// position, face normals, and the fillet radius.
 ///
 /// The center is offset from the vertex by `R * sum(face_normals)` —
 /// each face contributes an independent offset of R along its inward
-/// normal.  The actual sphere radius (distance from center to contact
-/// points) may differ from the fillet radius when the faces are not
-/// mutually orthogonal.
-///
-/// Returns `(center, sphere_radius)`.
+/// normal. The contact points determine the bounded corner patch radius.
 fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), BlendError> {
-    let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
-    for n in &data.face_normals {
-        normal_sum += *n;
-    }
-    let len = normal_sum.length();
-    if len < TOL {
-        {
-            if std::env::var("BK_CORNER_TRACE").is_ok() {
-                log::warn!("CORNER-FAIL st-site1");
-            }
-            return Err(BlendError::CornerFailure {
-                vertex: data.vertex_id,
-            });
-        }
-    }
-
-    // Each face pushes the sphere center by R along its normal.
-    let offset = normal_sum * data.radius;
-
-    let center = if data.is_convex {
-        data.vertex_pos + offset
-    } else {
-        data.vertex_pos - offset
-    };
+    let center = sphere_center(data)?;
 
     if data.contact_points.is_empty() {
-        {
-            if std::env::var("BK_CORNER_TRACE").is_ok() {
-                log::warn!("CORNER-FAIL st-site2");
-            }
-            return Err(BlendError::CornerFailure {
-                vertex: data.vertex_id,
-            });
-        }
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
     }
     let sphere_radius = (data.contact_points[0] - center).length();
     if sphere_radius < TOL {
-        {
-            if std::env::var("BK_CORNER_TRACE").is_ok() {
-                log::warn!("CORNER-FAIL st-site3");
-            }
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
+    }
+
+    // All boundary contacts must lie on the same rolling-ball sphere.
+    for contact in &data.contact_points {
+        let distance = (*contact - center).length();
+        if (distance - sphere_radius).abs() > TOL * 100.0 {
             return Err(BlendError::CornerFailure {
                 vertex: data.vertex_id,
             });
-        }
-    }
-
-    // Validate: all contact points should be at the same distance from center.
-    for cp in &data.contact_points {
-        let dist = (*cp - center).length();
-        let err = (dist - sphere_radius).abs();
-        if err > TOL * 100.0 {
-            {
-                if std::env::var("BK_CORNER_TRACE").is_ok() {
-                    log::warn!("CORNER-FAIL st-site4");
-                }
-                return Err(BlendError::CornerFailure {
-                    vertex: data.vertex_id,
-                });
-            }
         }
     }
 

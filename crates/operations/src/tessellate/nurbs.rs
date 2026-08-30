@@ -690,12 +690,29 @@ pub(super) fn tessellate_nurbs(
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
 
-    let mut cells = Vec::with_capacity(256);
-
+    // The grid below assumes the surface's (u, v) parameterization is
+    // right-handed (dS/du x dS/dv points along `surface.normal`). A
+    // left-handed parameterization (a mirrored UV domain, as the sphere-
+    // corner patches build per-corner with varying contact order) would
+    // otherwise mesh with the geometric normal anti-parallel to the
+    // surface normal, silently inverting the face's material side in
+    // volume/lighting. Detect the handedness once and mirror the
+    // triangle winding when left-handed.
+    // Sample the parametric handedness at a safe interior point.
+    let (um, vm) = (u_lo + (u_hi - u_lo) * 0.5, v_lo + (v_hi - v_lo) * 0.5);
+    let mut handedness = 1.0_f64;
+    let duv = surface.derivatives(um, vm, 1);
+    let su = duv[1][0];
+    let sv = duv[0][1];
+    let nrm = safe_normal(surface, um, vm);
+    if su.cross(sv).dot(nrm) < 0.0 {
+        handedness = -1.0;
+    }
     #[allow(clippy::cast_precision_loss)]
     let du = (u_hi - u_lo) / INITIAL_CELLS as f64;
     #[allow(clippy::cast_precision_loss)]
     let dv = (v_hi - v_lo) / INITIAL_CELLS as f64;
+    let mut cells = Vec::with_capacity(256);
 
     for i in 0..INITIAL_CELLS {
         for j in 0..INITIAL_CELLS {
@@ -801,14 +818,23 @@ pub(super) fn tessellate_nurbs(
             &mut uvs,
             &mut vertex_map,
         );
+        if handedness > 0.0 {
+            indices.push(i00);
+            indices.push(i10);
+            indices.push(i11);
 
-        indices.push(i00);
-        indices.push(i10);
-        indices.push(i11);
+            indices.push(i00);
+            indices.push(i11);
+            indices.push(i01);
+        } else {
+            indices.push(i00);
+            indices.push(i11);
+            indices.push(i10);
 
-        indices.push(i00);
-        indices.push(i11);
-        indices.push(i01);
+            indices.push(i00);
+            indices.push(i01);
+            indices.push(i11);
+        }
     }
 
     TriangleMeshUV {

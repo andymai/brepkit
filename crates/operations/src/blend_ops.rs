@@ -9,7 +9,13 @@ use brepkit_topology::solid::SolidId;
 
 use crate::OperationsError;
 
-/// Fillet edges with constant radius (v2 walking-based engine).
+/// Fillet edges with constant radius — the production engine.
+///
+/// Runs the corrected [`FilletBuilder`]: one ordered contour per G1 run,
+/// canonical boundary-registry ownership, ordered-fan junction corners, and
+/// closed periodic bands for circular rims. This is the engine the WASM
+/// dispatch prefers; the deprecated `fillet_rolling_ball` remains callable
+/// only as an explicit reference implementation.
 ///
 /// # Errors
 /// Returns `OperationsError` if radius is non-positive, edges are empty,

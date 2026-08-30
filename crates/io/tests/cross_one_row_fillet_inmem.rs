@@ -385,6 +385,7 @@ fn full_capture_fillet_is_complete_and_closed() {
 
     // Criterion 10: oriented volume finite and positive.
     let volume = oriented_solid_volume(&topo, result.solid, DEFLECTION).unwrap();
+
     assert!(
         volume.is_finite() && volume > 0.0,
         "volume must be finite and positive, got {volume}"
@@ -607,9 +608,13 @@ fn solid_geometry_fingerprint(topo: &Topology, solid: SolidId) -> String {
     format!("{volume:.3}|{}", descriptors.join("|"))
 }
 
+/// The deprecated rolling-ball engine remains callable as a reference
+/// implementation. It must still reject the degenerate face without mutating
+/// the source solid — the contract the production dispatcher used to rely on
+/// before the corrected `FilletBuilder` cutover.
 #[test]
 #[allow(deprecated)]
-fn rolling_production_rejects_degenerate_face_without_source_mutation() {
+fn rolling_reference_rejects_degenerate_face_without_source_mutation() {
     let mut topo = Topology::new();
     let solid = load(&mut topo);
     let source = source_fingerprint(&topo, solid);
@@ -624,9 +629,13 @@ fn rolling_production_rejects_degenerate_face_without_source_mutation() {
     assert_eq!(source_fingerprint(&topo, solid), source);
 }
 
+/// The rolling-ball reference result is measurable as a diagnostic artifact:
+/// it leaves a detached, degenerate 10-component solid (372/853/412) that the
+/// production guard rejects. Kept as documentation of the reference engine's
+/// output shape; production never assembles it.
 #[test]
 #[allow(deprecated)]
-fn rolling_diagnostic_bypass_result_is_measurable() {
+fn rolling_reference_diagnostic_result_is_measurable() {
     let mut topo = Topology::new();
     let solid = load(&mut topo);
     let source = source_fingerprint(&topo, solid);

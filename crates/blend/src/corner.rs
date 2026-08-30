@@ -12,6 +12,8 @@
 //!   cross-section and support boundaries.
 //! - **None** — 0-1 stripes; no corner needed.
 
+use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::knot_ops::curve_split;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -24,13 +26,13 @@ use crate::BlendError;
 use crate::boundary_registry::{
     BoundaryHandle, BoundaryKey, BoundaryKind, BoundaryOwner, BoundaryRegistry, PlannedVertex,
 };
-use crate::fillet_plan::{CornerClassification, VertexJunction};
+use crate::fillet_plan::{CornerClassification, FilletPlan, VertexJunction};
 use crate::section::CircSection;
 use crate::spherical_triangle::{
     SphericalCornerResult, VertexContactData, build_n_edge_corner, build_spherical_corner,
-    build_spherical_corner_surface,
+    build_spherical_corner_surface, sphere_center,
 };
-use crate::stripe::Stripe;
+use crate::stripe::{Stripe, StripeResult};
 
 /// A registry handle for a stripe's terminal cross-section, indexed by
 /// `(stripe, end)` where end `0` is the spine end and `1` is the spine start.
@@ -349,6 +351,276 @@ fn multi_edge_corner_data(
         is_convex,
         vertex_id,
     })
+}
+fn trim_nurbs_curve(
+    curve: &NurbsCurve,
+    start_fraction: f64,
+    end_fraction: f64,
+) -> Result<NurbsCurve, BlendError> {
+    let (domain_start, domain_end) = curve.domain();
+    let start = domain_start + (domain_end - domain_start) * start_fraction;
+    let end = domain_start + (domain_end - domain_start) * end_fraction;
+    let after_start = if start_fraction > TOL {
+        curve_split(curve, start)?.1
+    } else {
+        curve.clone()
+    };
+    if end_fraction < 1.0 - TOL {
+        Ok(curve_split(&after_start, end)?.0)
+    } else {
+        Ok(after_start)
+    }
+}
+
+fn interpolate_section(start: &CircSection, end: &CircSection, fraction: f64) -> CircSection {
+    CircSection {
+        p1: start.p1 + (end.p1 - start.p1) * fraction,
+        p2: start.p2 + (end.p2 - start.p2) * fraction,
+        center: start.center + (end.center - start.center) * fraction,
+        radius: start.radius + (end.radius - start.radius) * fraction,
+        uv1: (
+            start.uv1.0 + (end.uv1.0 - start.uv1.0) * fraction,
+            start.uv1.1 + (end.uv1.1 - start.uv1.1) * fraction,
+        ),
+        uv2: (
+            start.uv2.0 + (end.uv2.0 - start.uv2.0) * fraction,
+            start.uv2.1 + (end.uv2.1 - start.uv2.1) * fraction,
+        ),
+        t: start.t + (end.t - start.t) * fraction,
+    }
+}
+
+/// Shorten the three analytic stripes at a convex trihedral junction to
+/// their common rolling-ball center.
+///
+/// Concave and non-concurrent junctions retain the proven ordered-fan
+/// construction. Treating those as a convex setback removes valid material;
+/// a setback is therefore applied only when the three support-plane offsets
+/// intersect on every incident stripe centerline.
+pub fn set_back_convex_trihedral_stripes(
+    topo: &Topology,
+    plan: &FilletPlan,
+    stripe_results: &mut [StripeResult],
+) -> Result<std::collections::HashSet<EdgeId>, BlendError> {
+    let original_stripes: Vec<Stripe> = stripe_results
+        .iter()
+        .map(|result| result.stripe.clone())
+        .collect();
+    let mut trim_ranges = vec![(0.0_f64, 1.0_f64); original_stripes.len()];
+    let mut setback_edges = std::collections::HashSet::new();
+
+    for junction in plan.junctions.iter().filter(|junction| {
+        junction.classification == CornerClassification::Junction
+            && junction.incident_contours.len() == 3
+    }) {
+        let indices: Vec<usize> = junction
+            .incident_contours
+            .iter()
+            .map(|&contour_index| {
+                let contour = &plan.contours[contour_index];
+                original_stripes
+                    .iter()
+                    .position(|stripe| stripe.spine_edges() == contour.spine.edges())
+                    .ok_or_else(|| BlendError::PlanningFailure {
+                        reason: format!(
+                            "missing stripe for trihedral junction at {:?}",
+                            junction.vertex
+                        ),
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+
+        // The setback ball must sit in a symmetric trihedral corner. When
+        // the incident stripes differ widely in length (e.g. a short rib
+        // edge against long runs: 90:60:10), the trims land at very
+        // different fractions and the rebuilt wall caps + corner patch do
+        // not re-close the shell within volume tolerance (measured vs the
+        // OCCT oracle on the cross-one-row fixture: the equal-stripe box
+        // composes to within 0.1%, the mixed-stripe solid loses ~0.9%).
+        // Restrict setbacks to near-equal incident stripes.
+        let mut lengths: Vec<f64> = indices
+            .iter()
+            .map(|&i| original_stripes[i].spine.length())
+            .collect();
+        lengths.sort_by(f64::total_cmp);
+        if lengths.last().copied().unwrap_or(0.0) > lengths[0] * 2.0 + TOL {
+            continue;
+        }
+
+        let Some(fractions) =
+            convex_trihedral_setback(topo, junction.vertex, &indices, &original_stripes)?
+        else {
+            continue;
+        };
+        let vertex = topo.vertex(junction.vertex)?.point();
+        for (&index, fraction) in indices.iter().zip(fractions) {
+            let stripe = &original_stripes[index];
+            let spine_start = stripe.spine.evaluate(topo, 0.0)?;
+            let spine_end = stripe.spine.evaluate(topo, stripe.spine.length())?;
+            if (spine_start - vertex).length() <= (spine_end - vertex).length() {
+                trim_ranges[index].0 = trim_ranges[index].0.max(fraction);
+            } else {
+                trim_ranges[index].1 = trim_ranges[index].1.min(fraction);
+            }
+        }
+    }
+    for (index, (result, (start, end))) in stripe_results.iter_mut().zip(trim_ranges).enumerate() {
+        if start <= TOL && end >= 1.0 - TOL {
+            continue;
+        }
+        if end - start <= TOL {
+            return Err(BlendError::PlanningFailure {
+                reason: "trihedral setbacks consume an entire stripe".to_owned(),
+            });
+        }
+        let first = result.stripe.sections[0].clone();
+        let last = result.stripe.sections[1].clone();
+        result.stripe.contact1 = trim_nurbs_curve(&result.stripe.contact1, start, end)?;
+        result.stripe.contact2 = trim_nurbs_curve(&result.stripe.contact2, start, end)?;
+        result.stripe.sections = vec![
+            interpolate_section(&first, &last, start),
+            interpolate_section(&first, &last, end),
+        ];
+        setback_edges.extend(original_stripes[index].spine_edges().iter().copied());
+    }
+
+    Ok(setback_edges)
+}
+
+fn incident_face_count(topo: &Topology, vertex: VertexId) -> usize {
+    let mut faces = std::collections::HashSet::new();
+    for (face_id, face) in topo.faces().iter() {
+        let mut wires = vec![face.outer_wire()];
+        wires.extend_from_slice(face.inner_wires());
+        for wire_id in wires {
+            let Ok(wire) = topo.wire(wire_id) else {
+                continue;
+            };
+            for oriented in wire.edges() {
+                let Ok(edge) = topo.edge(oriented.edge()) else {
+                    continue;
+                };
+                if edge.start() == vertex || edge.end() == vertex {
+                    faces.insert(face_id);
+                }
+            }
+        }
+    }
+    faces.len()
+}
+
+fn convex_trihedral_setback(
+    topo: &Topology,
+    vertex: VertexId,
+    indices: &[usize],
+    stripes: &[Stripe],
+) -> Result<Option<Vec<f64>>, BlendError> {
+    // A setback ball only exists when the junction is a clean trihedral
+    // corner (three support faces). Junctions where extra faces pass
+    // through (e.g. a rib wall meeting a box corner) are not convex
+    // trihedral even when three stripes meet: solving the three-plane
+    // offset there cuts through the extra face.
+    if incident_face_count(topo, vertex) != 3 {
+        return Ok(None);
+    }
+    let radius = stripes[indices[0]].sections[0].radius;
+    let mut support_faces = Vec::with_capacity(3);
+    for &index in indices {
+        let stripe = &stripes[index];
+        if stripe.sections.len() != 2
+            || (stripe.sections[0].radius - radius).abs() > TOL
+            || (stripe.sections[1].radius - radius).abs() > TOL
+        {
+            return Ok(None);
+        }
+        for face_id in [stripe.face1, stripe.face2] {
+            if !support_faces
+                .iter()
+                .any(|existing: &FaceId| existing.index() == face_id.index())
+            {
+                support_faces.push(face_id);
+            }
+        }
+    }
+    if support_faces.len() != 3 {
+        return Ok(None);
+    }
+
+    let mut matrix = [[0.0_f64; 3]; 3];
+    let mut targets = [0.0_f64; 3];
+    for (row, face_id) in support_faces.into_iter().enumerate() {
+        let face = topo.face(face_id)?;
+        let FaceSurface::Plane { normal, d } = face.surface().clone() else {
+            return Ok(None);
+        };
+        let (inward_normal, inward_d) = if face.is_reversed() {
+            (normal, d)
+        } else {
+            (-normal, -d)
+        };
+        matrix[row] = [inward_normal.x(), inward_normal.y(), inward_normal.z()];
+        targets[row] = inward_d + radius;
+    }
+    let Some(inverse) = inverse_3x3(matrix) else {
+        return Ok(None);
+    };
+    let center = Point3::new(
+        inverse[0][0] * targets[0] + inverse[0][1] * targets[1] + inverse[0][2] * targets[2],
+        inverse[1][0] * targets[0] + inverse[1][1] * targets[1] + inverse[1][2] * targets[2],
+        inverse[2][0] * targets[0] + inverse[2][1] * targets[1] + inverse[2][2] * targets[2],
+    );
+
+    let mut fractions = Vec::with_capacity(indices.len());
+    for &index in indices {
+        let stripe = &stripes[index];
+        let start = stripe.sections[0].center;
+        let direction = stripe.sections[1].center - start;
+        let length_squared = direction.dot(direction);
+        if length_squared <= TOL * TOL {
+            return Err(BlendError::CornerFailure { vertex });
+        }
+        let fraction = (center - start).dot(direction) / length_squared;
+        let projected = start + direction * fraction;
+        // A setback trims the stripe end down to the rolling-ball center.
+        // Corners whose center projects onto a stripe mid-section are
+        // short-spine junctions (e.g. rib-top corners): trimming there
+        // removes valid material. Require the center to sit within the
+        // end decile of every incident spine.
+        if !(TOL..=1.0 - TOL).contains(&fraction) || (projected - center).length() > TOL * 100.0 {
+            return Ok(None);
+        }
+        if fraction.min(1.0 - fraction) > 0.1 + TOL {
+            return Ok(None);
+        }
+        fractions.push(fraction);
+    }
+    Ok(Some(fractions))
+}
+
+fn inverse_3x3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let [[a, b, c], [d, e, f], [g, h, i]] = matrix;
+    let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if determinant.abs() < 1e-12 {
+        return None;
+    }
+    let scale = 1.0 / determinant;
+    Some([
+        [
+            (e * i - f * h) * scale,
+            (c * h - b * i) * scale,
+            (b * f - c * e) * scale,
+        ],
+        [
+            (f * g - d * i) * scale,
+            (a * i - c * g) * scale,
+            (c * d - a * f) * scale,
+        ],
+        [
+            (d * h - e * g) * scale,
+            (b * g - a * h) * scale,
+            (a * e - b * d) * scale,
+        ],
+    ])
 }
 
 fn multi_edge_corner_geometry(
@@ -1422,7 +1694,25 @@ fn collect_junction_fan_boundaries(
                     reason: format!("missing cross-section boundaries for stripe {stripe_index}"),
                 })?;
         source_edges.extend(stripes[stripe_index].spine.edges().iter().copied());
-        for handle in [pair.0, pair.1].into_iter().flatten() {
+        // The pair holds (end_handle, start_handle); select the end at THIS
+        // junction vertex — the far end belongs to the other corner.
+        let handle = if let Some((terminal_start, terminal_end)) =
+            source_spine_endpoints(topo, &stripes[stripe_index])?
+        {
+            if junction_vertex == terminal_start {
+                pair.1
+            } else if junction_vertex == terminal_end {
+                pair.0
+            } else {
+                return Ok(None);
+            }
+        } else {
+            return Ok(None);
+        };
+        let Some(handle) = handle else {
+            continue;
+        };
+        {
             let entry = registry
                 .entry(handle)
                 .ok_or_else(|| BlendError::PlanningFailure {
@@ -1442,13 +1732,31 @@ fn collect_junction_fan_boundaries(
             }
             cross_vertices.insert(start);
             cross_vertices.insert(end);
-            if entry.owners[1].face.is_none() && seen_cross_edges.insert(edge) {
+            let has_owner1 = entry.owners[1].face.is_some();
+            let deduped = seen_cross_edges.insert(edge);
+            if !has_owner1 && deduped {
                 cross_edges.push((handle, edge, start, end));
             }
         }
     }
     if cross_edges.is_empty() {
         return Ok(None);
+    }
+    // A convex trihedral setback makes the three terminal cross-sections an
+    // exact closed loop. The corner owns that loop directly; routing it back
+    // through the source vertex would recreate the pre-setback over-removal.
+    let cross_only: Vec<JunctionBoundary> = cross_edges
+        .iter()
+        .map(|&(handle, edge, start, end)| JunctionBoundary {
+            edge,
+            handle,
+            start,
+            end,
+            required: true,
+        })
+        .collect();
+    if terminal_boundary_cycles(&cross_only).is_some() {
+        return Ok(Some(cross_only));
     }
 
     let mut planned_to_support = std::collections::HashMap::new();
@@ -1592,6 +1900,63 @@ fn collect_junction_fan_boundaries(
     }
 }
 
+fn spherical_corner_surface_reversed(
+    surface: &FaceSurface,
+    center: Point3,
+    vertex: VertexId,
+) -> Result<bool, BlendError> {
+    let FaceSurface::Nurbs(nurbs) = surface else {
+        return Ok(false);
+    };
+    let (u_start, u_end) = nurbs.domain_u();
+    let (v_start, v_end) = nurbs.domain_v();
+    let u = u_start + (u_end - u_start) / 3.0;
+    let v = v_start + (v_end - v_start) / 3.0;
+    let point = surface
+        .evaluate(u, v)
+        .ok_or(BlendError::CornerFailure { vertex })?;
+    let outward = point - center;
+    if outward.length() <= TOL {
+        return Err(BlendError::CornerFailure { vertex });
+    }
+    Ok(surface.normal(u, v).dot(outward) < 0.0)
+}
+
+fn orient_corner_cycle_against_existing_owner(
+    topo: &Topology,
+    registry: &BoundaryRegistry,
+    boundaries: &[JunctionBoundary],
+    cycle: &mut Vec<(usize, bool)>,
+    corner_reversed: bool,
+    vertex: VertexId,
+) -> Result<(), BlendError> {
+    let Some(&(boundary_index, corner_forward)) = cycle.first() else {
+        return Ok(());
+    };
+    let boundary = boundaries[boundary_index];
+    let entry = registry
+        .entry(boundary.handle)
+        .ok_or_else(|| BlendError::PlanningFailure {
+            reason: format!("unknown corner boundary {}", boundary.handle),
+        })?;
+    let existing_owner = entry
+        .owners
+        .iter()
+        .find(|owner| owner.face.is_some())
+        .ok_or(BlendError::CornerFailure { vertex })?;
+    let existing_face = existing_owner
+        .face
+        .ok_or(BlendError::CornerFailure { vertex })?;
+    let existing_effective = existing_owner.forward ^ topo.face(existing_face)?.is_reversed();
+    if corner_forward ^ corner_reversed == existing_effective {
+        cycle.reverse();
+        for (_, forward) in cycle {
+            *forward = !*forward;
+        }
+    }
+    Ok(())
+}
+
 fn build_junction_fan(
     topo: &mut Topology,
     stripes: &[Stripe],
@@ -1622,44 +1987,61 @@ fn build_junction_fan(
             vertex: junction_vertex,
         });
     }
-    let surface = if stripe_indices.len() == 2 {
-        if let Some(geometry) = horn_torus_geometry_for_pair(
-            junction_vertex,
-            stripes,
-            stripe_indices[0],
-            stripe_indices[1],
-            topo,
-        )? {
-            geometry.surface
-        } else if let Some(geometry) = mixed_radius_geometry_for_pair(
-            junction_vertex,
-            stripes,
-            stripe_indices[0],
-            stripe_indices[1],
-            topo,
-        )? {
-            geometry.surface
-        } else {
-            runout_surface(topo, &boundaries, &cycles[0], junction_vertex)?
-        }
+    let is_setback_corner =
+        boundaries.len() == 3 && boundaries.iter().all(|boundary| boundary.required);
+    let (surface, surface_reversed) = if stripe_indices.len() == 2 {
+        (
+            if let Some(geometry) = horn_torus_geometry_for_pair(
+                junction_vertex,
+                stripes,
+                stripe_indices[0],
+                stripe_indices[1],
+                topo,
+            )? {
+                geometry.surface
+            } else if let Some(geometry) = mixed_radius_geometry_for_pair(
+                junction_vertex,
+                stripes,
+                stripe_indices[0],
+                stripe_indices[1],
+                topo,
+            )? {
+                geometry.surface
+            } else {
+                runout_surface(topo, &boundaries, &cycles[0], junction_vertex)?
+            },
+            false,
+        )
     } else if stripe_indices.len() == 3 {
         let data = multi_edge_corner_data(junction_vertex, stripe_indices, stripes, topo)?;
         if data.contact_points.len() == 3 {
-            build_spherical_corner_surface(&data)?
+            let surface = build_spherical_corner_surface(&data)?;
+            let reversed = if is_setback_corner {
+                let center = sphere_center(&data)?;
+                spherical_corner_surface_reversed(&surface, center, junction_vertex)?
+            } else {
+                false
+            };
+            (surface, reversed)
         } else if data
             .contact_points
             .iter()
             .all(|point| ((*point - data.vertex_pos).length() - data.radius).abs() <= 1e-5)
         {
-            FaceSurface::Sphere(brepkit_math::surfaces::SphericalSurface::new(
-                data.vertex_pos,
-                data.radius,
-            )?)
+            (
+                FaceSurface::Sphere(brepkit_math::surfaces::SphericalSurface::new(
+                    data.vertex_pos,
+                    data.radius,
+                )?),
+                false,
+            )
         } else {
             return Err(BlendError::CornerFailure {
                 vertex: junction_vertex,
             });
         }
+    } else if stripe_indices.len() == 4 {
+        return build_junction_fan_faces(topo, &boundaries, &cycles[0], junction_vertex, registry);
     } else {
         return Err(BlendError::PlanningFailure {
             reason: format!(
@@ -1671,7 +2053,17 @@ fn build_junction_fan(
     };
 
     let mut results = Vec::with_capacity(cycles.len());
-    for cycle in cycles {
+    for mut cycle in cycles {
+        if is_setback_corner {
+            orient_corner_cycle_against_existing_owner(
+                topo,
+                registry,
+                &boundaries,
+                &mut cycle,
+                surface_reversed,
+                junction_vertex,
+            )?;
+        }
         let mut oriented_edges = Vec::with_capacity(cycle.len());
         for &(index, forward) in &cycle {
             let boundary = boundaries[index];
@@ -1679,7 +2071,12 @@ fn build_junction_fan(
             oriented_edges.push(OrientedEdge::new(boundary.edge, forward));
         }
         let wire_id = topo.add_wire(Wire::new(oriented_edges, true)?);
-        let face_id = topo.add_face(Face::new(wire_id, Vec::new(), surface.clone()));
+        let face = if surface_reversed {
+            Face::new_reversed(wire_id, Vec::new(), surface.clone())
+        } else {
+            Face::new(wire_id, Vec::new(), surface.clone())
+        };
+        let face_id = topo.add_face(face);
         for &(index, _) in &cycle {
             let handle = boundaries[index].handle;
             registry.set_owner_face(handle, 1, face_id)?;
@@ -1696,6 +2093,170 @@ fn build_junction_fan(
         });
     }
     Ok(results)
+}
+/// Build a fan of ruled-triangle faces closing a 4-stripe junction.
+///
+/// Valence-4 junctions (mixed radii, e.g. the fused-outline scoop) do not
+/// share one rolling-ball sphere, so the trihedral spherical patch does not
+/// apply and the fan-with-support cycle can contain support segments beyond
+/// the four cross-section edges. Each cycle boundary becomes one triangular
+/// face spanned between its edge curve and a shared apex vertex (a ruled
+/// surface). Adjacent triangles share the radiating apex edges with opposite
+/// orientation, so the fan is watertight by construction; the outer boundary
+/// edges stay registry-owned by the corner faces.
+fn build_junction_fan_faces(
+    topo: &mut Topology,
+    boundaries: &[JunctionBoundary],
+    cycle: &[(usize, bool)],
+    junction_vertex: VertexId,
+    registry: &mut BoundaryRegistry,
+) -> Result<Vec<CornerResult>, BlendError> {
+    // Apex = centroid of the cycle's boundary vertices; track the actual
+    // vertex IDs (cycle start of each boundary, in cycle order).
+    let mut cycle_vertices: Vec<VertexId> = Vec::with_capacity(cycle.len());
+    for &(index, forward) in cycle {
+        let boundary = boundaries[index];
+        let vertex_id = if forward {
+            boundary.start
+        } else {
+            boundary.end
+        };
+        cycle_vertices.push(vertex_id);
+    }
+    if cycle.is_empty() {
+        return Err(BlendError::CornerFailure {
+            vertex: junction_vertex,
+        });
+    }
+    let origin = topo.vertex(cycle_vertices[0])?.point();
+    let mut apex_offset = Vec3::new(0.0, 0.0, 0.0);
+    for &vertex_id in &cycle_vertices {
+        apex_offset += topo.vertex(vertex_id)?.point() - origin;
+    }
+    let apex = origin + apex_offset * (1.0 / cycle.len() as f64);
+    let apex_id = topo.add_vertex(Vertex::new(apex, TOL));
+
+    // Radial edges apex → V_i for each cycle vertex V_i.
+    let mut radials: Vec<EdgeId> = Vec::with_capacity(cycle.len());
+    for &vertex_id in &cycle_vertices {
+        radials.push(topo.add_edge(Edge::new(apex_id, vertex_id, EdgeCurve::Line)));
+    }
+
+    let mut results = Vec::with_capacity(cycle.len());
+    for (i, &(index, forward)) in cycle.iter().enumerate() {
+        let boundary = boundaries[index];
+        let next = (i + 1) % cycle.len();
+        // Wire: boundary_i (V_i→V_{i+1}), radial_{i+1} (V_{i+1}→apex),
+        // then radial_i reversed (apex→V_i).
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(boundary.edge, forward),
+                OrientedEdge::new(radials[next], true),
+                OrientedEdge::new(radials[i], false),
+            ],
+            true,
+        )?;
+        let wire_id = topo.add_wire(wire);
+        let surface = ruled_surface_to_apex(topo, &boundary, apex)?;
+        let face_id = topo.add_face(Face::new(wire_id, Vec::new(), surface.clone()));
+
+        registry.set_owner_forward(boundary.handle, 1, forward)?;
+        registry.set_owner_face(boundary.handle, 1, face_id)?;
+        let _ = registry.oriented_edge(topo, boundary.handle, 1)?;
+
+        results.push(CornerResult {
+            face_id,
+            surface,
+            new_edges: vec![boundary.edge, radials[i], radials[next]],
+            new_vertices: vec![apex_id],
+        });
+    }
+    Ok(results)
+}
+
+/// Build the ruled surface from the apex to a boundary edge's curve.
+///
+/// Constructs the tensor-product surface directly from the edge curve's own
+/// control points (apex row duplicated), so the patch reproduces the exact
+/// boundary curve along v=1 and is a straight line to the apex along v=0.
+fn ruled_surface_to_apex(
+    topo: &Topology,
+    boundary: &JunctionBoundary,
+    apex: Point3,
+) -> Result<FaceSurface, BlendError> {
+    let edge_data = topo.edge(boundary.edge)?;
+    match edge_data.curve() {
+        EdgeCurve::Line => {
+            let start = topo.vertex(edge_data.start())?.point();
+            let end = topo.vertex(edge_data.end())?.point();
+            let surface = NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![vec![apex, apex], vec![start, end]],
+                vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+            )
+            .map_err(|_| BlendError::CornerFailure {
+                vertex: boundary.start,
+            })?;
+            Ok(FaceSurface::Nurbs(surface))
+        }
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let cps = nurbs.control_points();
+            if cps.is_empty() {
+                return Err(BlendError::CornerFailure {
+                    vertex: boundary.start,
+                });
+            }
+            let surface = NurbsSurface::new(
+                1,
+                nurbs.degree(),
+                vec![0.0, 0.0, 1.0, 1.0],
+                nurbs.knots().to_vec(),
+                vec![vec![apex; cps.len()], cps.to_vec()],
+                vec![vec![1.0; cps.len()], vec![1.0; cps.len()]],
+            )
+            .map_err(|_| BlendError::CornerFailure {
+                vertex: boundary.start,
+            })?;
+            Ok(FaceSurface::Nurbs(surface))
+        }
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            // Not expected on cross-section boundaries; degrade via the
+            // sampled grid path for robustness.
+            ruled_surface_to_apex_sampled(topo, boundary, apex)
+        }
+    }
+}
+
+/// Sampled-grid fallback for the ruled surface (Circle/Ellipse bounds).
+fn ruled_surface_to_apex_sampled(
+    topo: &Topology,
+    boundary: &JunctionBoundary,
+    apex: Point3,
+) -> Result<FaceSurface, BlendError> {
+    const SAMPLES: usize = 9;
+    let edge_data = topo.edge(boundary.edge)?;
+
+    let start = topo.vertex(edge_data.start())?.point();
+    let end = topo.vertex(edge_data.end())?.point();
+    let (d0, d1) = edge_data.curve().domain_with_endpoints(start, end);
+
+    let mut row: Vec<Point3> = Vec::with_capacity(SAMPLES);
+    for i in 0..SAMPLES {
+        let t = d0 + (d1 - d0) * (i as f64 / (SAMPLES - 1) as f64);
+        row.push(edge_data.curve().evaluate_with_endpoints(t, start, end));
+    }
+    let surface = brepkit_math::nurbs::surface_fitting::interpolate_surface(
+        &[vec![apex; SAMPLES], row],
+        1,
+        1,
+    )
+    .map_err(|_| BlendError::CornerFailure {
+        vertex: boundary.start,
+    })?;
+    Ok(FaceSurface::Nurbs(surface))
 }
 
 /// Solve every original planned junction exactly once.
@@ -1755,7 +2316,7 @@ pub fn compute_ordered_corners(
             results.extend(terminal_results);
             continue;
         }
-        if indices.len() > 3 {
+        if indices.len() > 4 {
             return Err(BlendError::PlanningFailure {
                 reason: format!(
                     "unsupported ordered junction valence {} at vertex {:?}",
@@ -2252,7 +2813,7 @@ mod tests {
         let published_before = (topo.num_wires(), topo.num_faces(), topo.num_shells());
         let junction = VertexJunction {
             vertex,
-            incident_contours: vec![0, 1, 2, 3],
+            incident_contours: vec![0, 1, 2, 3, 4],
             unselected_sharp_edges: Vec::new(),
             face_fan: Vec::new(),
             classification: CornerClassification::Junction,
@@ -2261,12 +2822,12 @@ mod tests {
             &mut topo,
             &[],
             &[junction],
-            &[Some(0), Some(1), Some(2), Some(3)],
+            &[Some(0), Some(1), Some(2), Some(3), Some(4)],
             &[],
             &[],
             &mut BoundaryRegistry::new(),
         ) {
-            Ok(_) => panic!("higher-valence junction must fail explicitly"),
+            Ok(_) => panic!("valence-5 junction must fail explicitly"),
             Err(error) => error,
         };
         assert!(

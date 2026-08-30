@@ -315,7 +315,7 @@ impl FilletPlan {
             } else {
                 CornerClassification::Junction
             };
-            if incident_contours.len() > 3 {
+            if incident_contours.len() > 4 {
                 return Err(BlendError::PlanningFailure {
                     reason: format!(
                         "unsupported ordered junction valence {} at vertex {:?}",

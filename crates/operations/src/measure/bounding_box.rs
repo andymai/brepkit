@@ -103,7 +103,9 @@ fn aabb_include(aabb: &mut Aabb3, p: Point3) {
 /// Expand an AABB for a face, accounting for surface curvature.
 ///
 /// Uses different strategies based on surface type:
-/// - **Sphere/Torus**: analytic expansion (full surface extent)
+/// - **Sphere**: analytic full-surface expansion
+/// - **Torus**: analytic expansion only for the doubly-periodic seam topology;
+///   trimmed patches use their sampled wire bounds
 /// - **Cylinder/Cone**: wire-bounded expansion (sample edge midpoints
 ///   to avoid over-expanding for partial arcs like fillets)
 /// - **NURBS**: sparse interior grid sampling
@@ -125,8 +127,9 @@ fn expand_aabb_for_face(
     match surface {
         FaceSurface::Plane { .. } => {}
 
-        // Sphere and torus: use analytic expansion (these are typically full
-        // or near-full surfaces where the extremes can be far from vertices).
+        // Spheres are represented as full or near-full surfaces. A torus can
+        // also represent a trimmed fillet patch, where expanding to the full
+        // analytic torus shifts the public solid bounds by the minor radius.
         FaceSurface::Sphere(s) => {
             let c = s.center();
             let r = s.radius();
@@ -134,22 +137,18 @@ fn expand_aabb_for_face(
             aabb_include(aabb, Point3::new(c.x() + r, c.y() + r, c.z() + r));
         }
         FaceSurface::Torus(t) => {
-            // Per-dim half-extent of a torus = R * sqrt(1 - axis.d²) + r.
-            // The R*sqrt(1-axis.d²) term is the major-circle's extent in
-            // world dim d (zero for the dim aligned with the torus axis);
-            // the r term is the minor radius offset, which can extend
-            // freely in any direction. Replaces the previous formula that
-            // applied (R+r) to all dimensions and over-estimated the
-            // axis-aligned dim by `R`.
-            let c = t.center();
-            let r_major = t.major_radius();
-            let r_minor = t.minor_radius();
-            let axis = t.z_axis();
-            let hx = r_major * (1.0 - axis.x() * axis.x()).max(0.0).sqrt() + r_minor;
-            let hy = r_major * (1.0 - axis.y() * axis.y()).max(0.0).sqrt() + r_minor;
-            let hz = r_major * (1.0 - axis.z() * axis.z()).max(0.0).sqrt() + r_minor;
-            aabb_include(aabb, Point3::new(c.x() - hx, c.y() - hy, c.z() - hz));
-            aabb_include(aabb, Point3::new(c.x() + hx, c.y() + hy, c.z() + hz));
+            if torus_face_is_full_periodic(topo, face_id) {
+                // Per-dim half-extent of a torus = R * sqrt(1 - axis.d²) + r.
+                let c = t.center();
+                let r_major = t.major_radius();
+                let r_minor = t.minor_radius();
+                let axis = t.z_axis();
+                let hx = r_major * (1.0 - axis.x() * axis.x()).max(0.0).sqrt() + r_minor;
+                let hy = r_major * (1.0 - axis.y() * axis.y()).max(0.0).sqrt() + r_minor;
+                let hz = r_major * (1.0 - axis.z() * axis.z()).max(0.0).sqrt() + r_minor;
+                aabb_include(aabb, Point3::new(c.x() - hx, c.y() - hy, c.z() - hz));
+                aabb_include(aabb, Point3::new(c.x() + hx, c.y() + hy, c.z() + hz));
+            }
         }
 
         // Cylinder: expand radially at each face vertex's axis projection.
@@ -182,6 +181,34 @@ fn expand_aabb_for_face(
             }
         }
     }
+}
+
+/// Return whether a torus face is the minimal doubly-periodic whole-torus
+/// topology (`a, b, a⁻¹, b⁻¹`). Trimmed torus patches have ordinary boundary
+/// edges and must not expand to the analytic surface's full extent.
+fn torus_face_is_full_periodic(topo: &Topology, face_id: FaceId) -> bool {
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return false;
+    };
+    let oriented = wire.edges();
+    if oriented.len() != 4
+        || oriented[0].edge() != oriented[2].edge()
+        || oriented[1].edge() != oriented[3].edge()
+        || oriented[0].edge() == oriented[1].edge()
+        || oriented[0].is_forward() == oriented[2].is_forward()
+        || oriented[1].is_forward() == oriented[3].is_forward()
+    {
+        return false;
+    }
+    [oriented[0].edge(), oriented[1].edge()]
+        .into_iter()
+        .all(|edge_id| {
+            topo.edge(edge_id)
+                .is_ok_and(|edge| edge.start() == edge.end())
+        })
 }
 
 /// Sample edge midpoints along a face's outer wire to expand the AABB.

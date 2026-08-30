@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+* **blend/operations:** the corrected `FilletBuilder` engine (`blend_ops::fillet_v2`) is now the first production and WASM fillet engine. WASM publication remains atomic: unchanged, partial, open, non-manifold, or inward results are rejected. The deprecated `fillet_rolling_ball` is no longer part of the production dispatch chain and remains callable only as an explicit reference/diagnostic implementation. The deprecated flat-bevel `fillet` remains a last-resort WASM fallback. Junction corners select the terminal end of each cross-section pair (no more box-corner over-removal), and convex trihedral setbacks apply only to near-equal-length incident stripes, keeping mixed-length stripe junctions intact. Four-stripe junctions (mixed radii, e.g. fused-outline scoops) close with an apex-fan of ruled corner faces, so valence-4 corner assemblies stay watertight. Analytic wire boundaries are sampled per edge so curved wires retain their true boundary geometry, and NURBS tessellation preserves face handedness. Single constant-radius planar stripes propagate mid-edge contact splits into untouched caps, eliminating stale full-span boundary edges without fragmenting multi-stripe junctions. Trimmed torus faces now use wire-bounded AABBs instead of the full analytic torus extent.
+
+### Removed
+
+* **blend:** drop the obsolete weld/fill residual-loop repair (`close_residual_free_loops`, `weld_coincident_free_edges`). `registry_faces_reuse_edges_without_geometric_welding` proves exact registry edge reuse, while `fillet_builder_trihedral_junction_reuses_registry_cross_edges` and `ordered_fan_cross_rib_subset_closes_without_repair` assert zero free/non-manifold edges without either repair.
+
 ## [3.3.9](https://github.com/andymai/brepkit/compare/v3.3.8...v3.3.9) (2026-08-28)
 
 

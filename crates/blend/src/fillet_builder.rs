@@ -242,13 +242,11 @@ impl<'a> FilletBuilder<'a> {
                 is_partial: false,
             });
         }
-
-        // Partition out closed-revolution rim stripes (a full circular rim
-        // between a bounded disc cap and a cylinder/cone wall). These need an
-        // annular assembly that rebuilds the cap, shortens the wall, and emits
-        // a toroidal band — all sharing the two contact-circle edges — which
-        // the per-face line-based trimmer cannot produce (a closed interior
-        // contact circle crosses no boundary edge). Regular stripes still flow
+        let setback_edges = if let Some(plan) = plan.as_ref() {
+            corner::set_back_convex_trihedral_stripes(topo, plan, &mut stripe_results)?
+        } else {
+            HashSet::new()
+        };
         // through the trim + corner + blend-face path below.
         let mut boundary_registry = BoundaryRegistry::new();
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
@@ -399,6 +397,19 @@ impl<'a> FilletBuilder<'a> {
                     .push((si, restriction));
             }
         }
+        let propagate_single_contact_splits = all_edges.len() == 1
+            && regular_results.len() == 1
+            && laws.len() == 1
+            && matches!(laws[0], RadiusLaw::Constant(_))
+            && [
+                regular_results[0].stripe.face1,
+                regular_results[0].stripe.face2,
+            ]
+            .into_iter()
+            .all(|face_id| {
+                topo.face(face_id)
+                    .is_ok_and(|face| face.surface().is_planar())
+            });
         let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();
         restriction_faces.sort_unstable_by_key(|face| face.index());
         for face_id in restriction_faces {
@@ -409,7 +420,12 @@ impl<'a> FilletBuilder<'a> {
                 .iter()
                 .map(|(_, restriction)| restriction.clone())
                 .collect();
-            let batch = trimmer::trim_parametric_face_batch(topo, face_id, &restriction_plan)?;
+            let batch = trimmer::trim_parametric_face_batch_with_boundary_splits(
+                topo,
+                face_id,
+                &restriction_plan,
+                propagate_single_contact_splits,
+            )?;
             face_replacements.insert(face_id, batch.trimmed_face);
             for &(source, replacement) in &batch.incident_replacements {
                 face_replacements.entry(source).or_insert(replacement);
@@ -684,6 +700,24 @@ impl<'a> FilletBuilder<'a> {
                     .copied()
                     .unwrap_or(stripe.face2),
             ];
+            if stripe
+                .spine_edges()
+                .iter()
+                .any(|edge| setback_edges.contains(edge))
+                && let Some((side, contact_edge)) =
+                    [stripe_contact_edges[si].0, stripe_contact_edges[si].1]
+                        .into_iter()
+                        .enumerate()
+                        .find_map(|(side, edge)| edge.map(|edge| (side, edge)))
+            {
+                align_face_boundary_against_neighbor(
+                    topo,
+                    info.face,
+                    support_faces[side],
+                    contact_edge,
+                )?;
+                boundary_registry.refresh_owner_orientations(topo)?;
+            }
             for (side, contact_edge) in [stripe_contact_edges[si].0, stripe_contact_edges[si].1]
                 .into_iter()
                 .enumerate()
@@ -1196,6 +1230,38 @@ fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Optio
                 .iter()
                 .find_map(|oriented| (oriented.edge() == edge_id).then_some(oriented.is_forward()))
         })
+}
+
+fn align_face_boundary_against_neighbor(
+    topo: &mut Topology,
+    face_id: FaceId,
+    neighbor_id: FaceId,
+    shared_edge: EdgeId,
+) -> Result<(), BlendError> {
+    let face_forward = face_edge_forward(topo, face_id, shared_edge)
+        .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+    let neighbor_forward = face_edge_forward(topo, neighbor_id, shared_edge)
+        .ok_or(BlendError::TrimmingFailure { face: neighbor_id })?;
+    let face_reversed = topo.face(face_id)?.is_reversed();
+    let neighbor_reversed = topo.face(neighbor_id)?.is_reversed();
+    if face_forward ^ face_reversed != neighbor_forward ^ neighbor_reversed {
+        return Ok(());
+    }
+
+    let mut wires = vec![topo.face(face_id)?.outer_wire()];
+    wires.extend_from_slice(topo.face(face_id)?.inner_wires());
+    for wire_id in wires {
+        let wire = topo.wire_mut(wire_id)?;
+        let mut edges = wire.edges().to_vec();
+        edges.reverse();
+        for edge in &mut edges {
+            *edge = OrientedEdge::new(edge.edge(), !edge.is_forward());
+        }
+        for (slot, edge) in wire.edges_mut().iter_mut().zip(edges) {
+            *slot = edge;
+        }
+    }
+    Ok(())
 }
 fn ordered_spine_endpoints(
     topo: &Topology,

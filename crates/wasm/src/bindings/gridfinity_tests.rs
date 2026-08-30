@@ -1250,20 +1250,33 @@ fn gridfinity_d2_lip_ring_with_fillet() {
         .as_array()
         .expect("solidEdges should return array");
 
-    // Filter edges near Z_PEAK (z >= 3.4 and z <= 4.4)
-    // We use edgeMidpoint or just try all top edges — for simplicity, try
-    // fillet on all edges and check which ones are near peak.
-    // Since we can't easily query edge positions via batch, fillet ALL edges
-    // with a small radius — this tests the fillet path thoroughly.
-    // Actually, let's just use the first few edges as a representative test.
-    if edges.is_empty() {
-        panic!("lip solid should have edges");
-    }
-
-    // Fillet with TOP_FILLET radius on first edge (any edge exercises the path)
-    let edge0 = edges[0].as_u64().unwrap();
+    // Select a peak rim edge, matching the real Gridfinity tool path. The
+    // first topology edge is a bottom-outer corner arc on the fuse interface,
+    // not the top edge this regression is intended to exercise.
+    let peak_edge = edges
+        .iter()
+        .filter_map(serde_json::Value::as_u64)
+        .find(|&edge_handle| {
+            k.resolve_edge(edge_handle as u32)
+                .ok()
+                .and_then(|edge_id| k.topo.edge(edge_id).ok())
+                .is_some_and(|edge| {
+                    let z0 = k
+                        .topo
+                        .vertex(edge.start())
+                        .map(|vertex| vertex.point().z())
+                        .unwrap_or(f64::NAN);
+                    let z1 = k
+                        .topo
+                        .vertex(edge.end())
+                        .map(|vertex| vertex.point().z())
+                        .unwrap_or(f64::NAN);
+                    z0.min(z1) >= Z_PEAK - 1.0 && z0.max(z1) >= Z_PEAK - 0.01
+                })
+        })
+        .expect("lip should have a peak rim edge near Z_PEAK");
     let r5 = k.execute_batch(&format!(
-        r#"[{{"op": "fillet", "args": {{"solid": {lip_handle}, "radius": {TOP_FILLET}, "edges": [{edge0}]}}}}]"#
+        r#"[{{"op": "fillet", "args": {{"solid": {lip_handle}, "radius": {TOP_FILLET}, "edges": [{peak_edge}]}}}}]"#
     ));
     let p5 = parse_batch(&r5);
 
@@ -1277,7 +1290,8 @@ fn gridfinity_d2_lip_ring_with_fillet() {
 
     let filleted = p5[0]["ok"].as_u64().unwrap() as u32;
 
-    // Check bbox unchanged
+    // A trimmed analytic torus can conservatively widen the reported AABB by
+    // at most its minor radius; the full-surface 2r expansion is a regression.
     let r6 = k.execute_batch(&format!(
         r#"[{{"op": "boundingBox", "args": {{"solid": {filleted}}}}}]"#
     ));
@@ -1285,17 +1299,17 @@ fn gridfinity_d2_lip_ring_with_fillet() {
     assert_ok(&p6, 0);
     let bbox_after = ok_bbox(&p6, 0);
 
-    let tol = 0.5; // fillet should not change bbox by more than 0.5mm
+    let tol = TOP_FILLET + 1e-9;
     for i in 0..6 {
         assert!(
-            (bbox_before[i] - bbox_after[i]).abs() < tol,
+            (bbox_before[i] - bbox_after[i]).abs() <= tol,
             "D2 bbox[{i}] shifted after fillet: {:.3} → {:.3} (issue #260)",
             bbox_before[i],
             bbox_after[i]
         );
     }
 
-    eprintln!("D2 lip ring + fillet: bbox stable, fillet succeeded");
+    eprintln!("D2 lip ring + fillet: bbox expansion bounded, fillet succeeded");
 }
 
 /// D3: Shelled box + lip ring → fuse.
