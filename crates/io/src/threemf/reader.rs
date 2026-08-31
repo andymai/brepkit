@@ -63,7 +63,7 @@ fn parse_model_xml(xml: &str) -> Result<Vec<TriangleMesh>, IoError> {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Start(ref e)) => {
                 let local = e.local_name();
-                let name = std::str::from_utf8(local.as_ref()).unwrap_or("");
+                let name = local.as_ref();
 
                 match name {
                     "object" => {
@@ -78,7 +78,7 @@ fn parse_model_xml(xml: &str) -> Result<Vec<TriangleMesh>, IoError> {
             }
             Ok(quick_xml::events::Event::Empty(ref e)) => {
                 let local = e.local_name();
-                let name = std::str::from_utf8(local.as_ref()).unwrap_or("");
+                let name = local.as_ref();
 
                 match name {
                     "vertex" if in_vertices => {
@@ -96,7 +96,7 @@ fn parse_model_xml(xml: &str) -> Result<Vec<TriangleMesh>, IoError> {
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
                 let local = e.local_name();
-                let name = std::str::from_utf8(local.as_ref()).unwrap_or("");
+                let name = local.as_ref();
 
                 match name {
                     "object" if in_object => {
@@ -135,8 +135,8 @@ fn parse_vertex_attributes(e: &quick_xml::events::BytesStart<'_>) -> Result<Poin
     let mut z = None;
 
     for attr in e.attributes().flatten() {
-        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
-        let val = std::str::from_utf8(&attr.value).unwrap_or("");
+        let key = attr.key.as_ref();
+        let val = attr.value.as_ref();
         match key {
             "x" => x = Some(parse_f64_attr(val, "vertex x")?),
             "y" => y = Some(parse_f64_attr(val, "vertex y")?),
@@ -162,8 +162,8 @@ fn parse_triangle_attributes(
     let mut v3 = None;
 
     for attr in e.attributes().flatten() {
-        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
-        let val = std::str::from_utf8(&attr.value).unwrap_or("");
+        let key = attr.key.as_ref();
+        let val = attr.value.as_ref();
         match key {
             "v1" => v1 = Some(parse_u32_attr(val, "triangle v1")?),
             "v2" => v2 = Some(parse_u32_attr(val, "triangle v2")?),

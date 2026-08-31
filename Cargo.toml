@@ -48,7 +48,7 @@ proptest = "1"
 criterion = {version = "0.8", features = ["html_reports"]}
 
 # IO formats
-quick-xml = "0.41"
+quick-xml = "0.42"
 zip = {version = "8", default-features = false, features = ["deflate"]}
 
 # Workspace crates. The `version` is what consumers resolve from crates.io;
