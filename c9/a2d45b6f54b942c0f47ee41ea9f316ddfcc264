@@ -1,0 +1,20 @@
+crates/io/src/threemf/reader.rs
+  s_6ba9bddcd25f81::t_13f68c4a00c290 66,81,99
+  s_6ba9bddcd25f81::t_387287aa1a2d62 138-139,165-166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c9a2d45b6f54b942c0f47ee41ea9f316ddfcc264",
+  "prompts": {},
+  "sessions": {
+    "s_6ba9bddcd25f81": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6d2bdf7d-870e-4c1f-83e4-290b38b24614",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <catperson@fastmail.com>"
+    }
+  }
+}
