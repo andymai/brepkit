@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.0](https://github.com/andymai/brepkit/compare/v3.3.9...v3.4.0) (2026-09-03)
+
+
+### Features
+
+* **blend:** complete corrected fillet cutover ([#1631](https://github.com/andymai/brepkit/issues/1631)) ([a7ba558](https://github.com/andymai/brepkit/commit/a7ba558dc6681acf8f70e4a586e8887a7a0db544))
+
 ## [3.3.9](https://github.com/andymai/brepkit/compare/v3.3.8...v3.3.9) (2026-08-28)
 
 
