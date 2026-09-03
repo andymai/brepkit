@@ -218,7 +218,9 @@ mod tests {
 
         let evo = build_evolution_by_geometry(&inputs, &outputs);
 
-        // The fillet adds a blend face (6 → 7) yet removes no box face.
+        // The fillet notches each runout corner out of its existing end cap
+        // and adds one blend face: all six support faces remain single faces,
+        // so the corrected topology has 6 + 1 = 7 outputs.
         assert_eq!(inputs.len(), 6);
         assert_eq!(outputs.len(), 7);
         assert!(
@@ -227,8 +229,9 @@ mod tests {
         );
         assert_eq!(evo.modified.len(), 6, "all six box faces are tracked");
 
-        // Every output face — including the new blend — is attributed to an
-        // input, so a downstream face reference always resolves.
+        // Every output face — including the new blend and the notched support
+        // faces — is attributed to an input, so a downstream face reference
+        // always resolves.
         let tracked: HashSet<usize> = evo
             .modified
             .values()

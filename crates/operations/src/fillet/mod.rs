@@ -57,8 +57,7 @@ use helpers::{FacePolygon, FilletEdgeData, extract_inner_wire_positions, record_
 /// Fillet one or more edges of a solid with a constant radius (flat chamfer).
 ///
 /// **Deprecated**: This creates flat bevel faces, not rounded fillets.
-/// Use [`fillet_rolling_ball`] for true G1-continuous NURBS blend surfaces.
-///
+/// Use [`crate::blend_ops::fillet_v2`] for production fillets.
 /// Each target edge is replaced by a flat bevel face (chamfer-like
 /// approximation of a fillet arc).
 ///
@@ -71,7 +70,7 @@ use helpers::{FacePolygon, FilletEdgeData, extract_inner_wire_positions, record_
 /// - A target edge is adjacent to a non-planar face
 #[deprecated(
     since = "0.8.0",
-    note = "Use fillet_rolling_ball for true rounded fillets"
+    note = "Use blend_ops::fillet_v2 for production rounded fillets"
 )]
 #[allow(clippy::too_many_lines)]
 pub fn fillet(

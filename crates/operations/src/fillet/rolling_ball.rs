@@ -1,6 +1,6 @@
 //! Rolling-ball fillet algorithm producing G1-continuous NURBS blend surfaces.
 
-use std::collections::{HashMap, HashSet};
+use brepkit_math::det_hash::{DetHashMap, DetHashSet};
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
@@ -11,6 +11,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::VertexId;
 
 use crate::boolean::FaceSpec;
 use crate::dot_normal_point;
@@ -21,10 +22,19 @@ use super::geometry::{
 };
 use super::helpers::{FacePolygon, extract_inner_wire_positions};
 
+struct InnerWireData {
+    vertex_ids: Vec<VertexId>,
+    positions: Vec<Point3>,
+    edge_ids: Vec<EdgeId>,
+}
+
 /// Fillet one or more edges of a solid using the rolling-ball algorithm.
 ///
 /// Produces true NURBS cylindrical fillet surfaces with G1 tangent
 /// continuity, replacing the flat-quad approximation of [`super::fillet`].
+///
+/// This deprecated engine is retained as an explicit geometry/reference
+/// implementation. Production and WASM dispatch do not call it.
 ///
 /// **G1 chain propagation**: the edge set is automatically expanded to
 /// include all G1-continuous neighbors that share the same face pair
@@ -76,10 +86,11 @@ pub fn fillet_rolling_ball(
     let shell = topo.shell(solid_data.outer_shell())?;
     let shell_face_ids: Vec<FaceId> = shell.faces().to_vec();
 
-    let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
-    let mut face_polygons: HashMap<usize, FacePolygon> = HashMap::new();
-    let mut face_surfaces: HashMap<usize, FaceSurface> = HashMap::new();
-    let mut face_reversed: HashMap<usize, bool> = HashMap::new();
+    let mut edge_to_faces: DetHashMap<usize, Vec<FaceId>> = DetHashMap::default();
+    let mut face_polygons: DetHashMap<usize, FacePolygon> = DetHashMap::default();
+    let mut face_surfaces: DetHashMap<usize, FaceSurface> = DetHashMap::default();
+    let mut face_reversed: DetHashMap<usize, bool> = DetHashMap::default();
+    let mut face_inner_wire_data: DetHashMap<usize, Vec<InnerWireData>> = DetHashMap::default();
 
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
@@ -104,12 +115,16 @@ pub fn fillet_rolling_ball(
                 .push(face_id);
         }
 
-        // Inner wire edges also contribute to adjacency.
-        // Also extract inner wire vertex positions for preservation.
+        // Inner wire edges also contribute to adjacency. Preserve their
+        // topology alongside positions so selected hole contours can be
+        // trimmed by the same contact map as the outer contour.
         let mut face_inner_wires = Vec::new();
+        let mut face_inner_contours = Vec::new();
         for &inner_wid in face.inner_wires() {
             let inner_wire = topo.wire(inner_wid)?;
-            let mut iw_positions = Vec::new();
+            let mut iw_vertex_ids = Vec::with_capacity(inner_wire.edges().len());
+            let mut iw_positions = Vec::with_capacity(inner_wire.edges().len());
+            let mut iw_edge_ids = Vec::with_capacity(inner_wire.edges().len());
             for oe in inner_wire.edges() {
                 edge_to_faces
                     .entry(oe.edge().index())
@@ -117,12 +132,20 @@ pub fn fillet_rolling_ball(
                     .push(face_id);
                 let edge = topo.edge(oe.edge())?;
                 let vid = oe.oriented_start(edge);
+                iw_vertex_ids.push(vid);
                 iw_positions.push(topo.vertex(vid)?.point());
+                iw_edge_ids.push(oe.edge());
             }
             if !iw_positions.is_empty() {
-                face_inner_wires.push(iw_positions);
+                face_inner_wires.push(iw_positions.clone());
+                face_inner_contours.push(InnerWireData {
+                    vertex_ids: iw_vertex_ids,
+                    positions: iw_positions,
+                    edge_ids: iw_edge_ids,
+                });
             }
         }
+        face_inner_wire_data.insert(face_id.index(), face_inner_contours);
 
         // Build polygon data for planar faces (used for Phase 3 trimming).
         // Non-planar faces are stored in face_surfaces and passed through
@@ -147,7 +170,7 @@ pub fn fillet_rolling_ball(
 
     // Precompute edge → polygon entries for O(|filtered_edges|) Phase 2d lookup
     // instead of O(|filtered_edges| × |planar_faces|) nested iteration.
-    let mut edge_to_poly_pos: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    let mut edge_to_poly_pos: DetHashMap<usize, Vec<(usize, usize)>> = DetHashMap::default();
     for (&face_key, poly) in &face_polygons {
         for (i, eid) in poly.wire_edge_ids.iter().enumerate() {
             edge_to_poly_pos
@@ -185,8 +208,8 @@ pub fn fillet_rolling_ball(
         );
     }
 
-    let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
-    let mut vertex_fillet_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
+    let target_set: DetHashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
+    let mut vertex_fillet_edges: DetHashMap<usize, Vec<EdgeId>> = DetHashMap::default();
 
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
@@ -516,7 +539,8 @@ pub fn fillet_rolling_ball(
     // Detect chains of consecutive fillet edges that share a vertex.
     // When two fillet strips meet at a vertex on the same pair of faces,
     // they should share contact points for G1 tangent continuity.
-    let mut vertex_fillet_adjacency: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
+    let mut vertex_fillet_adjacency: DetHashMap<usize, Vec<(usize, usize, usize)>> =
+        DetHashMap::default();
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
         if let Some(faces) = edge_to_faces.get(&edge_id.index())
@@ -535,7 +559,7 @@ pub fn fillet_rolling_ball(
                 .push((edge_id.index(), fa, fb));
         }
     }
-    let mut g1_chain_vertices: HashSet<usize> = HashSet::new();
+    let mut g1_chain_vertices: DetHashSet<usize> = DetHashSet::default();
     for (vi, adj) in &vertex_fillet_adjacency {
         if adj.len() == 2 && adj[0].1 == adj[1].1 && adj[0].2 == adj[1].2 {
             g1_chain_vertices.insert(*vi);
@@ -550,8 +574,8 @@ pub fn fillet_rolling_ball(
     // than letting full-length strips interpenetrate and over-remove material.
     //
     // Key: (edge_index, vertex_index) → setback distance along the edge.
-    let setback_map: HashMap<(usize, usize), f64> = {
-        let mut map = HashMap::new();
+    let setback_map: DetHashMap<(usize, usize), f64> = {
+        let mut map = DetHashMap::default();
         for &edge_id in &filtered_edges {
             let edge = topo.edge(edge_id)?;
             let start_vid = edge.start();
@@ -663,8 +687,11 @@ pub fn fillet_rolling_ball(
     // pre-pass and Phase 4. Edges where the walker can't converge (e.g. a
     // tangent/G1 edge between a fillet face and its neighbour) are left
     // uncached and fall through to the planar path / are skipped.
-    let blend_section_cache: HashMap<usize, Vec<brepkit_blend::fillet_builder::BlendCrossSection>> = {
-        let mut cache = HashMap::new();
+    let blend_section_cache: DetHashMap<
+        usize,
+        Vec<brepkit_blend::fillet_builder::BlendCrossSection>,
+    > = {
+        let mut cache = DetHashMap::default();
         for &edge_id in &filtered_edges {
             let Ok(edge) = topo.edge(edge_id) else {
                 continue;
@@ -715,8 +742,8 @@ pub fn fillet_rolling_ball(
     // and the spherical-triangle corner-patch boundary.
     //
     // Key: (vertex_index, edge_index, face_index) → contact Point3
-    let fillet_contact_map: HashMap<(usize, usize, usize), Point3> = {
-        let mut map = HashMap::new();
+    let fillet_contact_map: DetHashMap<(usize, usize, usize), Point3> = {
+        let mut map = DetHashMap::default();
         // For G1 junctions: keep the first edge's contacts (entry().or_insert).
         for &edge_id in &filtered_edges {
             let edge = topo.edge(edge_id)?;
@@ -833,8 +860,8 @@ pub fn fillet_rolling_ball(
     //
     // Key: corner vertex index → (corner C, contact A on fa, fa, contact B on fb, fb).
     #[allow(clippy::type_complexity)]
-    let arc_runout: HashMap<usize, (Point3, Point3, usize, Point3, usize)> = {
-        let mut map = HashMap::new();
+    let arc_runout: DetHashMap<usize, (Point3, Point3, usize, Point3, usize)> = {
+        let mut map = DetHashMap::default();
         for &edge_id in &filtered_edges {
             // Only arcs run out tangent to a neighbour; straight fillets meet a
             // perpendicular face whose plane already contains the strip end.
@@ -896,7 +923,7 @@ pub fn fillet_rolling_ball(
     // a fixed distance up the shared unfilleted edge), so the sub-edge survives
     // as a shared boundary. Phase 5b reads P to close the patch against it.
     // Key: corner vertex index → preserved trim point P.
-    let mut corner_preserved: HashMap<usize, Point3> = HashMap::new();
+    let mut corner_preserved: DetHashMap<usize, Point3> = DetHashMap::default();
 
     for &face_id in &shell_face_ids {
         // Non-planar faces: either pass through or trim at fillet contact points.
@@ -1215,7 +1242,10 @@ pub fn fillet_rolling_ball(
 
                     let mut unique_contacts: Vec<Point3> = Vec::new();
                     for (&(vi_k, _, _), &pt) in &fillet_contact_map {
-                        if vi_k == vi {
+                        let on_face = (poly.normal.dot(Vec3::new(pt.x(), pt.y(), pt.z())) - poly.d)
+                            .abs()
+                            < tol.linear * 100.0;
+                        if vi_k == vi && on_face {
                             let already = unique_contacts
                                 .iter()
                                 .any(|uc| (*uc - pt).length() < tol.linear);
@@ -1225,23 +1255,35 @@ pub fn fillet_rolling_ball(
                         }
                     }
 
-                    if unique_contacts.len() >= 2 {
-                        let dir_prev = (prev_pos - pos).normalize()?;
-                        let approx_prev = pos + dir_prev * radius;
-                        let d0 = (unique_contacts[0] - approx_prev).length();
-                        let d1 = (unique_contacts[1] - approx_prev).length();
-                        if d0 <= d1 {
-                            new_verts.push(unique_contacts[0]);
-                            new_verts.push(unique_contacts[1]);
-                        } else {
-                            new_verts.push(unique_contacts[1]);
-                            new_verts.push(unique_contacts[0]);
-                        }
+                    let dir_prev = (prev_pos - pos).normalize()?;
+                    let dir_next = (next_pos - pos).normalize()?;
+                    let approx_prev = pos + dir_prev * radius;
+                    let approx_next = pos + dir_next * radius;
+                    let closest = |target: Point3, exclude: Option<Point3>| {
+                        unique_contacts
+                            .iter()
+                            .copied()
+                            .filter(|candidate| {
+                                exclude
+                                    .is_none_or(|used| (*candidate - used).length() >= tol.linear)
+                            })
+                            .min_by(|a, b| {
+                                let da = (*a - target).length();
+                                let db = (*b - target).length();
+                                da.total_cmp(&db)
+                                    .then_with(|| a.x().total_cmp(&b.x()))
+                                    .then_with(|| a.y().total_cmp(&b.y()))
+                                    .then_with(|| a.z().total_cmp(&b.z()))
+                            })
+                    };
+                    let prev_contact = closest(approx_prev, None);
+                    let next_contact = closest(approx_next, prev_contact);
+                    if let (Some(prev_contact), Some(next_contact)) = (prev_contact, next_contact) {
+                        new_verts.push(prev_contact);
+                        new_verts.push(next_contact);
                     } else {
-                        let dir_prev = (prev_pos - pos).normalize()?;
-                        new_verts.push(pos + dir_prev * radius);
-                        let dir_next = (next_pos - pos).normalize()?;
-                        new_verts.push(pos + dir_next * radius);
+                        new_verts.push(approx_prev);
+                        new_verts.push(approx_next);
                     }
                 }
                 (true, false, _) => {
@@ -1315,22 +1357,74 @@ pub fn fillet_rolling_ball(
             }
         }
 
+        // OCCT treats inner and outer restrictions as equal contour inputs.
+        // Do the same for a fully selected planar inner contour: replace every
+        // sharp hole corner by the two exact Phase 4 contact points. Keeping the
+        // old inner wire while adding blend strips leaves both copies open.
+        let mut new_inner_wires = poly.inner_wires.clone();
+        if let Some(inner_contours) = face_inner_wire_data.get(&face_id.index()) {
+            for (wire_index, contour) in inner_contours.iter().enumerate() {
+                let vertex_ids = &contour.vertex_ids;
+                let positions = &contour.positions;
+                let wire_edge_ids = &contour.edge_ids;
+                if positions.len() < 3
+                    || !wire_edge_ids
+                        .iter()
+                        .all(|edge| target_set.contains(&edge.index()))
+                {
+                    continue;
+                }
+
+                let mut trimmed = Vec::with_capacity(positions.len() * 2);
+                let mut complete = true;
+                for i in 0..positions.len() {
+                    let prev_i = if i == 0 { positions.len() - 1 } else { i - 1 };
+                    let vi = vertex_ids[i].index();
+                    let fi = face_id.index();
+                    let after = fillet_contact_map
+                        .get(&(vi, wire_edge_ids[i].index(), fi))
+                        .copied();
+                    let before = fillet_contact_map
+                        .get(&(vi, wire_edge_ids[prev_i].index(), fi))
+                        .copied();
+                    let (Some(after), Some(before)) = (after, before) else {
+                        complete = false;
+                        break;
+                    };
+                    trimmed.push(after);
+                    trimmed.push(before);
+                }
+                if complete {
+                    let mut deduped = Vec::with_capacity(trimmed.len());
+                    for (i, &point) in trimmed.iter().enumerate() {
+                        let next = trimmed[(i + 1) % trimmed.len()];
+                        if (point - next).length() >= tol.linear {
+                            deduped.push(point);
+                        }
+                    }
+                    if deduped.len() >= 3 {
+                        new_inner_wires[wire_index] = deduped;
+                    }
+                }
+            }
+        }
+
         let new_d = dot_normal_point(poly.normal, new_verts[0]);
         all_specs.push(FaceSpec::Planar {
             vertices: new_verts,
             normal: poly.normal,
             d: new_d,
-            inner_wires: poly.inner_wires.clone(),
+            inner_wires: new_inner_wires,
         });
     }
 
     // Phase 4: Build NURBS fillet faces for each target edge.
     // Also collect contact points per vertex for vertex blend patches.
     // vertex_contacts maps vertex_index → list of (face_index, contact_point) pairs.
-    let mut vertex_contacts: HashMap<usize, Vec<(usize, Point3)>> = HashMap::new();
+    let mut vertex_contacts: DetHashMap<usize, Vec<(usize, Point3)>> = DetHashMap::default();
     // For G1 chain junctions, store the contact points computed by the first
     // edge so the second edge can reuse them exactly.
-    let mut g1_contact_cache: HashMap<usize, (Point3, Point3)> = HashMap::new();
+    let mut g1_contact_cache: DetHashMap<usize, (Point3, Point3)> = DetHashMap::default();
 
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
@@ -2215,15 +2309,35 @@ pub fn fillet_rolling_ball(
         });
     }
 
-    // Phase 6: Assemble the solid using mixed-surface assembly.  Each fillet
-    // strip and corner-patch spec already carries the `reversed` flag needed
-    // for an outward-facing normal, so no post-assembly fix-up is required.
+    // Phase 6: Assemble the solid using mixed-surface assembly, merge split
+    // co-surface faces, then propagate one coherent edge-sense orientation
+    // across the reconstructed shell. OCCT performs this globally while
+    // rebuilding its result data structure; relying on independently built
+    // face flags leaves closed shells with same-sense shared edges.
     let solid_id = crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)?;
 
     // Merge co-surface faces that the fillet may have split. This keeps the
     // face count minimal, preventing the downstream boolean from triggering
     // the mesh boolean fallback on moderate-complexity filleted solids.
     let _ = crate::heal::unify_faces(topo, solid_id);
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid_id)
+        .map_err(crate::OperationsError::Topology)?;
+    brepkit_topology::orientation::propagate_orientation(topo, &faces, &[])
+        .map_err(crate::OperationsError::Topology)?;
+    brepkit_topology::orientation::normalize_face_normals(topo, &faces, &shell_face_ids)
+        .map_err(crate::OperationsError::Topology)?;
+
+    // Edge-sense propagation is defined only up to a global shell reversal.
+    // Resolve that final degree of freedom from signed volume: downstream
+    // booleans require outward-facing operands even when every shared edge is
+    // locally consistent.
+    let orientation_deflection = (radius * 0.1).clamp(0.01, 0.1);
+    if crate::measure::oriented_solid_volume(topo, solid_id, orientation_deflection)? < 0.0 {
+        for &face_id in &faces {
+            let reversed = topo.face(face_id)?.is_reversed();
+            topo.face_mut(face_id)?.set_reversed(!reversed);
+        }
+    }
 
     // Reject a geometrically-degenerate assembly. This engine is built around
     // polygonal wires with distinct corner vertices; a closed circular edge
@@ -2235,8 +2349,6 @@ pub fn fillet_rolling_ball(
     // rounds a closed rim correctly. The guard is keyed on actual face area,
     // not edge topology, so a valid fillet (every face has real area) is never
     // rejected.
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid_id)
-        .map_err(crate::OperationsError::Topology)?;
     let area_floor = (radius * radius) * 1e-6;
     for fid in faces {
         // Fast accept first. `face_area` tessellates NURBS faces, and the

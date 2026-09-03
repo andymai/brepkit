@@ -2017,7 +2017,15 @@ fn analytic_torus_signed_volume(
                         let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
                         Some(nc.evaluate(f64::midpoint(t0, t1)))
                     }
-                    _ => None,
+                    brepkit_topology::edge::EdgeCurve::Line => {
+                        let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
+                        let t_mid = f64::midpoint(t0, t1);
+                        Some(
+                            edge.curve()
+                                .evaluate_with_endpoints(t_mid, sv.point(), ev.point()),
+                        )
+                    }
+                    brepkit_topology::edge::EdgeCurve::Ellipse(_) => None,
                 };
                 if let Some(mid) = mid {
                     let (u, v) = tor.project_point(mid);

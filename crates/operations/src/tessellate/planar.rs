@@ -5,7 +5,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
 use super::edge_sampling::{
-    measure_max_chord_deviation, sample_wire_positions, segments_for_chord_deviation_a,
+    measure_max_chord_deviation, sample_edge, sample_wire_positions, segments_for_chord_deviation_a,
 };
 use super::shorter_arc_range;
 use super::{AnalyticKind, MERGE_GRID, TriangleMesh, TriangleMeshUV, point_merge_key};
@@ -19,13 +19,12 @@ use super::{AnalyticKind, MERGE_GRID, TriangleMesh, TriangleMeshUV, point_merge_
 // The "outside" sub-face from `split_face_with_internal_loops` has holes that
 // are ignored here. This is OK for now because the outside sub-face is discarded
 // by classification in the Steinmetz case, but will need fixing for correct
-// rendering of boolean results with internal loops.
 pub(super) fn tessellate_analytic_with_boundary(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     cyl: &brepkit_math::surfaces::CylindricalSurface,
-    _deflection: f64,
-    _angular_tol: f64,
+    deflection: f64,
+    angular_tol: f64,
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
     // NOTE: Do NOT handle is_reversed here -- `tessellate_with_uvs` applies
     // a common reversal pass for all face types after this function returns.
@@ -34,25 +33,41 @@ pub(super) fn tessellate_analytic_with_boundary(
     let mut uv_pts: Vec<(f64, f64)> = Vec::new();
     let mut positions_3d: Vec<Point3> = Vec::new();
 
+    // Sample the wire boundary at deflection density. The wire endpoints
+    // alone degenerate a curved cylinder wall into a flat polygon; the
+    // sampled polyline keeps the CDT (and the evaluated surface) inside the
+    // face and captures the wall curvature.
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
+        let samples = if oe.is_forward() {
+            sample_edge(topo, edge, deflection, angular_tol, false)?
         } else {
-            edge.end()
+            let mut pts = sample_edge(topo, edge, deflection, angular_tol, false)?;
+            pts.reverse();
+            pts
         };
-        let pos = topo.vertex(vid)?.point();
-        let (mut u, v) = cyl.project_point(pos);
+        for (k, pos) in samples.iter().enumerate() {
+            if k > 0 && !uv_pts.is_empty() {
+                // Skip the shared endpoint between consecutive edges.
+                let prev = positions_3d.last().copied();
+                if let Some(prev) = prev
+                    && (*pos - prev).length() < 1e-9
+                {
+                    continue;
+                }
+            }
+            let (mut u, v) = cyl.project_point(*pos);
 
-        // Unwrap u to be continuous with the previous sample.
-        if let Some(&(prev_u, _)) = uv_pts.last() {
-            let diff = u - prev_u;
-            let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
-            u -= shifts * std::f64::consts::TAU;
+            // Unwrap u to be continuous with the previous sample.
+            if let Some(&(prev_u, _)) = uv_pts.last() {
+                let diff = u - prev_u;
+                let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
+                u -= shifts * std::f64::consts::TAU;
+            }
+
+            uv_pts.push((u, v));
+            positions_3d.push(*pos);
         }
-
-        uv_pts.push((u, v));
-        positions_3d.push(pos);
     }
 
     if uv_pts.len() < 3 {

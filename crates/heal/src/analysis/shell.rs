@@ -49,6 +49,7 @@ pub fn analyze_shell(topo: &Topology, shell_id: ShellId) -> Result<ShellAnalysis
 
     for &face_id in faces {
         let face = topo.face(face_id)?;
+        let face_reversed = face.is_reversed();
         let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
             .chain(face.inner_wires().iter().copied())
             .collect();
@@ -64,7 +65,7 @@ pub fn analyze_shell(topo: &Topology, shell_id: ShellId) -> Result<ShellAnalysis
                         faces: Vec::new(),
                     })
                     .faces
-                    .push((face_id, oe.is_forward()));
+                    .push((face_id, oe.is_forward() != face_reversed));
             }
         }
     }
@@ -82,9 +83,9 @@ pub fn analyze_shell(topo: &Topology, shell_id: ShellId) -> Result<ShellAnalysis
     }
 
     // Orientation consistency: for each manifold edge (exactly 2 faces),
-    // the two face-uses should have opposite orientations (one forward,
-    // one reverse). If both are forward or both reverse, the orientation
-    // is inconsistent.
+    // the two effective face uses (wire sense XOR face reversal) should have
+    // opposite orientations. Raw wire senses alone misclassify faces whose
+    // orientation is encoded by `Face::is_reversed`.
     let mut orientation_consistent = true;
     for eu in edge_uses.values() {
         if eu.faces.len() == 2 {

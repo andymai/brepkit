@@ -55,14 +55,15 @@ pub fn filter_planar_edges(
 /// angle.
 ///
 /// Edges bordering a curved neighbour — including a previous fillet's NURBS
-/// blend face — ARE filletable: the rolling-ball engine solves the true
-/// ball-tangent contacts against any surface. The cases that genuinely have no
-/// fillet are **tangent / G1** edges (the two faces meet smoothly, e.g. a
-/// fillet face's contact line with its planar neighbour) and degenerate folds;
-/// those are excluded here so callers never feed them to the engine.
+/// blend face — ARE filletable: the corrected [`brepkit_blend::fillet_builder::FilletBuilder`]
+/// solves the true ball-tangent contacts against analytic and NURBS surfaces.
+/// The cases that genuinely have no fillet are **tangent / G1** edges (the two
+/// faces meet smoothly, e.g. a fillet face's contact line with its planar
+/// neighbour) and degenerate folds; those are excluded here so callers never
+/// feed them to the engine.
 ///
-/// `try_fillet` additionally guards each result with a manifold check, so a
-/// permissive filter here cannot let a malformed solid through.
+/// Production dispatch additionally validates complete edge accounting and
+/// the assembled solid before publication.
 ///
 /// # Errors
 ///

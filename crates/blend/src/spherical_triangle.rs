@@ -42,77 +42,60 @@ pub struct SphericalCornerResult {
     pub boundary_curves: Vec<NurbsCurve>,
 }
 
+/// Compute the rolling-ball sphere center from the source vertex, face
+/// normals, and requested fillet radius.
+///
+/// # Errors
+///
+/// Returns [`BlendError::CornerFailure`] when the incident face normals do
+/// not define an offset direction.
+pub fn sphere_center(data: &VertexContactData) -> Result<Point3, BlendError> {
+    let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
+    for normal in &data.face_normals {
+        normal_sum += *normal;
+    }
+    if normal_sum.length() < TOL {
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
+    }
+
+    let offset = normal_sum * data.radius;
+    Ok(if data.is_convex {
+        data.vertex_pos + offset
+    } else {
+        data.vertex_pos - offset
+    })
+}
+
 /// Compute the sphere center and actual sphere radius from vertex
 /// position, face normals, and the fillet radius.
 ///
 /// The center is offset from the vertex by `R * sum(face_normals)` —
 /// each face contributes an independent offset of R along its inward
-/// normal.  The actual sphere radius (distance from center to contact
-/// points) may differ from the fillet radius when the faces are not
-/// mutually orthogonal.
-///
-/// Returns `(center, sphere_radius)`.
+/// normal. The contact points determine the bounded corner patch radius.
 fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), BlendError> {
-    let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
-    for n in &data.face_normals {
-        normal_sum += *n;
-    }
-    let len = normal_sum.length();
-    if len < TOL {
-        {
-            if std::env::var("BK_CORNER_TRACE").is_ok() {
-                log::warn!("CORNER-FAIL st-site1");
-            }
-            return Err(BlendError::CornerFailure {
-                vertex: data.vertex_id,
-            });
-        }
-    }
-
-    // Each face pushes the sphere center by R along its normal.
-    let offset = normal_sum * data.radius;
-
-    let center = if data.is_convex {
-        data.vertex_pos + offset
-    } else {
-        data.vertex_pos - offset
-    };
+    let center = sphere_center(data)?;
 
     if data.contact_points.is_empty() {
-        {
-            if std::env::var("BK_CORNER_TRACE").is_ok() {
-                log::warn!("CORNER-FAIL st-site2");
-            }
-            return Err(BlendError::CornerFailure {
-                vertex: data.vertex_id,
-            });
-        }
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
     }
     let sphere_radius = (data.contact_points[0] - center).length();
     if sphere_radius < TOL {
-        {
-            if std::env::var("BK_CORNER_TRACE").is_ok() {
-                log::warn!("CORNER-FAIL st-site3");
-            }
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
+    }
+
+    // All boundary contacts must lie on the same rolling-ball sphere.
+    for contact in &data.contact_points {
+        let distance = (*contact - center).length();
+        if (distance - sphere_radius).abs() > TOL * 100.0 {
             return Err(BlendError::CornerFailure {
                 vertex: data.vertex_id,
             });
-        }
-    }
-
-    // Validate: all contact points should be at the same distance from center.
-    for cp in &data.contact_points {
-        let dist = (*cp - center).length();
-        let err = (dist - sphere_radius).abs();
-        if err > TOL * 100.0 {
-            {
-                if std::env::var("BK_CORNER_TRACE").is_ok() {
-                    log::warn!("CORNER-FAIL st-site4");
-                }
-                return Err(BlendError::CornerFailure {
-                    vertex: data.vertex_id,
-                });
-            }
         }
     }
 
@@ -162,95 +145,99 @@ fn build_great_circle_arc(
     Ok(NurbsCurve::new(2, knots, control_points, weights)?)
 }
 
-/// Build a spherical triangle corner patch for a standard 3-edge vertex.
-///
-/// The result is a degree-(2,2) rational NURBS surface that exactly
-/// lies on the rolling-ball sphere and is bounded by three great-circle
-/// arcs connecting the contact points.
-///
-/// # Errors
-///
-/// Returns `BlendError::CornerFailure` if the geometry is degenerate
-/// (e.g. coplanar face normals, contact points not on the sphere).
-#[allow(clippy::too_many_lines)]
-pub fn build_spherical_corner(
+struct SphericalPatchGeometry {
+    surface: FaceSurface,
+    center: Point3,
+    radius: f64,
+    points: [Point3; 3],
+}
+
+fn spherical_corner_geometry(
     data: &VertexContactData,
-) -> Result<SphericalCornerResult, BlendError> {
+) -> Result<SphericalPatchGeometry, BlendError> {
     if data.contact_points.len() < 3 {
-        {
-            if std::env::var("BK_CORNER_TRACE").is_ok() {
-                log::warn!("CORNER-FAIL st-site7");
-            }
-            return Err(BlendError::CornerFailure {
-                vertex: data.vertex_id,
-            });
-        }
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
     }
 
-    let (center, r) = compute_sphere_center(data)?;
-    let vid = data.vertex_id;
-
+    let (center, radius) = compute_sphere_center(data)?;
+    let vertex = data.vertex_id;
     let q1 = data.contact_points[0];
     let q2 = data.contact_points[1];
     let q3 = data.contact_points[2];
+    let dir1 = (q1 - center) * (1.0 / radius);
+    let dir2 = (q2 - center) * (1.0 / radius);
+    let dir3 = (q3 - center) * (1.0 / radius);
 
-    let dir1 = (q1 - center) * (1.0 / r);
-    let dir2 = (q2 - center) * (1.0 / r);
-    let dir3 = (q3 - center) * (1.0 / r);
-
-    // Edge midpoint control points (tangent intersection for rational arcs).
-    let mid_q1q2 = edge_mid_cp(center, r, dir1, dir2, vid)?;
-    let mid_q2q3 = edge_mid_cp(center, r, dir2, dir3, vid)?;
-    let mid_q3q1 = edge_mid_cp(center, r, dir3, dir1, vid)?;
-
+    let mid_q1q2 = edge_mid_cp(center, radius, dir1, dir2, vertex)?;
+    let mid_q2q3 = edge_mid_cp(center, radius, dir2, dir3, vertex)?;
+    let mid_q3q1 = edge_mid_cp(center, radius, dir3, dir1, vertex)?;
     let w_q1q2 = cos_half_angle(dir1, dir2);
     let w_q2q3 = cos_half_angle(dir2, dir3);
     let w_q3q1 = cos_half_angle(dir3, dir1);
 
-    // Apex: projection of the centroid direction onto the sphere.
-    let apex_dir_raw = dir1 + dir2 + dir3;
-    let apex_dir_len = apex_dir_raw.length();
-    if apex_dir_len < TOL {
-        {
-            if std::env::var("BK_CORNER_TRACE").is_ok() {
-                log::warn!("CORNER-FAIL st-site8");
-            }
-            return Err(BlendError::CornerFailure { vertex: vid });
-        }
+    let apex_direction = dir1 + dir2 + dir3;
+    let apex_length = apex_direction.length();
+    if apex_length < TOL {
+        return Err(BlendError::CornerFailure { vertex });
     }
-    let apex_dir = apex_dir_raw * (1.0 / apex_dir_len);
-    let apex = center + apex_dir * r;
-
-    let w_apex = w_q1q2 * w_q2q3 * w_q3q1;
-
-    // Build 3x3 control point grid (degree 2x2).
-    //
-    // Row 0: Q1, mid_Q1Q2, Q2           (bottom edge)
-    // Row 1: mid_Q3Q1, apex, mid_Q2Q3   (middle row)
-    // Row 2: Q3, Q3, Q3                 (degenerate top = triangle apex vertex)
+    let apex = center + apex_direction * (radius / apex_length);
     let control_points = vec![
         vec![q1, mid_q1q2, q2],
         vec![mid_q3q1, apex, mid_q2q3],
         vec![q3, q3, q3],
     ];
-
     let weights = vec![
         vec![1.0, w_q1q2, 1.0],
-        vec![w_q3q1, w_apex, w_q2q3],
+        vec![w_q3q1, w_q1q2 * w_q2q3 * w_q3q1, w_q2q3],
         vec![1.0, 1.0, 1.0],
     ];
-
     let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
-
     let surface = NurbsSurface::new(2, 2, knots.clone(), knots, control_points, weights)?;
 
-    let arc_q1q2 = build_great_circle_arc(center, r, q1, q2, vid)?;
-    let arc_q2q3 = build_great_circle_arc(center, r, q2, q3, vid)?;
-    let arc_q3q1 = build_great_circle_arc(center, r, q3, q1, vid)?;
-
-    Ok(SphericalCornerResult {
+    Ok(SphericalPatchGeometry {
         surface: FaceSurface::Nurbs(surface),
-        boundary_curves: vec![arc_q1q2, arc_q2q3, arc_q3q1],
+        center,
+        radius,
+        points: [q1, q2, q3],
+    })
+}
+
+/// Build only the spherical surface for a registry-owned trihedral patch.
+///
+/// The caller supplies the patch's existing registry edges to its topology;
+/// this function deliberately allocates no independent boundary topology.
+///
+/// # Errors
+///
+/// Returns [`BlendError::CornerFailure`] for degenerate trihedral geometry.
+pub fn build_spherical_corner_surface(data: &VertexContactData) -> Result<FaceSurface, BlendError> {
+    Ok(spherical_corner_geometry(data)?.surface)
+}
+
+/// Build a spherical triangle and standalone boundary curves.
+///
+/// Compatibility callers use the curves to allocate their own topology. The
+/// ordered junction solver uses [`build_spherical_corner_surface`] instead.
+///
+/// # Errors
+///
+/// Returns [`BlendError::CornerFailure`] for degenerate trihedral geometry.
+pub fn build_spherical_corner(
+    data: &VertexContactData,
+) -> Result<SphericalCornerResult, BlendError> {
+    let geometry = spherical_corner_geometry(data)?;
+    let [q1, q2, q3] = geometry.points;
+    let vertex = data.vertex_id;
+    let boundary_curves = vec![
+        build_great_circle_arc(geometry.center, geometry.radius, q1, q2, vertex)?,
+        build_great_circle_arc(geometry.center, geometry.radius, q2, q3, vertex)?,
+        build_great_circle_arc(geometry.center, geometry.radius, q3, q1, vertex)?,
+    ];
+    Ok(SphericalCornerResult {
+        surface: geometry.surface,
+        boundary_curves,
     })
 }
 

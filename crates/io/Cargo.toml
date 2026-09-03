@@ -26,6 +26,7 @@ zip.workspace = true
 
 [dev-dependencies]
 brepkit-algo.workspace = true
+brepkit-blend.workspace = true
 brepkit-topology = {workspace = true, features = ["test-utils"]}
 log.workspace = true
 proptest.workspace = true

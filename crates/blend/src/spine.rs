@@ -16,6 +16,8 @@ use crate::BlendError;
 pub struct Spine {
     /// Ordered edge IDs in the chain.
     edges: Vec<EdgeId>,
+    /// Whether each edge is traversed from its stored start to end.
+    directions: Vec<bool>,
     /// Cumulative arc-length at each edge boundary.
     /// `params[0] = 0`, `params[i]` = cumulative length through edge `i-1`.
     params: Vec<f64>,
@@ -44,42 +46,80 @@ impl Spine {
 
         Ok(Self {
             edges: vec![edge_id],
+            directions: vec![true],
             params: vec![0.0, length],
             length,
-            is_closed: false,
+            is_closed: topo.edge(edge_id)?.start() == topo.edge(edge_id)?.end(),
         })
     }
 
     /// Build a spine from an ordered chain of edges.
     ///
-    /// Edges must be G1-continuous (verified by caller).
+    /// Edges must be G1-continuous (verified by caller). Stored edge
+    /// orientation is normalized to the chain direction without changing the
+    /// durable edge IDs exposed by [`Self::edges`].
     ///
     /// # Errors
     /// Returns `BlendError` if any edge or vertex cannot be found.
     pub fn from_chain(topo: &Topology, edges: Vec<EdgeId>) -> Result<Self, BlendError> {
+        if edges.is_empty() {
+            return Err(BlendError::PlanningFailure {
+                reason: "cannot build an empty spine".to_owned(),
+            });
+        }
+        let mut directions = vec![true; edges.len()];
+        if edges.len() > 1 {
+            let first = topo.edge(edges[0])?;
+            let next = topo.edge(edges[1])?;
+            if first.end() != next.start()
+                && first.end() != next.end()
+                && (first.start() == next.start() || first.start() == next.end())
+            {
+                directions[0] = false;
+            }
+        }
+        for i in 1..edges.len() {
+            let previous = topo.edge(edges[i - 1])?;
+            let previous_end = if directions[i - 1] {
+                previous.end()
+            } else {
+                previous.start()
+            };
+            let edge = topo.edge(edges[i])?;
+            directions[i] = if edge.start() == previous_end {
+                true
+            } else {
+                edge.end() != previous_end
+            };
+        }
+
         let mut params = Vec::with_capacity(edges.len() + 1);
         params.push(0.0);
         let mut cumulative = 0.0;
-
         for &eid in &edges {
             let (p_start, p_end) = edge_endpoints(topo, eid)?;
             cumulative += (p_end - p_start).length();
             params.push(cumulative);
         }
-
-        let is_closed = if edges.len() >= 2 {
-            let first = topo.edge(edges[0])?;
-            let last = topo.edge(edges[edges.len() - 1])?;
-            first.start() == last.end()
+        let first = topo.edge(edges[0])?;
+        let last = topo.edge(edges[edges.len() - 1])?;
+        let first_start = if directions[0] {
+            first.start()
         } else {
-            false
+            first.end()
+        };
+        let last_end = if directions[edges.len() - 1] {
+            last.end()
+        } else {
+            last.start()
         };
 
         Ok(Self {
             edges,
+            directions,
             params,
             length: cumulative,
-            is_closed,
+            is_closed: first_start == last_end,
         })
     }
 
@@ -135,16 +175,19 @@ impl Spine {
     /// # Errors
     /// Returns `BlendError` if topology lookups fail.
     pub fn evaluate(&self, topo: &Topology, s: f64) -> Result<Point3, BlendError> {
-        let (idx, t) = self.locate(s);
+        let (idx, local_t) = self.locate(s);
         let edge = topo.edge(self.edges[idx])?;
         let p_start = topo.vertex(edge.start())?.point();
         let p_end = topo.vertex(edge.end())?.point();
         let curve = edge.curve();
         let (t0, t1) = curve.domain_with_endpoints(p_start, p_end);
-        let param = t0 + (t1 - t0) * t;
-        Ok(curve.evaluate_with_endpoints(param, p_start, p_end))
+        let t = if self.directions[idx] {
+            local_t
+        } else {
+            1.0 - local_t
+        };
+        Ok(curve.evaluate_with_endpoints(t0 + (t1 - t0) * t, p_start, p_end))
     }
-
     /// Evaluate the tangent direction on the spine at global parameter `s`.
     ///
     /// Returns the unit tangent, or a fallback Z-axis if the edge is degenerate.
@@ -153,18 +196,24 @@ impl Spine {
     /// # Errors
     /// Returns `BlendError` if topology lookups fail.
     pub fn tangent(&self, topo: &Topology, s: f64) -> Result<Vec3, BlendError> {
-        let (idx, t) = self.locate(s);
+        let (idx, local_t) = self.locate(s);
         let edge = topo.edge(self.edges[idx])?;
         let p_start = topo.vertex(edge.start())?.point();
         let p_end = topo.vertex(edge.end())?.point();
         let curve = edge.curve();
         let (t0, t1) = curve.domain_with_endpoints(p_start, p_end);
-        let param = t0 + (t1 - t0) * t;
-        let tan = curve.tangent_with_endpoints(param, p_start, p_end);
+        let t = if self.directions[idx] {
+            local_t
+        } else {
+            1.0 - local_t
+        };
+        let mut tan = curve.tangent_with_endpoints(t0 + (t1 - t0) * t, p_start, p_end);
+        if !self.directions[idx] {
+            tan = -tan;
+        }
         Ok(tan.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0)))
     }
 }
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -218,5 +267,32 @@ mod tests {
         let spine = Spine::from_single_edge(&topo, eid).unwrap();
         let mid = spine.evaluate(&topo, 5.0).unwrap();
         assert!((mid - Point3::new(5.0, 0.0, 0.0)).length() < 1e-10);
+    }
+    #[test]
+    fn chain_normalizes_stored_edge_orientation() {
+        let mut topo = Topology::new();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), 1e-7));
+        let first = topo.add_edge(Edge::new(v1, v0, EdgeCurve::Line));
+        let second = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let spine = Spine::from_chain(&topo, vec![first, second]).unwrap();
+        assert_eq!(spine.edge_count(), 2);
+        assert!(
+            (spine.evaluate(&topo, 0.0).unwrap() - Point3::new(0.0, 0.0, 0.0)).length() < 1e-10
+        );
+        assert!(
+            (spine.evaluate(&topo, 2.0).unwrap() - Point3::new(2.0, 0.0, 0.0)).length() < 1e-10
+        );
+        assert!(!spine.is_closed());
+    }
+
+    #[test]
+    fn one_self_loop_spine_is_periodic() {
+        let mut topo = Topology::new();
+        let vertex = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Line));
+        let spine = Spine::from_chain(&topo, vec![edge]).unwrap();
+        assert!(spine.is_closed());
     }
 }

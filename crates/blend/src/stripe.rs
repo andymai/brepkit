@@ -40,3 +40,16 @@ pub struct StripeResult {
     /// New edges created for the blend surface boundaries.
     pub new_edges: Vec<EdgeId>,
 }
+
+impl Stripe {
+    /// Return the ordered source edges represented by this stripe.
+    ///
+    /// A contour is intentionally represented by one stripe whose spine may
+    /// contain several edges. Callers should use this view instead of
+    /// iterating requested edges independently so the chain ordering and
+    /// orientation selected by [`Spine`] remain intact.
+    #[must_use]
+    pub fn spine_edges(&self) -> &[EdgeId] {
+        self.spine.edges()
+    }
+}
