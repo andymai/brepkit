@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788436191492,
+  "lastUpdate": 1788437392935,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33047,6 +33047,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41954860,
             "range": "± 50186",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "luciray@gmail.com",
+            "name": "ceeray",
+            "username": "ceeray"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a7ba558dc6681acf8f70e4a586e8887a7a0db544",
+          "message": "feat(blend): complete corrected fillet cutover (#1631)\n\nBK9: ship the corrected `FilletBuilder` engine as the production and\nWASM fillet engine.\n\n- `blend_ops::fillet_v2` becomes the first production/WASM engine;\npublication is atomic (unchanged, partial, open, non-manifold, inward\nresults rejected)\n- `fillet_rolling_ball` removed from the dispatch chain, callable only\nas reference/diagnostic; flat-bevel `fillet` remains a last-resort\nfallback\n- Junction corners use the terminal end of each cross-section pair;\nconvex trihedral setbacks apply only to near-equal-length stripes\n- Four-stripe (mixed-radius) junctions close with an apex-fan of ruled\ncorner faces\n- Analytic wire boundaries sampled per edge; NURBS tessellation\npreserves face handedness\n- Single constant-radius planar stripes propagate mid-edge contact\nsplits into untouched caps\n- Trimmed torus faces use wire-bounded AABBs instead of the full\nanalytic torus extent\n- Gridfinity D2 lip-ring regression now selects the peak rim edge as the\ntool does\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSwitches production and WASM fillets to the corrected `FilletBuilder`\nengine (`blend_ops::fillet_v2`), which fixes box-corner over-removal,\nopen junctions at mixed-radius corners, and inverted face tessellation\nthat the rolling-ball engine produced.\n\n**Refactors**\n- `fillet_rolling_ball` is removed from the dispatch chain and callable\nonly as a reference/diagnostic implementation; flat-bevel `fillet`\nremains a last-resort WASM fallback.\n- WASM publication is now atomic — unchanged, partial, open,\nnon-manifold, or inward results are rejected.\n- Adds `boundary_registry`, `fillet_plan`, `signed_volume`, and\n`orientation` modules for staged planning, canonical boundary ownership,\nand shell orientation repair.\n- Adds a frozen cross-fillet regression fixture with a shell audit in\n`crates/io/tests`.\n\n**Bug Fixes**\n- Junction corners use the terminal end of each cross-section pair\ninstead of over-removing corner material.\n- Four-stripe mixed-radius junctions close with an apex-fan of ruled\ncorner faces.\n- Convex trihedral setbacks apply only to near-equal-length incident\nstripes.\n- Mid-edge contact splits on planar stripes propagate into untouched\ncaps.\n- NURBS tessellation mirrors triangle winding on left-handed\nparameterizations so faces keep their material side.\n- Trimmed torus faces use wire-bounded AABBs instead of the full\nanalytic extent.\n- The Gridfinity D2 lip-ring regression selects the peak rim edge.\n- `signed_volume` samples spheres with the `SphericalSurface` UV\nconvention, so off-origin spherical faces no longer flip the shell\ninward.\n- Selected edges absent from the source shell fail planning instead of\npanicking.\n- WASM `filletV2`/`chamferV2` are wrapped in `catch_unwind` so a blend\npanic can't abort the WASM instance.\n\n<sup>Written for commit b4d86dbc7b6d1e568223a658863bb3e48776e8c8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1631?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nCo-authored-by: ceeray <6075534+ceeray@users.noreply.github.com>\nCo-authored-by: Claude <noreply@anthropic.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-09-03T05:07:27-07:00",
+          "tree_id": "93bd2de055af2ac16f978f60c36fb693636d1f32",
+          "url": "https://github.com/andymai/brepkit/commit/a7ba558dc6681acf8f70e4a586e8887a7a0db544"
+        },
+        "date": 1788437389425,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 800089,
+            "range": "± 1757",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 866697,
+            "range": "± 1080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9605,
+            "range": "± 72",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 582175,
+            "range": "± 1734",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35216576,
+            "range": "± 470728",
             "unit": "ns/iter"
           }
         ]
