@@ -1559,9 +1559,22 @@ impl BrepKernel {
             .iter()
             .map(|&h| self.resolve_edge(h))
             .collect::<Result<_, _>>()?;
-        let result =
-            brepkit_operations::blend_ops::fillet_v2(self.topo_mut(), solid_id, &edge_ids, radius)?;
-        Ok(solid_id_to_u32(result.solid))
+        // Wrap in catch_unwind like `fillet` does: a blend panic must not cross
+        // the WASM FFI boundary, which would abort the entire WASM instance.
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
+                let result = brepkit_operations::blend_ops::fillet_v2(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                )?;
+                Ok(solid_id_to_u32(result.solid))
+            }));
+        match outcome {
+            Ok(inner) => inner,
+            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "FilletV2"))),
+        }
     }
 
     /// Chamfer edges with two distances using the v2 blend engine.
@@ -1588,14 +1601,23 @@ impl BrepKernel {
             .iter()
             .map(|&h| self.resolve_edge(h))
             .collect::<Result<_, _>>()?;
-        let result = brepkit_operations::blend_ops::chamfer_v2(
-            self.topo_mut(),
-            solid_id,
-            &edge_ids,
-            d1,
-            d2,
-        )?;
-        Ok(solid_id_to_u32(result.solid))
+        // Wrap in catch_unwind like `fillet` does: a blend panic must not cross
+        // the WASM FFI boundary, which would abort the entire WASM instance.
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
+                let result = brepkit_operations::blend_ops::chamfer_v2(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    d1,
+                    d2,
+                )?;
+                Ok(solid_id_to_u32(result.solid))
+            }));
+        match outcome {
+            Ok(inner) => inner,
+            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "ChamferV2"))),
+        }
     }
 
     /// Chamfer edges with distance and angle using the v2 blend engine.

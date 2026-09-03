@@ -109,10 +109,10 @@ fn surface_grid_contribution(surface: &FaceSurface, sign: f64) -> f64 {
         FaceSurface::Cylinder(_) => (0.0, std::f64::consts::TAU, 0.0, 1.0),
         FaceSurface::Cone(_) => (0.0, std::f64::consts::TAU, 0.0, 1.0),
         FaceSurface::Sphere(_) => (
-            -std::f64::consts::FRAC_PI_2,
-            std::f64::consts::FRAC_PI_2,
             0.0,
             std::f64::consts::TAU,
+            -std::f64::consts::FRAC_PI_2,
+            std::f64::consts::FRAC_PI_2,
         ),
         FaceSurface::Torus(_) => (0.0, std::f64::consts::TAU, 0.0, std::f64::consts::TAU),
         FaceSurface::Nurbs(n) => (
@@ -154,4 +154,37 @@ fn tetrahedron(a: Point3, b: Point3, c: Point3) -> f64 {
     let b = Vec3::new(b.x(), b.y(), b.z());
     let c = Vec3::new(c.x(), c.y(), c.z());
     1.0 / 6.0 * a.dot(b.cross(c))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::surfaces::SphericalSurface;
+
+    #[test]
+    fn sphere_grid_flux_is_analytic_volume_and_translation_invariant() {
+        // A closed analytic sphere's divergence flux equals (4/3)·π·r³ for any
+        // center. The u/v bounds must match SphericalSurface (u = azimuth over
+        // 0..2π, v = latitude over -π/2..π/2); swapping them mis-tiles the
+        // sphere into a wrong, center-dependent value.
+        let radius = 2.0_f64;
+        let expected = 4.0 / 3.0 * std::f64::consts::PI * radius.powi(3);
+        let flux = |center: Point3| {
+            surface_grid_contribution(
+                &FaceSurface::Sphere(SphericalSurface::new(center, radius).unwrap()),
+                1.0,
+            )
+        };
+        let at_origin = flux(Point3::new(0.0, 0.0, 0.0));
+        let off_origin = flux(Point3::new(5.0, -3.0, 4.0));
+        assert!(
+            (at_origin - expected).abs() < 0.05 * expected,
+            "sphere flux should be ~{expected}, got {at_origin}"
+        );
+        assert!(
+            (off_origin - at_origin).abs() < 1e-6,
+            "sphere flux must be translation-invariant: origin={at_origin}, offset={off_origin}"
+        );
+    }
 }

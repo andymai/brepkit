@@ -1499,3 +1499,26 @@ fn fillet_edge_adjacent_to_nurbs_blend_is_watertight() {
         "second fillet volume out of range: first={vol1}, second={vol2}"
     );
 }
+
+#[test]
+fn fillet_v2_foreign_edge_does_not_panic() {
+    // Regression: mixing a valid edge of solid A with an edge from a different
+    // solid (equivalently a cavity or stale edge) yields two G1 contours, one
+    // of them empty. group_g1_contours sorted them by contour[0] and panicked
+    // on the empty one (a single empty contour hid the bug because a one-item
+    // sort skips the key). It must now resolve gracefully, and the foreign edge
+    // must never be reported as a successful blend.
+    let mut topo = Topology::new();
+    let solid_a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let solid_b = crate::primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+    let a_edges = solid_edge_ids(&topo, solid_a);
+    let b_edges = solid_edge_ids(&topo, solid_b);
+    if let Ok(blend) =
+        crate::blend_ops::fillet_v2(&mut topo, solid_a, &[a_edges[0], b_edges[0]], 1.0)
+    {
+        assert!(
+            !blend.succeeded.contains(&b_edges[0]),
+            "a foreign edge must not be reported as a successful fillet"
+        );
+    }
+}

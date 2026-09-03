@@ -335,6 +335,11 @@ pub fn group_g1_contours(
                 .collect::<Vec<_>>(),
         );
     }
-    contours.sort_by_key(|contour: &Vec<EdgeId>| contour[0].index());
+    // A selected edge absent from the source shell yields an empty contour;
+    // it is kept so the caller can report it as a PlanningFailure. Sort empties
+    // last instead of indexing `contour[0]`, which would panic here.
+    contours.sort_by_key(|contour: &Vec<EdgeId>| {
+        contour.first().map_or(usize::MAX, |edge| edge.index())
+    });
     Ok(contours)
 }
