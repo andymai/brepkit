@@ -30,7 +30,9 @@ mod g1_chain;
 mod geometry;
 mod helpers;
 mod radius_law;
+mod reblend;
 mod rolling_ball;
+mod setback_patch;
 #[cfg(test)]
 mod tests;
 

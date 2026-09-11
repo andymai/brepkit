@@ -81,6 +81,26 @@ pub fn fillet_rolling_ball(
         });
     }
 
+    // An accepted cylindrical strip is not an untouched end cap when a new
+    // sharp edge meets one of its tangent vertices. Recover that strip's
+    // sharp supports on a copy, then solve the adjoining corner jointly.
+    if let Some(result) = super::reblend::try_adjoining_strip(topo, solid, edges, radius)? {
+        return Ok(result);
+    }
+
+    build(topo, solid, edges, radius, None)
+}
+
+/// The optional corner is constructed only by the isolated-strip recognizer.
+pub(super) fn build(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    radius: f64,
+    setback_corner: Option<&super::reblend::SetbackCorner>,
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+
     // Phase 1: Collect face data and build adjacency.
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
@@ -1092,7 +1112,10 @@ pub fn fillet_rolling_ball(
                         if setback_map.contains_key(&(ei, vi))
                             && let Ok(dir) = (next_pos - pos).normalize()
                         {
-                            let p = pos + dir * radius;
+                            let p = setback_corner.filter(|corner| corner.vertex == vi).map_or(
+                                pos + dir * radius,
+                                super::reblend::SetbackCorner::preserved,
+                            );
                             trimmed_verts.push(p);
                             corner_preserved.entry(vi).or_insert(p);
                         }
@@ -1104,7 +1127,10 @@ pub fn fillet_rolling_ball(
                         if setback_map.contains_key(&(ei, vi))
                             && let Ok(dir) = (prev_pos - pos).normalize()
                         {
-                            let p = pos + dir * radius;
+                            let p = setback_corner.filter(|corner| corner.vertex == vi).map_or(
+                                pos + dir * radius,
+                                super::reblend::SetbackCorner::preserved,
+                            );
                             trimmed_verts.push(p);
                             corner_preserved.entry(vi).or_insert(p);
                         }
@@ -1305,7 +1331,9 @@ pub fn fillet_rolling_ball(
                     if setback_map.contains_key(&(ei, vi))
                         && let Ok(dir) = (next_pos - pos).normalize()
                     {
-                        let p = pos + dir * radius;
+                        let p = setback_corner
+                            .filter(|corner| corner.vertex == vi)
+                            .map_or(pos + dir * radius, super::reblend::SetbackCorner::preserved);
                         new_verts.push(p);
                         corner_preserved.entry(vi).or_insert(p);
                     }
@@ -1318,7 +1346,9 @@ pub fn fillet_rolling_ball(
                     if setback_map.contains_key(&(ei, vi))
                         && let Ok(dir) = (prev_pos - pos).normalize()
                     {
-                        let p = pos + dir * radius;
+                        let p = setback_corner
+                            .filter(|corner| corner.vertex == vi)
+                            .map_or(pos + dir * radius, super::reblend::SetbackCorner::preserved);
                         new_verts.push(p);
                         corner_preserved.entry(vi).or_insert(p);
                     }
@@ -1747,6 +1777,10 @@ pub fn fillet_rolling_ball(
     // for exactly 2 edges they form a four-sided patch that also picks up the
     // preserved point on the unfilleted edge (see the fillet_count == 2 branch).
     for (&vi, contacts) in &vertex_contacts {
+        if let Some(corner) = setback_corner.filter(|corner| corner.vertex == vi) {
+            all_specs.push(corner.face_spec()?);
+            continue;
+        }
         let fillet_count = vertex_fillet_edges.get(&vi).map_or(0, Vec::len);
         if fillet_count < 2 {
             continue;
@@ -2315,6 +2349,9 @@ pub fn fillet_rolling_ball(
     // rebuilding its result data structure; relying on independently built
     // face flags leaves closed shells with same-sense shared edges.
     let solid_id = crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)?;
+    if let Some(corner) = setback_corner {
+        corner.install_contact_curves(topo, solid_id)?;
+    }
 
     // Merge co-surface faces that the fillet may have split. This keeps the
     // face count minimal, preventing the downstream boolean from triggering
