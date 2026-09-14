@@ -1,0 +1,19 @@
+crates/io/tests/kumiko_wrap_strut_cut_inmem.rs
+  s_bbd929af8e1daa::t_31238a6678a2a9 117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "824b01d7f3ded63b7439e6dca34f27497b1f3618",
+  "prompts": {},
+  "sessions": {
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
