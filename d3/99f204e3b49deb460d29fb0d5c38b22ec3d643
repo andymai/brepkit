@@ -1,0 +1,25 @@
+crates/io/tests/data/kumiko_wrap_strut.bin
+  s_bbd929af8e1daa::t_7fa29f7ace0fab 1
+crates/io/tests/kumiko_wrap_strut_cut_inmem.rs
+  s_bbd929af8e1daa::t_7fa29f7ace0fab 1-150
+crates/io/tests/data/kumiko_wrap_band.bin
+  s_bbd929af8e1daa::t_0614c6095d4648 1
+.claude/skills/roadmap/SKILL.md
+  s_bbd929af8e1daa::t_843c43766b34a5 145-146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d399f204e3b49deb460d29fb0d5c38b22ec3d643",
+  "prompts": {},
+  "sessions": {
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
