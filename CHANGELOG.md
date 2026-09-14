@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.4.2](https://github.com/andymai/brepkit/compare/v3.4.1...v3.4.2) (2026-09-14)
+
+
+### Bug Fixes
+
+* **xtask:** read the wasm-bindgen pin from the workspace manifest ([#1647](https://github.com/andymai/brepkit/issues/1647)) ([a3c51d6](https://github.com/andymai/brepkit/commit/a3c51d6939be15449e05fe1f50a0bb98f97c5683))
+
+
+### Performance
+
+* **math:** stop the grid seeder refining every close sample pair ([#1646](https://github.com/andymai/brepkit/issues/1646)) ([ce1af4f](https://github.com/andymai/brepkit/commit/ce1af4f63e80eb0300f62e912285c76cb89e4618))
+
 ## [3.4.1](https://github.com/andymai/brepkit/compare/v3.4.0...v3.4.1) (2026-09-14)
 
 
