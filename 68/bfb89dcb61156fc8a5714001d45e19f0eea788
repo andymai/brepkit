@@ -1,0 +1,22 @@
+crates/io/examples/kumiko_pair_probe.rs
+  s_bbd929af8e1daa::t_78d00abbeb2d7d 8-15,21
+  s_bbd929af8e1daa::t_82cdc433af8a67 1-7,16-20,22-180
+.claude/skills/roadmap/SKILL.md
+  s_bbd929af8e1daa::t_bea136c6de8b45 145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "68bfb89dcb61156fc8a5714001d45e19f0eea788",
+  "prompts": {},
+  "sessions": {
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
