@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789425339580,
+  "lastUpdate": 1789427003189,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33479,6 +33479,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41707722,
             "range": "± 95626",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c624bfd364130272ec341a5872bbe369e0248be",
+          "message": "test(io): pin the kumiko corner-wrap strut cut behind the generator hangs (#1644)\n\n## What this pins\n\nThe gridfinity tool's slowest generator test\n(`slideRailBuilder.test.ts`, \"is not carved away by a kumiko wrap\neither\": a 3x2x6 bin with the mitsukude wall pattern and interior slide\nrails) takes 12 to 19 minutes on brepkit. A per-op timing capture of its\nexport shows 21 compound cuts of a rounded corner band by helical-sweep\nstrut lattices (22 s, 50 s and 226 s each), 23 mesh fallbacks, 532 s\ntotal; the reference kernel exports it watertight in seconds.\n\nCaptured operands replay one band-by-strut cut natively:\n\n- The band is 6 faces (2 cylinders, 4 planes). The strut is a rectangle\nswept along a helix segment: 16 NURBS wall patches per wall, 64 NURBS\nfaces plus 2 caps. The NURBS walls are inherent to the helical sweep,\nnot an adapter artifact: the same export on brepjs 19.0.4 (which fixed\nthe adapter's transform refit) gives an identical profile.\n- `BK_GFA_TIME` puts 4.2 s of the 4.4 s cut in `phase_ff`\n(`analytic_nurbs_intersection`, cylinder by helicoid patch). The marcher\nlogs `SSI: curve deviates 1.8e0 from surface(s) (tolerance=1e-5),\nre-fitting from sample points` ten times, and the exact result has 42\nfree edges (35 on the strut's NURBS sub-faces), so the op falls back to\na 167-face planar mesh.\n\n## Tests\n\n- `kumiko_corner_fixture_is_faithful` (active): band and strut surface\ncensuses.\n- `kumiko_corner_strut_cut_stays_exact` (ignored ready-repro): no\nfallback, typed faces kept, manifold by quantized geometry, under one\nsecond. Fails today on the fallback.\n\n## Roadmap\n\nAdds the item to the OPEN table with the mechanism, the refuted adapter\nhypothesis, and the marcher lead (extract one deviating pair into a\n`math` SSI test first), and attributes the hang class row to it.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins the gridfinity generator hang to a minimal in-memory repro: cutting\na rounded corner band by a helical-sweep strut takes 4.4s, the marcher\ndrifts 1.8mm off the surfaces, and the exact result has 42 free edges,\nso the operation falls back to a planar mesh.\n\n**Tests**\n- Adds `kumiko_wrap_band.bin` and `kumiko_wrap_strut.bin` fixtures and\ntwo tests.\n- The active test validates the capture: the band has 6 faces, the strut\nhas 64 NURBS + 2 planar faces, and both operands are manifold by edge id\nand by quantized geometry.\n- The ignored ready repro asserts no fallback, typed faces, and a\nmanifold result; its wall-clock budget was dropped so the future gate\nisn't flaky on loaded hosts, with the timing in the doc comment and\nroadmap instead.\n- Updates the roadmap row to attribute the generator hang class to this\nrepro and refute the adapter-transform hypothesis.\n\n<sup>Written for commit dce50fe25a56fe720e45d3eeabf54106c7c960f3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1644?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-14T23:00:48Z",
+          "tree_id": "6c522434835ce3ee737004f78b3d7a0f8bbf897d",
+          "url": "https://github.com/andymai/brepkit/commit/0c624bfd364130272ec341a5872bbe369e0248be"
+        },
+        "date": 1789427000254,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1067867,
+            "range": "± 2741",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1113222,
+            "range": "± 2114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13319,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 736679,
+            "range": "± 1192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45064799,
+            "range": "± 481770",
             "unit": "ns/iter"
           }
         ]
