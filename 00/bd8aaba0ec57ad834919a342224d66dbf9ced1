@@ -1,0 +1,32 @@
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_bbd929af8e1daa::t_63ab59b885cd9c 717-725,727-763
+  s_b3d1acc07602ad::t_1dbceed24cf7b5 664-667,764-781
+.claude/skills/roadmap/SKILL.md
+  s_b3d1acc07602ad::t_ef65eaf19c5db5 145
+crates/math/src/nurbs/intersection/tests.rs
+  s_b3d1acc07602ad::t_ce1ff1726bffdb 1204-1267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "00bd8aaba0ec57ad834919a342224d66dbf9ced1",
+  "prompts": {},
+  "sessions": {
+    "s_b3d1acc07602ad": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "794c02e7-503f-4dff-813b-fe98044740ca",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
