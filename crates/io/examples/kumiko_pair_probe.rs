@@ -1,7 +1,8 @@
 //! Per-pair marcher diagnostic for the kumiko corner-wrap cut: every cylinder
 //! face of the band against every NURBS wall of one strut, through the same
 //! NURBS-by-NURBS marcher `phase_ff` uses, reporting wall time and how far the
-//! returned curves sit from both surfaces.
+//! returned curves sit from both surfaces. `BAND=` and `STRUT=` override the
+//! fixture paths; projection failures are counted, not dropped.
 //!
 //! Run: `cargo run --release -p brepkit-io --example kumiko_pair_probe`
 
@@ -26,23 +27,21 @@ use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
+/// Boundary samples the way `phase_ff::face_v_range` takes them: the outer
+/// wire only, five samples per edge.
 fn face_points(topo: &Topology, fid: FaceId) -> Vec<Point3> {
     let face = topo.face(fid).unwrap();
     let mut pts = Vec::new();
-    let mut wires = vec![face.outer_wire()];
-    wires.extend_from_slice(face.inner_wires());
-    for wid in wires {
-        for oe in topo.wire(wid).unwrap().edges() {
-            let e = topo.edge(oe.edge()).unwrap();
-            let (a, b) = (
-                topo.vertex(e.start()).unwrap().point(),
-                topo.vertex(e.end()).unwrap().point(),
-            );
-            let (t0, t1) = e.curve().domain_with_endpoints(a, b);
-            for k in 0..=8 {
-                let t = t0 + (t1 - t0) * k as f64 / 8.0;
-                pts.push(e.curve().evaluate_with_endpoints(t, a, b));
-            }
+    for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+        let e = topo.edge(oe.edge()).unwrap();
+        let (a, b) = (
+            topo.vertex(e.start()).unwrap().point(),
+            topo.vertex(e.end()).unwrap().point(),
+        );
+        let (t0, t1) = e.curve().domain_with_endpoints(a, b);
+        for frac in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let t = t0 + (t1 - t0) * frac;
+            pts.push(e.curve().evaluate_with_endpoints(t, a, b));
         }
     }
     pts
@@ -50,17 +49,17 @@ fn face_points(topo: &Topology, fid: FaceId) -> Vec<Point3> {
 
 fn main() {
     let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+    let band_path = std::env::var_os("BAND").map_or_else(
+        || data.join("kumiko_wrap_band.bin"),
+        std::path::PathBuf::from,
+    );
+    let strut_path = std::env::var_os("STRUT").map_or_else(
+        || data.join("kumiko_wrap_strut.bin"),
+        std::path::PathBuf::from,
+    );
     let mut topo = Topology::new();
-    let band = deserialize_solid(
-        &std::fs::read(data.join("kumiko_wrap_band.bin")).unwrap(),
-        &mut topo,
-    )
-    .unwrap();
-    let strut = deserialize_solid(
-        &std::fs::read(data.join("kumiko_wrap_strut.bin")).unwrap(),
-        &mut topo,
-    )
-    .unwrap();
+    let band = deserialize_solid(&std::fs::read(band_path).unwrap(), &mut topo).unwrap();
+    let strut = deserialize_solid(&std::fs::read(strut_path).unwrap(), &mut topo).unwrap();
 
     let mut cylinders: Vec<(
         FaceId,
@@ -111,6 +110,7 @@ fn main() {
             let mut max_dev_cyl = 0.0_f64;
             let mut max_dev_wall = 0.0_f64;
             let mut max_dev_curve = 0.0_f64;
+            let mut proj_failures = 0_usize;
             if let Ok(curves) = &curves {
                 n_curves = curves.len();
                 for ic in curves {
@@ -120,8 +120,9 @@ fn main() {
                         let axial = cyl.axis().dot(rel);
                         let radial = (rel - cyl.axis() * axial).length();
                         max_dev_cyl = max_dev_cyl.max((radial - cyl.radius()).abs());
-                        if let Ok(pr) = project_point_to_surface(wn, p.point, 1e-9) {
-                            max_dev_wall = max_dev_wall.max(pr.distance);
+                        match project_point_to_surface(wn, p.point, 1e-9) {
+                            Ok(pr) => max_dev_wall = max_dev_wall.max(pr.distance),
+                            Err(_) => proj_failures += 1,
                         }
                     }
                     let (d0, d1) = ic.curve.domain();
@@ -131,6 +132,10 @@ fn main() {
                         let axial = cyl.axis().dot(rel);
                         let radial = (rel - cyl.axis() * axial).length();
                         max_dev_curve = max_dev_curve.max((radial - cyl.radius()).abs());
+                        match project_point_to_surface(wn, q, 1e-9) {
+                            Ok(pr) => max_dev_curve = max_dev_curve.max(pr.distance),
+                            Err(_) => proj_failures += 1,
+                        }
                     }
                 }
             }
@@ -144,37 +149,39 @@ fn main() {
                 max_dev_wall,
                 max_dev_curve,
                 curves.is_err(),
+                proj_failures,
             ));
         }
     }
     let total_ms = total.elapsed().as_secs_f64() * 1e3;
     println!(
-        "pairs={} total={total_ms:.0}ms with_curves={}",
+        "pairs={} total={total_ms:.0}ms with_curves={} projection_failures={}",
         rows.len(),
-        rows.iter().filter(|r| r.3 > 0).count()
+        rows.iter().filter(|r| r.3 > 0).count(),
+        rows.iter().map(|r| r.9).sum::<usize>()
     );
     rows.sort_by(|a, b| b.0.total_cmp(&a.0));
     println!("-- slowest pairs (ms, cyl, wall, curves, pts, dev_cyl, dev_wall, dev_curve, err)");
     for r in rows.iter().take(8) {
         println!(
-            "  {:8.1}ms {:?} x {:?} curves={} pts={} dev_cyl={:.2e} dev_wall={:.2e} dev_curve={:.2e} err={}",
-            r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8
+            "  {:8.1}ms {:?} x {:?} curves={} pts={} dev_cyl={:.2e} dev_wall={:.2e} dev_curve={:.2e} err={} proj_fail={}",
+            r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.8, r.9
         );
     }
     rows.sort_by(|a, b| b.5.max(b.6).total_cmp(&a.5.max(a.6)));
     println!("-- worst point deviation from the surfaces");
     for r in rows.iter().take(8) {
         println!(
-            "  {:8.1}ms {:?} x {:?} curves={} pts={} dev_cyl={:.2e} dev_wall={:.2e} dev_curve={:.2e}",
-            r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7
+            "  {:8.1}ms {:?} x {:?} curves={} pts={} dev_cyl={:.2e} dev_wall={:.2e} dev_curve={:.2e} proj_fail={}",
+            r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.9
         );
     }
     rows.sort_by(|a, b| b.7.total_cmp(&a.7));
-    println!("-- worst fitted-curve deviation from the cylinder");
+    println!("-- worst fitted-curve deviation from either surface");
     for r in rows.iter().take(5) {
         println!(
-            "  {:8.1}ms {:?} x {:?} curves={} pts={} dev_cyl={:.2e} dev_wall={:.2e} dev_curve={:.2e}",
-            r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7
+            "  {:8.1}ms {:?} x {:?} curves={} pts={} dev_cyl={:.2e} dev_wall={:.2e} dev_curve={:.2e} proj_fail={}",
+            r.0, r.1, r.2, r.3, r.4, r.5, r.6, r.7, r.9
         );
     }
 }
