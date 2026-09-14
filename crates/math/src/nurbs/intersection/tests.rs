@@ -1201,3 +1201,67 @@ fn dual_surface_validation_passes_for_known_intersection() {
         }
     }
 }
+
+fn flat_at(z: f64) -> NurbsSurface {
+    NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![Point3::new(0.0, 0.0, z), Point3::new(0.0, 1.0, z)],
+            vec![Point3::new(1.0, 0.0, z), Point3::new(1.0, 1.0, z)],
+        ],
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .unwrap()
+}
+
+#[test]
+fn grid_seeder_declares_a_grazing_disjoint_pair_empty() {
+    // 0.05 apart: every sample pair sits inside the grid's closeness
+    // threshold, so before the failure budget this refined all of them.
+    let s1 = flat_at(0.0);
+    let s2 = flat_at(0.05);
+    assert!(find_ssi_seeds_grid(&s1, &s2, 32, 1e-6).is_empty());
+    assert!(
+        intersect_nurbs_nurbs(&s1, &s2, 32, 0.01)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn grid_seeder_budget_keeps_a_shallow_crossing() {
+    // A 2.3 degree tilt crossing z=0 along x=0.5: the closest sample pairs
+    // are on the crossing and must seed it before any budget applies.
+    let s1 = flat_at(0.0);
+    let s2 = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![Point3::new(0.0, 0.0, -0.02), Point3::new(0.0, 1.0, -0.02)],
+            vec![Point3::new(1.0, 0.0, 0.02), Point3::new(1.0, 1.0, 0.02)],
+        ],
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .unwrap();
+    let seeds = find_ssi_seeds_grid(&s1, &s2, 32, 1e-6);
+    assert!(!seeds.is_empty(), "the crossing must still be seeded");
+    for seed in &seeds {
+        assert!(
+            seed.point.z().abs() < 1e-5,
+            "seed off the plane: {:?}",
+            seed.point
+        );
+        assert!(
+            (seed.point.x() - 0.5).abs() < 1e-4,
+            "seed off the crossing: {:?}",
+            seed.point
+        );
+    }
+    let curves = intersect_nurbs_nurbs(&s1, &s2, 32, 0.01).unwrap();
+    assert!(!curves.is_empty(), "the crossing must still be traced");
+}

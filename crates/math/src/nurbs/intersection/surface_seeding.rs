@@ -661,6 +661,10 @@ fn find_split_row(knots: &[f64], split_val: f64, degree: usize, n_cps: usize) ->
 /// refinement for all cell-center pairs whose 3D positions are within
 /// a generous distance threshold.
 #[allow(clippy::cast_precision_loss)]
+/// Closest grid pairs that may all fail Newton before a pair is declared
+/// non-intersecting by the grid seeder.
+const MAX_FAILED_SEED_ATTEMPTS: usize = 64;
+
 pub(super) fn find_ssi_seeds_grid(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
@@ -710,19 +714,71 @@ pub(super) fn find_ssi_seeds_grid(
     #[allow(clippy::cast_precision_loss)]
     let threshold = ((diag1.max(diag2) / n as f64) * 3.0).max(0.1);
 
-    for &(u1, v1, p1) in &pts1 {
-        for &(u2, v2, p2) in &pts2 {
+    // Newton from every close grid pair is the whole cost of this fallback:
+    // neighbouring pairs converge to the same seed and are deduplicated away,
+    // while a surface grazing the other within the threshold launches
+    // thousands of refinements that all fail. Refine the mutual nearest pairs
+    // first and only fall back to every close pair when none converges.
+    let mut nearest_in_2: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts1.len()];
+    let mut nearest_in_1: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts2.len()];
+    for (i, &(_, _, p1)) in pts1.iter().enumerate() {
+        for (k, &(_, _, p2)) in pts2.iter().enumerate() {
             let dist = (p1 - p2).length();
-            if dist < threshold
-                && let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance)
-            {
-                // 100x dedup: multiple grid samples may converge to the same intersection
-                let dup = seeds.iter().any(|s: &IntersectionPoint| {
-                    (s.point - refined.point).length() < tolerance * 100.0
-                });
-                if !dup {
-                    seeds.push(refined);
-                }
+            if dist < nearest_in_2[i].1 {
+                nearest_in_2[i] = (k, dist);
+            }
+            if dist < nearest_in_1[k].1 {
+                nearest_in_1[k] = (i, dist);
+            }
+        }
+    }
+    // 100x dedup: multiple grid samples may converge to the same intersection
+    let push_seed = |seeds: &mut Vec<IntersectionPoint>, refined: IntersectionPoint| {
+        let dup = seeds
+            .iter()
+            .any(|s: &IntersectionPoint| (s.point - refined.point).length() < tolerance * 100.0);
+        if !dup {
+            seeds.push(refined);
+        }
+    };
+    for (i, &(k, dist)) in nearest_in_2.iter().enumerate() {
+        if dist < threshold
+            && nearest_in_1[k].0 == i
+            && let Some(refined) = refine_ssi_point(
+                s1, s2, pts1[i].0, pts1[i].1, pts2[k].0, pts2[k].1, tolerance,
+            )
+        {
+            push_seed(&mut seeds, refined);
+        }
+    }
+    if !seeds.is_empty() {
+        return seeds;
+    }
+    // Exhaustive fallback, closest pairs first. A real crossing converges from
+    // its closest samples, so once the closest MAX_FAILED_SEED_ATTEMPTS pairs
+    // have all failed with nothing found, the surfaces graze without meeting
+    // and the remaining thousands of refinements would fail the same way.
+    let mut close: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, &(_, _, p1)) in pts1.iter().enumerate() {
+        for (k, &(_, _, p2)) in pts2.iter().enumerate() {
+            let dist = (p1 - p2).length();
+            if dist < threshold {
+                close.push((dist, i, k));
+            }
+        }
+    }
+    close.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut consecutive_failures = 0_usize;
+    for &(_, i, k) in &close {
+        if let Some(refined) = refine_ssi_point(
+            s1, s2, pts1[i].0, pts1[i].1, pts2[k].0, pts2[k].1, tolerance,
+        ) {
+            consecutive_failures = 0;
+            push_seed(&mut seeds, refined);
+        } else {
+            consecutive_failures += 1;
+            if seeds.is_empty() && consecutive_failures >= MAX_FAILED_SEED_ATTEMPTS {
+                break;
             }
         }
     }
