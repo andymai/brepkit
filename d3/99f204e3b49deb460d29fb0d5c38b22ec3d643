@@ -3,9 +3,9 @@ crates/io/tests/data/kumiko_wrap_strut.bin
 crates/io/tests/kumiko_wrap_strut_cut_inmem.rs
   s_bbd929af8e1daa::t_7fa29f7ace0fab 1-150
 crates/io/tests/data/kumiko_wrap_band.bin
-  s_bbd929af8e1daa::t_0614c6095d4648 1
+  s_bbd929af8e1daa::t_11bea7828e1480 1
 .claude/skills/roadmap/SKILL.md
-  s_bbd929af8e1daa::t_843c43766b34a5 145-146
+  s_bbd929af8e1daa::t_e341f3b5765af2 145-146
 ---
 {
   "schema_version": "authorship/3.0.0",
