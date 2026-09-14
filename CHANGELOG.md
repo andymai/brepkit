@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.1](https://github.com/andymai/brepkit/compare/v3.4.0...v3.4.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **measure:** bound trimmed cylinder and cone faces by their edges ([#1641](https://github.com/andymai/brepkit/issues/1641)) ([c011ff4](https://github.com/andymai/brepkit/commit/c011ff4b8046d285b116172281b35d59735f8bf7))
+
 ## [3.4.0](https://github.com/andymai/brepkit/compare/v3.3.9...v3.4.0) (2026-09-03)
 
 
