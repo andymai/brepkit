@@ -1,0 +1,22 @@
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_bbd929af8e1daa::t_139bc324d8170c 658-659,661-676,678-686,745-754,757,768-771,794-795,797-803,806-817,832-835,845-846
+  s_bbd929af8e1daa::t_79682628bc647f 660,677,767,772
+crates/math/src/nurbs/intersection/tests.rs
+  s_bbd929af8e1daa::t_71655dd2c0b755 8-10,1228,1230-1236,1244-1276,1311-1344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3de09648ba455878f138b87e6cdadee6f7311321",
+  "prompts": {},
+  "sessions": {
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
