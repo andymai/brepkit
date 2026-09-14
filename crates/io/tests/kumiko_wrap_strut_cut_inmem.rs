@@ -54,6 +54,21 @@ fn surface_census(topo: &Topology, solid: SolidId) -> HashMap<&'static str, usiz
     census
 }
 
+fn edge_use_counts(topo: &Topology, solid: SolidId) -> HashMap<usize, usize> {
+    let mut counts = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let mut wires = vec![face.outer_wire()];
+        wires.extend_from_slice(face.inner_wires());
+        for wid in wires {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *counts.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
+}
+
 fn edge_midpoint(topo: &Topology, eid: EdgeId) -> Point3 {
     let e = topo.edge(eid).unwrap();
     let (a, b) = (
@@ -111,6 +126,22 @@ fn kumiko_corner_fixture_is_faithful() {
     let strut_census = surface_census(&topo, strut);
     assert_eq!(strut_census.get("nurbs"), Some(&64));
     assert_eq!(strut_census.get("plane"), Some(&2));
+    // Both operands are closed and manifold, by id and by geometry, so a
+    // failing cut is the boolean's doing and not a damaged capture.
+    for (label, solid) in [("band", band), ("strut", strut)] {
+        let by_id = edge_use_counts(&topo, solid);
+        assert_eq!(
+            by_id.values().filter(|&&c| c != 2).count(),
+            0,
+            "{label} is not manifold by id"
+        );
+        let by_position = positional_edge_uses(&topo, solid);
+        assert_eq!(
+            by_position.values().filter(|&&c| c != 2).count(),
+            0,
+            "{label} is not manifold by position"
+        );
+    }
 }
 
 #[test]
