@@ -1,0 +1,19 @@
+xtask/src/wasm.rs
+  s_bbd929af8e1daa::t_df91ca8da17a9b 34-52,55-59,734-745,747
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "39cf388bb63df6e5611731cf800bd82cd256c43a",
+  "prompts": {},
+  "sessions": {
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
