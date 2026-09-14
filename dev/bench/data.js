@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789400375936,
+  "lastUpdate": 1789422316320,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33317,6 +33317,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45455387,
             "range": "± 205208",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c011ff4b8046d285b116172281b35d59735f8bf7",
+          "message": "fix(measure): bound trimmed cylinder and cone faces by their edges (#1641)\n\n## Defect\n\n`solid_bounding_box` added the full circle's axis-aligned extremes at\nevery vertex of a cylinder or cone face, whatever fraction of the circle\nthe face covered. A 0.001 mm slab intersected across an r=5 corner arc\nreported the whole 40 mm width. The gridfinity tool's wall-cutout tests\nmeasure widths exactly that way, so brepkit read as \"the corner was\nnever rounded\" on every corner-radius scenario, although the boolean and\nits volume were exact throughout.\n\n## Fix\n\nA ruled quadric reaches its extreme in any direction along a whole\nruling, and a ruling's ends lie on boundary edges, so a cylinder or cone\nface is bounded exactly by its edges. Circle and ellipse edges now\ncontribute the analytic extremes that fall inside their own\n`domain_with_endpoints` span (a quarter arc adds nothing beyond its\nendpoints), NURBS edges are sampled at 64 points over their span, and\nthe cylinder and cone arms add nothing. Spheres and tori keep their\nconservative full extents.\n\nThe intersect early-out and the compound-cut contact gate consume this\nbox; both only need it never to under-shoot, which circles and ellipses\nkeep exactly and NURBS edges keep to within a hair of the radius.\n\n## Verification\n\n- New pins: `concave_arc_notch_does_not_inflate_the_box` (a semicircular\nbite whose circle reaches y=25 on a solid that stops at y=20) and\n`thin_slab_through_arc_corners_has_tight_bounds` (the tool's slab probe\nagainst the analytic half-width).\n- `cargo test -p brepkit-operations`, `cargo test -p brepkit-io`, and\n`cargo test -p brepkit-wasm --lib gridfinity`: 1363 passed, 0 failed.\n- Clippy all-targets clean, fmt clean, doc paths clean.\n- Tool-side, the same probe on brepkit-wasm 3.4.0 returned span 40 at\nevery slab height across the arcs; the native repro with this fix\nreturns ±19.00075 at y=2, matching the reference kernel's 19.001.\n\n## Roadmap\n\nRecords the 2026-09-14 tool-side drift measurement (50 generator files\nfailing identically on 3.3.9 and 3.4.0 against the reference kernel's\npass), the two brepjs adapter roots found on the way (scaled circles\nbecome Bezier curves; compounds of compounds mesh empty), the 3.4.0\nfillet-cutover deltas, and the run recipe that survived.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `solid_bounding_box` so trimmed cylinder and cone faces use their\nboundary edges instead of full-circle extents. Thin slab intersections\nnow report the actual arc width instead of 40 mm; booleans and volumes\nare unchanged, and spheres and tori keep their conservative full\nextents.\n\n**Details**\n\n- Uses analytic extrema within each circle and ellipse edge span.\n- Bounds NURBS edges with span-limited, subdivided homogeneous Bezier\nhulls so intersection and compound-cut checks do not under-shoot.\n- Adds regression pins for concave arcs, thin arc slabs, NURBS arcs, and\ntilted ellipses.\n- Records the related tool-side drift and adapter findings in the\nroadmap.\n\n<sup>Written for commit d509260f2e2f14a83343cb8ed7bb08e9903ec159.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1641?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-14T21:42:33Z",
+          "tree_id": "45c66bd1ef4cf2c67e75cbf3f73dbe8866bc6c96",
+          "url": "https://github.com/andymai/brepkit/commit/c011ff4b8046d285b116172281b35d59735f8bf7"
+        },
+        "date": 1789422313187,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 976679,
+            "range": "± 3151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1056520,
+            "range": "± 2161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12199,
+            "range": "± 544",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 721372,
+            "range": "± 10862",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41887421,
+            "range": "± 197280",
             "unit": "ns/iter"
           }
         ]
