@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789427003189,
+  "lastUpdate": 1789428159264,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33533,6 +33533,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45064799,
             "range": "± 481770",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4cf1214214e34e3ca3e6b957360ecb8ea5058ce4",
+          "message": "docs(roadmap): isolate the kumiko wrap marcher cost with a per-pair probe (#1645)\n\n## What this adds\n\n`crates/io/examples/kumiko_pair_probe.rs`: a durable instrument that\nloads the kumiko wrap fixture from #1644, converts each band cylinder to\nNURBS over its face's v-range exactly as `phase_ff` does, and runs\n`intersect_nurbs_nurbs(32, 0.01)` on every AABB-overlapping\nband-cylinder by strut-wall pair, reporting wall time per pair and the\nmaximum distance of every returned point and fitted curve from both\nsurfaces. `BAND=` and `STRUT=` override the fixture paths.\n\n## What it shows\n\n- 98 overlapping pairs, 7.7 s total, 50 with curves.\n- The marcher is accurate: points within 1e-6 of both surfaces, fitted\ncurves within 1e-4 of the cylinder.\n- Eight pairs that never intersect cost 250 to 490 ms each, about half\nof the total: the subdivision seeder finds nothing and the 32-by-32 grid\nsearch runs on a disjoint pair.\n- A few intersecting pairs return 2-point fragments (`Id(4) x Id(22)`: 5\ncurves, 10 points) instead of one section; those are the pieces that\nlater fail to chain across the 16 wall patches and leave the free edges\nseen in the cut.\n\nThe roadmap row for the kumiko corner-wrap cut now names these two leads\n(seed-search rejection cost, fragment chaining) instead of the drift\nmessage alone.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a per-pair marcher probe for the kumiko wrap cut. It runs every\nband-cylinder by strut-wall pair through the same\n`intersect_nurbs_nurbs(32, 0.01)` call `phase_ff` uses, reporting wall\ntime and surface deviation per pair. The probe takes the cylinder\nv-range from the outer wire at five samples per edge exactly as\n`phase_ff` does, checks fitted curves against both surfaces, counts\nprojection failures instead of dropping them, and accepts `BAND=` and\n`STRUT=` fixture path overrides.\n\n- Across the 98 overlapping pairs, the marcher is accurate: points sit\nwithin 1e-6 of both surfaces and fitted curves within 1e-4 of the\ncylinder.\n- Eight never-intersecting pairs cost 250-490 ms each, about half the\n7.7 s total, because the seed search finds nothing and the 32x32 grid\nsearch still runs.\n- A few intersecting pairs return 2-point fragments instead of one\nsection; those pieces fail to chain across the 16 wall patches and leave\nthe free edges.\n- The roadmap row for the kumiko corner-wrap cut now names seed-search\nrejection cost and fragment chaining instead of the drift message.\n\n<sup>Written for commit 7e03a70bce6db19398058a779fb580b6b1b3630b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1645?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-14T23:20:08Z",
+          "tree_id": "ef1b20e81164b5ee1883513f99ed96cbb943bd8d",
+          "url": "https://github.com/andymai/brepkit/commit/4cf1214214e34e3ca3e6b957360ecb8ea5058ce4"
+        },
+        "date": 1789428156406,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1021685,
+            "range": "± 3649",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1111829,
+            "range": "± 13676",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13564,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 732295,
+            "range": "± 7751",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44472482,
+            "range": "± 112848",
             "unit": "ns/iter"
           }
         ]
