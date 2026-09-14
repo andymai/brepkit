@@ -31,14 +31,32 @@ fn pinned_wasm_bindgen_version() -> Result<String> {
 }
 
 fn parse_wasm_bindgen_pin(manifest: &str) -> Option<String> {
-    manifest.lines().find_map(|line| {
-        let rest = line.trim().strip_prefix("wasm-bindgen")?.trim_start();
-        let rest = rest.strip_prefix('=')?.trim_start();
-        let rest = rest.strip_prefix("\"=")?;
+    let mut in_workspace_dependencies = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_workspace_dependencies = line == "[workspace.dependencies]";
+            continue;
+        }
+        if !in_workspace_dependencies {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("wasm-bindgen") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix("\"=") else {
+            continue;
+        };
         let end = rest.find('"')?;
         let version = &rest[..end];
-        (!version.is_empty()).then(|| version.to_owned())
-    })
+        if !version.is_empty() {
+            return Some(version.to_owned());
+        }
+    }
+    None
 }
 
 fn pkg_dir() -> Result<PathBuf> {
@@ -713,9 +731,20 @@ mod pin_tests {
 
     #[test]
     fn ignores_ranges_and_other_crates() {
-        assert_eq!(parse_wasm_bindgen_pin("wasm-bindgen = \"0.2\"\n"), None);
+        let ws = |body: &str| format!("[workspace.dependencies]\n{body}\n");
+        assert_eq!(parse_wasm_bindgen_pin(&ws("wasm-bindgen = \"0.2\"")), None);
         assert_eq!(
-            parse_wasm_bindgen_pin("wasm-bindgen-futures = \"=0.4.1\"\n"),
+            parse_wasm_bindgen_pin(&ws("wasm-bindgen-futures = \"=0.4.1\"")),
+            None
+        );
+    }
+
+    #[test]
+    fn only_reads_the_workspace_dependencies_table() {
+        let manifest = "[patch.crates-io]\nwasm-bindgen = \"=0.1.0\"\n\n[workspace.dependencies]\nwasm-bindgen = \"=0.2.128\"\n\n[profile.release]\nwasm-bindgen = \"=9.9.9\"\n";
+        assert_eq!(parse_wasm_bindgen_pin(manifest).as_deref(), Some("0.2.128"));
+        assert_eq!(
+            parse_wasm_bindgen_pin("[dependencies]\nwasm-bindgen = \"=0.2.128\"\n"),
             None
         );
     }
