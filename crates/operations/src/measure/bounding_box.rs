@@ -123,6 +123,7 @@ fn expand_aabb_for_face(
     // arcs whose extremes lie between vertices, and any curved edge on a
     // planar face.
     sample_face_wire_midpoints(topo, aabb, face_id);
+    expand_boundary_edges_exact(topo, aabb, face_id);
 
     match surface {
         FaceSurface::Plane { .. } => {}
@@ -152,19 +153,10 @@ fn expand_aabb_for_face(
         }
 
         // Cylinder: expand radially at each face vertex's axis projection.
-        // Unlike the old approach that used AABB corners (which over-expands
-        // for fillet cylinders), this uses the face's own vertices to
-        // constrain the expansion to the actual face extent.
-        FaceSurface::Cylinder(c) => {
-            expand_cylinder_at_vertices(topo, aabb, face_id, c);
-        }
-
-        // Cone: expand radially at each face vertex (the radius varies per
-        // axial position). Uses the vertex's own distance-from-axis as the
-        // local radius, then projects to a full circle at that axial slice.
-        FaceSurface::Cone(c) => {
-            expand_cone_at_vertices(topo, aabb, face_id, c);
-        }
+        // A ruled quadric's extreme in any direction is attained along a whole
+        // ruling, whose ends lie on boundary edges: the exact edge bounds
+        // already cover the face.
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
 
         // NURBS: sample the surface at a sparse interior grid.
         FaceSurface::Nurbs(nurbs) => {
@@ -253,107 +245,239 @@ fn sample_face_wire_midpoints(
     has_curved
 }
 
-/// Expand AABB for a cylinder face by projecting each vertex onto the
-/// cylinder axis and adding the full radial extent at that axial position.
-fn expand_cylinder_at_vertices(
+/// Include the exact extremes of every boundary edge over its own span.
+///
+/// Circle and ellipse edges reach their axis-aligned extremes at analytic
+/// parameters; only those inside the edge's span count, so a quarter arc
+/// contributes nothing beyond its endpoints. NURBS edges are sampled densely
+/// over their span: the control polygon would never under-shoot but can sit
+/// far outside the curve, and the intersect and compound-cut shortcuts only
+/// need the box to stay within a hair of the true extent.
+fn expand_boundary_edges_exact(
     topo: &Topology,
     aabb: &mut Aabb3,
     face_id: brepkit_topology::face::FaceId,
-    cyl: &brepkit_math::surfaces::CylindricalSurface,
 ) {
+    use brepkit_topology::edge::EdgeCurve;
+    const NURBS_SAMPLES: usize = 64;
+
     let Ok(face) = topo.face(face_id) else {
         return;
     };
-    let Ok(wire) = topo.wire(face.outer_wire()) else {
-        return;
-    };
-    let axis = cyl.axis();
-    let origin = cyl.origin();
-    let r = cyl.radius();
-    let rx = r * (1.0 - axis.x() * axis.x()).max(0.0).sqrt();
-    let ry = r * (1.0 - axis.y() * axis.y()).max(0.0).sqrt();
-    let rz = r * (1.0 - axis.z() * axis.z()).max(0.0).sqrt();
-    for oe in wire.edges() {
-        let Ok(edge) = topo.edge(oe.edge()) else {
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let Ok(wire) = topo.wire(wire_id) else {
             continue;
         };
-        for vid in [edge.start(), edge.end()] {
-            let Ok(v) = topo.vertex(vid) else {
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
                 continue;
             };
-            let rel = brepkit_math::vec::Vec3::new(
-                v.point().x() - origin.x(),
-                v.point().y() - origin.y(),
-                v.point().z() - origin.z(),
-            );
-            let t = axis.dot(rel);
-            let coa = Point3::new(
-                origin.x() + axis.x() * t,
-                origin.y() + axis.y() * t,
-                origin.z() + axis.z() * t,
-            );
-            aabb_include(aabb, Point3::new(coa.x() - rx, coa.y() - ry, coa.z() - rz));
-            aabb_include(aabb, Point3::new(coa.x() + rx, coa.y() + ry, coa.z() + rz));
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (p_start, p_end) = (sv.point(), ev.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(p_start, p_end);
+            match edge.curve() {
+                EdgeCurve::Line => {}
+                EdgeCurve::Circle(c) => {
+                    let r = c.radius();
+                    include_conic_extremes(aabb, c.u_axis(), c.v_axis(), r, r, t0, t1, |t| {
+                        c.evaluate(t)
+                    });
+                }
+                EdgeCurve::Ellipse(e) => include_conic_extremes(
+                    aabb,
+                    e.u_axis(),
+                    e.v_axis(),
+                    e.semi_major(),
+                    e.semi_minor(),
+                    t0,
+                    t1,
+                    |t| e.evaluate(t),
+                ),
+                EdgeCurve::NurbsCurve(_) =>
+                {
+                    #[allow(clippy::cast_precision_loss)]
+                    for i in 1..NURBS_SAMPLES {
+                        let t = t0 + (t1 - t0) * (i as f64) / (NURBS_SAMPLES as f64);
+                        aabb_include(
+                            aabb,
+                            edge.curve().evaluate_with_endpoints(t, p_start, p_end),
+                        );
+                    }
+                }
+            }
         }
     }
 }
 
-/// Expand AABB for a cone face by computing each face vertex's radial
-/// distance from the axis (the local cone radius at that axial slice),
-/// then including a full circle of that radius at that slice.
-fn expand_cone_at_vertices(
-    topo: &Topology,
+/// Include the points where `c + a·cos(t)·u + b·sin(t)·v` is extreme along
+/// each world axis, for the parameters that fall inside `[t0, t1]` taken
+/// modulo the full turn.
+#[allow(clippy::too_many_arguments)]
+fn include_conic_extremes(
     aabb: &mut Aabb3,
-    face_id: brepkit_topology::face::FaceId,
-    cone: &brepkit_math::surfaces::ConicalSurface,
+    u_axis: brepkit_math::vec::Vec3,
+    v_axis: brepkit_math::vec::Vec3,
+    a: f64,
+    b: f64,
+    t0: f64,
+    t1: f64,
+    evaluate: impl Fn(f64) -> Point3,
 ) {
-    use brepkit_math::vec::Vec3;
-    let Ok(face) = topo.face(face_id) else {
-        return;
-    };
-    let Ok(wire) = topo.wire(face.outer_wire()) else {
-        return;
-    };
-    let axis = cone.axis();
-    let apex = cone.apex();
-    // Axis-perpendicular projection scales for a full ring at slice centre.
-    let sx = (1.0 - axis.x() * axis.x()).max(0.0).sqrt();
-    let sy = (1.0 - axis.y() * axis.y()).max(0.0).sqrt();
-    let sz = (1.0 - axis.z() * axis.z()).max(0.0).sqrt();
-    for oe in wire.edges() {
-        let Ok(edge) = topo.edge(oe.edge()) else {
+    let span = t1 - t0;
+    let u = [u_axis.x(), u_axis.y(), u_axis.z()];
+    let v = [v_axis.x(), v_axis.y(), v_axis.z()];
+    for k in 0..3 {
+        let (au, bv) = (a * u[k], b * v[k]);
+        if au.hypot(bv) <= 0.0 {
             continue;
-        };
-        for vid in [edge.start(), edge.end()] {
-            let Ok(v) = topo.vertex(vid) else {
-                continue;
-            };
-            let rel = Vec3::new(
-                v.point().x() - apex.x(),
-                v.point().y() - apex.y(),
-                v.point().z() - apex.z(),
-            );
-            let t = axis.dot(rel);
-            let coa = Point3::new(
-                apex.x() + axis.x() * t,
-                apex.y() + axis.y() * t,
-                apex.z() + axis.z() * t,
-            );
-            // Local radius is the perpendicular distance from axis to vertex.
-            let perp = Vec3::new(
-                rel.x() - axis.x() * t,
-                rel.y() - axis.y() * t,
-                rel.z() - axis.z() * t,
-            );
-            let r = perp.length();
-            aabb_include(
-                aabb,
-                Point3::new(coa.x() - r * sx, coa.y() - r * sy, coa.z() - r * sz),
-            );
-            aabb_include(
-                aabb,
-                Point3::new(coa.x() + r * sx, coa.y() + r * sy, coa.z() + r * sz),
-            );
         }
+        let phi = bv.atan2(au);
+        for extreme in [phi, phi + std::f64::consts::PI] {
+            let rel = (extreme - t0).rem_euclid(std::f64::consts::TAU);
+            if rel <= span + 1e-12 {
+                aabb_include(aabb, evaluate(t0 + rel));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::boolean::{self, BooleanOp};
+    use crate::extrude::extrude;
+    use crate::primitives::make_box;
+    use crate::transform::transform_solid;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::mat::Mat4;
+    use brepkit_math::vec::Vec3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    fn vertex(topo: &mut Topology, x: f64, y: f64) -> brepkit_topology::vertex::VertexId {
+        topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7))
+    }
+
+    fn arc(
+        topo: &mut Topology,
+        a: brepkit_topology::vertex::VertexId,
+        b: brepkit_topology::vertex::VertexId,
+        center: Point3,
+        radius: f64,
+    ) -> brepkit_topology::edge::EdgeId {
+        let circle = Circle3D::new(center, Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+        topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)))
+    }
+
+    fn extrude_profile(topo: &mut Topology, edges: Vec<OrientedEdge>, depth: f64) -> SolidId {
+        let wire = Wire::new(edges, true).unwrap();
+        let wid = topo.add_wire(wire);
+        let fid = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        extrude(topo, fid, Vec3::new(0.0, 0.0, 1.0), depth).unwrap()
+    }
+
+    /// 40 x 33 profile whose two bottom corners are r=5 quarter arcs.
+    fn u_profile(topo: &mut Topology) -> SolidId {
+        let (hw, r, h) = (20.0, 5.0, 33.0);
+        let v0 = vertex(topo, -hw, h);
+        let v1 = vertex(topo, -hw, r);
+        let v2 = vertex(topo, -(hw - r), 0.0);
+        let v3 = vertex(topo, hw - r, 0.0);
+        let v4 = vertex(topo, hw, r);
+        let v5 = vertex(topo, hw, h);
+        let edges = [
+            topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line)),
+            arc(topo, v1, v2, Point3::new(-(hw - r), r, 0.0), r),
+            topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line)),
+            arc(topo, v3, v4, Point3::new(hw - r, r, 0.0), r),
+            topo.add_edge(Edge::new(v4, v5, EdgeCurve::Line)),
+            topo.add_edge(Edge::new(v5, v0, EdgeCurve::Line)),
+        ];
+        extrude_profile(
+            topo,
+            edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            8.0,
+        )
+    }
+
+    #[test]
+    fn concave_arc_notch_does_not_inflate_the_box() {
+        // 40 x 20 rectangle with a semicircular r=5 bite out of the top edge.
+        // The bite's circle reaches y=25 but the solid never leaves y<=20.
+        let mut topo = Topology::new();
+        let v0 = vertex(&mut topo, -20.0, 0.0);
+        let v1 = vertex(&mut topo, 20.0, 0.0);
+        let v2 = vertex(&mut topo, 20.0, 20.0);
+        let v3 = vertex(&mut topo, 5.0, 20.0);
+        let v4 = vertex(&mut topo, -5.0, 20.0);
+        let v5 = vertex(&mut topo, -20.0, 20.0);
+        // The CCW span from v4 to v3 runs through the bite's bottom (0, 15);
+        // the wire traverses it reversed.
+        let bite = arc(&mut topo, v4, v3, Point3::new(0.0, 20.0, 0.0), 5.0);
+        let edges = vec![
+            OrientedEdge::new(topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line)), true),
+            OrientedEdge::new(topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line)), true),
+            OrientedEdge::new(topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line)), true),
+            OrientedEdge::new(bite, false),
+            OrientedEdge::new(topo.add_edge(Edge::new(v4, v5, EdgeCurve::Line)), true),
+            OrientedEdge::new(topo.add_edge(Edge::new(v5, v0, EdgeCurve::Line)), true),
+        ];
+        let solid = extrude_profile(&mut topo, edges, 8.0);
+
+        let aabb = solid_bounding_box(&topo, solid).unwrap();
+        assert!((aabb.min.x() + 20.0).abs() < 1e-9, "min.x={}", aabb.min.x());
+        assert!((aabb.max.x() - 20.0).abs() < 1e-9, "max.x={}", aabb.max.x());
+        assert!(aabb.min.y().abs() < 1e-9, "min.y={}", aabb.min.y());
+        assert!((aabb.max.y() - 20.0).abs() < 1e-9, "max.y={}", aabb.max.y());
+        assert!((aabb.max.z() - 8.0).abs() < 1e-9, "max.z={}", aabb.max.z());
+    }
+
+    #[test]
+    fn thin_slab_through_arc_corners_has_tight_bounds() {
+        // The gridfinity tool measures cutout widths by intersecting with a
+        // 0.001 mm slab and reading the bounds. Across the r=5 corner arcs the
+        // sliver is 2 * (20 - (5 - sqrt(25 - (5 - y)^2))) wide, not the full
+        // circle's 40.
+        let mut topo = Topology::new();
+        let body = u_profile(&mut topo);
+        let (y0, thickness) = (2.0, 0.001);
+        let slab = make_box(&mut topo, 160.0, thickness, 40.0).unwrap();
+        transform_solid(&mut topo, slab, &Mat4::translation(-80.0, y0, -20.0)).unwrap();
+
+        let sliver = boolean::boolean(&mut topo, BooleanOp::Intersect, body, slab).unwrap();
+        let aabb = solid_bounding_box(&topo, sliver).unwrap();
+
+        let half_width_at = |y: f64| 20.0 - (5.0 - (25.0f64 - (5.0 - y).powi(2)).sqrt());
+        let expected = half_width_at(y0 + thickness);
+        assert!(
+            (aabb.max.x() - expected).abs() < 1e-6,
+            "max.x={} expected {expected}",
+            aabb.max.x()
+        );
+        assert!(
+            (aabb.min.x() + expected).abs() < 1e-6,
+            "min.x={} expected -{expected}",
+            aabb.min.x()
+        );
+        assert!((aabb.min.y() - y0).abs() < 1e-9, "min.y={}", aabb.min.y());
+        assert!(
+            (aabb.max.y() - (y0 + thickness)).abs() < 1e-9,
+            "max.y={}",
+            aabb.max.y()
+        );
+        assert!(aabb.min.z().abs() < 1e-9 && (aabb.max.z() - 8.0).abs() < 1e-9);
     }
 }

@@ -55,7 +55,15 @@ aggregate with brepkit faster on 25 of 26 rows (the last is a 1.04x noise-band
 watch) and 0 non-manifold scenarios vs the reference's 5; all four
 primitive-boolean fallbacks are exact analytic. Per-PR history and per-row
 numbers live in git, MEMORY.md, and the bench harness — do not re-record them
-here. Native criterion CAVEAT: the
+here. **Drift measured 2026-09-14 (tool HEAD 4a66decb, brepkit 3.3.9 and 3.4.0,
+`BREPJS_KERNEL=brepkit`, forks pool, 2 workers): 50 generator files fail identically
+on both kernels and pass on the reference kernel.** The tool's own CI never sets
+`BREPJS_KERNEL`, so its generator suite runs on the reference kernel by default and
+brepkit is opt-in via Labs; a month of tool feature growth (wall-cutout corner
+radii, text tracking, label-plate icons, click rails) was developed against the
+reference kernel only. Roots found so far (three probes, one kernel fix; see OPEN):
+the trimmed-cylinder bounding box (closed below), brepjs `scaleDrawing` on the
+brepkit path, and brepjs `compound()` of compounds. Native criterion CAVEAT: the
 cad_operations "mesh sphere" case runs a bench-local PER-FACE shim ~40x lighter than the
 solid-level path — never compare it to solid-level numbers (`perf_probe` has the matching
 native figure).
@@ -128,6 +136,11 @@ that does not exist yet; without it, stop.
 
 | Item | Status / next step |
 |---|---|
+| **brepjs `transformCurve2dGeneral` samples every non-translation into a 21-point Bezier on the brepkit path** (`src/kernel/brepkit/kernel2dOps.ts`) | Root of the label-plate icon family (`labelPlateIcons.test.ts`: washer volume 6.9% low, nut bore never cut): `scaleDrawing` turns exact circles into `BEZIER_CURVE`, the extrusion becomes B-spline cylinders and the coaxial bore cut mesh-falls back. `geometry2d.ts` already has exact `scaleCurve2d`/`rotateCurve2d`/`mirrorAcrossAxis`; decompose similarity matrices onto them and keep the Bezier fit only for true affinities. brepjs-side fix |
+| **brepjs `makeCompound` drops compound children when meshing** (`constructionOps.ts` synthetic compounds + `meshOps.ts::meshCompound`) | Root of the tracked / multi-line text family (`textBuilder.scenario.test.ts`, `wallText`, `textElement`, `repeatLabels`): per-glyph `sketchText` pieces are compounds, `compound(pieces)` becomes a synthetic compound, and `meshCompound` keeps only `type === 'solid'` children, so `mesh()` returns zero vertices while bounds and volume are right. Flatten compound children at construction and recurse when meshing. brepjs-side fix |
+| **3.4.0 fillet cutover regressions vs 3.3.9 on the tool HEAD** | Same-day pair of runs: `assemblyGenerator.scenario.combriser` 4/4 vs 0/4, `assemblyGenerator.scenario` 13 vs 6, `binGenerator.export.groupedScoop` 4 vs 2, `binGenerator.export.solidCutouts` 1 vs 0 (`dovetailKey` went the other way, 0 vs 1). The wasm `try_fillet` chain is now `fillet_v2` then flat-bevel `fillet` then an error where 3.3.9 also had `fillet_rolling_ball` and a silent unchanged-solid return. Attribute per test before bumping the tool past 3.3.9 |
+| **Click-rail seating family** (`lidCutoutGrip.scenario`, `lidGripDip`, `lidGripRelief`, `lidCutouts`) | Mesh-column probing (`__kernel-tests__/lidSeating.ts`), interference 1.91 vs the 1.75 ceiling on both 3.3.9 and 3.4.0; passes on the reference kernel. Not bounds-related; undug |
+| **Generator-suite hangs on brepkit** | Single tests block 5 to 12 minutes inside synchronous kernel calls on both 3.3.9 and 3.4.0 (`is not carved away by a kumiko wrap either` 741s, `splits bin with compartments + scoop + thick walls + connectors` 631s, `featureCacheKeyDiscipline` 740s), so a full run is ~50 minutes at 2 forks where the reference finishes in ~4. A hang is a perf-bar defect; undug |
 | **4x4 mag no-lip noise-band watch (1.04x on the 3.2.38 matrix)** | The only row the reference leads; has oscillated 1.00x-1.06x across 3.2.36-3.2.38 with no kernel change targeting it. Watch, do not chase, unless a fresh same-day matrix shows a real drift |
 | **Mesh-boolean fallback emits OPEN meshes that are CONSUMED** | A product call, not just a fix: rejecting means the op fails outright. Mitigation shipped: `boolean::mesh_fallback_count()` + wasm `meshFallbackCount()` let pipelines snapshot-and-refuse |
 | **Export angular default (5°) vs the reference's coarser effective default** | Tolerance-parity product choice, not mesher waste: 5° forces 18 segments/quarter-arc on r=0.6 slot corners, ~1.7x triangles vs reference at fine deflection. Revisit only as a product decision |
@@ -139,6 +152,17 @@ that does not exist yet; without it, stop.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Trimmed cylinder and cone faces inflated the solid bounding box to the full circle (CLOSED 2026-09-14; root of the wall-cutout corner family)** —
+  `expand_cylinder_at_vertices` / `expand_cone_at_vertices` added the whole
+  circle's axis-aligned extremes at every face vertex regardless of angular
+  extent, so a 0.001 mm slab intersected across an r=5 corner arc reported the
+  full 40 mm width (the tool's `wallCutoutBuilder.test.ts` reads widths that
+  way: "still rounds the u-shape bottom corners" and 5 siblings). The boolean
+  and volume were right all along. Replaced by exact per-edge extremes over
+  `domain_with_endpoints` for circles and ellipses (a ruled quadric's extreme
+  lies on a ruling whose ends are boundary edges) and 64-sample NURBS edges.
+  Pins `measure::bounding_box::tests::{concave_arc_notch_does_not_inflate_the_box,thin_slab_through_arc_corners_has_tight_bounds}`.
+  Spheres and tori keep their conservative full extents.
 - **Plane-torus section perf (CLOSED 2026-08-28; torus−box boolean 12.4ms → 5.0ms, 2.46x, still exact analytic)** —
   `exact_plane_analytic`/`intersect_plane_torus` sent every plane-torus through a
   128² sign-change grid + Newton refinement (~49K torus evals), then a NURBS fit the
@@ -536,6 +560,11 @@ One line each; the fixture/PR carries the story. Newest first.
   winding emission first (`extrude` shipped mirrored CW-profile prisms for a
   long time), and remember the trimmer/splitter Left/Right frames follow wire
   traversal — never predict them from geometry alone.
+- **A width read off `getBounds` is a measurement, not geometry.** The wall-cutout
+  "fillet never applied" family was a vertex-anchored bounding box adding full-circle
+  extents on trimmed cylinder faces; the intersect's volume was exact throughout.
+  Before blaming a boolean for a bounds delta, print the result's volume against the
+  analytic expectation (`thin_slab_through_arc_corners_has_tight_bounds` is the template).
 - **A whole-solid volume cannot tell a MISSING cavity from a COLLAPSED one** — both read
   high by the same amount. Print per-shell signed volume against each shell's own bbox
   (`cargo run --release --example cavity_probe -p brepkit-io`) before blaming either the
@@ -610,6 +639,11 @@ One line each; the fixture/PR carries the story. Newest first.
 
 ## Tool-side measurement recipes and traps
 
+- **The tool's generator suite runs on the REFERENCE kernel unless `BREPJS_KERNEL=brepkit` is set** (`__kernel-tests__/wasmInit.ts` defaults to the reference id; the tool's CI never sets it). "Green on every bump" is a reference-kernel statement; only an explicit brepkit run is a brepkit signal.
+- **Run recipe that survived 2026-09-14:** per-version worktree under the tool's `.worktrees/` with the `brepkit-wasm` pin edited, then
+  `systemd-run --user --unit=<name> --collect --working-directory=<wt> --setenv=BREPJS_KERNEL=brepkit --setenv=NO_COLOR=1 --setenv=PATH="$PATH" bash -c "./node_modules/.bin/vitest run --project generators --project generators-heavy --pool=forks --maxWorkers=2 --reporter=default --reporter=json --outputFile.json=<out>"`.
+  The root config's threads pool at 75% of cores takes a V8 heap OOM in one worker down with the whole run (`Worker exited unexpectedly`); forks lose only that file. A sandboxed foreground call cannot outlive its timeout and a plain `setsid nohup` child died with the call; the user unit survives. Never `pkill -f` a pattern that appears in your own command line.
+- **Attribute a failure to a kernel version only from a same-day pair** on the same tool commit: of 53 failing files on 3.4.0, 50 failed identically on 3.3.9.
 - **Scenario numbers rot.** Always run the control on the SAME DAY and SAME catalog; a
   stale baseline has twice nearly produced a false conclusion. Confirmed again 2026-08-10:
   the issue's "137 failed on 3.2.18" re-measured as **154** on the same kernel, because the
