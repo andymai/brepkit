@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789428159264,
+  "lastUpdate": 1789429625775,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33587,6 +33587,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44472482,
             "range": "± 112848",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a3c51d6939be15449e05fe1f50a0bb98f97c5683",
+          "message": "fix(xtask): read the wasm-bindgen pin from the workspace manifest (#1647)\n\n## Defect\n\n`cargo xtask wasm-build` checked the installed wasm-bindgen-cli against\na hardcoded `0.2.121` while the workspace pins `wasm-bindgen =\n\"=0.2.128\"`, so after the dependabot bumps every local wasm build\nstopped at \"version mismatch: installed=0.2.128, required=0.2.121\".\n\n## Fix\n\nThe required version is parsed from the root `Cargo.toml` at run time\n(the `wasm-bindgen = \"=x.y.z\"` line), so the check follows the pin. Two\nunit tests cover the exact-pin line and reject version ranges and other\n`wasm-bindgen-*` crates. Verified live: `cargo xtask wasm-build\n--skip-opt` now reports `wasm-bindgen-cli 0.2.128 ok`.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n`cargo xtask wasm-build` now reads the exact `wasm-bindgen` version pin\nfrom the root `Cargo.toml` instead of comparing against hardcoded\n`0.2.121`. This keeps the CLI check aligned with workspace dependency\nupdates so local WASM builds do not fail after a pin change.\n\n**Bug Fixes**\n\n- Uses the detected version in mismatch errors, install guidance, and\nsuccess output.\n- Adds tests for exact pins while rejecting version ranges, similarly\nnamed crates, and pins outside `[workspace.dependencies]`.\n\n<sup>Written for commit 39cf388bb63df6e5611731cf800bd82cd256c43a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1647?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-14T23:44:29Z",
+          "tree_id": "df79bc4e1fd778d43c10f871c564c9ddee4229e0",
+          "url": "https://github.com/andymai/brepkit/commit/a3c51d6939be15449e05fe1f50a0bb98f97c5683"
+        },
+        "date": 1789429622853,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 988687,
+            "range": "± 5615",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1071592,
+            "range": "± 1316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12451,
+            "range": "± 132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 729549,
+            "range": "± 1365",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41909514,
+            "range": "± 60880",
             "unit": "ns/iter"
           }
         ]
