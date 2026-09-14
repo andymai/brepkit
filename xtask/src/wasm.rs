@@ -1,11 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-/// Pinned wasm-bindgen-cli version. Must match `wasm-bindgen = "=0.2.121"` in
-/// the workspace Cargo.toml.
-const WASM_BINDGEN_VERSION: &str = "0.2.121";
 
 /// Minimum number of exported methods expected in the .d.ts file.
 /// Based on ~185 methods in the current BrepKernel. Update when the API surface
@@ -21,6 +17,46 @@ fn project_root() -> Result<PathBuf> {
         .parent()
         .map(Path::to_path_buf)
         .context("xtask must be located inside the project root")
+}
+
+/// The wasm-bindgen version the workspace pins (`wasm-bindgen = "=x.y.z"` in
+/// the root Cargo.toml), which the installed wasm-bindgen-cli must match.
+/// Read at run time so dependabot bumps cannot leave this check stale.
+fn pinned_wasm_bindgen_version() -> Result<String> {
+    let manifest = project_root()?.join("Cargo.toml");
+    let text =
+        fs::read_to_string(&manifest).with_context(|| format!("reading {}", manifest.display()))?;
+    parse_wasm_bindgen_pin(&text)
+        .context("no `wasm-bindgen = \"=x.y.z\"` pin in the workspace Cargo.toml")
+}
+
+fn parse_wasm_bindgen_pin(manifest: &str) -> Option<String> {
+    let mut in_workspace_dependencies = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_workspace_dependencies = line == "[workspace.dependencies]";
+            continue;
+        }
+        if !in_workspace_dependencies {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("wasm-bindgen") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix("\"=") else {
+            continue;
+        };
+        let end = rest.find('"')?;
+        let version = &rest[..end];
+        if !version.is_empty() {
+            return Some(version.to_owned());
+        }
+    }
+    None
 }
 
 fn pkg_dir() -> Result<PathBuf> {
@@ -78,19 +114,18 @@ pub fn check_tools() -> Result<()> {
 
     // wasm-bindgen-cli version check
     if command_exists("wasm-bindgen") {
-        let version = run_cmd_output(
-            Command::new("wasm-bindgen").arg("--version"),
-        )?;
+        let version = run_cmd_output(Command::new("wasm-bindgen").arg("--version"))?;
         // Output is like "wasm-bindgen 0.2.121"
         let installed = version.split_whitespace().last().unwrap_or("");
-        if installed != WASM_BINDGEN_VERSION {
+        let required = pinned_wasm_bindgen_version()?;
+        if installed != required {
             bail!(
                 "wasm-bindgen-cli version mismatch: installed={installed}, \
-                 required={WASM_BINDGEN_VERSION}\n  \
-                 Fix: cargo binstall wasm-bindgen-cli@{WASM_BINDGEN_VERSION} --no-confirm"
+                 required={required}\n  \
+                 Fix: cargo binstall wasm-bindgen-cli@{required} --no-confirm"
             );
         }
-        println!("  wasm-bindgen-cli {WASM_BINDGEN_VERSION} ok");
+        println!("  wasm-bindgen-cli {required} ok");
     } else {
         println!(
             "  warning: wasm-bindgen-cli not found (wasm-pack bundles its own, \
@@ -119,7 +154,14 @@ pub fn build_both_targets(simd: bool) -> Result<()> {
     println!("\nBuilding WASM (bundler target)...");
     run_cmd(
         Command::new("wasm-pack")
-            .args(["build", "--target", "bundler", "--release", "--out-dir", "pkg"])
+            .args([
+                "build",
+                "--target",
+                "bundler",
+                "--release",
+                "--out-dir",
+                "pkg",
+            ])
             .current_dir(&wasm_crate)
             .env("RUSTFLAGS", &rustflags),
     )
@@ -128,7 +170,14 @@ pub fn build_both_targets(simd: bool) -> Result<()> {
     println!("\nBuilding WASM (nodejs target)...");
     run_cmd(
         Command::new("wasm-pack")
-            .args(["build", "--target", "nodejs", "--release", "--out-dir", "pkg-node"])
+            .args([
+                "build",
+                "--target",
+                "nodejs",
+                "--release",
+                "--out-dir",
+                "pkg-node",
+            ])
             .current_dir(&wasm_crate)
             .env("RUSTFLAGS", &rustflags),
     )
@@ -376,7 +425,9 @@ fn validate_package_json(pkg_json: &serde_json::Value, errors: &mut Vec<String>)
 
     let name = get_str("name");
     if name != "brepkit-wasm" {
-        errors.push(format!("package.json name is '{name}', expected 'brepkit-wasm'"));
+        errors.push(format!(
+            "package.json name is '{name}', expected 'brepkit-wasm'"
+        ));
     } else {
         println!("  ok name: {name}");
     }
@@ -438,8 +489,8 @@ pub fn run_smoke_test() -> Result<()> {
 pub fn publish(dry_run: bool) -> Result<()> {
     let pkg = pkg_dir()?;
 
-    let tag_name = std::env::var("TAG_NAME")
-        .context("TAG_NAME env var not set — required for publish")?;
+    let tag_name =
+        std::env::var("TAG_NAME").context("TAG_NAME env var not set — required for publish")?;
     let tag_version = tag_name.strip_prefix('v').unwrap_or(&tag_name);
 
     let pkg_json: serde_json::Value = serde_json::from_str(
@@ -665,5 +716,36 @@ export class BrepKernel {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("nodejs build output not found"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::parse_wasm_bindgen_pin;
+
+    #[test]
+    fn reads_the_exact_pin_from_the_workspace_table() {
+        let manifest = "[workspace.dependencies]\nserde = \"1\"\nwasm-bindgen = \"=0.2.128\"  # Pinned\nwasm-bindgen-futures = \"0.4\"\n";
+        assert_eq!(parse_wasm_bindgen_pin(manifest).as_deref(), Some("0.2.128"));
+    }
+
+    #[test]
+    fn ignores_ranges_and_other_crates() {
+        let ws = |body: &str| format!("[workspace.dependencies]\n{body}\n");
+        assert_eq!(parse_wasm_bindgen_pin(&ws("wasm-bindgen = \"0.2\"")), None);
+        assert_eq!(
+            parse_wasm_bindgen_pin(&ws("wasm-bindgen-futures = \"=0.4.1\"")),
+            None
+        );
+    }
+
+    #[test]
+    fn only_reads_the_workspace_dependencies_table() {
+        let manifest = "[patch.crates-io]\nwasm-bindgen = \"=0.1.0\"\n\n[workspace.dependencies]\nwasm-bindgen = \"=0.2.128\"\n\n[profile.release]\nwasm-bindgen = \"=9.9.9\"\n";
+        assert_eq!(parse_wasm_bindgen_pin(manifest).as_deref(), Some("0.2.128"));
+        assert_eq!(
+            parse_wasm_bindgen_pin("[dependencies]\nwasm-bindgen = \"=0.2.128\"\n"),
+            None
+        );
     }
 }
