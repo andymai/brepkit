@@ -1,5 +1,5 @@
 crates/io/tests/kumiko_wrap_strut_cut_inmem.rs
-  s_bbd929af8e1daa::t_db968992a3242d 57-71,129-144
+  s_bbd929af8e1daa::t_7be32ed983f99b 57-71,129-144
 ---
 {
   "schema_version": "authorship/3.0.0",
