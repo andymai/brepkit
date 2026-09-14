@@ -1,0 +1,21 @@
+crates/io/examples/kumiko_pair_probe.rs
+  s_bbd929af8e1daa::t_eb66736c3001f7 4-5,30-31,35-44,52-55,57-58,175
+  s_bbd929af8e1daa::t_63ab59b885cd9c 56,59,61-62,113,123-125,135-138,152,158,160-161,167-168,176,180
+  s_bbd929af8e1daa::t_4b72711ce74d40 183-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7e03a70bce6db19398058a779fb580b6b1b3630b",
+  "prompts": {},
+  "sessions": {
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
