@@ -24,8 +24,10 @@ use brepkit_io::arena_io::deserialize_solid;
 use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{self, BooleanOp};
 use brepkit_operations::fillet::{FilletRadiusLaw, fillet_variable};
+use brepkit_operations::measure::solid_volume;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
+use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 fn fixture(name: &str) -> PathBuf {
@@ -91,7 +93,19 @@ fn load_case(topo: &mut Topology) -> (SolidId, Vec<(EdgeId, FilletRadiusLaw)>) {
     (base, laws)
 }
 
-/// Pairs of distinct edges whose endpoints coincide (in either order).
+fn edge_midpoint(topo: &Topology, eid: EdgeId) -> Point3 {
+    let e = topo.edge(eid).unwrap();
+    let (a, b) = (
+        topo.vertex(e.start()).unwrap().point(),
+        topo.vertex(e.end()).unwrap().point(),
+    );
+    let (t0, t1) = e.curve().domain_with_endpoints(a, b);
+    e.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b)
+}
+
+/// Pairs of distinct edges that coincide geometrically: same endpoints (in
+/// either order) and the same midpoint. A line and an arc closing a lens
+/// share endpoints but not midpoints and are not twins.
 fn twin_edge_pairs(topo: &Topology, solid: SolidId) -> Vec<(EdgeId, EdgeId)> {
     let ends = edge_ends(topo, solid);
     let mut twins = Vec::new();
@@ -99,12 +113,65 @@ fn twin_edge_pairs(topo: &Topology, solid: SolidId) -> Vec<(EdgeId, EdgeId)> {
         for (eb, b0, b1) in &ends[i + 1..] {
             let fwd = (*a0 - *b0).length().max((*a1 - *b1).length());
             let rev = (*a0 - *b1).length().max((*a1 - *b0).length());
-            if fwd.min(rev) < 1e-9 {
+            if fwd.min(rev) < 1e-9
+                && (edge_midpoint(topo, *ea) - edge_midpoint(topo, *eb)).length() < 1e-9
+            {
                 twins.push((*ea, *eb));
             }
         }
     }
     twins
+}
+
+/// Edge uses keyed by quantized geometry (endpoints and midpoint) instead of
+/// arena id, so two ids on one curve count as one edge.
+#[allow(clippy::cast_possible_truncation)]
+fn positional_edge_uses(topo: &Topology, solid: SolidId) -> HashMap<[i64; 9], usize> {
+    let q = |p: Point3| {
+        [
+            (p.x() * 1e6).round() as i64,
+            (p.y() * 1e6).round() as i64,
+            (p.z() * 1e6).round() as i64,
+        ]
+    };
+    let mut uses = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let mut wires = vec![face.outer_wire()];
+        wires.extend_from_slice(face.inner_wires());
+        for wid in wires {
+            for oe in topo.wire(wid).unwrap().edges() {
+                let e = topo.edge(oe.edge()).unwrap();
+                let (mut a, mut b) = (
+                    q(topo.vertex(e.start()).unwrap().point()),
+                    q(topo.vertex(e.end()).unwrap().point()),
+                );
+                if a > b {
+                    std::mem::swap(&mut a, &mut b);
+                }
+                let m = q(edge_midpoint(topo, oe.edge()));
+                let key = [a[0], a[1], a[2], b[0], b[1], b[2], m[0], m[1], m[2]];
+                *uses.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+    uses
+}
+
+fn surface_census(topo: &Topology, solid: SolidId) -> HashMap<&'static str, usize> {
+    let mut census = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let tag = match topo.face(fid).unwrap().surface() {
+            FaceSurface::Plane { .. } => "plane",
+            FaceSurface::Cylinder(_) => "cylinder",
+            FaceSurface::Cone(_) => "cone",
+            FaceSurface::Sphere(_) => "sphere",
+            FaceSurface::Torus(_) => "torus",
+            FaceSurface::Nurbs(_) => "nurbs",
+        };
+        *census.entry(tag).or_insert(0) += 1;
+    }
+    census
 }
 
 fn edge_use_counts(topo: &Topology, solid: SolidId) -> HashMap<usize, usize> {
@@ -169,6 +236,8 @@ fn groupedscoop_cut_stays_exact() {
         &mut topo,
     )
     .unwrap();
+    let body_volume = solid_volume(&topo, body, 0.01).unwrap();
+    let tool_volume = solid_volume(&topo, tool, 0.01).unwrap();
     let before = boolean::mesh_fallback_count();
     let result = boolean::boolean(&mut topo, BooleanOp::Cut, body, tool).unwrap();
     assert_eq!(
@@ -176,10 +245,31 @@ fn groupedscoop_cut_stays_exact() {
         before,
         "the cut took the mesh fallback"
     );
-    let uses = edge_use_counts(&topo, result);
+    // Exactness: the tool's curved surfaces survive as typed faces (a fallback
+    // blob is all planes), every edge is used twice by geometry and not only
+    // by id, and the volume sits between "tool fully outside" and "tool fully
+    // inside".
+    let census = surface_census(&topo, result);
+    assert!(
+        census.get("cylinder").copied().unwrap_or(0) >= 4 && census.contains_key("torus"),
+        "cut result lost the scoop's curved faces: {census:?}"
+    );
+    let by_id = edge_use_counts(&topo, result);
     assert_eq!(
-        uses.values().filter(|&&c| c != 2).count(),
+        by_id.values().filter(|&&c| c != 2).count(),
         0,
-        "cut result must be manifold"
+        "cut result must be manifold by id"
+    );
+    let by_position = positional_edge_uses(&topo, result);
+    assert_eq!(
+        by_position.values().filter(|&&c| c != 2).count(),
+        0,
+        "cut result must be manifold by position"
+    );
+    let volume = solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        volume <= body_volume + 1e-6 && volume >= body_volume - tool_volume - 1e-6,
+        "cut volume {volume} outside [{}, {body_volume}]",
+        body_volume - tool_volume
     );
 }
