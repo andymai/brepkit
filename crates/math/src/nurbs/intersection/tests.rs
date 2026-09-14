@@ -5,7 +5,9 @@ use crate::vec::{Point3, Vec3};
 
 use super::surface_marching::march_intersection;
 use super::surface_marching::{near_existing_segment, second_order_tangent};
-use super::surface_seeding::{find_ssi_seeds_grid, find_ssi_seeds_subdivision, refine_ssi_point};
+use super::surface_seeding::{
+    REFINE_CALLS, find_ssi_seeds_grid, find_ssi_seeds_subdivision, refine_ssi_point,
+};
 use super::*;
 
 /// Create a simple bilinear NURBS surface (flat plane at z=0, from (0,0) to (1,1)).
@@ -1223,11 +1225,52 @@ fn grid_seeder_declares_a_grazing_disjoint_pair_empty() {
     // threshold, so before the failure budget this refined all of them.
     let s1 = flat_at(0.0);
     let s2 = flat_at(0.05);
+    let before = REFINE_CALLS.load(std::sync::atomic::Ordering::Relaxed);
     assert!(find_ssi_seeds_grid(&s1, &s2, 32, 1e-6).is_empty());
+    let refinements = REFINE_CALLS.load(std::sync::atomic::Ordering::Relaxed) - before;
+    // At most one refinement per mutual nearest pair (n*n) plus the bounded
+    // closest set; the exhaustive pass refined every one of the ~n^4 pairs.
+    assert!(
+        refinements <= 32 * 32 + 256,
+        "grid seeder refined {refinements} pairs on a disjoint pair"
+    );
     assert!(
         intersect_nurbs_nurbs(&s1, &s2, 32, 0.01)
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn grid_seeder_keeps_searching_after_its_first_seed() {
+    // Two separate crossings, one per opposite corner, with the surfaces
+    // grazing above z=0 everywhere else: both must be seeded.
+    let s1 = flat_at(0.0);
+    let s2 = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![Point3::new(0.0, 0.0, -0.02), Point3::new(0.0, 1.0, 0.08)],
+            vec![Point3::new(1.0, 0.0, 0.08), Point3::new(1.0, 1.0, -0.02)],
+        ],
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .unwrap();
+    let seeds = find_ssi_seeds_grid(&s1, &s2, 32, 1e-6);
+    let near = |x: f64, y: f64| {
+        seeds
+            .iter()
+            .any(|s| (s.point.x() - x).abs() < 0.3 && (s.point.y() - y).abs() < 0.3)
+    };
+    assert!(
+        near(0.0, 0.0),
+        "the (0, 0) crossing was not seeded: {seeds:?}"
+    );
+    assert!(
+        near(1.0, 1.0),
+        "the (1, 1) crossing was not seeded: {seeds:?}"
     );
 }
 
@@ -1264,4 +1307,38 @@ fn grid_seeder_budget_keeps_a_shallow_crossing() {
     }
     let curves = intersect_nurbs_nurbs(&s1, &s2, 32, 0.01).unwrap();
     assert!(!curves.is_empty(), "the crossing must still be traced");
+}
+
+#[test]
+fn grid_seeder_budget_keeps_a_crossing_confined_to_one_corner() {
+    // s2 dips below z=0 only near the (1, 1) corner: almost every sample pair
+    // is close but far from the crossing, so the closest-first order and
+    // the failure budget must not give up before reaching it.
+    let s1 = flat_at(0.0);
+    let s2 = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![Point3::new(0.0, 0.0, 0.08), Point3::new(0.0, 1.0, 0.08)],
+            vec![Point3::new(1.0, 0.0, 0.08), Point3::new(1.0, 1.0, -0.02)],
+        ],
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .unwrap();
+    let seeds = find_ssi_seeds_grid(&s1, &s2, 32, 1e-6);
+    assert!(!seeds.is_empty(), "the corner crossing must be seeded");
+    for seed in &seeds {
+        assert!(
+            seed.point.z().abs() < 1e-5,
+            "seed off the plane: {:?}",
+            seed.point
+        );
+        assert!(
+            seed.point.x() > 0.7 && seed.point.y() > 0.7,
+            "seed away from the corner: {:?}",
+            seed.point
+        );
+    }
 }

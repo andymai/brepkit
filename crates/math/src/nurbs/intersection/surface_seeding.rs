@@ -655,16 +655,41 @@ fn find_split_row(knots: &[f64], split_val: f64, degree: usize, n_cps: usize) ->
     }
 }
 
+/// Closest grid sample pairs the grid seeder refines before declaring a pair
+/// non-intersecting when none of them (and no mutual nearest pair) converges.
+const MAX_FAILED_SEED_ATTEMPTS: usize = 256;
+
+/// A close sample pair kept in the bounded max-heap of closest candidates.
+#[derive(Clone, Copy, PartialEq)]
+struct ClosePair {
+    dist: f64,
+    i: usize,
+    k: usize,
+}
+
+impl Eq for ClosePair {}
+
+impl PartialOrd for ClosePair {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ClosePair {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.dist
+            .total_cmp(&other.dist)
+            .then_with(|| self.i.cmp(&other.i))
+            .then_with(|| self.k.cmp(&other.k))
+    }
+}
+
 /// Find seed points for NURBS-NURBS intersection by grid sampling (fallback).
 ///
 /// Strategy: sample both surfaces on an n x n grid and try Newton
 /// refinement for all cell-center pairs whose 3D positions are within
 /// a generous distance threshold.
 #[allow(clippy::cast_precision_loss)]
-/// Closest grid pairs that may all fail Newton before a pair is declared
-/// non-intersecting by the grid seeder.
-const MAX_FAILED_SEED_ATTEMPTS: usize = 64;
-
 pub(super) fn find_ssi_seeds_grid(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
@@ -717,10 +742,19 @@ pub(super) fn find_ssi_seeds_grid(
     // Newton from every close grid pair is the whole cost of this fallback:
     // neighbouring pairs converge to the same seed and are deduplicated away,
     // while a surface grazing the other within the threshold launches
-    // thousands of refinements that all fail. Refine the mutual nearest pairs
-    // first and only fall back to every close pair when none converges.
+    // thousands of refinements that all fail. One scan records each sample's
+    // nearest partner and the MAX_FAILED_SEED_ATTEMPTS closest pairs overall
+    // (bounded storage; a disjoint pair of dense patches has a million close
+    // pairs). The mutual nearest pairs and the closest pairs are refined
+    // first; Newton is local and a transversal crossing converges from its
+    // closest samples, so when none of them converges the pair is grazing
+    // without meeting (or touching tangentially, which the marcher cannot
+    // trace either) and the search stops. Once any seed exists the full
+    // close-pair pass streams as before, so a second branch that has no
+    // mutual nearest pair is still found.
     let mut nearest_in_2: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts1.len()];
     let mut nearest_in_1: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts2.len()];
+    let mut closest: std::collections::BinaryHeap<ClosePair> = std::collections::BinaryHeap::new();
     for (i, &(_, _, p1)) in pts1.iter().enumerate() {
         for (k, &(_, _, p2)) in pts2.iter().enumerate() {
             let dist = (p1 - p2).length();
@@ -729,6 +763,12 @@ pub(super) fn find_ssi_seeds_grid(
             }
             if dist < nearest_in_1[k].1 {
                 nearest_in_1[k] = (i, dist);
+            }
+            if dist < threshold {
+                closest.push(ClosePair { dist, i, k });
+                if closest.len() > MAX_FAILED_SEED_ATTEMPTS {
+                    closest.pop();
+                }
             }
         }
     }
@@ -751,34 +791,30 @@ pub(super) fn find_ssi_seeds_grid(
             push_seed(&mut seeds, refined);
         }
     }
-    if !seeds.is_empty() {
-        return seeds;
-    }
-    // Exhaustive fallback, closest pairs first. A real crossing converges from
-    // its closest samples, so once the closest MAX_FAILED_SEED_ATTEMPTS pairs
-    // have all failed with nothing found, the surfaces graze without meeting
-    // and the remaining thousands of refinements would fail the same way.
-    let mut close: Vec<(f64, usize, usize)> = Vec::new();
-    for (i, &(_, _, p1)) in pts1.iter().enumerate() {
-        for (k, &(_, _, p2)) in pts2.iter().enumerate() {
-            let dist = (p1 - p2).length();
-            if dist < threshold {
-                close.push((dist, i, k));
-            }
+    let closest = closest.into_sorted_vec();
+    for pair in &closest {
+        if let Some(refined) = refine_ssi_point(
+            s1,
+            s2,
+            pts1[pair.i].0,
+            pts1[pair.i].1,
+            pts2[pair.k].0,
+            pts2[pair.k].1,
+            tolerance,
+        ) {
+            push_seed(&mut seeds, refined);
         }
     }
-    close.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut consecutive_failures = 0_usize;
-    for &(_, i, k) in &close {
-        if let Some(refined) = refine_ssi_point(
-            s1, s2, pts1[i].0, pts1[i].1, pts2[k].0, pts2[k].1, tolerance,
-        ) {
-            consecutive_failures = 0;
-            push_seed(&mut seeds, refined);
-        } else {
-            consecutive_failures += 1;
-            if seeds.is_empty() && consecutive_failures >= MAX_FAILED_SEED_ATTEMPTS {
-                break;
+    if seeds.is_empty() {
+        return seeds;
+    }
+    for &(u1, v1, p1) in &pts1 {
+        for &(u2, v2, p2) in &pts2 {
+            let dist = (p1 - p2).length();
+            if dist < threshold
+                && let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance)
+            {
+                push_seed(&mut seeds, refined);
             }
         }
     }
@@ -793,6 +829,10 @@ pub(super) fn find_ssi_seeds_grid(
 /// normal equations `JtJ*d = Jtr`, giving **quadratic convergence**.
 /// This replaces the previous alternating-projection approach which had
 /// only linear convergence and could fail near tangent intersections.
+#[cfg(test)]
+pub(super) static REFINE_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 pub(super) fn refine_ssi_point(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
@@ -802,6 +842,8 @@ pub(super) fn refine_ssi_point(
     v2_guess: f64,
     tolerance: f64,
 ) -> Option<IntersectionPoint> {
+    #[cfg(test)]
+    REFINE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut state = [u1_guess, v1_guess, u2_guess, v2_guess];
     let mut prev_residual = f64::MAX;
 
