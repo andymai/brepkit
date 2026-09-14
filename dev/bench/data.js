@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789429625775,
+  "lastUpdate": 1789429990168,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33641,6 +33641,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41909514,
             "range": "± 60880",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ce1af4f63e80eb0300f62e912285c76cb89e4618",
+          "message": "perf(math): stop the grid seeder refining every close sample pair (#1646)\n\n## Defect\n\n`find_ssi_seeds_grid`, the NURBS-by-NURBS marcher's fallback when\nsubdivision finds no seeds, samples both surfaces at n by n and launches\na Newton refinement from every sample pair within its closeness\nthreshold. Two surfaces that graze without meeting put thousands of\npairs inside that threshold and every refinement fails. On the kumiko\ncorner-wrap fixture (#1644) a helical strut wall over the bin's corner\ncylinder costs 250 to 490 ms per face pair this way, about half of the\ncut's face-face phase.\n\n## Fix\n\nRefine the mutual nearest sample pairs first; neighbouring pairs\nconverge to the same seed and were deduplicated anyway. Only when none\nof them converges run the exhaustive pass, closest pairs first, and stop\nafter 64 consecutive failures while nothing has been found: a genuine\ncrossing converges from its closest samples, so the rest would fail the\nsame way. Once a seed exists the pass runs to completion exactly as\nbefore.\n\n## Evidence\n\n- `kumiko_pair_probe` (every band-cylinder by strut-wall pair): 7.9 s to\n1.2 s, the same 50 pairs seeded, point deviations within 1e-6 and fitted\ncurves within 1e-4 of both surfaces, zero projection failures. The\ndisjoint pairs go from 490 ms to about 22 ms.\n- `replay_pair` on the captured operands: one band-by-strut cut 4.4 s to\n0.8 s; the three-tool compound cut 27 s to 5.6 s. The cut's exactness is\nunchanged (still 41 free edges in the raw result, still a fallback);\nthat is the roadmap's remaining lead for this item.\n- Pins: `grid_seeder_declares_a_grazing_disjoint_pair_empty` and\n`grid_seeder_budget_keeps_a_shallow_crossing`.\n- `cargo test` for math, algo, operations, io and the wasm gridfinity\ncanary: 2068 passed, 0 failed.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nThe NURBS-by-NURBS grid fallback now avoids spending most of its time on\nfailed Newton refinements for grazing, disjoint surfaces.\n\n- Refines mutual-nearest pairs and the 256 closest candidates first,\nusing bounded storage; it stops when none produces a seed and preserves\nthe full close-pair search after the first seed.\n- The kumiko probe improves from 7.9s to 1.2s, with the single cut\nimproving from 4.4s to 0.8s and the three-tool compound from 27s to\n5.6s; accuracy and cut exactness are unchanged.\n- Adds coverage for disjoint pairs, shallow crossings, and separate\ncorner crossings; the refinement-count assertion uses a thread-local\ntest counter for parallel test safety.\n\n<sup>Written for commit d09a7b8a94fe7bd8441854c953a521ab77f00f2c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1646?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-14T23:50:58Z",
+          "tree_id": "5edd1f19f984460d02581abedc0c909414b120a9",
+          "url": "https://github.com/andymai/brepkit/commit/ce1af4f63e80eb0300f62e912285c76cb89e4618"
+        },
+        "date": 1789429987248,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 790833,
+            "range": "± 1094",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 860589,
+            "range": "± 1682",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10352,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 568631,
+            "range": "± 1407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 34761081,
+            "range": "± 34836",
             "unit": "ns/iter"
           }
         ]
