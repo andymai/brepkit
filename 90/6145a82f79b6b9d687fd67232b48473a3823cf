@@ -1,0 +1,19 @@
+crates/io/tests/groupedscoop_fillet_cut_inmem.rs
+  s_bbd929af8e1daa::t_74e47dcd821076 27,30,96-108,116-118,126-176,239-240,248-257,259-265,267-273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "906145a82f79b6b9d687fd67232b48473a3823cf",
+  "prompts": {},
+  "sessions": {
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
