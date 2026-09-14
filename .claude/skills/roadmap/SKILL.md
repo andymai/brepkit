@@ -160,7 +160,8 @@ One line each; the fixture/PR carries the story. Newest first.
   way: "still rounds the u-shape bottom corners" and 5 siblings). The boolean
   and volume were right all along. Replaced by exact per-edge extremes over
   `domain_with_endpoints` for circles and ellipses (a ruled quadric's extreme
-  lies on a ruling whose ends are boundary edges) and 64-sample NURBS edges.
+  lies on a ruling whose ends are boundary edges) and the subdivided Bezier
+  hull of NURBS edges (conservative by the convex-hull property).
   Pins `measure::bounding_box::tests::{concave_arc_notch_does_not_inflate_the_box,thin_slab_through_arc_corners_has_tight_bounds}`.
   Spheres and tori keep their conservative full extents.
 - **Plane-torus section perf (CLOSED 2026-08-28; torus−box boolean 12.4ms → 5.0ms, 2.46x, still exact analytic)** —

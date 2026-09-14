@@ -152,7 +152,6 @@ fn expand_aabb_for_face(
             }
         }
 
-        // Cylinder: expand radially at each face vertex's axis projection.
         // A ruled quadric's extreme in any direction is attained along a whole
         // ruling, whose ends lie on boundary edges: the exact edge bounds
         // already cover the face.
@@ -245,21 +244,20 @@ fn sample_face_wire_midpoints(
     has_curved
 }
 
-/// Include the exact extremes of every boundary edge over its own span.
+/// Include the extremes of every boundary edge over its own span.
 ///
 /// Circle and ellipse edges reach their axis-aligned extremes at analytic
 /// parameters; only those inside the edge's span count, so a quarter arc
-/// contributes nothing beyond its endpoints. NURBS edges are sampled densely
-/// over their span: the control polygon would never under-shoot but can sit
-/// far outside the curve, and the intersect and compound-cut shortcuts only
-/// need the box to stay within a hair of the true extent.
+/// contributes nothing beyond its endpoints. NURBS edges contribute the
+/// control points of their subdivided Bezier segments, which never
+/// under-shoot the curve: the intersect early-out and the compound-cut
+/// contact gate both rely on that.
 fn expand_boundary_edges_exact(
     topo: &Topology,
     aabb: &mut Aabb3,
     face_id: brepkit_topology::face::FaceId,
 ) {
     use brepkit_topology::edge::EdgeCurve;
-    const NURBS_SAMPLES: usize = 64;
 
     let Ok(face) = topo.face(face_id) else {
         return;
@@ -295,20 +293,89 @@ fn expand_boundary_edges_exact(
                     t1,
                     |t| e.evaluate(t),
                 ),
-                EdgeCurve::NurbsCurve(_) =>
-                {
-                    #[allow(clippy::cast_precision_loss)]
-                    for i in 1..NURBS_SAMPLES {
-                        let t = t0 + (t1 - t0) * (i as f64) / (NURBS_SAMPLES as f64);
-                        aabb_include(
-                            aabb,
-                            edge.curve().evaluate_with_endpoints(t, p_start, p_end),
-                        );
-                    }
-                }
+                EdgeCurve::NurbsCurve(n) => include_nurbs_edge_hull(aabb, n, t0, t1),
             }
         }
     }
+}
+
+/// Conservative bound of a NURBS edge over `[t0, t1]`.
+///
+/// The curve is split to the edge's span, decomposed into Bezier segments,
+/// and each segment is subdivided by de Casteljau in homogeneous space. A
+/// rational Bezier segment with positive weights lies inside the convex hull
+/// of its control points, so including every subdivided control point can
+/// never under-shoot; three subdivisions keep a quarter-circle span within
+/// half a percent of its radius.
+fn include_nurbs_edge_hull(
+    aabb: &mut Aabb3,
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+) {
+    use brepkit_math::nurbs::decompose::curve_to_bezier_segments;
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    const SUBDIVISIONS: usize = 3;
+
+    let (d0, d1) = curve.domain();
+    let eps = 1e-9 * (d1 - d0).abs();
+    let (lo, hi) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
+    let mut span = curve.clone();
+    if lo > d0 + eps
+        && lo < d1 - eps
+        && let Ok((_, right)) = curve_split(&span, lo)
+    {
+        span = right;
+    }
+    if hi > d0 + eps
+        && hi < d1 - eps
+        && let Ok((left, _)) = curve_split(&span, hi)
+    {
+        span = left;
+    }
+    let segments = match curve_to_bezier_segments(&span) {
+        Ok(segments) => segments,
+        Err(_) => vec![span],
+    };
+    for segment in &segments {
+        let poles: Vec<[f64; 4]> = segment
+            .control_points()
+            .iter()
+            .zip(segment.weights())
+            .map(|(p, &w)| [p.x() * w, p.y() * w, p.z() * w, w])
+            .collect();
+        include_bezier_hull(aabb, &poles, SUBDIVISIONS);
+    }
+}
+
+/// Include the projected control points of a homogeneous Bezier segment after
+/// `depth` midpoint subdivisions.
+fn include_bezier_hull(aabb: &mut Aabb3, poles: &[[f64; 4]], depth: usize) {
+    if depth == 0 || poles.len() < 2 {
+        for p in poles {
+            if p[3] > 0.0 {
+                aabb_include(aabb, Point3::new(p[0] / p[3], p[1] / p[3], p[2] / p[3]));
+            }
+        }
+        return;
+    }
+    let n = poles.len();
+    let mut current = poles.to_vec();
+    let mut left = Vec::with_capacity(n);
+    let mut right = vec![[0.0; 4]; n];
+    left.push(current[0]);
+    right[n - 1] = current[n - 1];
+    for level in 1..n {
+        for i in 0..n - level {
+            for k in 0..4 {
+                current[i][k] = 0.5 * (current[i][k] + current[i + 1][k]);
+            }
+        }
+        left.push(current[0]);
+        right[n - 1 - level] = current[n - 1 - level];
+    }
+    include_bezier_hull(aabb, &left, depth - 1);
+    include_bezier_hull(aabb, &right, depth - 1);
 }
 
 /// Include the points where `c + a·cos(t)·u + b·sin(t)·v` is extreme along
@@ -479,5 +546,109 @@ mod tests {
             aabb.max.y()
         );
         assert!(aabb.min.z().abs() < 1e-9 && (aabb.max.z() - 8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nurbs_arc_hull_never_under_shoots_and_stays_tight() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        // A rational quadratic quarter circle of radius 10 from 45 to 135
+        // degrees: its middle control point sits at (0, 10·√2), well above the
+        // arc's true top at y = 10.
+        let r = 10.0_f64;
+        let (c45, s45) = (
+            std::f64::consts::FRAC_PI_4.cos(),
+            std::f64::consts::FRAC_PI_4.sin(),
+        );
+        let curve = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(r * c45, r * s45, 0.0),
+                Point3::new(0.0, r * std::f64::consts::SQRT_2, 0.0),
+                Point3::new(-r * c45, r * s45, 0.0),
+            ],
+            vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+        )
+        .unwrap();
+        let seed = Point3::new(r * c45, r * s45, 0.0);
+        let mut aabb = Aabb3 {
+            min: seed,
+            max: seed,
+        };
+        include_nurbs_edge_hull(&mut aabb, &curve, 0.0, 1.0);
+        assert!(
+            aabb.max.y() >= r - 1e-9,
+            "under-shoots the top: {}",
+            aabb.max.y()
+        );
+        assert!(aabb.max.y() <= r * 1.005, "too loose: {}", aabb.max.y());
+        assert!(aabb.min.x() >= -r * c45 - 1e-9 && aabb.max.x() <= r * c45 + 1e-9);
+
+        // Half the span: the split keeps the bound on the kept half only.
+        let mut half = Aabb3 {
+            min: seed,
+            max: seed,
+        };
+        include_nurbs_edge_hull(&mut half, &curve, 0.0, 0.5);
+        assert!(
+            half.min.x() >= -1e-6,
+            "left half leaked in: {}",
+            half.min.x()
+        );
+        assert!(half.max.y() >= r - 1e-9 && half.max.y() <= r * 1.005);
+    }
+
+    #[test]
+    fn elliptical_arc_bounds_follow_its_own_span() {
+        use brepkit_math::curves::Ellipse3D;
+        // Half of a tilted ellipse (a=10, b=4, major axis at 30 degrees) closed
+        // by a chord. The ellipse's global extremes on the far half must stay
+        // out of the box, and the near half's analytic extremes must be in it.
+        let (a, b) = (10.0_f64, 4.0_f64);
+        let tilt = std::f64::consts::FRAC_PI_6;
+        let u = Vec3::new(tilt.cos(), tilt.sin(), 0.0);
+        let v = Vec3::new(-tilt.sin(), tilt.cos(), 0.0);
+        let center = Point3::new(3.0, 2.0, 0.0);
+        let ellipse = Ellipse3D::with_axes(center, Vec3::new(0.0, 0.0, 1.0), a, b, u, v).unwrap();
+        let start = ellipse.evaluate(0.0);
+        let end = ellipse.evaluate(std::f64::consts::PI);
+        let mut topo = Topology::new();
+        let v0 = topo.add_vertex(Vertex::new(start, 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(end, 1e-7));
+        let arc = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Ellipse(ellipse.clone())));
+        let chord = topo.add_edge(Edge::new(v1, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![OrientedEdge::new(arc, true), OrientedEdge::new(chord, true)],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let fid = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let aabb = face_set_bounding_box(&topo, &[fid]).unwrap();
+
+        let mut expected = Aabb3 {
+            min: start,
+            max: start,
+        };
+        for i in 0..=100_000 {
+            let t = std::f64::consts::PI * f64::from(i) / 100_000.0;
+            aabb_include(&mut expected, ellipse.evaluate(t));
+        }
+        for (got, want) in [
+            (aabb.min.x(), expected.min.x()),
+            (aabb.min.y(), expected.min.y()),
+            (aabb.max.x(), expected.max.x()),
+            (aabb.max.y(), expected.max.y()),
+        ] {
+            assert!((got - want).abs() < 1e-6, "got {got} want {want}");
+        }
     }
 }
