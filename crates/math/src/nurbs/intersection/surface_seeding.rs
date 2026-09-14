@@ -655,6 +655,35 @@ fn find_split_row(knots: &[f64], split_val: f64, degree: usize, n_cps: usize) ->
     }
 }
 
+/// Closest grid sample pairs the grid seeder refines before declaring a pair
+/// non-intersecting when none of them (and no mutual nearest pair) converges.
+const MAX_FAILED_SEED_ATTEMPTS: usize = 256;
+
+/// A close sample pair kept in the bounded max-heap of closest candidates.
+#[derive(Clone, Copy, PartialEq)]
+struct ClosePair {
+    dist: f64,
+    i: usize,
+    k: usize,
+}
+
+impl Eq for ClosePair {}
+
+impl PartialOrd for ClosePair {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ClosePair {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.dist
+            .total_cmp(&other.dist)
+            .then_with(|| self.i.cmp(&other.i))
+            .then_with(|| self.k.cmp(&other.k))
+    }
+}
+
 /// Find seed points for NURBS-NURBS intersection by grid sampling (fallback).
 ///
 /// Strategy: sample both surfaces on an n x n grid and try Newton
@@ -710,24 +739,94 @@ pub(super) fn find_ssi_seeds_grid(
     #[allow(clippy::cast_precision_loss)]
     let threshold = ((diag1.max(diag2) / n as f64) * 3.0).max(0.1);
 
+    // Newton from every close grid pair is the whole cost of this fallback:
+    // neighbouring pairs converge to the same seed and are deduplicated away,
+    // while a surface grazing the other within the threshold launches
+    // thousands of refinements that all fail. One scan records each sample's
+    // nearest partner and the MAX_FAILED_SEED_ATTEMPTS closest pairs overall
+    // (bounded storage; a disjoint pair of dense patches has a million close
+    // pairs). The mutual nearest pairs and the closest pairs are refined
+    // first; Newton is local and a transversal crossing converges from its
+    // closest samples, so when none of them converges the pair is grazing
+    // without meeting (or touching tangentially, which the marcher cannot
+    // trace either) and the search stops. Once any seed exists the full
+    // close-pair pass streams as before, so a second branch that has no
+    // mutual nearest pair is still found.
+    let mut nearest_in_2: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts1.len()];
+    let mut nearest_in_1: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts2.len()];
+    let mut closest: std::collections::BinaryHeap<ClosePair> = std::collections::BinaryHeap::new();
+    for (i, &(_, _, p1)) in pts1.iter().enumerate() {
+        for (k, &(_, _, p2)) in pts2.iter().enumerate() {
+            let dist = (p1 - p2).length();
+            if dist < nearest_in_2[i].1 {
+                nearest_in_2[i] = (k, dist);
+            }
+            if dist < nearest_in_1[k].1 {
+                nearest_in_1[k] = (i, dist);
+            }
+            if dist < threshold {
+                closest.push(ClosePair { dist, i, k });
+                if closest.len() > MAX_FAILED_SEED_ATTEMPTS {
+                    closest.pop();
+                }
+            }
+        }
+    }
+    // 100x dedup: multiple grid samples may converge to the same intersection
+    let push_seed = |seeds: &mut Vec<IntersectionPoint>, refined: IntersectionPoint| {
+        let dup = seeds
+            .iter()
+            .any(|s: &IntersectionPoint| (s.point - refined.point).length() < tolerance * 100.0);
+        if !dup {
+            seeds.push(refined);
+        }
+    };
+    for (i, &(k, dist)) in nearest_in_2.iter().enumerate() {
+        if dist < threshold
+            && nearest_in_1[k].0 == i
+            && let Some(refined) = refine_ssi_point(
+                s1, s2, pts1[i].0, pts1[i].1, pts2[k].0, pts2[k].1, tolerance,
+            )
+        {
+            push_seed(&mut seeds, refined);
+        }
+    }
+    let closest = closest.into_sorted_vec();
+    for pair in &closest {
+        if let Some(refined) = refine_ssi_point(
+            s1,
+            s2,
+            pts1[pair.i].0,
+            pts1[pair.i].1,
+            pts2[pair.k].0,
+            pts2[pair.k].1,
+            tolerance,
+        ) {
+            push_seed(&mut seeds, refined);
+        }
+    }
+    if seeds.is_empty() {
+        return seeds;
+    }
     for &(u1, v1, p1) in &pts1 {
         for &(u2, v2, p2) in &pts2 {
             let dist = (p1 - p2).length();
             if dist < threshold
                 && let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance)
             {
-                // 100x dedup: multiple grid samples may converge to the same intersection
-                let dup = seeds.iter().any(|s: &IntersectionPoint| {
-                    (s.point - refined.point).length() < tolerance * 100.0
-                });
-                if !dup {
-                    seeds.push(refined);
-                }
+                push_seed(&mut seeds, refined);
             }
         }
     }
 
     seeds
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Refinements attempted on this thread; tests run in parallel, so a
+    /// process-wide counter would mix their calls.
+    pub(super) static REFINE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[allow(clippy::similar_names)]
@@ -746,6 +845,8 @@ pub(super) fn refine_ssi_point(
     v2_guess: f64,
     tolerance: f64,
 ) -> Option<IntersectionPoint> {
+    #[cfg(test)]
+    REFINE_CALLS.with(|calls| calls.set(calls.get() + 1));
     let mut state = [u1_guess, v1_guess, u2_guess, v2_guess];
     let mut prev_residual = f64::MAX;
 
