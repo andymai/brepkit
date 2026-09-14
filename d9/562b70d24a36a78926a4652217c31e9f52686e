@@ -1,0 +1,34 @@
+crates/io/tests/data/kumiko_wrap_strut_3.bin
+  s_bbd929af8e1daa::t_57ff58571888ba 1
+crates/io/tests/data/kumiko_wrap_lattice.bin
+  s_bbd929af8e1daa::t_57ff58571888ba 1
+.claude/skills/roadmap/SKILL.md
+  s_bbd929af8e1daa::t_07e560e32aed67 145
+crates/io/tests/data/kumiko_wrap_strut_2.bin
+  s_bbd929af8e1daa::t_57ff58571888ba 1
+crates/io/tests/data/kumiko_wrap_strut_1.bin
+  s_bbd929af8e1daa::t_57ff58571888ba 1
+crates/io/tests/data/kumiko_wrap_strut_0.bin
+  s_bbd929af8e1daa::t_57ff58571888ba 1
+crates/io/tests/kumiko_wrap_lattice_cut_inmem.rs
+  s_bbd929af8e1daa::t_0136b8537ecd83 19,102
+  s_bbd929af8e1daa::t_57ff58571888ba 1-3,6-18,20-79,85-101,103-119
+  s_bbd929af8e1daa::t_07e560e32aed67 4-5,80-84
+  s_bbd929af8e1daa::t_5c6883cb154db5 120-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d9562b70d24a36a78926a4652217c31e9f52686e",
+  "prompts": {},
+  "sessions": {
+    "s_bbd929af8e1daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d0631772-c6c2-4092-8be8-285450875ed9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
