@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789423052549,
+  "lastUpdate": 1789425339580,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33425,6 +33425,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 40351140,
             "range": "± 102566",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "830e5780015d38d33bc3a0ccc219140856eaf5c3",
+          "message": "test(io): pin the grouped-scoop junction-fan regression from the blend cutover (#1643)\n\n## What this pins\n\nThe gridfinity tool's `binGenerator.export.groupedScoop` scenario\n\"circle + rectangle group with scoop\" passes on brepkit-wasm 3.3.9 and\nfails on 3.4.0 (22 boundary edges in the STL). Operands captured from\nthe tool replay it natively:\n\n- The scoop tool is a nine-edge `filletVariable` (radii 2, 0.6, 0.263,\n0.393) on a 12-face body. On 3.3.9 it comes back with 28 faces and the\nbin cut stays exact; on 3.4.0 it comes back with 37 faces (13 NURBS, 4\ntorus) and the cut's exact result has one four-owner edge, so the ops\nlayer falls back to a 787-face mesh with 12 free edges. Every later fuse\nin the export then falls back too (2222 faces at export).\n- Mechanism, in `crates/blend/src/corner.rs`: `build_junction_fan_faces`\ncloses the four-stripe mixed-radius junction with a centroid apex and\none radial line per cycle vertex. The r=0.263 stripe's cross boundary is\na sub-segment of the r=2 stripe's cross boundary on the same support\nline, so the cross-only boundary set closes into a walk that passes that\nvertex twice; `boundary_cycle` marks boundaries as used but never\nvertices, and the fan mints two radials between the same endpoints. The\ntool is manifold by edge id; the cut's endpoint-keyed duplicate merge\ncollapses the twins.\n- Refuted: requiring a simple cycle in `boundary_cycle` alone. The\ncorner then fails outright and `fillet_variable` returns its open first\nassembly (44 free edges).\n\n## Tests\n\n- `groupedscoop_fixture_is_faithful` (active): the captured base has 12\nfaces, all nine spec edges match by endpoints, the bin body has 10\nfaces.\n- `groupedscoop_fillet_has_no_twin_edges` and\n`groupedscoop_cut_stays_exact` (ignored ready-repros): both fail today\nwith the twin pairs and the fallback count printed.\n\n## Roadmap\n\nReplaces the unattributed \"3.4.0 fillet cutover regressions\" row with\nthe mechanism and fixture pointer, and records the final tool-side\ncensus (108 failing files per kernel, 103 identical on both, of the ~350\nfiles that completed).\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins the gridfinity `groupedScoop` regression with captured native\noperands and a focused IO test. The cut passed on `brepkit-wasm` 3.3.9,\nbut 3.4.0 creates twin junction edges, rejects the exact cut, and falls\nback to a mesh with open edges.\n\n- Verifies the fixture contains the expected 12-face fillet base, nine\nspecified edges, and 10-face bin body.\n- Adds ignored repros: twin-edge detection now requires coincident\nmidpoints, and the cut repro asserts typed curved faces, positional\nmanifoldness, and volume bounds.\n- Updates the roadmap with the junction-fan mechanism, the measured tool\nregression census, and a note that the other 3.4.0-only failures are\nstill unattributed.\n\n<sup>Written for commit 906145a82f79b6b9d687fd67232b48473a3823cf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1643?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-14T22:33:09Z",
+          "tree_id": "03325d30d6818b45b7ed90ae544930d2706a21f0",
+          "url": "https://github.com/andymai/brepkit/commit/830e5780015d38d33bc3a0ccc219140856eaf5c3"
+        },
+        "date": 1789425336507,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 982640,
+            "range": "± 1795",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1061672,
+            "range": "± 1132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12291,
+            "range": "± 100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 725142,
+            "range": "± 1369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41707722,
+            "range": "± 95626",
             "unit": "ns/iter"
           }
         ]
