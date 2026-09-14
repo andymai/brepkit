@@ -822,6 +822,13 @@ pub(super) fn find_ssi_seeds_grid(
     seeds
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Refinements attempted on this thread; tests run in parallel, so a
+    /// process-wide counter would mix their calls.
+    pub(super) static REFINE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[allow(clippy::similar_names)]
 /// Refine an SSI point using coupled 4D Newton iteration.
 ///
@@ -829,10 +836,6 @@ pub(super) fn find_ssi_seeds_grid(
 /// normal equations `JtJ*d = Jtr`, giving **quadratic convergence**.
 /// This replaces the previous alternating-projection approach which had
 /// only linear convergence and could fail near tangent intersections.
-#[cfg(test)]
-pub(super) static REFINE_CALLS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 pub(super) fn refine_ssi_point(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
@@ -843,7 +846,7 @@ pub(super) fn refine_ssi_point(
     tolerance: f64,
 ) -> Option<IntersectionPoint> {
     #[cfg(test)]
-    REFINE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    REFINE_CALLS.with(|calls| calls.set(calls.get() + 1));
     let mut state = [u1_guess, v1_guess, u2_guess, v2_guess];
     let mut prev_residual = f64::MAX;
 

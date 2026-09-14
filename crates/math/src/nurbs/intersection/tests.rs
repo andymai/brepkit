@@ -1225,9 +1225,9 @@ fn grid_seeder_declares_a_grazing_disjoint_pair_empty() {
     // threshold, so before the failure budget this refined all of them.
     let s1 = flat_at(0.0);
     let s2 = flat_at(0.05);
-    let before = REFINE_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let before = REFINE_CALLS.with(std::cell::Cell::get);
     assert!(find_ssi_seeds_grid(&s1, &s2, 32, 1e-6).is_empty());
-    let refinements = REFINE_CALLS.load(std::sync::atomic::Ordering::Relaxed) - before;
+    let refinements = REFINE_CALLS.with(std::cell::Cell::get) - before;
     // At most one refinement per mutual nearest pair (n*n) plus the bounded
     // closest set; the exhaustive pass refined every one of the ~n^4 pairs.
     assert!(
