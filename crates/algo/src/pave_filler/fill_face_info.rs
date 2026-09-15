@@ -198,6 +198,16 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
             let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
             let selected: Vec<PaveBlockId> = match parameter {
                 Some(t) => {
+                    // A closed rim's leaves are seam-anchored (see
+                    // `make_blocks`); bring the crossing angle into the
+                    // same turn before testing containment.
+                    let periodic = topo.edge(edge_id).is_ok_and(|e| {
+                        matches!(
+                            e.curve(),
+                            brepkit_topology::edge::EdgeCurve::Circle(_)
+                                | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                        )
+                    });
                     let filtered: Vec<PaveBlockId> = leaves
                         .iter()
                         .copied()
@@ -207,6 +217,16 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                                 let lo = a.min(b);
                                 let hi = a.max(b);
                                 let eps = (hi - lo).abs().max(1.0) * LEAF_PARAM_REL_EPS;
+                                let t = if periodic {
+                                    let turn = (t - lo).rem_euclid(std::f64::consts::TAU);
+                                    if turn > std::f64::consts::TAU - eps {
+                                        lo
+                                    } else {
+                                        lo + turn
+                                    }
+                                } else {
+                                    t
+                                };
                                 (lo - eps..=hi + eps).contains(&t)
                             })
                         })

@@ -65,6 +65,48 @@ pub fn build_solid_with_origins(
         return Err(AlgoError::AssemblyFailed("no faces selected".into()));
     }
     log::debug!("BuilderSolid: {} faces selected", selected.len());
+    if std::env::var("BK_SEL").is_ok() {
+        for sf in selected {
+            let Ok(face) = topo.face(sf.face_id) else {
+                continue;
+            };
+            let mut rows: Vec<String> = Vec::new();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let Ok(wire) = topo.wire(wid) else { continue };
+                for oe in wire.edges() {
+                    let Ok(e) = topo.edge(oe.edge()) else {
+                        continue;
+                    };
+                    let (Ok(a), Ok(b)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+                        continue;
+                    };
+                    let (a, b) = (a.point(), b.point());
+                    rows.push(format!(
+                        "{:?}{} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                        oe.edge(),
+                        if oe.is_forward() { "+" } else { "-" },
+                        e.curve().type_tag(),
+                        a.x(),
+                        a.y(),
+                        a.z(),
+                        b.x(),
+                        b.y(),
+                        b.z()
+                    ));
+                }
+            }
+            log::debug!(
+                "SEL face {:?} src={:?} {} rev={} flip={} edges: {}",
+                sf.face_id,
+                sf.source_face,
+                face.surface().type_tag(),
+                face.is_reversed(),
+                sf.reversed,
+                rows.join(" | ")
+            );
+        }
+    }
 
     // Step 0: Create reversed copies for Cut B-faces
     let mut face_ids: Vec<FaceId> = Vec::with_capacity(selected.len());
@@ -650,6 +692,25 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
             }
             if uvs.len() < 3 {
                 continue;
+            }
+            // The samples arrive as principal values, so a sector that wraps
+            // through the seam (a barrel keeping 300 degrees of its wall
+            // after a bracket fuse) reads as nearly the whole period and the
+            // box below integrates the wrong patch. Unwrap along the wire so
+            // consecutive samples never jump a period.
+            let (u_period, v_period) = match surface {
+                FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => {
+                    (Some(std::f64::consts::TAU), None)
+                }
+                FaceSurface::Torus(_) => (Some(std::f64::consts::TAU), Some(std::f64::consts::TAU)),
+                FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => (None, None),
+            };
+            for i in 1..uvs.len() {
+                let (pu, pv) = uvs[i - 1];
+                let (u, v) = uvs[i];
+                let u = u_period.map_or(u, |p| u - ((u - pu) / p).round() * p);
+                let v = v_period.map_or(v, |p| v - ((v - pv) / p).round() * p);
+                uvs[i] = (u, v);
             }
             let (u_lo, u_hi, v_lo, v_hi) = uvs.iter().fold(
                 (f64::MAX, f64::MIN, f64::MAX, f64::MIN),

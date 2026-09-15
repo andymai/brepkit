@@ -175,7 +175,7 @@ pub fn run_pave_filler(
     }
 
     // Stage 2: Resolution (mutable Topology)
-    gfa_time!("make_blocks", make_blocks::perform(arena))?;
+    gfa_time!("make_blocks", make_blocks::perform(topo, arena))?;
     gfa_time!(
         "force_interf_ee",
         force_interf_ee::perform(topo, tol, arena)
@@ -255,7 +255,7 @@ pub fn run_pave_filler_n(
     }
 
     // Stage 2: Resolution (solid-agnostic — reads the accumulated arena).
-    make_blocks::perform(arena)?;
+    make_blocks::perform(topo, arena)?;
     force_interf_ee::perform(topo, tol, arena)?;
     link_existing::perform(topo, tol, arena)?;
     make_split_edges::perform(topo, arena)?;

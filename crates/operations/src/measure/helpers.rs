@@ -186,6 +186,134 @@ fn sample_edge_curve(
     }
 }
 
+/// Angular range `(u_start, u_end)` of a face on a surface periodic in `u`,
+/// from the arcs its outer wire actually covers rather than from a sparse
+/// sample of vertex angles.
+///
+/// Each circle or ellipse boundary edge is walked along the shorter arc
+/// between its endpoints (the convention the midpoint sampling and the
+/// tessellator follow), unwrapped so the walk never jumps a period, and
+/// contributes the interval of `u` it covers (`project` returns the surface
+/// `u` of a point); the union of those intervals is the face's extent and the
+/// largest uncovered gap is its opening. A wall keeping 270 degrees around a
+/// bracket sampled at its vertices and arc midpoints reads as five angles
+/// with a 90 degree gap, which the density heuristic of
+/// [`compute_angular_range`] calls a full turn. Returns `None` when the wire
+/// has no curved edge, or when a curved edge is a spline: a blend band's
+/// rational arc keeps its full circle as its domain, so walking it would
+/// cover the whole turn (the second-pass fillet fixture).
+pub(super) fn angular_range_from_wire_arcs(
+    topo: &Topology,
+    wire: &brepkit_topology::wire::Wire,
+    project: impl Fn(Point3) -> f64,
+) -> Option<(f64, f64)> {
+    use brepkit_topology::edge::EdgeCurve;
+    use std::f64::consts::{PI, TAU};
+    const SAMPLES: usize = 16;
+    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        match edge.curve() {
+            EdgeCurve::Line => continue,
+            EdgeCurve::NurbsCurve(_) => return None,
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {}
+        }
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        if edge.is_closed() {
+            return Some((0.0, TAU));
+        }
+        let point_at = |f: f64| -> Point3 {
+            match edge.curve() {
+                EdgeCurve::Circle(c) => {
+                    let (ts, te) = (c.project(sp), c.project(ep));
+                    let fwd = (te - ts).rem_euclid(TAU);
+                    let a = if fwd <= PI {
+                        fwd.mul_add(f, ts)
+                    } else {
+                        (TAU - fwd).mul_add(-f, ts)
+                    };
+                    c.evaluate(a)
+                }
+                EdgeCurve::Ellipse(e) => {
+                    let (ts, te) = (e.project(sp), e.project(ep));
+                    let fwd = (te - ts).rem_euclid(TAU);
+                    let a = if fwd <= PI {
+                        fwd.mul_add(f, ts)
+                    } else {
+                        (TAU - fwd).mul_add(-f, ts)
+                    };
+                    e.evaluate(a)
+                }
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => sp,
+            }
+        };
+        let mut prev: Option<f64> = None;
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for k in 0..=SAMPLES {
+            #[allow(clippy::cast_precision_loss)]
+            let mut u = project(point_at(k as f64 / SAMPLES as f64));
+            if let Some(p) = prev {
+                u -= ((u - p) / TAU).round() * TAU;
+            }
+            prev = Some(u);
+            lo = lo.min(u);
+            hi = hi.max(u);
+        }
+        if hi - lo >= TAU - 1e-9 {
+            return Some((0.0, TAU));
+        }
+        let shift = lo.rem_euclid(TAU) - lo;
+        intervals.push((lo + shift, hi + shift));
+    }
+    if intervals.is_empty() {
+        return None;
+    }
+    // Union on the circle: split intervals crossing the period end, sort,
+    // merge, then find the widest uncovered gap.
+    let mut pieces: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in intervals {
+        if b > TAU {
+            pieces.push((a, TAU));
+            pieces.push((0.0, b - TAU));
+        } else {
+            pieces.push((a, b));
+        }
+    }
+    pieces.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in pieces {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 + 1e-9 => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    let mut best_gap = 0.0_f64;
+    let mut range = (0.0, TAU);
+    for i in 0..merged.len() {
+        let (_, end) = merged[i];
+        let next_start = if i + 1 < merged.len() {
+            merged[i + 1].0
+        } else {
+            merged[0].0 + TAU
+        };
+        let gap = next_start - end;
+        if gap > best_gap {
+            best_gap = gap;
+            let start = next_start.rem_euclid(TAU);
+            range = (start, start + (TAU - gap));
+        }
+    }
+    if best_gap <= 1e-9 {
+        return Some((0.0, TAU));
+    }
+    Some(range)
+}
+
 /// Compute the angular range `(u_start, u_end)` from a set of projected u values.
 ///
 /// Detects the largest angular gap and treats it as the boundary between the
