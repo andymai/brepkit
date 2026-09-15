@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789494095614,
+  "lastUpdate": 1789495561200,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35045,6 +35045,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41965480,
             "range": "± 333657",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1f30ac5ba5cb1d7b4e07fdb57c6e65f9827aa69b",
+          "message": "fix(operations): probe a tool's boundary before calling it contained (#1673)\n\n## Summary\n\n- `detect_trivial_relation`'s AABB-only containment fallback called a\ntool contained when its AABB centre sat on the blank's boundary plane\n(or inside a concave region the tool leaves elsewhere): the intersect\nreturned the whole tool and the fuse the blank. A boundary witness now\nprobes the tool's vertices and edge midpoints with the robust classifier\nand refutes containment on any Outside point.\n- Past the shortcut, a closed plane rim split at two opposite points\nkept a half-turn piece that shared both endpoints with the chord\nsection; the endpoint-keyed edge merge collapsed the two and the cap\nkept the removed half's rim. The plane splitter now splits such a piece\nat the seam's antipode, the vertex the periodic path already puts on the\nwall sharing the rim.\n- Pin:\n`intersect_a_pin_with_a_wide_diagonal_keep_box_keeps_half_the_pin`\n(fails on main with the whole pin returned).\n\n## Verification\n\n- The pin's intersect keeps the half pin and its fuse adds it to the\nbox; the closed-rim pins (slot through a knuckle, tangent rod on a post,\ntwo-cylinder fuse, box corner cut) are unchanged.\n- algo, operations, io and wasm suites green; clippy clean.\n\n## Roadmap\n\nThe containment-fallback row moves to Closed with both roots.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the containment fallback so a partially overlapping tool is no\nlonger treated as contained: `intersect` keeps only the overlap and\n`fuse` retains the tool portion outside the blank. Closed plane rims\nalso keep the chord when splits land at opposite points.\n\n**Bug Fixes**\n- Samples tool edge starts and quarter points with the robust classifier\nand a distance guard, covering both analytic and AABB containment paths\nwithout rejecting touching containment.\n- Splits a closed rim at the seam’s antipode when needed, so\nendpoint-based merging no longer replaces the chord with the removed\nrim.\n- Adds a regression test for watertight half-pin intersect and fuse\nresults, including point classification on both sides of the cut.\n\n<sup>Written for commit 6f0cc8c0d45f9f8109cfdd03369d23f4628dd673.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1673?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T18:03:30Z",
+          "tree_id": "b5bc64f0dc4a7fe5921ef61def6bd313e97b225e",
+          "url": "https://github.com/andymai/brepkit/commit/1f30ac5ba5cb1d7b4e07fdb57c6e65f9827aa69b"
+        },
+        "date": 1789495557933,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 994441,
+            "range": "± 23794",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1075286,
+            "range": "± 19764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12233,
+            "range": "± 292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 742620,
+            "range": "± 1511",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41826903,
+            "range": "± 353455",
             "unit": "ns/iter"
           }
         ]
