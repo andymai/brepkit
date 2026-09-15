@@ -397,7 +397,7 @@ impl<'a> FilletBuilder<'a> {
                     .push((si, restriction));
             }
         }
-        let propagate_single_contact_splits = all_edges.len() == 1
+        let single_planar_stripe = all_edges.len() == 1
             && regular_results.len() == 1
             && laws.len() == 1
             && matches!(laws[0], RadiusLaw::Constant(_))
@@ -410,6 +410,35 @@ impl<'a> FilletBuilder<'a> {
                 topo.face(face_id)
                     .is_ok_and(|face| face.surface().is_planar())
             });
+        // Without a plan every source vertex is treated as terminal, which
+        // keeps the per-edge fallback on its runout closure everywhere.
+        let unsplit_vertices: HashSet<VertexId> = plan.as_ref().map_or_else(
+            || {
+                all_edges
+                    .iter()
+                    .filter_map(|(edge_id, _)| topo.edge(*edge_id).ok())
+                    .flat_map(|edge| [edge.start(), edge.end()])
+                    .collect()
+            },
+            |fillet_plan| {
+                fillet_plan
+                    .junctions
+                    .iter()
+                    .filter(|junction| {
+                        matches!(
+                            junction.classification,
+                            crate::fillet_plan::CornerClassification::Terminal
+                        )
+                    })
+                    .map(|junction| junction.vertex)
+                    .collect()
+            },
+        );
+        let split_policy = if single_planar_stripe {
+            trimmer::BoundarySplitPolicy::All
+        } else {
+            trimmer::BoundarySplitPolicy::ExceptAt(&unsplit_vertices)
+        };
         let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();
         restriction_faces.sort_unstable_by_key(|face| face.index());
         for face_id in restriction_faces {
@@ -420,11 +449,11 @@ impl<'a> FilletBuilder<'a> {
                 .iter()
                 .map(|(_, restriction)| restriction.clone())
                 .collect();
-            let batch = trimmer::trim_parametric_face_batch_with_boundary_splits(
+            let batch = trimmer::trim_parametric_face_batch(
                 topo,
                 face_id,
                 &restriction_plan,
-                propagate_single_contact_splits,
+                split_policy,
             )?;
             face_replacements.insert(face_id, batch.trimmed_face);
             for &(source, replacement) in &batch.incident_replacements {
@@ -593,7 +622,7 @@ impl<'a> FilletBuilder<'a> {
                                          start: VertexId,
                                          end: VertexId|
                  -> Result<
-                    Option<crate::boundary_registry::BoundaryHandle>,
+                    Option<(crate::boundary_registry::BoundaryHandle, usize)>,
                     BlendError,
                 > {
                     if start == end {
@@ -610,6 +639,52 @@ impl<'a> FilletBuilder<'a> {
                             )
                         })
                         .unwrap_or(EdgeCurve::Line);
+                    // Two stripes meeting tangentially across a seam between
+                    // faces on one surface end at the same section. The
+                    // second band becomes the second owner of the first
+                    // band's cross-section edge instead of minting a twin
+                    // arc that would leave both with a single face use.
+                    let midpoint =
+                        |curve: &EdgeCurve,
+                         a: brepkit_math::vec::Point3,
+                         b: brepkit_math::vec::Point3| {
+                            let (t0, t1) = curve.domain_with_endpoints(a, b);
+                            curve.evaluate_with_endpoints(0.5 * (t0 + t1), a, b)
+                        };
+                    let own_midpoint = midpoint(&curve, start_point, end_point);
+                    let shared = blend_cross_handles
+                        .iter()
+                        .flat_map(|(end_handle, start_handle)| [*end_handle, *start_handle])
+                        .flatten()
+                        .find(|&handle| {
+                            boundary_registry.entry(handle).is_some_and(|entry| {
+                                let same_vertices = (entry.start.vertex == start
+                                    && entry.end.vertex == end)
+                                    || (entry.start.vertex == end && entry.end.vertex == start);
+                                if !same_vertices
+                                    || entry.owners[1].face.is_some()
+                                    || entry.edge_id().is_none()
+                                {
+                                    return false;
+                                }
+                                let (Ok(a), Ok(b)) = (
+                                    topo.vertex(entry.start.vertex),
+                                    topo.vertex(entry.end.vertex),
+                                ) else {
+                                    return false;
+                                };
+                                (midpoint(&entry.curve, a.point(), b.point()) - own_midpoint)
+                                    .length()
+                                    <= 1e-6
+                            })
+                        });
+                    if let Some(handle) = shared {
+                        let forward = boundary_registry
+                            .entry(handle)
+                            .is_some_and(|entry| entry.start.vertex == start);
+                        boundary_registry.set_owner_forward(handle, 1, forward)?;
+                        return Ok(Some((handle, 1)));
+                    }
                     let key = BoundaryKey::cross_section(
                         contour_id,
                         usize::from(start == p2_start || start == p2_end),
@@ -633,7 +708,7 @@ impl<'a> FilletBuilder<'a> {
                         ],
                     )?;
                     boundary_registry.defer_owner(handle, 1)?;
-                    Ok(Some(handle))
+                    Ok(Some((handle, 0)))
                 };
                 if stripe.spine.is_closed() {
                     // Periodic closed-rim stripes: the two cross-sections are
@@ -660,15 +735,18 @@ impl<'a> FilletBuilder<'a> {
                         &mut boundary_registry,
                         (contact1, 1),
                         (contact2, 1),
-                        cross_end.map(|handle| (handle, 0)),
-                        cross_start.map(|handle| (handle, 0)),
+                        cross_end,
+                        cross_start,
                     )?;
-                    for handle in [cross_end, cross_start].into_iter().flatten() {
-                        boundary_registry.set_owner_face(handle, 0, info.face)?;
+                    for (handle, owner) in [cross_end, cross_start].into_iter().flatten() {
+                        boundary_registry.set_owner_face(handle, owner, info.face)?;
                     }
                     boundary_registry.set_owner_face(contact1, 1, info.face)?;
                     boundary_registry.set_owner_face(contact2, 1, info.face)?;
-                    blend_cross_handles[si] = (cross_end, cross_start);
+                    blend_cross_handles[si] = (
+                        cross_end.map(|(handle, _)| handle),
+                        cross_start.map(|(handle, _)| handle),
+                    );
                     info
                 }
             } else {

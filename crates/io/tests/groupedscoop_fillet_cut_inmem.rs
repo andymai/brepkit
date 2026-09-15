@@ -1,16 +1,27 @@
 //! Grouped-scoop cutout from the gridfinity tool (`binGenerator.export.groupedScoop`,
 //! "circle + rectangle group with scoop"), captured on brepkit-wasm 3.4.0.
 //!
-//! The scoop tool is a variable fillet over nine edges with radii 2, 0.6, 0.263
-//! and 0.393 on a 12-face body. The corrected blend engine closes the
-//! four-stripe mixed-radius junction with an apex fan whose boundary cycle
-//! passes one vertex twice (the r=0.263 stripe's cross boundary is a
-//! sub-segment of the r=2 stripe's), so the fan mints two radial lines
-//! between the same endpoints. The tool is manifold by edge id, but the bin
-//! cut's duplicate-edge merge collapses the twins into one four-owner edge,
-//! the exact result is rejected, and the mesh fallback exports with open
-//! edges. On 3.3.9 the same junction closed with 28 faces and the cut stayed
-//! exact.
+//! The scoop tool is a variable fillet over nine bottom edges (radii 2, 0.6,
+//! 0.263 and 0.393) of a 12-face body: a rectangle and a circle extrusion
+//! whose bottom and top are left as three coplanar pieces each, so three of
+//! the nine edges are flat and the outline has sharp corners where two
+//! stripes meet at an unfilleted vertical spoke. On 3.4.0 the corrected
+//! engine emitted twin edges there: a zero-width band per flat edge, one
+//! connector per wall from each spoke corner up to the same contact point,
+//! and two coincident cross-sections where the two r=2 arcs meet across the
+//! cylinder seam. The bin cut's endpoint-keyed merge collapsed the twins into
+//! a four-owner edge and the exact result was rejected for the mesh fallback.
+//!
+//! Emission is fixed (flat edges dropped at plan time, the spoke split at
+//! every single-contact wall's contact end, coincident seam cross-sections
+//! shared), so the tool is manifold by position and the cut stays exact and
+//! manifold. The two-stripe corner closure itself is still not a solid: both
+//! bands run to the far wall and cross in the corner cube, the bottom
+//! contact lines cross and the chord between their far ends closes a
+//! reversed lobe, and the horn-torus patch spans the cube a third time. The
+//! ignored tests pin that (the tool mesh has open edges and the cut removes
+//! more than the tool's volume); 3.3.9 had the same model, with a cut that
+//! removed 2.1x the tool's volume and exported 144 open mesh edges.
 //!
 //! Data: `groupedscoop_fillet_base.bin` + `groupedscoop_fillet_spec.json` (the
 //! `filletVariable` call), `groupedscoop_bin_body.bin` (the cut's base).
@@ -25,6 +36,7 @@ use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{self, BooleanOp};
 use brepkit_operations::fillet::{FilletRadiusLaw, fillet_variable};
 use brepkit_operations::measure::solid_volume;
+use brepkit_operations::tessellate::{boundary_edge_count, tessellate_solid_with_tolerance};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceSurface;
@@ -210,7 +222,35 @@ fn groupedscoop_fixture_is_faithful() {
 }
 
 #[test]
-#[ignore = "ready repro: the junction fan mints twin radials at the four-stripe mixed-radius corner"]
+fn groupedscoop_plan_drops_flat_edges() {
+    let mut topo = Topology::new();
+    let (base, laws) = load_case(&mut topo);
+    let edge_sets: Vec<(Vec<EdgeId>, brepkit_blend::radius_law::RadiusLaw)> =
+        laws.iter()
+            .map(|(eid, law)| {
+                let r = match law {
+                    FilletRadiusLaw::Constant(r) => *r,
+                    FilletRadiusLaw::Linear { start, .. }
+                    | FilletRadiusLaw::SCurve { start, .. } => *start,
+                };
+                (
+                    vec![*eid],
+                    brepkit_blend::radius_law::RadiusLaw::Constant(r),
+                )
+            })
+            .collect();
+    let plan = brepkit_blend::fillet_plan::FilletPlan::build(&topo, base, &edge_sets).unwrap();
+    let planned: Vec<EdgeId> = plan
+        .contours
+        .iter()
+        .flat_map(|contour| contour.edges.iter().copied())
+        .collect();
+    // Three of the nine requested edges (D-E, D-F, F-E) lie between coplanar
+    // bottom pieces of the group outline; a fillet there has nothing to round.
+    assert_eq!(planned.len(), 6, "planned edges: {planned:?}");
+}
+
+#[test]
 fn groupedscoop_fillet_has_no_twin_edges() {
     let mut topo = Topology::new();
     let (base, laws) = load_case(&mut topo);
@@ -225,30 +265,33 @@ fn groupedscoop_fillet_has_no_twin_edges() {
     assert!(twins.is_empty(), "twin edges in the scoop tool: {twins:?}");
 }
 
-#[test]
-#[ignore = "ready repro: the bin cut by the scoop tool must stay exact (3.3.9 did)"]
-fn groupedscoop_cut_stays_exact() {
-    let mut topo = Topology::new();
-    let (base, laws) = load_case(&mut topo);
-    let tool = fillet_variable(&mut topo, base, &laws).unwrap();
+/// Fillet the tool and cut the bin body with it: `(body, tool, result)`.
+/// Asserts the cut stayed on the exact path.
+fn cut_case(topo: &mut Topology) -> (SolidId, SolidId, SolidId) {
+    let (base, laws) = load_case(topo);
+    let tool = fillet_variable(topo, base, &laws).unwrap();
     let body = deserialize_solid(
         &std::fs::read(fixture("groupedscoop_bin_body.bin")).unwrap(),
-        &mut topo,
+        topo,
     )
     .unwrap();
-    let body_volume = solid_volume(&topo, body, 0.01).unwrap();
-    let tool_volume = solid_volume(&topo, tool, 0.01).unwrap();
     let before = boolean::mesh_fallback_count();
-    let result = boolean::boolean(&mut topo, BooleanOp::Cut, body, tool).unwrap();
+    let result = boolean::boolean(topo, BooleanOp::Cut, body, tool).unwrap();
     assert_eq!(
         boolean::mesh_fallback_count(),
         before,
         "the cut took the mesh fallback"
     );
+    (body, tool, result)
+}
+
+#[test]
+fn groupedscoop_cut_stays_exact() {
+    let mut topo = Topology::new();
+    let (_, _, result) = cut_case(&mut topo);
     // Exactness: the tool's curved surfaces survive as typed faces (a fallback
-    // blob is all planes), every edge is used twice by geometry and not only
-    // by id, and the volume sits between "tool fully outside" and "tool fully
-    // inside".
+    // blob is all planes) and every edge is used twice by geometry, not only
+    // by id.
     let census = surface_census(&topo, result);
     assert!(
         census.get("cylinder").copied().unwrap_or(0) >= 4 && census.contains_key("torus"),
@@ -266,6 +309,29 @@ fn groupedscoop_cut_stays_exact() {
         0,
         "cut result must be manifold by position"
     );
+}
+
+#[test]
+#[ignore = "ready repro: the two-stripe convex corner closure is not a solid (bands cross in the corner cube, bowtie bottom wire, pinched horn torus)"]
+fn groupedscoop_tool_tessellates_watertight() {
+    let mut topo = Topology::new();
+    let (base, laws) = load_case(&mut topo);
+    let tool = fillet_variable(&mut topo, base, &laws).unwrap();
+    let mesh = tessellate_solid_with_tolerance(&topo, tool, 0.01, 5.0_f64.to_radians()).unwrap();
+    assert_eq!(
+        boundary_edge_count(&mesh),
+        0,
+        "scoop tool mesh has open edges"
+    );
+}
+
+#[test]
+#[ignore = "ready repro: the two-stripe convex corner closure is not a solid (bands cross in the corner cube, bowtie bottom wire, pinched horn torus)"]
+fn groupedscoop_cut_removes_at_most_the_tool() {
+    let mut topo = Topology::new();
+    let (body, tool, result) = cut_case(&mut topo);
+    let body_volume = solid_volume(&topo, body, 0.01).unwrap();
+    let tool_volume = solid_volume(&topo, tool, 0.01).unwrap();
     let volume = solid_volume(&topo, result, 0.01).unwrap();
     assert!(
         volume <= body_volume + 1e-6 && volume >= body_volume - tool_volume - 1e-6,

@@ -435,7 +435,7 @@ pub fn set_back_convex_trihedral_stripes(
         // edge against long runs: 90:60:10), the trims land at very
         // different fractions and the rebuilt wall caps + corner patch do
         // not re-close the shell within volume tolerance (measured vs the
-        // OCCT oracle on the cross-one-row fixture: the equal-stripe box
+        // Reference-kernel oracle on the cross-one-row fixture: the equal-stripe box
         // composes to within 0.1%, the mixed-stripe solid loses ~0.9%).
         // Restrict setbacks to near-equal incident stripes.
         let mut lengths: Vec<f64> = indices
@@ -1891,6 +1891,30 @@ fn collect_junction_fan_boundaries(
             required: false,
         });
     }
+    if std::env::var("BK_CORNER_TRACE").is_ok() {
+        log::debug!(
+            "junction {junction_vertex:?} candidates: {} cross, {} support",
+            cross_edges.len(),
+            support_candidates.len()
+        );
+        for boundary in &boundaries {
+            let start = topo.vertex(boundary.start)?.point();
+            let end = topo.vertex(boundary.end)?.point();
+            log::debug!(
+                "  cand edge {:?} req={} {:?}->{:?} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
+                boundary.edge,
+                boundary.required,
+                boundary.start,
+                boundary.end,
+                start.x(),
+                start.y(),
+                start.z(),
+                end.x(),
+                end.y(),
+                end.z()
+            );
+        }
+    }
     if terminal_boundary_cycles(&boundaries).is_some() {
         Ok(Some(boundaries))
     } else {
@@ -1898,6 +1922,47 @@ fn collect_junction_fan_boundaries(
             vertex: junction_vertex,
         })
     }
+}
+
+/// Whether every stripe's cross-section at `junction_vertex` already has
+/// both owners assigned.
+fn junction_cross_sections_closed(
+    topo: &Topology,
+    stripes: &[Stripe],
+    stripe_indices: &[usize],
+    junction_vertex: VertexId,
+    cross_boundaries: &[TerminalBoundary],
+    registry: &BoundaryRegistry,
+) -> Result<bool, BlendError> {
+    let mut any = false;
+    for &stripe_index in stripe_indices {
+        let Some(pair) = cross_boundaries.get(stripe_index) else {
+            return Ok(false);
+        };
+        let Some((terminal_start, terminal_end)) =
+            source_spine_endpoints(topo, &stripes[stripe_index])?
+        else {
+            return Ok(false);
+        };
+        let handle = if junction_vertex == terminal_start {
+            pair.1
+        } else if junction_vertex == terminal_end {
+            pair.0
+        } else {
+            return Ok(false);
+        };
+        let Some(handle) = handle else {
+            continue;
+        };
+        let Some(entry) = registry.entry(handle) else {
+            return Ok(false);
+        };
+        if entry.owners[1].face.is_none() {
+            return Ok(false);
+        }
+        any = true;
+    }
+    Ok(any)
 }
 
 fn spherical_corner_surface_reversed(
@@ -1967,6 +2032,19 @@ fn build_junction_fan(
     registry: &mut BoundaryRegistry,
 ) -> Result<Vec<CornerResult>, BlendError> {
     let junction_vertex = junction.vertex;
+    // Stripes meeting tangentially across a seam already share one
+    // cross-section edge with both owners set at band assembly: nothing is
+    // open here and a patch would only add a zero-area face.
+    if junction_cross_sections_closed(
+        topo,
+        stripes,
+        stripe_indices,
+        junction_vertex,
+        cross_boundaries,
+        registry,
+    )? {
+        return Ok(Vec::new());
+    }
     let boundaries = collect_junction_fan_boundaries(
         topo,
         stripes,
@@ -2134,6 +2212,33 @@ fn build_junction_fan_faces(
         apex_offset += topo.vertex(vertex_id)?.point() - origin;
     }
     let apex = origin + apex_offset * (1.0 / cycle.len() as f64);
+    if std::env::var("BK_CORNER_TRACE").is_ok() {
+        log::debug!(
+            "junction fan at {junction_vertex:?}: {} boundaries, apex ({:.4},{:.4},{:.4})",
+            cycle.len(),
+            apex.x(),
+            apex.y(),
+            apex.z()
+        );
+        for &(index, forward) in cycle {
+            let boundary = boundaries[index];
+            let start = topo.vertex(boundary.start)?.point();
+            let end = topo.vertex(boundary.end)?.point();
+            log::debug!(
+                "  edge {:?} fwd={forward} req={} {:?}->{:?} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
+                boundary.edge,
+                boundary.required,
+                boundary.start,
+                boundary.end,
+                start.x(),
+                start.y(),
+                start.z(),
+                end.x(),
+                end.y(),
+                end.z()
+            );
+        }
+    }
     let apex_id = topo.add_vertex(Vertex::new(apex, TOL));
 
     // Radial edges apex → V_i for each cycle vertex V_i.
