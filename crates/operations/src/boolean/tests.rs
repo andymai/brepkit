@@ -4997,6 +4997,111 @@ fn fuse_bracket_with_its_edge_on_the_axis(topo: &mut Topology, hollow: bool) -> 
     boolean(topo, BooleanOp::Fuse, barrel, bracket).unwrap()
 }
 
+/// A half pin standing on a knuckle's end, its cap coplanar with the end
+/// disc's wedge and remainder. The cap is a half disc cut at 45 degrees, so
+/// its rim is two arcs (the pin's seam splits them) and one bracket radius
+/// leaves the cap through an arc away from any vertex. The coplanar phase
+/// used to project that rim as its chords: the radius section stopped at
+/// the chord, the chord's piece became a section of its own, the wedge
+/// split into a sliver nothing paired with, and the touching cut and the
+/// fuse both left free edges.
+#[test]
+fn half_pin_standing_on_a_knuckle_end_touches_and_fuses_exactly() {
+    let mut topo = Topology::new();
+    let rod = crate::primitives::make_cylinder(&mut topo, 2.2, 8.0).unwrap();
+    let bracket = crate::primitives::make_box(&mut topo, 3.0, 3.0, 8.0).unwrap();
+    let knuckle = boolean(&mut topo, BooleanOp::Fuse, rod, bracket).unwrap();
+    let rod_volume = std::f64::consts::PI * 2.2 * 2.2 * 8.0;
+    let knuckle_volume = rod_volume * 0.75 + 3.0 * 3.0 * 8.0;
+    assert_watertight_with_volume(&topo, knuckle, 1, knuckle_volume);
+
+    // The half x + y >= 0 of a pin r 0.9, extruded from a profile of two
+    // arcs (split at the pin's seam angle) and the chord, so the cap's rim
+    // matches a keyhole pin's fragmented cap without a boolean in the way.
+    let half_pin = |topo: &mut Topology| -> SolidId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let r = 0.9_f64;
+        let c = Point3::new(0.0, 0.0, 8.0);
+        let at = |deg: f64| {
+            let a = deg.to_radians();
+            Point3::new(r * a.cos(), r * a.sin(), 8.0)
+        };
+        let v0 = topo.add_vertex(Vertex::new(at(-45.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(at(0.0), 1e-7));
+        let v2 = topo.add_vertex(Vertex::new(at(135.0), 1e-7));
+        let circle = || EdgeCurve::Circle(Circle3D::new(c, Vec3::new(0.0, 0.0, 1.0), r).unwrap());
+        let a0 = topo.add_edge(Edge::new(v0, v1, circle()));
+        let a1 = topo.add_edge(Edge::new(v1, v2, circle()));
+        let chord = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(a0, true),
+                OrientedEdge::new(a1, true),
+                OrientedEdge::new(chord, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let profile = brepkit_topology::builder::make_face_from_wire(topo, wid).unwrap();
+        crate::extrude::extrude(topo, profile, Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap()
+    };
+    let half_volume = std::f64::consts::PI * 0.9 * 0.9 * 4.0 / 2.0;
+    // The seam splits the kept 180 degrees of wall into two faces.
+    let pin = half_pin(&mut topo);
+    assert_watertight_with_volume(&topo, pin, 2, half_volume);
+
+    let touched = boolean(&mut topo, BooleanOp::Cut, knuckle, pin).unwrap();
+    assert_watertight_with_volume(&topo, touched, 1, knuckle_volume);
+
+    let pin = half_pin(&mut topo);
+    let fused = boolean(&mut topo, BooleanOp::Fuse, knuckle, pin).unwrap();
+    assert_watertight_with_volume(&topo, fused, 3, knuckle_volume + half_volume);
+}
+
+/// A keyhole pin: a rod fused with a box whose end faces are flush with the
+/// rod's and whose footprint crosses the rim (the roadmap's partially
+/// overlapping coplanar end caps). Ready repro, ignored: the fuse still
+/// falls back to a mesh with the arc-exact coplanar phase, so the root is
+/// past the section stage (the coplanar same-domain pass treats the
+/// partial overlap as a subtraction).
+#[test]
+#[ignore = "ready repro: flush end caps that partially overlap still fall back"]
+fn fuse_a_rod_with_a_flush_slot_bar_crossing_its_rim() {
+    let mut topo = Topology::new();
+    let rod = crate::primitives::make_cylinder(&mut topo, 0.9, 8.01).unwrap();
+    let bar = crate::primitives::make_box(&mut topo, 0.6, 1.2, 8.01).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        bar,
+        &brepkit_math::mat::Mat4::translation(0.3, -0.6, 0.0),
+    )
+    .unwrap();
+    let fused = boolean(&mut topo, BooleanOp::Fuse, rod, bar).unwrap();
+    // The bar's part outside the rod: x in 0.3..0.9 within the disc is
+    // inside, so only the sliver beyond the arc counts.
+    let r = 0.9_f64;
+    let inside_disc = |x0: f64, x1: f64| -> f64 {
+        // area of the disc strip x0..x1 clipped to |y| <= 0.6
+        let f = |x: f64| {
+            let h = (r * r - x * x).max(0.0).sqrt().min(0.6);
+            2.0 * h
+        };
+        let n = 4000;
+        (0..n)
+            .map(|i| f((x1 - x0).mul_add((i as f64 + 0.5) / n as f64, x0)))
+            .sum::<f64>()
+            * (x1 - x0)
+            / n as f64
+    };
+    let bar_outside = (0.6 * 1.2 - inside_disc(0.3, 0.9)) * 8.01;
+    let expected = std::f64::consts::PI * r * r * 8.01 + bar_outside;
+    assert_watertight_with_volume(&topo, fused, 1, expected);
+}
+
 fn assert_watertight_with_volume(
     topo: &Topology,
     result: SolidId,

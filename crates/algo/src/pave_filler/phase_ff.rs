@@ -4039,7 +4039,7 @@ fn ellipse_bbox(ellipse: &brepkit_math::curves::Ellipse3D) -> Aabb3 {
 /// within `tol.linear` of `point`. This implements the "PutPavesOnCurve"
 /// vertex snapping: intersection curve endpoints at face boundaries reuse
 /// the face's existing boundary vertices instead of creating duplicates.
-fn find_nearby_face_vertex(
+pub(super) fn find_nearby_face_vertex(
     topo: &Topology,
     face_id: FaceId,
     point: Point3,
