@@ -325,7 +325,7 @@ fn force_interf_ee_adjacent_boxes_creates_common_blocks() {
     }
 
     // Run make_blocks (splits pave blocks at extra paves)
-    crate::pave_filler::make_blocks::perform(&mut arena).unwrap();
+    crate::pave_filler::make_blocks::perform(&mut topo, &mut arena).unwrap();
 
     // Before ForceInterfEE: may have CommonBlocks from coplanar phase
     // (touching boundary edges get linked). Count them for comparison.
@@ -371,7 +371,7 @@ fn force_interf_ee_disjoint_boxes_no_common_blocks() {
         let mut filler = PaveFiller::with_tolerance(&mut topo, a, b, tol);
         filler.perform(&mut arena).unwrap();
     }
-    crate::pave_filler::make_blocks::perform(&mut arena).unwrap();
+    crate::pave_filler::make_blocks::perform(&mut topo, &mut arena).unwrap();
     crate::pave_filler::force_interf_ee::perform(&topo, tol, &mut arena).unwrap();
 
     let cb_count = arena.common_blocks.iter().count();
@@ -639,7 +639,7 @@ fn debug_overlapping_boxes_section_pbs() {
         filler.perform(&mut arena).unwrap();
     }
 
-    crate::pave_filler::make_blocks::perform(&mut arena).unwrap();
+    crate::pave_filler::make_blocks::perform(&mut topo, &mut arena).unwrap();
     crate::pave_filler::force_interf_ee::perform(&topo, tol, &mut arena).unwrap();
 
     let section_pb_count: usize = arena.curves.iter().map(|c| c.pave_blocks.len()).sum();

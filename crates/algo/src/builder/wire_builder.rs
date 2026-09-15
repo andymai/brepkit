@@ -111,6 +111,7 @@ pub fn build_wire_loops_with_winding(
     // 2. Greedy traversal.
     let mut used = vec![false; edges.len()];
     let mut loops = Vec::new();
+    let wire_trace = log::log_enabled!(log::Level::Debug) && std::env::var("BK_WIRE_TRACE").is_ok();
 
     while let Some(start_idx) = used.iter().position(|u| !u) {
         used[start_idx] = true;
@@ -160,6 +161,21 @@ pub fn build_wire_loops_with_winding(
             for entry in entries {
                 if !entry.outgoing || used[entry.edge_idx] {
                     continue;
+                }
+                if wire_trace {
+                    let c = &edges[entry.edge_idx];
+                    log::debug!(
+                        "WTRACE at ({:.4},{:.4}) in={:.4} cand ({:.4},{:.4})->({:.4},{:.4}) ang={:.4} score={:.4}",
+                        current_edge.end_uv.x(),
+                        current_edge.end_uv.y(),
+                        incoming_angle,
+                        c.start_uv.x(),
+                        c.start_uv.y(),
+                        c.end_uv.x(),
+                        c.end_uv.y(),
+                        entry.angle,
+                        turn_score(incoming_angle, entry.angle)
+                    );
                 }
                 // Skip the reverse of the arriving edge (prevents U-turns
                 // along section edges that appear as forward+backward pairs).

@@ -18,6 +18,9 @@ static TRACE_SECEDGE: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_SECEDG
 /// `clip_line_to_face_boundary`, which is what separates a chord-short clip
 /// from a genuinely absent section.
 static TRACE_CLIP: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_CLIP").is_ok());
+/// `BK_SPLIT_TRACE=<face index>` also dumps that face's emitted sub-face wires.
+static TRACE_SPLIT_FACE: LazyLock<Option<String>> =
+    LazyLock::new(|| std::env::var("BK_SPLIT_TRACE").ok());
 
 /// Quantized 3D position pair for CommonBlock edge matching.
 type CbEdgeKey = ((i64, i64, i64), (i64, i64, i64));
@@ -2822,7 +2825,16 @@ fn clip_line_to_face_boundary(
     let single_crossing_ok = crossings.len() == 1
         && face.inner_wires().is_empty()
         && matches!(face.surface(), FaceSurface::Plane { .. });
-    if crossings.len() < 2 && !single_crossing_ok {
+    // A holed planar face can also be reached from INSIDE its outer wire: a
+    // section that runs from outside the rim, through the ring and on into
+    // the hole (a bracket plane's trace across a barrel's end annulus, ending
+    // on the axis) crosses the outer wire once, and the outermost pair has
+    // nothing to bound. Those sections are classified below against the
+    // outer wire and the holes together.
+    let holed_plane_partial = crossings.len() < 2
+        && !face.inner_wires().is_empty()
+        && matches!(face.surface(), FaceSurface::Plane { .. });
+    if crossings.len() < 2 && !single_crossing_ok && !holed_plane_partial {
         return None;
     }
 
@@ -2949,6 +2961,37 @@ fn clip_line_to_face_boundary(
                 inside.then_some((w[0], w[1]))
             })
             .collect()
+    } else if holed_plane_partial
+        && let (Some(frame), Some(poly)) = (plane_frame.as_ref(), poly.as_ref())
+    {
+        // Fewer than two outer crossings: the section starts or ends inside
+        // the outer wire, in material or over a hole. Keep the sub-intervals
+        // whose midpoint is inside the outer polygon and outside every hole,
+        // splitting at the hole crossings as well as the outer ones. The
+        // whole-section hole weave never sees these sections (it needs two
+        // outer crossings), so trimming them here takes nothing from it.
+        let (hole_polys, hole_crossings) =
+            hole_loops_along_line(topo, face, frame, line_start, line_end, tol);
+        let mut borders: Vec<f64> = crossings
+            .iter()
+            .chain(crossings_ext.iter())
+            .chain(hole_crossings.iter())
+            .map(|t| t.clamp(0.0, 1.0))
+            .chain([0.0, 1.0])
+            .collect();
+        borders.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        borders.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        borders
+            .windows(2)
+            .filter_map(|w| {
+                let mid_uv = frame.project(line_start + line_dir * f64::midpoint(w[0], w[1]));
+                let in_outer = crate::builder::classify_2d::point_in_polygon_2d(mid_uv, poly);
+                let in_hole = hole_polys
+                    .iter()
+                    .any(|h| crate::builder::classify_2d::point_in_polygon_2d(mid_uv, h));
+                (in_outer && !in_hole).then_some((w[0], w[1]))
+            })
+            .collect()
     } else {
         // Non-plane fallback: the historical outermost pair — but over the
         // TRUE-arc crossings as well as the chord ones. A chord crossing sits
@@ -2989,6 +3032,121 @@ fn clip_line_to_face_boundary(
         out.push((clipped_start, clipped_end));
     }
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// The inner wires of a planar `face` as arc-sampled polygons in `frame`,
+/// plus the parameters along `line_start -> line_end` where the line crosses
+/// a hole edge (true arcs for circles, chords for the rest).
+fn hole_loops_along_line(
+    topo: &Topology,
+    face: &Face,
+    frame: &crate::builder::plane_frame::PlaneFrame,
+    line_start: Point3,
+    line_end: Point3,
+    tol: f64,
+) -> (Vec<Vec<brepkit_math::vec::Point2>>, Vec<f64>) {
+    use brepkit_math::vec::Point2;
+    let line_dir = line_end - line_start;
+    let line_len2 = line_dir.dot(line_dir);
+    let plane_normal = match face.surface() {
+        FaceSurface::Plane { normal, .. } => Some(*normal),
+        _ => None,
+    };
+    let l0 = frame.project(line_start);
+    let l1 = frame.project(line_end);
+    let mut polys = Vec::new();
+    let mut crossings = Vec::new();
+    for &wid in face.inner_wires() {
+        let Ok(wire) = topo.wire(wid) else {
+            continue;
+        };
+        let mut poly: Vec<Point2> = Vec::new();
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(sv), Ok(ev)) = (
+                topo.vertex(oe.oriented_start(edge)),
+                topo.vertex(oe.oriented_end(edge)),
+            ) else {
+                continue;
+            };
+            let (sp, ep) = (sv.point(), ev.point());
+            poly.push(frame.project(sp));
+            let closed = oe.oriented_start(edge) == oe.oriented_end(edge);
+            match edge.curve() {
+                EdgeCurve::Line => {
+                    let (h0, h1) = (frame.project(sp), frame.project(ep));
+                    let (rx, ry) = (l1.x() - l0.x(), l1.y() - l0.y());
+                    let (sx, sy) = (h1.x() - h0.x(), h1.y() - h0.y());
+                    let denom = rx.mul_add(sy, -(ry * sx));
+                    let scale = (rx.hypot(ry) * sx.hypot(sy)).max(f64::MIN_POSITIVE);
+                    if denom.abs() > 1e-9 * scale {
+                        let (qx, qy) = (h0.x() - l0.x(), h0.y() - l0.y());
+                        let t = qx.mul_add(sy, -(qy * sx)) / denom;
+                        let u = qx.mul_add(ry, -(qy * rx)) / denom;
+                        if (-1e-9..=1.0 + 1e-9).contains(&t) && (-1e-6..=1.0 + 1e-6).contains(&u) {
+                            crossings.push(t);
+                        }
+                    }
+                }
+                curve => {
+                    for (p, _) in arc_segment_crossings(
+                        curve,
+                        sp,
+                        ep,
+                        closed,
+                        line_start,
+                        line_end,
+                        tol,
+                        plane_normal,
+                    ) {
+                        if line_len2 > 0.0 {
+                            let t = (p - line_start).dot(line_dir) / line_len2;
+                            if (-1e-9..=1.0 + 1e-9).contains(&t) {
+                                crossings.push(t);
+                            }
+                        }
+                    }
+                    if closed && let EdgeCurve::Circle(c) = curve {
+                        let a_seam = c.project(sp);
+                        for k in 1..96 {
+                            let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
+                            poly.push(frame.project(c.evaluate(a)));
+                        }
+                    } else if closed && let EdgeCurve::Ellipse(el) = curve {
+                        let a_seam = el.project(sp);
+                        for k in 1..96 {
+                            let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
+                            poly.push(frame.project(el.evaluate(a)));
+                        }
+                    } else {
+                        // Walk the edge's NATIVE span (`domain_with_endpoints`
+                        // is the arc from the stored start to the stored end),
+                        // then restore traversal order: a rim piece past 180
+                        // degrees walked by the shorter-arc convention would
+                        // trace its complement and fold the polygon.
+                        let (ns, ne) = if oe.is_forward() { (sp, ep) } else { (ep, sp) };
+                        let (t0, t1) = curve.domain_with_endpoints(ns, ne);
+                        let mut samples: Vec<Point2> = (1..96)
+                            .map(|k| {
+                                let t = (t1 - t0).mul_add(f64::from(k) / 96.0, t0);
+                                frame.project(curve.evaluate_with_endpoints(t, ns, ne))
+                            })
+                            .collect();
+                        if !oe.is_forward() {
+                            samples.reverse();
+                        }
+                        poly.extend(samples);
+                    }
+                }
+            }
+        }
+        if poly.len() >= 3 {
+            polys.push(poly);
+        }
+    }
+    (polys, crossings)
 }
 
 /// Distance from a 3D point to a line segment.
@@ -3338,7 +3496,7 @@ fn build_topology_face(
     topo: &mut Topology,
     split: &super::split_types::SplitSubFace,
     tol: Tolerance,
-    _parent_face_id: FaceId,
+    parent_face_id: FaceId,
     _shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
     _cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
@@ -3373,6 +3531,29 @@ fn build_topology_face(
 
     // Step 2: Create edges and oriented edges for the outer wire.
     let mut oriented_edges = Vec::with_capacity(split.outer_wire.len());
+
+    if TRACE_SPLIT_FACE
+        .as_deref()
+        .is_some_and(|v| v == parent_face_id.index().to_string())
+    {
+        for e in &split.outer_wire {
+            log::debug!(
+                "STRACE-OUT face={parent_face_id:?} {} fwd={} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4}) uv=({:.4},{:.4})->({:.4},{:.4})",
+                e.curve_3d.type_tag(),
+                e.forward,
+                e.start_3d.x(),
+                e.start_3d.y(),
+                e.start_3d.z(),
+                e.end_3d.x(),
+                e.end_3d.y(),
+                e.end_3d.z(),
+                e.start_uv.x(),
+                e.start_uv.y(),
+                e.end_uv.x(),
+                e.end_uv.y()
+            );
+        }
+    }
 
     for pcurve_edge in &split.outer_wire {
         // Vertex resolution priority:

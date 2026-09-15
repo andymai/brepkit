@@ -1071,25 +1071,44 @@ pub(super) fn split_periodic_face_into_sectors(
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::vec::{Point2, Vec2};
     use std::f64::consts::{PI, TAU};
-
     if !matches!(surface, FaceSurface::Cylinder(_)) {
         return None;
     }
     let close_tol = tol * 100.0;
 
-    let mut boundary_circles: Vec<&OrientedPCurveEdge> = Vec::new();
+    // A rim is a closed circle edge, or several arcs of one circle when
+    // earlier booleans split it (a hinge barrel's rim after its journals were
+    // cut): every circle edge lies on one of exactly two rims, told apart by
+    // their axial v. The sectors mint their own rim arcs from the circle
+    // geometry, so how the rim arrives fragmented does not matter here.
+    let mut rim_edges: Vec<&OrientedPCurveEdge> = Vec::new();
     let mut seam_edges: Vec<&OrientedPCurveEdge> = Vec::new();
     for e in boundary_edges {
         let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
         match (&e.curve_3d, is_closed) {
-            (EdgeCurve::Circle(_), true) => boundary_circles.push(e),
+            (EdgeCurve::Circle(_), _) => rim_edges.push(e),
             (EdgeCurve::Line, false) => seam_edges.push(e),
             _ => return None,
         }
     }
-    if boundary_circles.len() != 2 || seam_edges.is_empty() {
+    if rim_edges.len() < 2 || seam_edges.is_empty() {
         return None;
     }
+    let mut rim_levels: Vec<(f64, &OrientedPCurveEdge)> = Vec::new();
+    for e in &rim_edges {
+        let (_, v) = surface.project_point(e.start_3d)?;
+        match rim_levels
+            .iter()
+            .position(|(lv, _)| (lv - v).abs() < close_tol)
+        {
+            Some(_) => {}
+            None => rim_levels.push((v, e)),
+        }
+    }
+    if rim_levels.len() != 2 {
+        return None;
+    }
+    let boundary_circles: Vec<&OrientedPCurveEdge> = rim_levels.iter().map(|(_, e)| *e).collect();
 
     let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
     for e in &seam_edges {
@@ -1245,9 +1264,12 @@ pub(super) fn split_periodic_face_into_sectors(
         if bot_edge.forward { t } else { -t }
     };
     let du_dir = {
-        // Surface partial in +u at the seam/bottom corner.
-        let p0 = surface.evaluate(seam_u, v_bot)?;
-        let p1 = surface.evaluate(seam_u + 1e-4, v_bot)?;
+        // Surface partial in +u where the representative bottom rim edge
+        // starts (a fragmented rim's piece need not start at the seam, and a
+        // circle's tangent turns with u).
+        let (u_s, _) = surface.project_point(bot_edge.start_3d)?;
+        let p0 = surface.evaluate(u_s, v_bot)?;
+        let p1 = surface.evaluate(u_s + 1e-4, v_bot)?;
         (p1 - p0).normalize().ok()?
     };
     let floor_ccw = bot_tangent.dot(du_dir) > 0.0;
@@ -1286,6 +1308,7 @@ pub(super) fn split_periodic_face_into_sectors(
             precomputed_interior: Some(interior),
         });
     }
+    log::trace!("sectors: face {face_id:?} built {} sectors", sectors.len());
     Some(sectors)
 }
 

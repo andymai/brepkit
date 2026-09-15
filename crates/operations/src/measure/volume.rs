@@ -7,7 +7,9 @@ use brepkit_topology::solid::SolidId;
 
 use crate::tessellate;
 
-use super::helpers::{collect_solid_vertex_points, compute_angular_range};
+use super::helpers::{
+    angular_range_from_wire_arcs, collect_solid_vertex_points, compute_angular_range,
+};
 
 /// Volume of a solid that contains a bored quadric — a sphere (or torus) face
 /// carrying a full-revolution latitude-circle hole (a drilled tunnel rim) — via
@@ -1490,7 +1492,8 @@ fn analytic_cylinder_signed_volume(
         return Ok(0.0);
     }
 
-    let u_range = compute_angular_range(&mut u_vals);
+    let u_range = angular_range_from_wire_arcs(topo, wire, |p| cyl.project_point(p).0)
+        .unwrap_or_else(|| compute_angular_range(&mut u_vals));
 
     let r = cyl.radius();
     let x_axis = cyl.x_axis();

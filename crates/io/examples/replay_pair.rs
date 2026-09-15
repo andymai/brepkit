@@ -175,6 +175,43 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
                     b.y(),
                     b.z()
                 );
+                if std::env::var("FREE_EDGES").is_ok_and(|v| v == "3") {
+                    // Every result edge touching either endpoint: shows what
+                    // the neighbouring faces use along the same line.
+                    for (oid, on) in &uses {
+                        if oid == eid {
+                            continue;
+                        }
+                        let Ok(oe) = topo.edge(*oid) else { continue };
+                        let (Ok(oa), Ok(ob)) = (topo.vertex(oe.start()), topo.vertex(oe.end()))
+                        else {
+                            continue;
+                        };
+                        let (oa, ob) = (oa.point(), ob.point());
+                        let touches = |p: brepkit_math::vec::Point3| {
+                            (p - a).length() < 1e-6 || (p - b).length() < 1e-6
+                        };
+                        if !(touches(oa) || touches(ob)) {
+                            continue;
+                        }
+                        let owners: Vec<String> = users
+                            .get(oid)
+                            .into_iter()
+                            .flatten()
+                            .map(|f| format!("{f:?}"))
+                            .collect();
+                        println!(
+                            "      touching {oid:?} {} n={on} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) owners={owners:?}",
+                            oe.curve().type_tag(),
+                            oa.x(),
+                            oa.y(),
+                            oa.z(),
+                            ob.x(),
+                            ob.y(),
+                            ob.z()
+                        );
+                    }
+                }
                 if std::env::var("FREE_EDGES").is_ok_and(|v| v == "2") {
                     for f in users.get(eid).into_iter().flatten() {
                         let Ok(fc) = topo.face(*f) else { continue };
@@ -220,8 +257,12 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
     }
     let mut mix: Vec<_> = mix.into_iter().collect();
     mix.sort_unstable();
+    let vol_defl = std::env::var("VOL_DEFL")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.05);
     let vol =
-        brepkit_operations::measure::oriented_solid_volume(topo, sid, 0.05).unwrap_or(f64::NAN);
+        brepkit_operations::measure::oriented_solid_volume(topo, sid, vol_defl).unwrap_or(f64::NAN);
     // TESS_BND=1 additionally tessellates at export tolerance (0.01 mm /
     // 5 degrees, matching the tool's STL export) and reports mesh boundary
     // and non-manifold edge counts — the discriminant between a B-Rep leak
@@ -316,11 +357,62 @@ fn main() {
                     lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]
                 );
                 let rev = face.is_reversed();
+                // Planar winding check: the outer wire's traversal-ordered
+                // Newell normal (arc edges sampled at their midpoints too)
+                // against the face's effective normal.
+                let wind = if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = &s {
+                    let Ok(w) = topo.wire(face.outer_wire()) else {
+                        unreachable!()
+                    };
+                    let mut pts: Vec<brepkit_math::vec::Point3> = Vec::new();
+                    for oe in w.edges() {
+                        let Ok(e) = topo.edge(oe.edge()) else {
+                            continue;
+                        };
+                        let (Ok(sv), Ok(ev)) = (
+                            topo.vertex(oe.oriented_start(e)),
+                            topo.vertex(oe.oriented_end(e)),
+                        ) else {
+                            continue;
+                        };
+                        let (sp, ep) = (sv.point(), ev.point());
+                        pts.push(sp);
+                        if !matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                            let (nsp, nep) = if oe.is_forward() { (sp, ep) } else { (ep, sp) };
+                            let (d0, d1) = e.curve().domain_with_endpoints(nsp, nep);
+                            let mut mids: Vec<brepkit_math::vec::Point3> = (1..8)
+                                .map(|k| {
+                                    let t = d0 + (d1 - d0) * f64::from(k) / 8.0;
+                                    e.curve().evaluate_with_endpoints(t, nsp, nep)
+                                })
+                                .collect();
+                            if !oe.is_forward() {
+                                mids.reverse();
+                            }
+                            pts.extend(mids);
+                        }
+                    }
+                    let mut n = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
+                    for i in 0..pts.len() {
+                        let a = pts[i];
+                        let b = pts[(i + 1) % pts.len()];
+                        n = brepkit_math::vec::Vec3::new(
+                            n.x() + (a.y() - b.y()) * (a.z() + b.z()),
+                            n.y() + (a.z() - b.z()) * (a.x() + b.x()),
+                            n.z() + (a.x() - b.x()) * (a.y() + b.y()),
+                        );
+                    }
+                    let eff = if rev { *normal * -1.0 } else { *normal };
+                    let d = n.dot(eff);
+                    format!(" wind={}", if d > 0.0 { "ccw-out" } else { "CW-IN" })
+                } else {
+                    String::new()
+                };
                 if s.is_analytic() || matches!(s, brepkit_topology::face::FaceSurface::Plane { .. })
                 {
-                    println!("{label} {fid:?} rev={rev} {bbox} {s:?}");
+                    println!("{label} {fid:?} rev={rev} {bbox}{wind} {s:?}");
                 } else {
-                    println!("{label} {fid:?} rev={rev} {bbox} nurbs");
+                    println!("{label} {fid:?} rev={rev} {bbox}{wind} nurbs");
                 }
             }
         }

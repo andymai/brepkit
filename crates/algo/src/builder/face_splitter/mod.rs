@@ -4070,16 +4070,26 @@ fn clip_sections_to_outer_region(
 /// this signature only when it has woven twin section edges into one loop
 /// instead of closing a region between them; a clean partition never does.
 ///
-/// Loops of two edges are exempt: consecutive edges always share a vertex, so
-/// for `n == 2` closure alone forces the reverse pattern and every lens region
-/// (an arc plus its co-endpoint chord) matches. Only at three or more edges
-/// does the pattern actually mean the walker doubled back — at two it fired on
-/// the honeycomb cap arrangement's legitimate lens and cost `pcut3` its zero
-/// free-edge pin.
-fn loops_have_out_and_back(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
+/// Loops of two edges are exempt by default: consecutive edges always share a
+/// vertex, so for `n == 2` closure alone forces the reverse pattern and every
+/// lens region (an arc plus its co-endpoint chord) matches. Only at three or
+/// more edges does the pattern actually mean the walker doubled back — at two
+/// it fired on the honeycomb cap arrangement's legitimate lens and cost
+/// `pcut3` its zero free-edge pin. With `two_edge_spurs` (a promoted hole in
+/// the arrangement) a two-edge loop of two STRAIGHT edges counts: that is a
+/// bridge section walked to the opening and straight back, never a region,
+/// while a lens still keeps its arc and stays exempt.
+fn loops_have_out_and_back(
+    loops: &[Vec<OrientedPCurveEdge>],
+    tol: f64,
+    two_edge_spurs: bool,
+) -> bool {
     for lp in loops {
         let n = lp.len();
-        if n < 3 {
+        if n < 2 {
+            continue;
+        }
+        if n == 2 && !(two_edge_spurs && lp.iter().all(|e| matches!(e.curve_3d, EdgeCurve::Line))) {
             continue;
         }
         for i in 0..n {
@@ -4627,7 +4637,14 @@ fn split_face_2d_impl(
     // (the halfSockets body's cavity cut), so fix the winding here where the
     // wires enter the splitter.
     let original_inner_wires: Vec<Vec<OrientedPCurveEdge>> = if is_plane {
-        let outer_sign = signed_area_2d(&sample_wire_loop_uv(&boundary_edges)) >= 0.0;
+        // Arc-true via the frame: the pcurve sampler walks a reversed
+        // boundary arc backwards (boundary pcurves are fitted in traversal
+        // order), and a rim split into reversed pieces then reads with the
+        // wrong sign (a barrel's end disc, see `sample_wire_loop_uv_via_frame`).
+        let outer_sign = signed_area_2d(&sampling::sample_wire_loop_uv_via_frame(
+            &boundary_edges,
+            frame,
+        )) >= 0.0;
         let flip_wire = |hole: &mut Vec<OrientedPCurveEdge>| {
             hole.reverse();
             for edge in hole.iter_mut() {
@@ -5318,6 +5335,11 @@ fn split_face_2d_impl(
     // section runs THROUGH the opening — attaching the hole whole after the
     // split leaves the notch piece overlapping the opening covered by the
     // kept face with nothing below it (the fit-offset groove-mouth sliver).
+    // A section that ENDS at a hole vertex needs the hole just the same: it
+    // is a bridge from the outer wire to the opening (a bracket plane's
+    // trace across a barrel's end annulus, clipped to the ring), and with
+    // the hole attached whole its inner end dangles and the bridge is
+    // dropped as a pendant.
     if is_plane && !original_inner_wires.is_empty() {
         let sec_segs: Vec<(Point3, Point3)> = sections
             .iter()
@@ -5329,6 +5351,9 @@ fn split_face_2d_impl(
             let len2 = d.dot(d);
             if len2 < 1e-18 {
                 return false;
+            }
+            if (p - a).length() < tol.linear || (p - b).length() < tol.linear {
+                return true;
             }
             let t = (p - a).dot(d) / len2;
             if !(1e-6..=1.0 - 1e-6).contains(&t) {
@@ -6139,12 +6164,14 @@ fn split_face_2d_impl(
             .iter()
             .map(|e| {
                 format!(
-                    "STRACE-PRE ({:.7},{:.7})->({:.7},{:.7}) src={:?}",
+                    "STRACE-PRE ({:.7},{:.7})->({:.7},{:.7}) src={:?} fwd={} {}",
                     e.start_uv.x(),
                     e.start_uv.y(),
                     e.end_uv.x(),
                     e.end_uv.y(),
-                    e.source_edge_idx
+                    e.source_edge_idx,
+                    e.forward,
+                    e.curve_3d.type_tag()
                 )
             })
             .collect();
@@ -6262,7 +6289,27 @@ fn split_face_2d_impl(
                     .map(|e| format!("({:.7},{:.7})", e.start_uv.x(), e.start_uv.y()))
                     .collect();
                 vs.sort();
-                format!("STRACE-LOOP n={} {}", lp.len(), vs.join(""))
+                let walk: Vec<String> = lp
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "({:.3},{:.3}){}{}",
+                            e.start_uv.x(),
+                            e.start_uv.y(),
+                            if e.forward { "+" } else { "-" },
+                            match e.curve_3d {
+                                EdgeCurve::Line => "l",
+                                _ => "c",
+                            }
+                        )
+                    })
+                    .collect();
+                format!(
+                    "STRACE-LOOP n={} {} walk={}",
+                    lp.len(),
+                    vs.join(""),
+                    walk.join(">")
+                )
             })
             .collect();
         lrows.sort();
@@ -6285,7 +6332,14 @@ fn split_face_2d_impl(
     // has all its bands misclassified as holes and collapses to one sub-face.
     let mut cw_loops = false;
     if all_edges.len() > n_boundary_edges && !u_periodic && !v_periodic {
-        let boundary_pts = sample_wire_loop_uv(&all_edges[..n_boundary_edges]);
+        // Same arc-true sampling as the loop classification below: the
+        // pcurve sampler folds reversed boundary arcs and called a barrel's
+        // end disc clockwise, so both of its regions were emitted inside out.
+        let boundary_pts = if is_plane {
+            sampling::sample_wire_loop_uv_via_frame(&all_edges[..n_boundary_edges], frame)
+        } else {
+            sample_wire_loop_uv(&all_edges[..n_boundary_edges])
+        };
         if signed_area_2d(&boundary_pts) < 0.0 {
             cw_loops = true;
             if loops.len() <= 1 {
@@ -6355,7 +6409,7 @@ fn split_face_2d_impl(
     let woven_spur = is_plane
         && holes_integrated
         && !woven_inner_wires.is_empty()
-        && loops_have_out_and_back(&loops, tol.linear);
+        && loops_have_out_and_back(&loops, tol.linear, holes_promoted);
     if is_plane
         && ((holes_integrated && original_inner_wires.len() >= 2 && !woven_inner_wires.is_empty())
             || bay_mouth_arrangement
@@ -6788,6 +6842,13 @@ fn split_face_2d_impl(
             if area.abs() <= perimeter * tol.linear {
                 continue;
             }
+            if trace_split {
+                log::debug!(
+                    "STRACE-CLASS n={} area={area:.5} cw_loops={cw_loops} -> {}",
+                    wire_loop.len(),
+                    if area > 0.0 { "outer" } else { "hole" }
+                );
+            }
             if area > 0.0 {
                 outers.push((wire_loop, area));
             } else {
@@ -6879,6 +6940,12 @@ fn split_face_2d_impl(
             }
         });
         for mut region in promoted {
+            if trace_split {
+                log::debug!(
+                    "STRACE-PROMOTE hole loop n={} promoted to a region (reversed)",
+                    region.len()
+                );
+            }
             region.reverse();
             for edge in &mut region {
                 std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);

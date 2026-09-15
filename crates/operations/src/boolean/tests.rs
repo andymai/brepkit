@@ -4969,6 +4969,69 @@ fn fuse_rod_tangent_to_the_top_of_a_post_keeps_the_rod() {
     );
 }
 
+/// A bracket whose corner edge runs along a barrel's axis: the bracket's two
+/// faces through the axis cut the end caps radially, one of them through
+/// the rims' seam vertices, and the barrel's wall keeps 270 degrees around
+/// its seam (the click-hinge knuckle).
+fn fuse_bracket_with_its_edge_on_the_axis(topo: &mut Topology, hollow: bool) -> SolidId {
+    let barrel = crate::primitives::make_cylinder(topo, 2.2, 8.0).unwrap();
+    let barrel = if hollow {
+        let bore = crate::primitives::make_cylinder(topo, 1.8, 12.0).unwrap();
+        crate::transform::transform_solid(
+            topo,
+            bore,
+            &brepkit_math::mat::Mat4::translation(0.0, 0.0, -2.0),
+        )
+        .unwrap();
+        boolean(topo, BooleanOp::Cut, barrel, bore).unwrap()
+    } else {
+        barrel
+    };
+    let bracket = crate::primitives::make_box(topo, 3.0, 3.0, 12.0).unwrap();
+    crate::transform::transform_solid(
+        topo,
+        bracket,
+        &brepkit_math::mat::Mat4::translation(0.0, 0.0, -2.0),
+    )
+    .unwrap();
+    boolean(topo, BooleanOp::Fuse, barrel, bracket).unwrap()
+}
+
+fn assert_watertight_with_volume(
+    topo: &Topology,
+    result: SolidId,
+    cylinders: usize,
+    expected: f64,
+) {
+    assert!(is_closed_manifold(topo, result).unwrap());
+    assert!(!has_free_edges(topo, result).unwrap());
+    let mesh = crate::tessellate::tessellate_solid_with_tolerance(topo, result, 0.01, 0.2).unwrap();
+    assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+    assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+    assert_eq!(count_cylinder_faces(topo, result), cylinders);
+    let vol = crate::measure::solid_volume(topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "fused volume {vol:.3} != expected {expected:.3}"
+    );
+}
+
+#[test]
+fn fuse_tube_with_a_bracket_edge_on_its_axis_splits_the_annulus_caps() {
+    let mut topo = Topology::new();
+    let result = fuse_bracket_with_its_edge_on_the_axis(&mut topo, true);
+    let tube = std::f64::consts::PI * (2.2 * 2.2 - 1.8 * 1.8) * 8.0;
+    assert_watertight_with_volume(&topo, result, 2, tube * 0.75 + 3.0 * 3.0 * 12.0);
+}
+
+#[test]
+fn fuse_rod_with_a_bracket_edge_on_its_axis_splits_the_end_discs() {
+    let mut topo = Topology::new();
+    let result = fuse_bracket_with_its_edge_on_the_axis(&mut topo, false);
+    let rod = std::f64::consts::PI * 2.2 * 2.2 * 8.0;
+    assert_watertight_with_volume(&topo, result, 1, rod * 0.75 + 3.0 * 3.0 * 12.0);
+}
+
 #[test]
 fn fuse_stacked_rounded_rect_arc_prisms_same_footprint() {
     let mut topo = Topology::new();
@@ -6935,11 +6998,20 @@ fn diag_tangency_count() {
             match brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, cyl, b)
             {
                 Ok(r) => {
-                    let n = brepkit_topology::explorer::solid_faces(&topo, r)
-                        .unwrap()
-                        .len();
+                    let faces = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
+                    let n = faces.len();
+                    let mut mix: Vec<String> = faces
+                        .iter()
+                        .map(|&f| {
+                            let face = topo.face(f).unwrap();
+                            let w = topo.wire(face.outer_wire()).unwrap();
+                            format!("{}[{}]", face.surface().type_tag(), w.edges().len())
+                        })
+                        .collect();
+                    mix.sort();
+                    let vol = crate::measure::solid_volume(&topo, r, 0.01).unwrap();
                     match super::assembly::validate_boolean_result(&topo, r) {
-                        Ok(()) => format!("F={n:3} CLEAN"),
+                        Ok(()) => format!("F={n:3} CLEAN vol={vol:.3} {}", mix.join(" ")),
                         Err(e) => format!("F={n:3} {e}"),
                     }
                 }

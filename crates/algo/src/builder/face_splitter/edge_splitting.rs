@@ -27,7 +27,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
 ) -> Vec<OrientedPCurveEdge> {
     let mut result = Vec::new();
     for edge in edges {
-        let splits = match &edge.curve_3d {
+        let mut splits = match &edge.curve_3d {
             EdgeCurve::Circle(circle) => {
                 find_splits_on_circle(circle, &edge, split_pts_3d, surface, tol)
             }
@@ -48,6 +48,35 @@ pub(super) fn split_boundary_edges_at_3d_points(
         if splits.is_empty() {
             result.push(edge);
             continue;
+        }
+        // A closed plane rim split once would leave two complementary arcs
+        // sharing both endpoints; pave the longer arc at its middle exactly
+        // as `make_blocks` does for the edge images, so this face's pieces
+        // match its neighbours' and the assembler's endpoint-keyed merge
+        // never conflates the two arcs. Only a holed planar face re-splits a
+        // raw closed rim here (its outer wire is not image-expanded); every
+        // other face, the wall sharing the rim included, takes the images
+        // and so already carries the `make_blocks` midpoint.
+        if frame.is_some()
+            && splits.len() == 1
+            && let EdgeCurve::Circle(c) = &edge.curve_3d
+            && (edge.start_3d - edge.end_3d).length() < tol
+        {
+            let a0 = c.project(edge.start_3d);
+            let a1 = c.project(splits[0].1);
+            let first = (a1 - a0).rem_euclid(std::f64::consts::TAU);
+            let second = std::f64::consts::TAU - first;
+            let m = if first >= second {
+                a0 + 0.5 * first
+            } else {
+                a1 + 0.5 * second
+            };
+            let delta = if edge.forward { m - a0 } else { a0 - m };
+            let t_mid = delta.rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU;
+            if t_mid > tol && t_mid < 1.0 - tol {
+                splits.push((t_mid, c.evaluate(m)));
+                splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            }
         }
 
         let circle_iso_v_rim = matches!(edge.curve_3d, EdgeCurve::Circle(_))
@@ -233,13 +262,17 @@ pub(super) fn find_splits_on_circle(
     // angle, signed by the traversal direction, so `t` is monotone along the
     // walk (a periodic rim is traversed CW on the top cap, CCW on the bottom).
     //
-    // Scoped to cylinder/cone rims, matching the UV-span branch in
-    // `split_boundary_edges_at_3d_points` that consumes these `t` values. The
-    // same origin-vs-start mismatch is latent for a closed circle on any other
-    // surface (a bore rim on a plane), but only the periodic-rim case is
-    // exercised and verified here, so the wider change stays out of scope.
-    let closed_anchor = (matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
-        && (edge.start_3d - edge.end_3d).length() < tol)
+    // Cylinder/cone rims consume these `t` values through the UV-span branch
+    // in `split_boundary_edges_at_3d_points`; a closed rim on a plane (a
+    // barrel's end annulus, whose seam vertex sits on the bracket plane that
+    // sections it) has the same origin-vs-start mismatch and projects its
+    // split UVs through the frame instead. Anchoring both at the start keeps
+    // the seam from reading as an interior split (a zero-length piece the
+    // arrangement then traces as its own loop).
+    let closed_anchor = (matches!(
+        surface,
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Plane { .. }
+    ) && (edge.start_3d - edge.end_3d).length() < tol)
         .then(|| circle.project(edge.start_3d));
     let u_span = edge.end_uv.x() - edge.start_uv.x();
     let mut splits = Vec::new();
