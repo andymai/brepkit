@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789457971970,
+  "lastUpdate": 1789458840671,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34019,6 +34019,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41551687,
             "range": "± 49643",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b156f47e6e5b989f401038c95c1b947d8ff61f6e",
+          "message": "fix(blend): notch untouched caps and seed the orientation repair at prism corners (#1654)\n\n## Summary\n\nThe tool's assembly parts (`block`, `comb`, `riser`, `boreBank`) start\nby easing a prism's four vertical corners, and that stage came out of\nthe corrected engine closed by edge id but with 32 open mesh edges and\neight extra planar faces (the ready-repro from #1653). Two roots, both\nin how a stripe's terminal end meets an untouched cap:\n\n1. **The cap was overlaid, not notched.** The end-cap notch (replace the\ncap's two-edge corner path with the blend's own arc) ran after the\ncorner solver and only for one-edge planar fillets, and a wall carrying\ntwo contacts never split its spoke. So the terminal runout stitched the\narc and the wall's connectors into a reversed planar patch sitting on\nthe cap's corner. Now a terminal whose third face is a planar cap with\ntwo straight corner edges that both contacts end on is \"notchable\":\n`BoundarySplitPolicy::Selective` splits the spoke there on every face\n(single-contact faces still split all non-terminal spokes as #1650\nintroduced), the doubled-back tail is dropped as a chain, and the cap\nadopts the arc before the corner solver runs, so no runout cycle exists.\nTerminals that are not notchable keep the runout closure; the aggressive\nscoop fixture showed why the contact-end check matters (its contacts do\nnot end on the caps' corner edges, and a split there strands one\nsub-edge per cap).\n2. **The orientation repair had no seeds.** With every original face\nrebuilt, the pairing walk toggled the reversal flag of the two mirrored\ncorner bands (their raw wires wind clockwise around the surface normal)\nand inverted them. A notched cap keeps its source's surface, flag and\ntraversal, and now seeds the repair.\n\n3. **The wasm fillet chain published junk.** `try_fillet`'s validity\ngate checked edge-id closure, orientation and volume sign, which a face\noverlaying its neighbour passes; the comb's rim ease came back as 26\nfaces with 424 open mesh edges and the slot cuts through it fell back to\na mesh. The gate now also requires the tessellated result to be\nwatertight (the position-quantized check the roadmap prescribes), so\nsuch a result falls through to the flat bevel and then to a clean error,\nand the tool's `easedOrOriginal` keeps its input.\n\n## Verification\n\n- `prism_vertical_corner_fillets_are_watertight` is active (watertight,\nvolume equals oriented volume). `comb_part_probe`: the corner stage is\nexact with all four bands' flux positive; the rim ease fails cleanly and\nthe part keeps its sharp rim; the four slot cuts then stay exact and\nwatertight (0 fallbacks).\n- `cargo test -p brepkit-blend` (123), the io fillet fixtures\n(`cross_one_row_fillet_inmem` 7/7 including the volume oracle,\n`scoop_fillet_variable_inmem` 4/4 including the aggressive scoop,\n`gscoop_pinch_cut_inmem`, `scoop_fix_inmem`,\n`scoop_corner_cylinder_fuse`, `scooplabel_ef_margin_inmem`,\n`compartscoop_fuse_inmem`, `scoop_fuse_order_independence`,\n`groupedscoop_fillet_cut_inmem`), the operations blend tests, `cargo\ntest -p brepkit-wasm --lib gridfinity` (27, including the d5 canary) and\nthe `try_fillet` helper tests all pass.\n- Refuted on the way (roadmap): seeding on every rebuilt original, an\narea-vector winding check at band creation or after propagation, and a\nplan-level tangent-spoke filter; each broke one of the fixtures above.\n\n## Still open\n\nThe rim ease of a rounded prism (the parts' second stage) fails cleanly:\nthe plane x cylinder analytic stripe classifies the cap as a plate\naround a post and places the corner-arc stripes outside the part. The\nlocal material-side test that fixes that placement is parked on\n`wip/prism-corner-fillets` because it shifts the cross-one-row volume\noracle by 79 mm³ through a path the face dumps do not show; the roadmap\nrow carries it.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the assembly parts' first-stage prism corner fillets so they come\nout watertight instead of closing by edge id with 32 open mesh edges and\neight faces overlaying the caps.\n\n- A terminal on a planar cap with two straight corner edges that both\ncontacts end on now splits the spoke and notches the cap before the\ncorner solver runs, so no reversed runout patch forms; other terminals\nkeep the runout closure.\n- Notched caps anchor the orientation repair, which previously inverted\nthe two mirrored corner bands once every original face was rebuilt.\n- `try_fillet` now also requires the tessellated mesh to be watertight,\nso an overlaid result falls through to a clean error and the tool keeps\nits input.\n- The rounded-prism rim ease now fails cleanly and the part keeps its\nsharp rim instead of publishing 26 faces with 424 open mesh edges.\n\n<sup>Written for commit 4d61f5454d46b065c31f1b45d2e3aec831b1cf92.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1654?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T07:51:21Z",
+          "tree_id": "d969ad000376d828e85f8657566fc8353569797b",
+          "url": "https://github.com/andymai/brepkit/commit/b156f47e6e5b989f401038c95c1b947d8ff61f6e"
+        },
+        "date": 1789458837147,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 983851,
+            "range": "± 3405",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1075574,
+            "range": "± 14048",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12232,
+            "range": "± 165",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 726390,
+            "range": "± 3980",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41692439,
+            "range": "± 327970",
             "unit": "ns/iter"
           }
         ]
