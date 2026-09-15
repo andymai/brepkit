@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789459535346,
+  "lastUpdate": 1789463685115,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34181,6 +34181,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44756477,
             "range": "± 37880",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5dedd02feb4350bbb5f07f078d0bea6e820bfc91",
+          "message": "fix(algo): coaxial same-domain pairs take their orientation from the surface normal (#1657)\n\n## Summary\n\nThe `combriser` file's four tests all failed on the same 46 open mesh\nedges, and a tool-side probe showed the EMPTY 2x1 assembly base already\nexports them (#1656 left this as the next dig). Captured the base's fuse\noperands from the tool and replayed them natively: the raw fuse has 16\nfree edges, all on the 0.01 mm band where the plate overlaps the socket\ntops, at the four rounded corners.\n\n**Root.** The plate is extruded upward from z=-0.01; each cell socket's\ntop 0.25 mm is a vertical band the tool lofts downward from z=0. Over\nthe overlap the plate's four corner cylinders (+Z axis) coincide with\nthe bands' (-Z axis, same centre and radius). `detect_same_domain` pairs\neach coincident sliver by its edge set, but `surfaces_same_domain`\nreturned `axis_dot > 0` as the \"same orientation\" flag, so the four\ncylinder pairs were called opposite and the fuse dropped both faces of\neach (`BK_SD_SEL`: six wall pairs \"keep rep\", four corner pairs \"drop\nboth\").\n\n**Fix.** A cylinder's normal is the outward radial direction whichever\nway the axis runs, and a torus's points out of its tube, so coaxial\npairs of either always share their normals; only the faces' reversal\nflags decide the pair's orientation. Cones keep the axis test (their\nnormal has an axial component that flips with the axis).\n\n## Verification\n\n- New pins:\n`fuse_plate_onto_downward_extruded_cell_bands_keeps_the_corner_slivers`\n(the base rebuilt natively: plate up from z=-0.01, two cell bands\nextruded down from z=0; watertight by edge use and by mesh, exact\nvolume, analytic corners; it failed on main with 59 non-manifold edges)\nand the surface-pair unit tests\n`cylinders_same_domain_opposite_axis_shares_normals`,\n`cylinders_same_domain_same_axis`, `cylinders_off_axis_not_same_domain`;\n`torus_same_domain_opposite_direction` now asserts the shared normal\n(renamed `torus_same_domain_opposite_axis_shares_normals`) and checks it\nagainst the evaluated normals.\n- The captured tool fuse (plate x two-cell socket) replays natively with\nfree=0 and a watertight mesh (was free=16, 148 mesh boundary edges),\nsame volume.\n- Tool-side, same tool commit and worktree as the #1654 numbers:\n`combriser` 4 -> 0 of 4, `assemblyGenerator.scenario` 6 -> 3 of 23\n(below the same-day 3.3.9 control's 6; the three left are two\ncluster-fuse mesh fallbacks and one open-edge tube export, recorded as a\nnew roadmap row), `export.customShape` 0 of 23 with the L body x lip\nfuse exact (it fell back to a mesh under the old rule, the whole export\na 890-face blob), `export.groupedScoop` 4 -> 4 (two-stripe corner\nmodel), `export.solidCutouts` 0 -> 0, `scenario.solidCutouts` 5 -> 5\n(snapshots).\n- Local suites: `brepkit-algo` + `brepkit-operations` (1271 passed),\n`brepkit-io` (293, one fixture re-captured below), `brepkit-wasm --lib`;\nclippy clean on the three touched crates.\n\n## The L-lip fixture\n\n`lship_lipfuse_inmem.rs` failed under the fix with 32 free edges: its\nlip, captured on a 2.127-era kernel, encoded the concave corner's\norientation in the cylinder AXIS (a -Z axis, face not reversed), exactly\nthe convention the old rule read, while today's loft marks that face\nreversed on an outward-radial surface (the convention the builder,\nclassifiers and tessellator use). Re-captured both operands from today's\ntool (`3×3 L with lip` export, op7 of the boolean chain): the fuse is\nexact (106 faces, watertight, no fallback) and the volume oracle is\nreset at the fixture's own deflection, cross-checked against body + lip\n- a mesh intersect within 0.07%. The same pair under `OP=intersect`\nleaves 18 free edges and falls back (not a tool op; noted in the\nroadmap).\n\n## Roadmap\n\nThe base-socket residue leaves the rim-ease row; new Closed entry with\nthe pins, the capture recipe and the tool-side numbers; a new OPEN row\nfor the three assembly-scenario failures left.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes same-domain pairing for coaxial cylinders and tori so overlapping\nfaces with opposite axes are no longer dropped from fuses. This clears\nthe open edges in the empty 2x1 assembly base export and keeps the 3×3 L\nbody + lip fuse analytic instead of falling back to a mesh.\n\n**Bug Fixes**\n- Cylinder normals are outward radial and torus normals point out of the\ntube, so coaxial pairs share normals even when their axes run opposite;\nonly face reversal flags set the pair orientation.\n- Cones keep the axis-direction test because their normals have an axial\ncomponent that flips with the axis.\n- Re-captured the L-lip fixture operands from the current loft\nconvention and reset the fixture's volume oracle.\n\n<sup>Written for commit 0d59aaf2d3be47efab9cce9c3bca83947f8e0166.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1657?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T09:12:12Z",
+          "tree_id": "5b59f01501fdec61be0f2bf55b12590a10da333c",
+          "url": "https://github.com/andymai/brepkit/commit/5dedd02feb4350bbb5f07f078d0bea6e820bfc91"
+        },
+        "date": 1789463681622,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 987301,
+            "range": "± 23058",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1065128,
+            "range": "± 1903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12249,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 727737,
+            "range": "± 2018",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42470356,
+            "range": "± 215309",
             "unit": "ns/iter"
           }
         ]
