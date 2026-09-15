@@ -569,8 +569,18 @@ fn main() {
     // 3+ solid clusters route through fuse_cluster, whose mesh-fallback bail
     // rejects a degraded fuse to protect the rest of the batch.
     if std::env::var("FUSE_ALL").is_ok() {
-        println!("-- compound_ops::fuse_all {{A, B}} --");
-        let compound = topo.add_compound(brepkit_topology::compound::Compound::new(vec![a, b]));
+        // FUSE_MEMBERS=<comma-separated paths> adds more cluster members, so a
+        // 3+ solid `fuseAll` (the assembly parts' cluster fuse) replays as one.
+        let mut members = vec![a, b];
+        if let Ok(list) = std::env::var("FUSE_MEMBERS") {
+            for path in list.split(',').filter(|t| !t.trim().is_empty()) {
+                members.push(
+                    deserialize_solid(&std::fs::read(path.trim()).unwrap(), &mut topo).unwrap(),
+                );
+            }
+        }
+        println!("-- compound_ops::fuse_all over {} solids --", members.len());
+        let compound = topo.add_compound(brepkit_topology::compound::Compound::new(members));
         let before = brepkit_operations::boolean::mesh_fallback_count();
         let t = std::time::Instant::now();
         match brepkit_operations::compound_ops::fuse_all(&mut topo, compound) {

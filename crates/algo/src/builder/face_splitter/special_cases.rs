@@ -1898,6 +1898,54 @@ pub(super) fn split_face_with_internal_loops(
     // The loop winding determines which region of the face is enclosed.
     // We want the SMALLER region (the Steinmetz lobe), so check signed area
     // in UV and reverse if the loop encloses the larger region.
+    // Nested pre-existing holes: a section loop that ENCLOSES an original
+    // hole (a coaxial counterbore's circle around a tube's bore) splits the
+    // face into a ring-shaped disc that carries the hole and a remainder
+    // that does not. Leaving the hole on the remainder double-books the band
+    // between the two rims and strands the hole's rim on one owner.
+    let mut nested_holes_by_loop: Vec<Vec<usize>> = vec![Vec::new(); loops.len()];
+    let mut nested_holes: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    if let Some(frame) = plane_frame.as_ref() {
+        for (li, loop_edges) in loops.iter().enumerate() {
+            let polygon: Vec<Point2> = sample_edges_3d(loop_edges)
+                .iter()
+                .map(|p| frame.project(*p))
+                .collect();
+            if polygon.len() < 3 {
+                continue;
+            }
+            for (hi, hole) in original_inner_wires.iter().enumerate() {
+                if consumed_holes.contains(&hi) || nested_holes.contains(&hi) {
+                    continue;
+                }
+                let pts = sample_edges_3d(hole);
+                if !pts.is_empty()
+                    && pts.iter().all(|p| {
+                        super::super::classify_2d::point_in_polygon_2d(frame.project(*p), &polygon)
+                    })
+                {
+                    log::debug!(
+                        "split_face_with_internal_loops: face {face_id:?} loop {li} encloses hole {hi}"
+                    );
+                    nested_holes_by_loop[li].push(hi);
+                    nested_holes.insert(hi);
+                }
+            }
+        }
+    }
+    let into_solid = |p: Point3| -> Point3 {
+        match surface {
+            FaceSurface::Plane { normal, .. } => {
+                let n = if reversed { -*normal } else { *normal };
+                Point3::new(
+                    p.x() - n.x() * 1e-6,
+                    p.y() - n.y() * 1e-6,
+                    p.z() - n.z() * 1e-6,
+                )
+            }
+            _ => p,
+        }
+    };
     let mut all_holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
     for (li, loop_edges) in loops.iter_mut().enumerate() {
         // Compute signed area in UV. For single-edge closed curves
@@ -2034,11 +2082,22 @@ pub(super) fn split_face_with_internal_loops(
             )
         };
 
-        // The loop as outer wire of the inside sub-face.
+        // The loop as outer wire of the inside sub-face, with the holes it
+        // encloses; a ring's interior lies between the loop and its holes,
+        // not at the centroid.
+        let nested: Vec<Vec<OrientedPCurveEdge>> = nested_holes_by_loop[li]
+            .iter()
+            .map(|&hi| original_inner_wires[hi].clone())
+            .collect();
+        let disc_interior = if nested.is_empty() {
+            disc_interior
+        } else {
+            between_loop_and_holes(loop_edges, &nested).map_or(disc_interior, into_solid)
+        };
         result.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: loop_edges.clone(),
-            inner_wires: Vec::new(),
+            inner_wires: nested,
             reversed,
             parent: face_id,
             rank,
@@ -2157,9 +2216,16 @@ pub(super) fn split_face_with_internal_loops(
         original_inner_wires
             .iter()
             .enumerate()
-            .filter(|(hi, _)| !consumed_holes.contains(hi))
+            .filter(|(hi, _)| !consumed_holes.contains(hi) && !nested_holes.contains(hi))
             .map(|(_, h)| h.clone()),
     );
+    let frame_interior = frame_interior.or_else(|| {
+        if nested_holes.is_empty() {
+            None
+        } else {
+            between_loop_and_holes(boundary_edges, &all_holes).map(into_solid)
+        }
+    });
     let remainder = SplitSubFace {
         surface: surface.clone(),
         outer_wire: boundary_edges.to_vec(),
@@ -2193,6 +2259,45 @@ pub(super) fn split_face_with_internal_loops(
     result.push(remainder);
 
     result
+}
+
+/// 3D samples along a wire's edges: two per line, 32 per curved edge, never
+/// at an endpoint (a full circle's endpoints coincide).
+fn sample_edges_3d(edges: &[OrientedPCurveEdge]) -> Vec<Point3> {
+    let mut pts = Vec::new();
+    for e in edges {
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+        let n = if matches!(e.curve_3d, EdgeCurve::Line) {
+            2
+        } else {
+            32
+        };
+        for k in 0..n {
+            #[allow(clippy::cast_precision_loss)]
+            let t = t0 + (t1 - t0) * ((k as f64 + 0.5) / n as f64);
+            pts.push(e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d));
+        }
+    }
+    pts
+}
+
+/// A point midway between a sample of `loop_edges` and the nearest sample of
+/// any of `holes`: inside the ring the loop bounds around holes it encloses.
+fn between_loop_and_holes(
+    loop_edges: &[OrientedPCurveEdge],
+    holes: &[Vec<OrientedPCurveEdge>],
+) -> Option<Point3> {
+    let q = *sample_edges_3d(loop_edges).first()?;
+    let h = holes
+        .iter()
+        .flat_map(|h| sample_edges_3d(h))
+        .min_by(|a, b| {
+            (*a - q)
+                .length()
+                .partial_cmp(&(*b - q).length())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+    Some(q + (h - q) * 0.5)
 }
 
 /// True when an internal section loop and a pre-existing inner wire (both

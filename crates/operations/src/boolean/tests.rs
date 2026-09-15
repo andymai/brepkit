@@ -4846,6 +4846,40 @@ fn fuse_plate_onto_downward_extruded_cell_bands_keeps_the_corner_slivers() {
     );
 }
 
+/// A tube's top annulus is a plane face with a hole. A coaxial counterbore's
+/// wall crosses it in a circle that ENCLOSES that hole, so the face must
+/// split into two annuli, the inner one carrying the old hole; the tool's
+/// counterbored tube (`assemblyGenerator.scenario`) fell back to a mesh here.
+#[test]
+fn cut_coaxial_counterbore_from_a_tube_splits_the_top_annulus() {
+    let mut topo = Topology::new();
+    let outer = crate::primitives::make_cylinder(&mut topo, 10.0, 60.0).unwrap();
+    let bore = crate::primitives::make_cylinder(&mut topo, 8.0, 60.0).unwrap();
+    let tube = boolean(&mut topo, BooleanOp::Cut, outer, bore).unwrap();
+    let counterbore = crate::primitives::make_cylinder(&mut topo, 9.0, 9.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        counterbore,
+        &brepkit_math::mat::Mat4::translation(0.0, 0.0, 52.0),
+    )
+    .unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Cut, tube, counterbore).unwrap();
+
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert!(!has_free_edges(&topo, result).unwrap());
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+    // Outer wall, bore, counterbore wall.
+    assert_eq!(count_cylinder_faces(&topo, result), 3);
+    let expected =
+        std::f64::consts::PI * (100.0 - 64.0) * 60.0 - std::f64::consts::PI * (81.0 - 64.0) * 8.0;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "counterbored tube volume {vol:.3} != expected {expected:.3}"
+    );
+}
+
 #[test]
 fn fuse_stacked_rounded_rect_arc_prisms_same_footprint() {
     let mut topo = Topology::new();
