@@ -683,8 +683,20 @@ impl<'a> FilletBuilder<'a> {
                             .entry(handle)
                             .is_some_and(|entry| entry.start.vertex == start);
                         boundary_registry.set_owner_forward(handle, 1, forward)?;
+                        log::debug!(
+                            "cross-section {start:?}->{end:?} of contour {contour_id} adopts handle {handle}"
+                        );
                         return Ok(Some((handle, 1)));
                     }
+                    log::debug!(
+                        "cross-section {start:?}->{end:?} of contour {contour_id} registered fresh ({:.7},{:.7},{:.7})->({:.7},{:.7},{:.7})",
+                        start_point.x(),
+                        start_point.y(),
+                        start_point.z(),
+                        end_point.x(),
+                        end_point.y(),
+                        end_point.z()
+                    );
                     let key = BoundaryKey::cross_section(
                         contour_id,
                         usize::from(start == p2_start || start == p2_end),

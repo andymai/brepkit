@@ -23,4 +23,6 @@ pub mod tessellate;
 pub mod transforms;
 
 #[cfg(test)]
+mod assembly_probe_tests;
+#[cfg(test)]
 mod gridfinity_tests;
