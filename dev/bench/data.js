@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789459337043,
+  "lastUpdate": 1789459535346,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34127,6 +34127,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44963646,
             "range": "± 608676",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b59aa93f73bd8719d1428f486cea7a87606e0f5e",
+          "message": "docs(roadmap): tool-side effect of the prism corner fix and the base socket residue (#1656)\n\nSame-day triple on tool commit 4a66decb, one worktree (3.4.0 stock ->\n#1650 -> #1654): `assemblyGenerator.scenario` 13 -> 10 -> 6 (the 3.3.9\ncount, back at parity), `combriser` 4 -> 4 -> 4 but now every test fails\non the same 46 open mesh edges, and a tool-side probe shows the empty\n2x1 base already exports those 46 (a block adds none). Natively the\nplate's rim ease fails cleanly at every fallback radius and stays\nwatertight (new diagnostic `floor_plate_probe`), and the socket builder\nis a ruled loft with no blends, so the residue sits in the socket loft\nor its fuse with the plate. The roadmap row carries the numbers and the\nnext dig.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nDocuments the prism corner fix's tool-side effect and isolates the\nassembly base's socket residue to the empty 2x1 base. The assembly\ngenerator scenario count dropped from 13 to 10 to 6 (back to 3.3.9\nparity), and the combriser's 46 open mesh edges now trace to the base,\nnot the parts. Adds an ignored diagnostic test `floor_plate_probe` that\nreplays the base's rim ease natively, confirming the plate stays\nwatertight while leaving the residue in the socket loft or its fuse with\nthe plate.\n\n<sup>Written for commit cf342ac100e2703df1462ccec2fae28fdf879b80.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1656?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T08:03:00Z",
+          "tree_id": "08cb5911fc08645b34fc1580ebf3d14e06811ee7",
+          "url": "https://github.com/andymai/brepkit/commit/b59aa93f73bd8719d1428f486cea7a87606e0f5e"
+        },
+        "date": 1789459532026,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1023117,
+            "range": "± 1268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1110431,
+            "range": "± 3297",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13432,
+            "range": "± 222",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 732391,
+            "range": "± 1087",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44756477,
+            "range": "± 37880",
             "unit": "ns/iter"
           }
         ]
