@@ -1,0 +1,38 @@
+crates/operations/src/tessellate/planar.rs
+  s_1ba1aaf77c517d::t_0b439eb85fb577 898-899,901-902,905
+  s_1ba1aaf77c517d::t_68a3c7fb3f984a 883-895,897,900,903-904,906-910,913-917,920,925-926,929-931
+  s_1ba1aaf77c517d::t_e79c64a889f358 896,911-912,918-919,921-924,927-928,932-934
+crates/algo/src/builder/mod.rs
+  s_1ba1aaf77c517d::t_92ca22ff0feaf6 691-697,699-702,710-715,726-727,729-737,956-958,960,962-968,972-973,975-976,978,980,982-983,985-995
+  s_1ba1aaf77c517d::t_68a3c7fb3f984a 603-607,635-638,698,707,959,961,969-971,974,977,979,981,984
+  s_1ba1aaf77c517d::t_58f78a549239f8 716-725
+  s_1ba1aaf77c517d::t_63872f87bf7169 703-706,708-709,728
+crates/algo/src/pave_filler/phase_ef.rs
+  s_1ba1aaf77c517d::t_cef0c87d029e13 441-444
+crates/operations/src/boolean/tests.rs
+  s_1ba1aaf77c517d::t_a25ff0d2c6d717 4926-4971
+.claude/skills/roadmap/SKILL.md
+  s_1ba1aaf77c517d::t_ef886434f32de6 145,160-183
+crates/algo/src/classifier/mod.rs
+  s_1ba1aaf77c517d::t_a89b1c7b7e2e09 77-81,171-172,174-178,264-267
+  s_1ba1aaf77c517d::t_68a3c7fb3f984a 82-130,132-138,148,150-163,165-170,173,179-181,183-259,261-263,268-281,283-295
+  s_1ba1aaf77c517d::t_12bb28a927393f 131,139-147,149,164,182,260,282,296-297
+crates/algo/src/classifier/analytic.rs
+  s_1ba1aaf77c517d::t_59d6cc332b00bf 233-237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0ecf2963dccfe88019b147057ebf0bc39bb9ce23",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": null
+    }
+  }
+}
