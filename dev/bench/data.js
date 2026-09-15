@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789429990168,
+  "lastUpdate": 1789430568848,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33695,6 +33695,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 34761081,
             "range": "± 34836",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "172f40d6722ea516f6adfc9589c95b2807de230d",
+          "message": "chore(main): release 3.4.2 (#1648)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.4.2](https://github.com/andymai/brepkit/compare/v3.4.1...v3.4.2)\n(2026-09-14)\n\n\n### Bug Fixes\n\n* **xtask:** read the wasm-bindgen pin from the workspace manifest\n([#1647](https://github.com/andymai/brepkit/issues/1647))\n([a3c51d6](https://github.com/andymai/brepkit/commit/a3c51d6939be15449e05fe1f50a0bb98f97c5683))\n\n\n### Performance\n\n* **math:** stop the grid seeder refining every close sample pair\n([#1646](https://github.com/andymai/brepkit/issues/1646))\n([ce1af4f](https://github.com/andymai/brepkit/commit/ce1af4f63e80eb0300f62e912285c76cb89e4618))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-15T00:00:12Z",
+          "tree_id": "fb2b75b30625dd8dc8b84aefae43854a9913ccf0",
+          "url": "https://github.com/andymai/brepkit/commit/172f40d6722ea516f6adfc9589c95b2807de230d"
+        },
+        "date": 1789430564642,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 980455,
+            "range": "± 2120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1060176,
+            "range": "± 28659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12635,
+            "range": "± 250",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 721282,
+            "range": "± 1552",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41643790,
+            "range": "± 77404",
             "unit": "ns/iter"
           }
         ]
