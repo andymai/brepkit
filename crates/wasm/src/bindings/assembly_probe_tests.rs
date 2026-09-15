@@ -330,6 +330,40 @@ fn prism_vertical_corner_fillets_are_watertight() {
     );
 }
 
+/// The assembly base's floor plate (`assemblyGenerator.ts`): a 2x1 deck,
+/// 83.5 x 41.5 x 2.01 with r=4 corners, whose top rim the junction pass
+/// eases at r=1.5. Reports the mesh at the export settings and at the
+/// wasm gate's coarser settings.
+#[test]
+#[ignore = "diagnostic — native replay of the assembly base's floor plate rim ease"]
+fn floor_plate_probe() {
+    install_log_tap();
+    let mut topo = Topology::new();
+    let (width, depth, thickness) = (83.5_f64, 41.5_f64, 2.01_f64);
+    let plate = box_at(
+        &mut topo,
+        [width, depth, thickness],
+        [-width / 2.0, -depth / 2.0, 0.0],
+    );
+    let corners = vertical_edges(&topo, plate);
+    let plate = fillet_step(&mut topo, plate, &corners, 4.0, "plate corners");
+    report(&topo, plate, "after corners");
+    let rim = edges_near_plane(&topo, plate, thickness);
+    eprintln!("  rim edges: {}", rim.len());
+    let eased = fillet_step(&mut topo, plate, &rim, 1.5, "rim ease");
+    report(&topo, eased, "after rim ease");
+    for (deflection, angular) in [(0.01, 5.0_f64), (0.1, 10.0)] {
+        let mesh = tessellate_solid_with_tolerance(&topo, eased, deflection, angular.to_radians())
+            .unwrap();
+        eprintln!(
+            "  mesh at deflection {deflection} angular {angular}: boundary={} nonmanifold={} tris={}",
+            boundary_edge_count(&mesh),
+            non_manifold_edge_count(&mesh),
+            mesh.indices.len() / 3
+        );
+    }
+}
+
 /// Every edge of a 10 mm cube at r=1 (the `try_fillet_all_box_edges` case):
 /// per-face flux and the winding log.
 #[test]
