@@ -348,6 +348,25 @@ impl FilletPlan {
                 classification,
             });
         }
+        log::debug!(
+            "fillet plan: {} contours {:?}; junctions {:?}",
+            contours.len(),
+            contours
+                .iter()
+                .map(|contour| (contour.edges.len(), contour.periodic))
+                .collect::<Vec<_>>(),
+            junctions
+                .iter()
+                .map(|junction| {
+                    (
+                        junction.vertex,
+                        junction.incident_contours.clone(),
+                        junction.unselected_sharp_edges.len(),
+                        junction.classification,
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
 
         Ok(Self {
             contours,
