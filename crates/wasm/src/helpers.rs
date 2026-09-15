@@ -217,11 +217,26 @@ pub fn try_fillet(
         let Ok(shell) = topo.shell(shell_id) else {
             return false;
         };
+        // Closure by edge id is blind to a face that overlays a neighbour or
+        // winds against it; the position-quantized view is the mesh, whose
+        // directed edges must all pair. A result that fails this is
+        // consumed as garbage downstream (a slot cut through it falls back
+        // to a mesh), while a clean failure lets the caller keep its input.
+        let watertight = || {
+            brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+                topo,
+                s,
+                orientation_deflection,
+                10.0_f64.to_radians(),
+            )
+            .is_ok_and(|mesh| brepkit_operations::tessellate::boundary_edge_count(&mesh) == 0)
+        };
         brepkit_topology::validation::validate_shell_closed(shell, topo).is_ok()
             && brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
                 .is_ok_and(|issues| issues.is_empty())
             && brepkit_operations::measure::oriented_solid_volume(topo, s, orientation_deflection)
                 .is_ok_and(|volume| volume > 1e-12)
+            && watertight()
     };
 
     // Try engines in preference order; accept the first changed, valid result.

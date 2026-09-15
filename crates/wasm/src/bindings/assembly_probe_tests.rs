@@ -303,9 +303,8 @@ fn fillet_step(
 }
 
 /// A prism's four vertical corner fillets must come out watertight: each
-/// stripe ends on an untouched cap. The roadmap row carries the three roots.
+/// stripe ends on an untouched cap that takes the notch.
 #[test]
-#[ignore = "ready repro: vertical-corner fillets close by edge id but overlay the caps with reversed runout patches (32 open mesh edges); mechanisms on branch wip/prism-corner-fillets"]
 fn prism_vertical_corner_fillets_are_watertight() {
     let mut topo = Topology::new();
     let (width, depth, height) = (70.0_f64, 14.0_f64, 35.0_f64);
