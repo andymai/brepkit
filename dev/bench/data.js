@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789464255643,
+  "lastUpdate": 1789464714901,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34289,6 +34289,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44296237,
             "range": "± 266586",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b4ee6913a693670cf519d311b1e06742b54af543",
+          "message": "fix(algo): a section loop that encloses a face's hole takes that hole into its disc (#1659)\n\n## Summary\n\nSecond of the three assembly-scenario failures left after #1657. The\ntool's counterbored, tapered tube took its first mesh fallback in\n`cutWithEvolution(tube, counterbore)`; natively the raw cut leaves one\nfree edge, the bore's top circle at z=60, owned once by a plane.\n\n**Root.** The tube's top annulus is a plane face with a hole (the bore).\nThe coaxial counterbore's wall crosses it in a circle that ENCLOSES that\nhole. `split_face_with_internal_loops` builds each internal loop as a\n\"disc\" sub-face with no inner wires and leaves every pre-existing hole\non the remainder, so the ring between the two rims was covered by both\nsub-faces and the bore's rim had a single owner. It already merged a\nloop that OVERLAPS a hole (the deepened-opening union) but never nested\none.\n\n**Fix.** On planar faces, each pre-existing hole whose samples all lie\ninside an internal loop moves into that loop's disc and leaves the\nremainder. Both sub-faces get an interior point midway between their\nouter rim and the nearest hole sample (a ring's centroid falls in its\nhole), with the same into-the-solid offset the disc already used.\n\n## Verification\n\n- New pin `cut_coaxial_counterbore_from_a_tube_splits_the_top_annulus`\n(tube = cylinder minus coaxial cylinder, cut by a coaxial counterbore):\nclosed, no free edges, three analytic cylinders, exact volume. It fell\nback to a mesh on main.\n- The captured tool cut (`cutWithEvolution(tube, counterbore)`, operands\nfrom an untracked `__kernel-tests__` probe that wraps the raw kernel's\nbooleans) replays exact: 6 faces (cone, two cylinders, three planes), no\nfree edges, watertight mesh; it had one free edge and fell back to a\nmesh.\n- Local suites: `brepkit-algo` + `brepkit-operations` (1272 passed),\n`brepkit-io` (293), `brepkit-wasm --lib` (232); clippy clean through the\npre-commit hook.\n- Tool-side (same tool commit and worktree, the #1657 build -> this\nbuild): `combriser` 0 of 4, `assemblyGenerator.scenario` 3 of 23. The\ntube test's export goes from 622 to 93 open mesh edges: with the\ncounterbore cut exact, its chain reaches a chamfer that now fails\ncleanly on the exact tube (`cannot normalize zero vector`) and a\ntwo-solid `fuseAll` that falls back; both recorded in the roadmap row.\n\n## Roadmap\n\nNew Closed entry with the pin. The \"assembly cluster fuses\" row now\ncarries the arch (a rod tangent to its post's top face: the pairwise\nfuse is accepted with the rod dropped and 577 non-manifold mesh edges;\nnative repro in hand) and the tilted block x cradle roots, plus the tube\nchain's next two stops.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes face splitting for a section loop that encloses a pre-existing\nhole: the loop's disc left the hole on the remainder, so the band\nbetween the rims was covered twice, the hole's rim had one owner, and\nthe counterbored tube cut fell back to a mesh. An enclosed hole now\nmoves into the loop's disc, and both sub-faces sample their interior\nmidway between their outer rim and the nearest hole sample, since a\nring's centroid lies in its hole.\n\n- Only planar faces are affected; non-planar faces keep the old\nbehavior.\n- Adds a pin test\n`cut_coaxial_counterbore_from_a_tube_splits_the_top_annulus` asserting\nclosed, free-edge-free, exact-volume results.\n- `replay_pair` accepts `FUSE_MEMBERS` so a three-solid `fuseAll`\nreplays as one call.\n- The tube test's export drops from 622 to 93 open mesh edges; its chain\nnow reaches a chamfer that fails cleanly on the exact tube.\n- Updates the roadmap: the assembly cluster fuses row now carries the\narch and tilted block x cradle roots.\n\n<sup>Written for commit 0cf538b90425cfdf9d0e3d850ceb88ae90b1375c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1659?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T09:29:09Z",
+          "tree_id": "c75adeb15185f60da7c519d132660cc3c1bc4c29",
+          "url": "https://github.com/andymai/brepkit/commit/b4ee6913a693670cf519d311b1e06742b54af543"
+        },
+        "date": 1789464712311,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 983831,
+            "range": "± 19879",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1066694,
+            "range": "± 15639",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12286,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 733488,
+            "range": "± 1494",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42009655,
+            "range": "± 349729",
             "unit": "ns/iter"
           }
         ]
