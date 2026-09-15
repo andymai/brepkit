@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789479532724,
+  "lastUpdate": 1789483667069,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34721,6 +34721,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35137872,
             "range": "± 94026",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9d165fb14d12da1fcd2f065f1fe0d7d900dc9fe3",
+          "message": "fix(algo): cut a pin bore through a knuckle fused to an on-axis bracket exactly (#1667)\n\n## Summary\n\nThe hinge swing sweep's \"hang\" (`hingeSwing.scenario`) is a perf chain,\nnot a hang: every swing intersect took about 83 s in wasm because the\nbin arrived as a 4763-face planar mesh blob, minted by the pin bore cut\nthrough the knuckled bin (`compoundCut(bin, [two keyhole pins])`). The\nfirst pin's cut now stays analytic. Three roots:\n\n- **Convex-analytic classifier.** `try_build_convex_analytic` tested\nonly the vertex centroid against the half-space/cylinder/cone model, so\nthe non-convex knuckle (rod fused to a bracket whose faces meet on the\naxis) was accepted and every point on the rod's far side read Outside;\nthe bore wall band was dropped from the cut while the result still\nlooked closed. Every boundary vertex must satisfy every constraint now,\nin both the plain and the composite builders, and the classifier is\nbuilt once with the ray-cast geometry instead of once per point.\n- **Planar interior sample.** `sample_face_interior` validated\ncandidates against a corner-only chord polygon; for a C-shaped ring (an\nannulus remainder after #1666) every candidate near its arcs failed and\nthe last-resort chord-hexagon interior point landed in the bore. The\npolygon now samples the arcs in native orientation.\n- **Sections on coplanar siblings.** The FF closed-circle split handed a\ncoplanar sibling's arc to the first face pair and then denied the\nsibling its own arc as a duplicate; arcs are trimmed to each planar\nface's trimmed loops (`FaceLoops2d`), with the admitting band sized to\nthe loop sampling's sagitta so a rim-riding arc still passes. The\nhole-free planar clipper also dropped a section with no boundary\ncrossing at all (a keyhole slot wall inside the disc); the midpoint test\ndecides those.\n\nStill open (roadmap rows added): the second pin's cut falls back on its\nend face being coplanar with the fragmented knuckle end, and a periodic\nband with the seam inside a section-bounded sector; partially\noverlapping coplanar end caps in a fuse (likely the `op59` lid plate\nfamily). The tool-side sweep stays mesh-versus-mesh until the second pin\ncloses.\n\n## Verification\n\n- New pin `cut_a_pin_bore_through_a_knuckle_flush_with_its_bracket`\n(watertight, face mix, volume to 1e-3).\n- Captured operands: the first pin's cut replays exact (194 faces,\nwatertight); the hinge fuses and earlier pins unchanged.\n- `cargo nextest run` for algo (219), operations (1058), io (293), wasm\n(232): all green. Clippy clean on the touched crates.\n- Local reviewer pass (the AI review service is out of monthly quota):\nits four findings are addressed in this diff.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPreserves an analytic result for the first pin bore through a knuckle\nfused to an on-axis bracket instead of falling back to a large planar\nmesh. This removes the 83-second-per-intersection hinge-sweep bottleneck\nwhile keeping the cut watertight.\n\n- Validates every boundary vertex against analytic plane, cylinder, and\ncone constraints, including composite shells, and builds the classifier\nonce with `RayCastGeoms`.\n- Samples curved face boundaries when choosing planar interior points,\npreventing arc-heavy regions from selecting points inside the bore.\n- Clips coplanar circle arcs to each planar face’s trimmed loops and\nkeeps planar sections with no boundary crossings when their midpoint is\ninside.\n- Adds a regression test covering watertightness and volume for the\nknuckle bore cut.\n- The second pin still falls back; the roadmap now records its coplanar\nend-face root, the periodic image expansion's UV-assignment root, and a\npartially overlapping coplanar end-cap fuse.\n\n<sup>Written for commit de5655df7a0cea1fa3ba6459ecdd3062d999e91e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1667?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T14:45:17Z",
+          "tree_id": "8330e055c24d66e0c66f48cd043d68d78fa16a40",
+          "url": "https://github.com/andymai/brepkit/commit/9d165fb14d12da1fcd2f065f1fe0d7d900dc9fe3"
+        },
+        "date": 1789483663159,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 986688,
+            "range": "± 5155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1063981,
+            "range": "± 1271",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12131,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 742679,
+            "range": "± 4800",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41829583,
+            "range": "± 72334",
             "unit": "ns/iter"
           }
         ]
