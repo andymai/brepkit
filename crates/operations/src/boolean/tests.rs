@@ -5119,21 +5119,36 @@ fn intersect_a_pin_with_a_wide_diagonal_keep_box_keeps_half_the_pin() {
         * brepkit_math::mat::Mat4::rotation_z(std::f64::consts::FRAC_PI_4)
         * brepkit_math::mat::Mat4::translation(0.0, -2.0, 0.0);
     crate::transform::transform_solid(&mut topo, keep, &place).unwrap();
+    // The seam splits the intersect's kept half of the wall into two faces;
+    // the fuse keeps the other half, which the seam does not cross.
     let half = boolean(&mut topo, BooleanOp::Intersect, pin, keep).unwrap();
-    assert!(is_closed_manifold(&topo, half).unwrap());
     let half_volume = std::f64::consts::PI * 0.9 * 0.9 * 4.0 / 2.0;
-    let vol = crate::measure::solid_volume(&topo, half, 0.01).unwrap();
-    assert!(
-        (vol - half_volume).abs() < 0.01 * half_volume,
-        "intersect kept {vol:.3}, expected the half pin {half_volume:.3}"
-    );
+    assert_watertight_with_volume(&topo, half, 2, half_volume);
     let fused = boolean(&mut topo, BooleanOp::Fuse, pin, keep).unwrap();
     let box_volume = 4.0 * 4.0 * 6.0;
-    let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
-    assert!(
-        (vol - (box_volume + half_volume)).abs() < 0.01 * half_volume,
-        "fuse gave {vol:.3}, expected the box plus the half pin {:.3}",
-        box_volume + half_volume
+    assert_watertight_with_volume(&topo, fused, 1, box_volume + half_volume);
+    // Which half survived, not just how much: a point on each side of the
+    // box's diagonal face, inside the pin.
+    let probe = |solid: SolidId, p: Point3| {
+        crate::classify::classify_point(&topo, solid, p, 0.01, 1e-7).unwrap()
+    };
+    let kept = Point3::new(0.4, 0.4, 2.0);
+    let removed = Point3::new(-0.4, -0.4, 2.0);
+    assert_eq!(
+        probe(half, kept),
+        crate::classify::PointClassification::Inside
+    );
+    assert_eq!(
+        probe(half, removed),
+        crate::classify::PointClassification::Outside
+    );
+    assert_eq!(
+        probe(fused, removed),
+        crate::classify::PointClassification::Inside
+    );
+    assert_eq!(
+        probe(fused, Point3::new(-1.5, -1.5, 2.0)),
+        crate::classify::PointClassification::Outside
     );
 }
 

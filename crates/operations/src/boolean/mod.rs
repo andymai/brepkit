@@ -1163,9 +1163,12 @@ pub fn boolean_with_evolution(
     // shortcuts below; the geometry heuristic attributes a copied result's
     // faces exactly (normal + centroid match 1:1). Detection only runs for
     // a != b (a == b skips the faithful path regardless) and its cost is
-    // O(faces + vertices) per call; `boolean` re-runs it on the fallback,
-    // which is accepted — deduplicating would mean threading the relation
-    // through `boolean`'s public signature.
+    // O(faces + vertices) per call, plus, once a containment candidate
+    // survives the cheap witnesses, up to 96 boundary probes each
+    // classified against and measured to the other solid; `boolean` re-runs
+    // it on the fallback, which is accepted
+    // — deduplicating would mean threading the relation through `boolean`'s
+    // public signature.
     let trivial = a != b && {
         use brepkit_algo::classifier::try_build_analytic_classifier;
         let tol = brepkit_math::tolerance::Tolerance::new();
@@ -2368,15 +2371,19 @@ fn detect_trivial_relation(
     // AABB encloses a notch's empty volume. Guard the whole determination
     // with the `center_outside` witness — sound for every path because it
     // only fires on proven non-containment (see the lemma above).
-    // Boundary witness for the AABB-only fallback: a point ON the inner
-    // solid's boundary that classifies Outside the outer one refutes
-    // containment outright, and unlike the AABB centre it cannot be
-    // disabled by the inner's own concavity or by sitting on the outer's
-    // boundary plane. Vertices alone miss a round tool (a cylinder's only
-    // vertices are on its seam), so edge midpoints are probed too: a pin
-    // whose AABB a rotated keep box encloses while half the pin lies
-    // beyond the box's face, or a hinge pin ending in the gap past the
-    // last knuckle, both fail here and nowhere else.
+    // Boundary witness: a point on the inner solid's boundary that lies
+    // clear of the outer one refutes containment
+    // outright, and unlike the AABB centre it cannot be disabled by the
+    // inner's own concavity or by sitting on the outer's boundary plane.
+    // Each sampled edge is probed at its start and at its quarter points
+    // (a bare cylinder has three edges, so its rims are probed at four
+    // quadrants each), and a probe only counts when the robust classifier
+    // says Outside AND the point stands clear of the outer's boundary by
+    // ten tolerances: a probe ON a coincident face can read Outside from
+    // the chord-approximated boundary test, and refuting a true, touching
+    // containment would send the pair through the raw path this shortcut
+    // exists to spare it. A refutation is sound; like the centre and
+    // volume witnesses this is a sample, not a proof of containment.
     let boundary_probe_outside =
         |topo: &Topology, inner: SolidId, outer: SolidId, bb: &Option<(Point3, Point3)>| -> bool {
             let Some((lo, hi)) = *bb else { return false };
@@ -2388,7 +2395,7 @@ fn detect_trivial_relation(
             let Ok(sh) = topo.shell(s.outer_shell()) else {
                 return false;
             };
-            let mut probes: Vec<Point3> = Vec::new();
+            let mut edges: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
             let mut seen: std::collections::HashSet<brepkit_topology::edge::EdgeId> =
                 std::collections::HashSet::new();
             for &fid in sh.faces() {
@@ -2397,30 +2404,41 @@ fn detect_trivial_relation(
                     continue;
                 };
                 for oe in w.edges() {
-                    if !seen.insert(oe.edge()) {
-                        continue;
+                    if seen.insert(oe.edge()) {
+                        edges.push(oe.edge());
                     }
-                    let Ok(e) = topo.edge(oe.edge()) else {
-                        continue;
-                    };
-                    let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
-                        continue;
-                    };
-                    let (ps, pe) = (vs.point(), ve.point());
-                    let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
-                    probes.push(ps);
-                    probes.push(e.curve().evaluate_with_endpoints(0.5 * (t0 + t1), ps, pe));
                 }
             }
-            let stride = probes.len().div_ceil(96).max(1);
-            probes.iter().step_by(stride).any(|&p| {
+            let clear_outside = |p: Point3| {
                 matches!(
                     crate::classify::classify_point(topo, outer, p, defl, tol.linear),
                     Ok(crate::classify::PointClassification::Outside)
-                )
+                ) && crate::distance::point_to_solid_distance(topo, p, outer)
+                    .is_ok_and(|d| d.distance > tol.linear * 10.0)
+            };
+            let stride = edges.len().div_ceil(24).max(1);
+            edges.iter().step_by(stride).any(|&eid| {
+                let Ok(e) = topo.edge(eid) else { return false };
+                let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+                    return false;
+                };
+                let (ps, pe) = (vs.point(), ve.point());
+                let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+                [0.0, 0.25, 0.5, 0.75].into_iter().any(|f| {
+                    let p = if f == 0.0 {
+                        ps
+                    } else {
+                        e.curve()
+                            .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
+                    };
+                    clear_outside(p)
+                })
             })
         };
 
+    // The boundary witness guards both terms: the analytic term tests the
+    // tool's VERTICES, and a round tool (two seam vertices on a cylinder)
+    // can hold every vertex inside the blank while its rims leave it.
     let b_in_a = ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
         || (ca.is_none()
             && aabb_strictly_contains(&aabb_b, &aabb_a)
