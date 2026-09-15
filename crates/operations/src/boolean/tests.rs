@@ -5102,6 +5102,56 @@ fn fuse_a_rod_with_a_flush_slot_bar_crossing_its_rim() {
     assert_watertight_with_volume(&topo, fused, 1, expected);
 }
 
+/// A pin whose bounds a rotated keep box encloses while half the pin lies
+/// beyond the box's diagonal face. The AABB-only containment fallback used
+/// to call the pin contained (its AABB centre sits ON the box's face, so
+/// the centre witness could not refute it) and return the whole pin from
+/// the intersect and the box from the fuse. Past the shortcut, the cap's
+/// rim was split at two opposite points and its removed half shared both
+/// endpoints with the chord, which the endpoint-keyed edge merge collapsed
+/// (the cap kept the removed half's rim in place of the chord).
+#[test]
+fn intersect_a_pin_with_a_wide_diagonal_keep_box_keeps_half_the_pin() {
+    let mut topo = Topology::new();
+    let pin = crate::primitives::make_cylinder(&mut topo, 0.9, 4.0).unwrap();
+    let keep = crate::primitives::make_box(&mut topo, 4.0, 4.0, 6.0).unwrap();
+    let place = brepkit_math::mat::Mat4::translation(0.0, 0.0, -1.0)
+        * brepkit_math::mat::Mat4::rotation_z(std::f64::consts::FRAC_PI_4)
+        * brepkit_math::mat::Mat4::translation(0.0, -2.0, 0.0);
+    crate::transform::transform_solid(&mut topo, keep, &place).unwrap();
+    // The seam splits the intersect's kept half of the wall into two faces;
+    // the fuse keeps the other half, which the seam does not cross.
+    let half = boolean(&mut topo, BooleanOp::Intersect, pin, keep).unwrap();
+    let half_volume = std::f64::consts::PI * 0.9 * 0.9 * 4.0 / 2.0;
+    assert_watertight_with_volume(&topo, half, 2, half_volume);
+    let fused = boolean(&mut topo, BooleanOp::Fuse, pin, keep).unwrap();
+    let box_volume = 4.0 * 4.0 * 6.0;
+    assert_watertight_with_volume(&topo, fused, 1, box_volume + half_volume);
+    // Which half survived, not just how much: a point on each side of the
+    // box's diagonal face, inside the pin.
+    let probe = |solid: SolidId, p: Point3| {
+        crate::classify::classify_point(&topo, solid, p, 0.01, 1e-7).unwrap()
+    };
+    let kept = Point3::new(0.4, 0.4, 2.0);
+    let removed = Point3::new(-0.4, -0.4, 2.0);
+    assert_eq!(
+        probe(half, kept),
+        crate::classify::PointClassification::Inside
+    );
+    assert_eq!(
+        probe(half, removed),
+        crate::classify::PointClassification::Outside
+    );
+    assert_eq!(
+        probe(fused, removed),
+        crate::classify::PointClassification::Inside
+    );
+    assert_eq!(
+        probe(fused, Point3::new(-1.5, -1.5, 2.0)),
+        crate::classify::PointClassification::Outside
+    );
+}
+
 fn assert_watertight_with_volume(
     topo: &Topology,
     result: SolidId,

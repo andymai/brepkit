@@ -1163,9 +1163,12 @@ pub fn boolean_with_evolution(
     // shortcuts below; the geometry heuristic attributes a copied result's
     // faces exactly (normal + centroid match 1:1). Detection only runs for
     // a != b (a == b skips the faithful path regardless) and its cost is
-    // O(faces + vertices) per call; `boolean` re-runs it on the fallback,
-    // which is accepted — deduplicating would mean threading the relation
-    // through `boolean`'s public signature.
+    // O(faces + vertices) per call, plus, once a containment candidate
+    // survives the cheap witnesses, up to 96 boundary probes each
+    // classified against and measured to the other solid; `boolean` re-runs
+    // it on the fallback, which is accepted
+    // — deduplicating would mean threading the relation through `boolean`'s
+    // public signature.
     let trivial = a != b && {
         use brepkit_algo::classifier::try_build_analytic_classifier;
         let tol = brepkit_math::tolerance::Tolerance::new();
@@ -2368,16 +2371,87 @@ fn detect_trivial_relation(
     // AABB encloses a notch's empty volume. Guard the whole determination
     // with the `center_outside` witness — sound for every path because it
     // only fires on proven non-containment (see the lemma above).
+    // Boundary witness: a point on the inner solid's boundary that lies
+    // clear of the outer one refutes containment
+    // outright, and unlike the AABB centre it cannot be disabled by the
+    // inner's own concavity or by sitting on the outer's boundary plane.
+    // Each sampled edge is probed at its start and at its quarter points
+    // (a bare cylinder has three edges, so its rims are probed at four
+    // quadrants each), and a probe only counts when the robust classifier
+    // says Outside AND the point stands clear of the outer's boundary by
+    // ten tolerances: a probe ON a coincident face can read Outside from
+    // the chord-approximated boundary test, and refuting a true, touching
+    // containment would send the pair through the raw path this shortcut
+    // exists to spare it. A refutation is sound; like the centre and
+    // volume witnesses this is a sample, not a proof of containment.
+    let boundary_probe_outside =
+        |topo: &Topology, inner: SolidId, outer: SolidId, bb: &Option<(Point3, Point3)>| -> bool {
+            let Some((lo, hi)) = *bb else { return false };
+            let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
+            let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+            let Ok(s) = topo.solid(inner) else {
+                return false;
+            };
+            let Ok(sh) = topo.shell(s.outer_shell()) else {
+                return false;
+            };
+            let mut edges: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
+            let mut seen: std::collections::HashSet<brepkit_topology::edge::EdgeId> =
+                std::collections::HashSet::new();
+            for &fid in sh.faces() {
+                let Ok(f) = topo.face(fid) else { continue };
+                let Ok(w) = topo.wire(f.outer_wire()) else {
+                    continue;
+                };
+                for oe in w.edges() {
+                    if seen.insert(oe.edge()) {
+                        edges.push(oe.edge());
+                    }
+                }
+            }
+            let clear_outside = |p: Point3| {
+                matches!(
+                    crate::classify::classify_point(topo, outer, p, defl, tol.linear),
+                    Ok(crate::classify::PointClassification::Outside)
+                ) && crate::distance::point_to_solid_distance(topo, p, outer)
+                    .is_ok_and(|d| d.distance > tol.linear * 10.0)
+            };
+            let stride = edges.len().div_ceil(24).max(1);
+            edges.iter().step_by(stride).any(|&eid| {
+                let Ok(e) = topo.edge(eid) else { return false };
+                let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+                    return false;
+                };
+                let (ps, pe) = (vs.point(), ve.point());
+                let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+                (0..4).any(|k| {
+                    let p = if k == 0 {
+                        ps
+                    } else {
+                        let f = f64::from(k) / 4.0;
+                        e.curve()
+                            .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
+                    };
+                    clear_outside(p)
+                })
+            })
+        };
+
+    // The boundary witness guards both terms: the analytic term tests the
+    // tool's VERTICES, and a round tool (two seam vertices on a cylinder)
+    // can hold every vertex inside the blank while its rims leave it.
     let b_in_a = ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
         || (ca.is_none()
             && aabb_strictly_contains(&aabb_b, &aabb_a)
             && !volume_refutes(topo, b, a)))
-        && !center_outside(topo, b, a, &aabb_b);
+        && !center_outside(topo, b, a, &aabb_b)
+        && !boundary_probe_outside(topo, b, a, &aabb_b);
     let a_in_b = ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
         || (cb.is_none()
             && aabb_strictly_contains(&aabb_a, &aabb_b)
             && !volume_refutes(topo, a, b)))
-        && !center_outside(topo, a, b, &aabb_a);
+        && !center_outside(topo, a, b, &aabb_a)
+        && !boundary_probe_outside(topo, a, b, &aabb_a);
 
     TrivialRelation {
         identical: aabbs_match && all_b_verts_in_a && all_a_verts_in_b,
