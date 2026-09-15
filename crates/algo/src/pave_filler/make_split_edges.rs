@@ -79,11 +79,27 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                 }
             }
 
-            log::debug!(
-                "MakeSplitEdges: created edge {edge_id:?} for CommonBlock {cb_id:?} \
-                 ({} PaveBlocks)",
-                all_pbs.len()
-            );
+            if log::log_enabled!(log::Level::Debug) {
+                let members: Vec<String> = all_pbs
+                    .iter()
+                    .filter_map(|&m| arena.pave_blocks.get(m))
+                    .map(|pb| {
+                        format!(
+                            "{:?} of {:?} t=[{:.4},{:.4}]",
+                            pb.original_edge,
+                            pb.original_edge,
+                            pb.start.parameter,
+                            pb.end.parameter
+                        )
+                    })
+                    .collect();
+                log::debug!(
+                    "MakeSplitEdges: created edge {edge_id:?} for CommonBlock {cb_id:?} \
+                     ({} PaveBlocks: {})",
+                    all_pbs.len(),
+                    members.join("; ")
+                );
+            }
         } else {
             let edge_id = create_split_edge(topo, arena, pb_id)?;
             if let Some(pb) = arena.pave_blocks.get_mut(pb_id) {

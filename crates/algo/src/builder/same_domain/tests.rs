@@ -818,14 +818,15 @@ fn cylinder_patch(
     // bottom arc v00 -> v10, right seam v10 -> v11, top arc v11 -> v01, left seam v01 -> v00
     let e_bot = topo.add_edge(Edge::new(v00, v10, EdgeCurve::Circle(circ_bot)));
     let e_right = topo.add_edge(Edge::new(v10, v11, EdgeCurve::Line));
-    let e_top = topo.add_edge(Edge::new(v11, v01, EdgeCurve::Circle(circ_top)));
+    // Stored natively (counter-clockwise from u0 to u1) and traversed reversed.
+    let e_top = topo.add_edge(Edge::new(v01, v11, EdgeCurve::Circle(circ_top)));
     let e_left = topo.add_edge(Edge::new(v01, v00, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
             OrientedEdge::new(e_bot, true),
             OrientedEdge::new(e_right, true),
-            OrientedEdge::new(e_top, true),
+            OrientedEdge::new(e_top, false),
             OrientedEdge::new(e_left, true),
         ],
         true,
@@ -891,14 +892,15 @@ fn cone_patch(
 
     let e_bot = topo.add_edge(Edge::new(v00, v10, EdgeCurve::Circle(circ_bot)));
     let e_right = topo.add_edge(Edge::new(v10, v11, EdgeCurve::Line));
-    let e_top = topo.add_edge(Edge::new(v11, v01, EdgeCurve::Circle(circ_top)));
+    // Stored natively (counter-clockwise from u0 to u1) and traversed reversed.
+    let e_top = topo.add_edge(Edge::new(v01, v11, EdgeCurve::Circle(circ_top)));
     let e_left = topo.add_edge(Edge::new(v01, v00, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
             OrientedEdge::new(e_bot, true),
             OrientedEdge::new(e_right, true),
-            OrientedEdge::new(e_top, true),
+            OrientedEdge::new(e_top, false),
             OrientedEdge::new(e_left, true),
         ],
         true,

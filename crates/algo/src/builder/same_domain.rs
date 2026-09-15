@@ -933,7 +933,10 @@ fn compute_edge_set_quantized(
         // (they are exactly the two halves this discriminator separates).
         // Identical geometry always stores identical direction under that
         // convention, so a true duplicate pair cannot hash apart here.
-        let mid = crate::builder::pcurve_compute::evaluate_edge_at_t(edge.curve(), sp, ep, 0.5);
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        let mid = edge
+            .curve()
+            .evaluate_with_endpoints(0.5_f64.mul_add(t1 - t0, t0), sp, ep);
         // quantize_point MULTIPLIES by the scale, so the 100x-coarser
         // midpoint bucket (fit-error tolerance for marched geometry) needs
         // scale / 100, not scale * 100.
@@ -1059,12 +1062,15 @@ fn planar_faces_overlap(
                 continue;
             };
             let (sp, ep) = (sv.point(), ev.point());
-            // Sample via the shorter-arc evaluator: split faces can store
-            // arc edges whose vertex order opposes the circle's CCW
-            // parameterization, and domain-based sampling would then trace
-            // the complementary (long-way) arc, corrupting the polygon used
-            // for the containment tests below.
-            super::pcurve_compute::sample_edge_uniform(
+            // Sample the edge's NATIVE arc (counter-clockwise in the circle's
+            // own parameter from stored start to end): a rim split at two
+            // paves leaves a major-arc piece (a disc's 276 degree remainder
+            // beside a flush slot bar), and the shorter-arc evaluator traced
+            // its short complement, so the remainder's polygon became the
+            // bar's rectangle, the remainder paired with the bar's overlap
+            // piece and the real overlap piece was dropped as an unpaired
+            // On face.
+            super::pcurve_compute::sample_edge_uniform_native(
                 edge.curve(),
                 sp,
                 ep,
@@ -1290,7 +1296,7 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
         let (sp, ep) = (sv.point(), ev.point());
         // Sample each edge so arc boundaries contribute their true swept area,
         // mirroring `planar_faces_overlap`'s shorter-arc sampling.
-        super::pcurve_compute::sample_edge_uniform(
+        super::pcurve_compute::sample_edge_uniform_native(
             edge.curve(),
             sp,
             ep,
@@ -1332,7 +1338,7 @@ fn wire_points_3d(topo: &Topology, face_id: FaceId) -> Option<Vec<brepkit_math::
         let sv = topo.vertex(edge.start()).ok()?;
         let ev = topo.vertex(edge.end()).ok()?;
         let (sp, ep) = (sv.point(), ev.point());
-        super::pcurve_compute::sample_edge_uniform(
+        super::pcurve_compute::sample_edge_uniform_native(
             edge.curve(),
             sp,
             ep,
@@ -1668,7 +1674,7 @@ fn face_outer_wire_points(topo: &Topology, face_id: FaceId) -> Vec<brepkit_math:
         let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
             continue;
         };
-        super::pcurve_compute::sample_edge_uniform(
+        super::pcurve_compute::sample_edge_uniform_native(
             edge.curve(),
             sv.point(),
             ev.point(),

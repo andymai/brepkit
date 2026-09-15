@@ -5063,13 +5063,12 @@ fn half_pin_standing_on_a_knuckle_end_touches_and_fuses_exactly() {
 }
 
 /// A keyhole pin: a rod fused with a box whose end faces are flush with the
-/// rod's and whose footprint crosses the rim (the roadmap's partially
-/// overlapping coplanar end caps). Ready repro, ignored: the fuse still
-/// falls back to a mesh with the arc-exact coplanar phase, so the root is
-/// past the section stage (the coplanar same-domain pass treats the
-/// partial overlap as a subtraction).
+/// rod's and whose footprint crosses the rim. The disc's remainder beside
+/// the bar is bounded by a 276 degree rim piece; the same-domain detector
+/// sampled that arc as its short complement, took the remainder for the
+/// bar's overlap rectangle, and dropped both the remainder (paired away)
+/// and the real overlap piece (an unpaired On face).
 #[test]
-#[ignore = "ready repro: flush end caps that partially overlap still fall back"]
 fn fuse_a_rod_with_a_flush_slot_bar_crossing_its_rim() {
     let mut topo = Topology::new();
     let rod = crate::primitives::make_cylinder(&mut topo, 0.9, 8.01).unwrap();

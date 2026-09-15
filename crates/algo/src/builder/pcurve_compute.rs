@@ -248,6 +248,7 @@ pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, 
 /// that is two iterative point-to-curve projections per sample — the
 /// same-domain samplers over spline-carrying faces paid hundreds of
 /// milliseconds per boolean for it.
+#[cfg(test)]
 pub(super) fn sample_edge_uniform(
     curve: &EdgeCurve,
     start: Point3,
@@ -290,6 +291,32 @@ pub(super) fn sample_edge_uniform(
                 out.push(curve.evaluate_with_endpoints(frac_at(k).mul_add(span, t0), start, end));
             }
         }
+    }
+}
+
+/// Uniformly sample an edge along its NATIVE span: a circle or ellipse edge
+/// runs counter-clockwise in its curve's own parameter from its stored
+/// start to its stored end (`domain_with_endpoints`), so a major arc, such
+/// as the 276 degree remainder of a rim split at two paves, traces itself
+/// and not its short complement. `forward = false` reverses the samples.
+///
+/// The shorter-arc sampler above serves section arcs (below a half turn by
+/// construction); boundary edges must come here.
+pub(super) fn sample_edge_uniform_native(
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    n: usize,
+    forward: bool,
+    out: &mut Vec<Point3>,
+) {
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let span = t1 - t0;
+    #[allow(clippy::cast_precision_loss)]
+    for k in 0..n {
+        let f = k as f64 / n as f64;
+        let f = if forward { f } else { 1.0 - f };
+        out.push(curve.evaluate_with_endpoints(f.mul_add(span, t0), start, end));
     }
 }
 
