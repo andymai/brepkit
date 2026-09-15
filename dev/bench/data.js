@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789487008136,
+  "lastUpdate": 1789493522004,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34937,6 +34937,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42068491,
             "range": "± 210647",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7efdce04d9efb0662960f077f7e214ed2c205ed",
+          "message": "fix(algo): clip coplanar sections against arcs, not their chords (#1671)\n\n## Summary\n\n- The coplanar FF phase treated every boundary arc of a coplanar face\npair as its chord. On the hinge scenario's second pin (its end cap\ncoplanar with a fragmented knuckle end) that truncated a radius at the\npin cap's chord, minted the chord piece as a section, and crossed a bore\narc's chord through a diameter the arc never reaches; the wedge then\nsplit into a sliver nothing paired with and the cut fell back to a mesh.\n- The phase is now arc-exact: segment/circle and circle/circle\ncrossings, arc-true region tests over every wire, real arc sections\ndeduplicated against the regular FF's arcs, coincident carriers matched\nby geometry.\n- Pin: `half_pin_standing_on_a_knuckle_end_touches_and_fuses_exactly`\n(fails on main with a mesh fallback). The flush slot-bar fuse of the\npartially overlapping end-cap row still falls back and is kept as an\nignored ready repro.\n\n## Verification\n\n- The captured second pin cut replays exact (239 faces, no free edges);\nthe bore is verified by oracle scans along the axis and across the\nsection at eleven stations. The first pin, the knuckle fuses and the\nslot pin are unchanged.\n- algo, operations, io and wasm suites green; clippy clean.\n\n## Found, not fixed here\n\n- The export/volume mesher fans developable bands whose ruling edges\ncarry vertices, so mesh-based volumes of this cut read short although\nthe geometry is right (the bin's own export volume is 0.7% short).\nIgnored ready repro `band_with_split_ruling_keeps_triangles_on_the_arc`,\nroadmap row with the refuted approaches and the acceptance bar.\n- The operations-level containment fallback returns an operand for\nfuse/intersect when the tool's AABB centre sits on the blank's boundary\n(roadmap row).\n\n## Roadmap\n\nThe second-pin row moves to Closed; two rows open for the findings\nabove.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes coplanar face-pair clipping, which previously projected circular\nboundaries as chords and caused phantom sections, free edges, and mesh\nfallback in the hinge’s second-pin cut and fuse. The phase now clips\nboundary arcs as arcs; export mesh volume can still undercount because\nof a separate developable-band mesher issue.\n\n**Bug Fixes**\n\n- Handles segment/circle and circle/circle crossings, holes, partial\noverlaps, coincident carriers matched along their whole length, and\nshared vertices.\n- Deduplicates line and arc sections per target face, uses exact\nsegment-and-arc containment with a tolerance-graded winding fallback,\nclips sampled ellipse/NURBS boundaries, and welds crossings with regular\nFF endpoints.\n- Adds a watertight half-pin cut and fuse regression test; keeps the\nflush slot-bar fuse ignored because it still falls back after coplanar\nprocessing.\n\n**Diagnostics**\n\n- Adds replay and mesh probes for per-face flux, mesh volume, triangle\noutput, and raw wire geometry.\n\n<sup>Written for commit c7e1e251bd6fea622cd494fb8d9f924fd5fc48aa.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1671?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T17:29:27Z",
+          "tree_id": "dfe89f0c7b2f58f6fc2e64c8eb39dcafd2dc70b5",
+          "url": "https://github.com/andymai/brepkit/commit/c7efdce04d9efb0662960f077f7e214ed2c205ed"
+        },
+        "date": 1789493518922,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1048495,
+            "range": "± 20601",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1114777,
+            "range": "± 2613",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13070,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 747136,
+            "range": "± 10751",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45184092,
+            "range": "± 203115",
             "unit": "ns/iter"
           }
         ]
