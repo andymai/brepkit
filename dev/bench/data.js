@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789430568848,
+  "lastUpdate": 1789431167677,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33749,6 +33749,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41643790,
             "range": "± 77404",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ede9c46eb527be8f72207c3332142b685301e276",
+          "message": "docs(roadmap): record the seeding fix's tool-side effect on the kumiko wrap (#1649)\n\nTool-side re-timing of the 3x2x6 mitsukude wrap export on brepjs 19.0.4\nwith the #1646 wasm overlaid at both node_modules locations\n(hash-verified): 532 s to 483 s. The two box-by-three-strut compound\ncuts halved (53 s to 26 s each); the 94-face-base 8-tool compound cut\n(226 s, 7516-face fallback blob) and the fuse of that blob (125 s) are\nunchanged and now own the export. The roadmap row names that cut as the\nnext perf lead; its operands are saved by the timing probe.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the Kumiko wrap roadmap with tool-side timing from the seeding\nfix and pins the export's first mesh fallback as the next perf lead. The\n3x2x6 export drops from 532 s to 483 s, but the unchanged 8-tool\ncompound cut and fallback-blob fuse now dominate runtime.\n\n- The two box-by-three-strut compound cuts each drop from 53 s to 26 s.\n- The new fixture captures the flat wall's 62-plane strut lattice cut by\nfour helical corner struts; it replays natively in 9.5 s and ends in 77\nnon-manifold edges.\n- The roadmap row now points at this fixture instead of the temporary\n`slow_op5967_*` probe artifacts.\n\n<sup>Written for commit d9562b70d24a36a78926a4652217c31e9f52686e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1649?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T00:10:16Z",
+          "tree_id": "464214279ed3f4280ac757bd0babf3d8811ff2bb",
+          "url": "https://github.com/andymai/brepkit/commit/ede9c46eb527be8f72207c3332142b685301e276"
+        },
+        "date": 1789431164257,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 982846,
+            "range": "± 2370",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1061627,
+            "range": "± 2722",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12378,
+            "range": "± 296",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 723050,
+            "range": "± 1601",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41435068,
+            "range": "± 48855",
             "unit": "ns/iter"
           }
         ]
