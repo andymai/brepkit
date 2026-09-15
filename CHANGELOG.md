@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.8](https://github.com/andymai/brepkit/compare/v3.4.7...v3.4.8) (2026-09-15)
+
+
+### Bug Fixes
+
+* **algo:** re-sample a sub-face classified on the opposing boundary; mesh pinched loops ([#1663](https://github.com/andymai/brepkit/issues/1663)) ([6e2bcfc](https://github.com/andymai/brepkit/commit/6e2bcfc182a48b54495dc1d3803f515510656bed))
+
 ## [3.4.7](https://github.com/andymai/brepkit/compare/v3.4.6...v3.4.7) (2026-09-15)
 
 
