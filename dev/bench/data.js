@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789497725657,
+  "lastUpdate": 1789498283684,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35207,6 +35207,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36317480,
             "range": "± 1482042",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "968e7ae7fc6b767f93c55d809a857a00a26f4d91",
+          "message": "chore(main): release 3.4.13 (#1676)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.4.13](https://github.com/andymai/brepkit/compare/v3.4.12...v3.4.13)\n(2026-09-15)\n\n\n### Bug Fixes\n\n* **algo:** sample boundary arcs natively in the same-domain detector\n([#1675](https://github.com/andymai/brepkit/issues/1675))\n([15008bf](https://github.com/andymai/brepkit/commit/15008bf7e4fbb3f888f99cb9476097a7d0517ddf))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` v3.4.13 and bumps all workspace crate versions. This\nrelease fixes the same-domain detector to sample boundary arcs natively.\n\n<sup>Written for commit f37c425bd2bf084a1ad39edfb28e5ab237e0e8c8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1676?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-15T18:49:08Z",
+          "tree_id": "7bfb64772b4aa9b65d882c20245ffd09ab12e74e",
+          "url": "https://github.com/andymai/brepkit/commit/968e7ae7fc6b767f93c55d809a857a00a26f4d91"
+        },
+        "date": 1789498279581,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 558850,
+            "range": "± 11643",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 621839,
+            "range": "± 30127",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7704,
+            "range": "± 128",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 419971,
+            "range": "± 3968",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28489970,
+            "range": "± 601442",
             "unit": "ns/iter"
           }
         ]
