@@ -1905,7 +1905,53 @@ pub(super) fn split_face_with_internal_loops(
     // between the two rims and strands the hole's rim on one owner.
     let mut nested_holes_by_loop: Vec<Vec<usize>> = vec![Vec::new(); loops.len()];
     let mut nested_holes: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // A loop enclosed by another loop (a tube standing on a plate: its bore
+    // circle inside its wall circle) is a hole of the enclosing disc, not of
+    // the remainder; `parent_loop[j]` is the smallest loop enclosing loop j.
+    let mut parent_loop: Vec<Option<usize>> = vec![None; loops.len()];
     if let Some(frame) = plane_frame.as_ref() {
+        let polygons: Vec<Vec<Point2>> = loops
+            .iter()
+            .map(|l| {
+                sample_edges_3d(l)
+                    .iter()
+                    .map(|p| frame.project(*p))
+                    .collect()
+            })
+            .collect();
+        let area = |poly: &[Point2]| -> f64 {
+            poly.iter()
+                .zip(poly.iter().cycle().skip(1))
+                .map(|(a, b)| a.x() * b.y() - b.x() * a.y())
+                .sum::<f64>()
+                .abs()
+        };
+        for lj in 0..loops.len() {
+            if polygons[lj].len() < 3 {
+                continue;
+            }
+            let mut best: Option<(f64, usize)> = None;
+            for li in 0..loops.len() {
+                if li == lj || polygons[li].len() < 3 {
+                    continue;
+                }
+                let inside = polygons[lj]
+                    .iter()
+                    .all(|p| super::super::classify_2d::point_in_polygon_2d(*p, &polygons[li]));
+                if inside {
+                    let a = area(&polygons[li]);
+                    if best.is_none_or(|(ba, _)| a < ba) {
+                        best = Some((a, li));
+                    }
+                }
+            }
+            if let Some((_, li)) = best {
+                log::debug!(
+                    "split_face_with_internal_loops: face {face_id:?} loop {li} encloses loop {lj}"
+                );
+                parent_loop[lj] = Some(li);
+            }
+        }
         for (li, loop_edges) in loops.iter().enumerate() {
             let polygon: Vec<Point2> = sample_edges_3d(loop_edges)
                 .iter()
@@ -1947,7 +1993,7 @@ pub(super) fn split_face_with_internal_loops(
         }
     };
     let mut all_holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
-    for (li, loop_edges) in loops.iter_mut().enumerate() {
+    for loop_edges in &mut loops {
         // Compute signed area in UV. For single-edge closed curves
         // (circles), sample points along the pcurve since start_uv ~= end_uv
         // gives zero area with just the endpoints.
@@ -2031,7 +2077,9 @@ pub(super) fn split_face_with_internal_loops(
                 edge.forward = !edge.forward;
             }
         }
+    }
 
+    for (li, loop_edges) in loops.iter().enumerate() {
         // Compute the interior point for the disc sub-face.
         // For closed section curves (circles) that form internal loops,
         // the interior point on the plane can land ON the opposing solid's
@@ -2044,7 +2092,7 @@ pub(super) fn split_face_with_internal_loops(
             let n_samples = 16;
             let mut sum = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
             let mut count = 0_usize;
-            for edge in loop_edges.iter() {
+            for edge in loop_edges {
                 let (t0, t1) = edge
                     .curve_3d
                     .domain_with_endpoints(edge.start_3d, edge.end_3d);
@@ -2085,10 +2133,15 @@ pub(super) fn split_face_with_internal_loops(
         // The loop as outer wire of the inside sub-face, with the holes it
         // encloses; a ring's interior lies between the loop and its holes,
         // not at the centroid.
-        let nested: Vec<Vec<OrientedPCurveEdge>> = nested_holes_by_loop[li]
+        let mut nested: Vec<Vec<OrientedPCurveEdge>> = nested_holes_by_loop[li]
             .iter()
             .map(|&hi| original_inner_wires[hi].clone())
             .collect();
+        for (lj, parent) in parent_loop.iter().enumerate() {
+            if *parent == Some(li) {
+                nested.push(reverse_loop_edges(&loops[lj]));
+            }
+        }
         let disc_interior = if nested.is_empty() {
             disc_interior
         } else {
@@ -2107,7 +2160,7 @@ pub(super) fn split_face_with_internal_loops(
         // Build the outside sub-face's hole: the merged union outline when
         // this loop consumed an overlapping pre-existing hole, otherwise the
         // reversed loop.
-        if hole_absorbed[li] {
+        if hole_absorbed[li] || parent_loop[li].is_some() {
             continue;
         }
         let hole: Vec<OrientedPCurveEdge> = if let Some(u) = union_hole_by_loop[li].take() {
@@ -2220,7 +2273,7 @@ pub(super) fn split_face_with_internal_loops(
             .map(|(_, h)| h.clone()),
     );
     let frame_interior = frame_interior.or_else(|| {
-        if nested_holes.is_empty() {
+        if nested_holes.is_empty() && parent_loop.iter().all(Option::is_none) {
             None
         } else {
             between_loop_and_holes(boundary_edges, &all_holes).map(into_solid)
@@ -2279,6 +2332,25 @@ fn sample_edges_3d(edges: &[OrientedPCurveEdge]) -> Vec<Point3> {
         }
     }
     pts
+}
+
+/// The reversed copy of a disc loop: hole winding for the face that contains it.
+fn reverse_loop_edges(loop_edges: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
+    loop_edges
+        .iter()
+        .rev()
+        .map(|e| OrientedPCurveEdge {
+            curve_3d: e.curve_3d.clone(),
+            pcurve: e.pcurve.clone(),
+            start_uv: e.end_uv,
+            end_uv: e.start_uv,
+            start_3d: e.end_3d,
+            end_3d: e.start_3d,
+            forward: !e.forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        })
+        .collect()
 }
 
 /// A point midway between a sample of `loop_edges` and the nearest sample of

@@ -4880,6 +4880,49 @@ fn cut_coaxial_counterbore_from_a_tube_splits_the_top_annulus() {
     );
 }
 
+/// A tube standing on a plate, sunk 0.01 mm into it (the tool's assembly
+/// parts): the plate's top face receives the tube's wall circle and, inside
+/// it, the bore circle. The wall disc must carry the bore circle as its hole
+/// (the ring is inside the tube's wall, the bore disc is the bore's floor),
+/// and the remainder only the wall circle; with both circles on the
+/// remainder the wall circle had three owners.
+#[test]
+fn fuse_tube_standing_on_a_plate_nests_the_bore_loop_in_the_wall_loop() {
+    let mut topo = Topology::new();
+    let plate = crate::primitives::make_box(&mut topo, 40.0, 40.0, 2.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        plate,
+        &brepkit_math::mat::Mat4::translation(-20.0, -20.0, 0.0),
+    )
+    .unwrap();
+    let outer = crate::primitives::make_cylinder(&mut topo, 10.0, 60.0).unwrap();
+    let bore = crate::primitives::make_cylinder(&mut topo, 5.0, 60.0).unwrap();
+    let tube = boolean(&mut topo, BooleanOp::Cut, outer, bore).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        tube,
+        &brepkit_math::mat::Mat4::translation(0.0, 0.0, 1.99),
+    )
+    .unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, plate, tube).unwrap();
+
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert!(!has_free_edges(&topo, result).unwrap());
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+    let mesh =
+        crate::tessellate::tessellate_solid_with_tolerance(&topo, result, 0.01, 0.2).unwrap();
+    assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+    assert_eq!(count_cylinder_faces(&topo, result), 2);
+    let expected = 40.0 * 40.0 * 2.0 + std::f64::consts::PI * (100.0 - 25.0) * (60.0 - 0.01);
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "plate + tube volume {vol:.3} != expected {expected:.3}"
+    );
+}
+
 #[test]
 fn fuse_stacked_rounded_rect_arc_prisms_same_footprint() {
     let mut topo = Topology::new();
