@@ -63,9 +63,25 @@ pub fn perform(
     // frame (the same frame for every pair on that plane, either normal
     // sign), so a face paired many times pays its arc sampling once.
     let mut regions: HashMap<FaceId, Region2> = HashMap::new();
-    // Vertices minted by this phase, so a crossing computed once along an
-    // arc and once along a line (or shared by two pairs) is one vertex.
+    // Vertices this phase may weld to: the regular FF phase's section
+    // endpoints (the pave vertex index predates phase FF and never sees
+    // them) plus every vertex minted here, so a crossing computed once along
+    // an arc and once along a line, or shared with a regular section, is one
+    // vertex.
     let mut minted: Vec<(Point3, VertexId)> = Vec::new();
+    for curve in &arena.curves {
+        for &pb_id in &curve.pave_blocks {
+            let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                continue;
+            };
+            for pave in [pb.start, pb.end] {
+                let vid = arena.resolve_vertex(pave.vertex);
+                if let Ok(v) = topo.vertex(vid) {
+                    minted.push((v.point(), vid));
+                }
+            }
+        }
+    }
 
     for (idx_a, &(fa, na, da)) in planes_a.iter().enumerate() {
         let bbox_a = &bboxes_a[idx_a];
@@ -173,26 +189,23 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
     }
 }
 
-/// Check if a section curve already exists at this position for either face.
+/// Check if a section curve already exists at this position on the face
+/// the piece must split.
 ///
-/// Searches `arena.curves` for any existing intersection curve involving
-/// `face_a` or `face_b` whose endpoints match `p_start`/`p_end` within
-/// tolerance. This prevents the coplanar phase from creating duplicate
-/// section edges that already exist from the regular FF phase.
+/// Searches `arena.curves` for an existing intersection curve attached to
+/// `target` whose midpoint matches the proposed piece's within tolerance, so
+/// the coplanar phase does not duplicate a section the regular FF phase
+/// already gave that face. A curve attached only to the other face of the
+/// pair does not count: it never splits `target`.
 fn has_existing_section_at(
     arena: &GfaArena,
-    face_a: FaceId,
-    face_b: FaceId,
+    target: FaceId,
     p_start: Point3,
     p_end: Point3,
     tol: Tolerance,
 ) -> bool {
     for curve in &arena.curves {
-        if curve.face_a != face_a
-            && curve.face_a != face_b
-            && curve.face_b != face_a
-            && curve.face_b != face_b
-        {
+        if curve.face_a != target && curve.face_b != target {
             continue;
         }
 
@@ -281,9 +294,9 @@ fn process_coplanar_pair(
     let faces = [face_a, face_b];
     for piece in pieces {
         match piece {
-            SectionPiece::Line(s, e) => {
-                if !has_existing_section_at(arena, face_a, face_b, s, e, tol) {
-                    create_section_edge(topo, arena, minted, faces, s, e, tol)?;
+            SectionPiece::Line { target, start, end } => {
+                if !has_existing_section_at(arena, target, start, end, tol) {
+                    create_section_edge(topo, arena, minted, faces, start, end, tol)?;
                 }
             }
             SectionPiece::Arc {
@@ -381,7 +394,11 @@ struct Region2 {
 /// A clipped piece of a boundary edge inside the partner face; `target` is
 /// that partner, the face the piece must split.
 enum SectionPiece {
-    Line(Point3, Point3),
+    Line {
+        target: FaceId,
+        start: Point3,
+        end: Point3,
+    },
     Arc {
         target: FaceId,
         circle: brepkit_math::curves::Circle3D,
@@ -557,7 +574,42 @@ fn inside_region(pt: Point2, region: &Region2, tol: f64) -> bool {
             return n % 2 == 1;
         }
     }
-    false
+    // Every direction hit a vertex or grazed an arc: fall back to the
+    // winding number over finely sampled arcs, which has no ambiguous
+    // configuration (only a sagitta band, irrelevant this far from any
+    // clean direction).
+    winding_inside(pt, region)
+}
+
+/// Even-odd containment by winding number, arcs walked in 64 chords.
+fn winding_inside(pt: Point2, region: &Region2) -> bool {
+    let angle = |p: Point2, q: Point2| -> f64 {
+        let (ax, ay) = (p.x() - pt.x(), p.y() - pt.y());
+        let (bx, by) = (q.x() - pt.x(), q.y() - pt.y());
+        (ax * by - ay * bx).atan2(ax * bx + ay * by)
+    };
+    let mut total = 0.0;
+    for e in &region.edges {
+        match &e.shape {
+            Shape2::Seg => total += angle(e.p2_start, e.p2_end),
+            Shape2::Poly(poly) => {
+                for w in poly.windows(2) {
+                    total += angle(w[0], w[1]);
+                }
+            }
+            Shape2::Arc(arc) => {
+                let len = arc.sweep.abs();
+                let mut prev = arc_point(arc, 0.0);
+                for k in 1..=64 {
+                    let next = arc_point(arc, len * f64::from(k) / 64.0);
+                    total += angle(prev, next);
+                    prev = next;
+                }
+            }
+        }
+    }
+    let turns = (total / std::f64::consts::TAU).round();
+    turns.abs().rem_euclid(2.0) > 0.5
 }
 
 /// Crossings of the ray `a..b` with the region's boundary, or `None` when
@@ -661,27 +713,45 @@ fn carrier_probes(e: &BoundaryEdge) -> Vec<Point2> {
     }
 }
 
-/// Index of the partner edge that `e` lies on along its whole length.
+/// Index of the partner edge that coincides with `e` along both their whole
+/// lengths. A sub-span of a longer partner edge is not coincident: it is
+/// clipped like any other edge, so the shared interval splits the longer
+/// carrier at its ends instead of one common block covering the two
+/// unequal pave blocks.
 fn coincident_boundary_edge(e: &BoundaryEdge, target: &[BoundaryEdge], tol: f64) -> Option<usize> {
     let probes = carrier_probes(e);
-    target
-        .iter()
-        .position(|t| probes.iter().all(|&p| point_on_edge_2d(p, t, tol)))
+    target.iter().position(|t| {
+        probes.iter().all(|&p| point_on_edge_2d(p, t, tol))
+            && carrier_probes(t)
+                .iter()
+                .all(|&p| point_on_edge_2d(p, e, tol))
+    })
 }
 
 /// Parameters `t` along the segment `a..b` where it crosses the target edge.
+/// A collinear partner segment contributes its own endpoints, so a partial
+/// overlap splits the source at the overlap's ends (the shared interval is
+/// then skipped as boundary and the rest clipped on its own).
 fn seg_crossings(a: Point2, b: Point2, t: &BoundaryEdge, tol: f64, out: &mut Vec<f64>) {
-    match &t.shape {
-        Shape2::Seg => {
-            if let Some(x) = seg_seg_param(a, b, t.p2_start, t.p2_end) {
-                out.push(x);
-            }
-        }
-        Shape2::Poly(poly) => {
-            for w in poly.windows(2) {
-                if let Some(x) = seg_seg_param(a, b, w[0], w[1]) {
+    let mut seg = |c: Point2, d: Point2| {
+        if let Some(x) = seg_seg_param(a, b, c, d) {
+            out.push(x);
+        } else if point_on_segment_2d(c, a, b, tol) || point_on_segment_2d(d, a, b, tol) {
+            let (dx, dy) = (b.x() - a.x(), b.y() - a.y());
+            let len2 = dx * dx + dy * dy;
+            for q in [c, d] {
+                let x = ((q.x() - a.x()) * dx + (q.y() - a.y()) * dy) / len2;
+                if x > 0.0 && x < 1.0 && point_on_segment_2d(q, a, b, tol) {
                     out.push(x);
                 }
+            }
+        }
+    };
+    match &t.shape {
+        Shape2::Seg => seg(t.p2_start, t.p2_end),
+        Shape2::Poly(poly) => {
+            for w in poly.windows(2) {
+                seg(w[0], w[1]);
             }
         }
         Shape2::Arc(arc) => {
@@ -871,7 +941,7 @@ fn clip_to_region(
                 });
             }
         }
-        Shape2::Seg | Shape2::Poly(_) => {
+        Shape2::Seg => {
             let (a, b) = (e.p2_start, e.p2_end);
             let d = Point2::new(b.x() - a.x(), b.y() - a.y());
             let seg_len = d.x().hypot(d.y());
@@ -894,10 +964,70 @@ fn clip_to_region(
                 if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
                     continue;
                 }
-                out.push(SectionPiece::Line(
-                    lerp3(e.p3_start, e.p3_end, ta),
-                    lerp3(e.p3_start, e.p3_end, tb),
-                ));
+                out.push(SectionPiece::Line {
+                    target: target_face,
+                    start: lerp3(e.p3_start, e.p3_end, ta),
+                    end: lerp3(e.p3_start, e.p3_end, tb),
+                });
+            }
+        }
+        Shape2::Poly(poly) => {
+            // A sampled curve is walked sample by sample for its crossings
+            // and its in-region runs; each run is emitted as the chord
+            // between the run's ends (the true curve piece is the regular FF
+            // phase's job, this only partitions the partner consistently).
+            let n = poly.len().saturating_sub(1);
+            if n == 0 {
+                return;
+            }
+            // Cumulative parameter: sub-segment k spans [k, k + 1].
+            let mut ss: Vec<f64> = vec![0.0, n as f64];
+            for (k, w) in poly.windows(2).enumerate() {
+                let mut local = Vec::new();
+                for t in &target.edges {
+                    seg_crossings(w[0], w[1], t, tol, &mut local);
+                }
+                ss.extend(local.into_iter().map(|x| x + k as f64));
+            }
+            ss.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+            let at = |s: f64| -> Point2 {
+                let k = (s.floor() as usize).min(n - 1);
+                let f = s - k as f64;
+                let (c, d) = (poly[k], poly[k + 1]);
+                Point2::new(
+                    (d.x() - c.x()).mul_add(f, c.x()),
+                    (d.y() - c.y()).mul_add(f, c.y()),
+                )
+            };
+            let dist = |s0: f64, s1: f64| {
+                let (p, q) = (at(s0), at(s1));
+                (q.x() - p.x()).hypot(q.y() - p.y())
+            };
+            ss.dedup_by(|x, y| dist(*x, *y) < tol);
+            for w in ss.windows(2) {
+                let (sa, sb) = (w[0], w[1]);
+                if dist(sa, sb) < tol {
+                    continue;
+                }
+                let mid = at(0.5 * (sa + sb));
+                if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
+                    continue;
+                }
+                let start = if sa <= 0.0 {
+                    e.p3_start
+                } else {
+                    frame.unproject(at(sa))
+                };
+                let end = if sb >= n as f64 {
+                    e.p3_end
+                } else {
+                    frame.unproject(at(sb))
+                };
+                out.push(SectionPiece::Line {
+                    target: target_face,
+                    start,
+                    end,
+                });
             }
         }
     }
