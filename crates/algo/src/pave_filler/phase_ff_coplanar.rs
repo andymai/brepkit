@@ -575,14 +575,15 @@ fn inside_region(pt: Point2, region: &Region2, tol: f64) -> bool {
         }
     }
     // Every direction hit a vertex or grazed an arc: fall back to the
-    // winding number over finely sampled arcs, which has no ambiguous
-    // configuration (only a sagitta band, irrelevant this far from any
-    // clean direction).
-    winding_inside(pt, region)
+    // winding number, whose arcs are walked in chords within `tol` of the
+    // arc, so its only error band is the boundary band the callers already
+    // exclude.
+    winding_inside(pt, region, tol)
 }
 
-/// Even-odd containment by winding number, arcs walked in 64 chords.
-fn winding_inside(pt: Point2, region: &Region2) -> bool {
+/// Even-odd containment by winding number; arcs are walked in chords whose
+/// sagitta stays within `tol`.
+fn winding_inside(pt: Point2, region: &Region2, tol: f64) -> bool {
     let angle = |p: Point2, q: Point2| -> f64 {
         let (ax, ay) = (p.x() - pt.x(), p.y() - pt.y());
         let (bx, by) = (q.x() - pt.x(), q.y() - pt.y());
@@ -599,9 +600,12 @@ fn winding_inside(pt: Point2, region: &Region2) -> bool {
             }
             Shape2::Arc(arc) => {
                 let len = arc.sweep.abs();
+                let sag = tol.min(arc.radius * 0.5).max(1e-12);
+                let step = 2.0 * (1.0 - sag / arc.radius).acos();
+                let n = ((len / step).ceil() as usize).clamp(8, 1 << 20);
                 let mut prev = arc_point(arc, 0.0);
-                for k in 1..=64 {
-                    let next = arc_point(arc, len * f64::from(k) / 64.0);
+                for k in 1..=n {
+                    let next = arc_point(arc, len * k as f64 / n as f64);
                     total += angle(prev, next);
                     prev = next;
                 }
