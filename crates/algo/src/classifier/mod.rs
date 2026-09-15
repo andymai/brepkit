@@ -74,6 +74,227 @@ pub fn classify_point_cached(
     }
 }
 
+/// A face's loops sampled into its own 2D parameter space.
+///
+/// A plane's local frame, or the surface's `(u, v)` with `u` unwrapped along
+/// each loop on a periodic surface. Built once per face and reused for
+/// containment tests and for alternative interior samples.
+pub struct FaceLoops2d {
+    frame: Option<crate::builder::plane_frame::PlaneFrame>,
+    surface: FaceSurface,
+    periodic: bool,
+    u_mean: f64,
+    /// The outer loop, in traversal order.
+    pub outer: Vec<brepkit_math::vec::Point2>,
+    /// The inner loops (holes), each in traversal order.
+    pub holes: Vec<Vec<brepkit_math::vec::Point2>>,
+    /// Axis-aligned bounds of every sampled boundary point.
+    pub aabb: [f64; 6],
+}
+
+impl FaceLoops2d {
+    /// Sample `face_id`'s loops: two points per line, sixteen per curved edge,
+    /// each edge walked in its traversal direction and excluding the traversal
+    /// endpoint (the next edge supplies it).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] on a topology lookup failure.
+    pub fn new(
+        topo: &Topology,
+        face_id: brepkit_topology::face::FaceId,
+    ) -> Result<Self, AlgoError> {
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::EdgeCurve;
+        use std::f64::consts::{PI, TAU};
+
+        let face = topo.face(face_id)?;
+        let surface = face.surface().clone();
+        let periodic = matches!(
+            &surface,
+            FaceSurface::Cylinder(_)
+                | FaceSurface::Cone(_)
+                | FaceSurface::Sphere(_)
+                | FaceSurface::Torus(_)
+        );
+        let frame = if let FaceSurface::Plane { normal, .. } = &surface {
+            let mut pts = Vec::new();
+            for oe in topo.wire(face.outer_wire())?.edges() {
+                let e = topo.edge(oe.edge())?;
+                pts.push(topo.vertex(e.start())?.point());
+            }
+            Some(crate::builder::plane_frame::PlaneFrame::from_plane_face(
+                *normal, &pts,
+            ))
+        } else {
+            None
+        };
+        let mut aabb = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+        let mut sample_loop = |wid: brepkit_topology::wire::WireId,
+                               u_ref: Option<f64>|
+         -> Result<Vec<Point2>, AlgoError> {
+            let wire = topo.wire(wid)?;
+            let mut out: Vec<Point2> = Vec::new();
+            for oe in wire.edges() {
+                let e = topo.edge(oe.edge())?;
+                let sp = topo.vertex(e.start())?.point();
+                let ep = topo.vertex(e.end())?.point();
+                let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+                let n = if matches!(e.curve(), EdgeCurve::Line) {
+                    2
+                } else {
+                    16
+                };
+                for k in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    let f = k as f64 / n as f64;
+                    // Traversal order: a forward edge walks t0 -> t1 and
+                    // excludes t1; a reversed edge walks t1 -> t0 and
+                    // excludes t0. The shared junction vertex is supplied
+                    // exactly once, by the edge that starts there.
+                    let t = if oe.is_forward() {
+                        t0 + (t1 - t0) * f
+                    } else {
+                        t1 - (t1 - t0) * f
+                    };
+                    let p3 = e.curve().evaluate_with_endpoints(t, sp, ep);
+                    for (a, v) in [p3.x(), p3.y(), p3.z()].iter().enumerate() {
+                        aabb[a] = aabb[a].min(*v);
+                        aabb[a + 3] = aabb[a + 3].max(*v);
+                    }
+                    let Some(q) = (match frame.as_ref() {
+                        Some(f) => Some(f.project(p3)),
+                        None => surface.project_point(p3).map(|(u, v)| Point2::new(u, v)),
+                    }) else {
+                        continue;
+                    };
+                    let anchor = if periodic {
+                        out.last().map_or(u_ref, |prev| Some(prev.x()))
+                    } else {
+                        None
+                    };
+                    let q = if let Some(a) = anchor {
+                        Point2::new(a + (q.x() - a + PI).rem_euclid(TAU) - PI, q.y())
+                    } else {
+                        q
+                    };
+                    out.push(q);
+                }
+            }
+            Ok(out)
+        };
+        let outer = sample_loop(face.outer_wire(), None)?;
+        #[allow(clippy::cast_precision_loss)]
+        let u_mean = if outer.is_empty() {
+            0.0
+        } else {
+            outer.iter().map(|q| q.x()).sum::<f64>() / outer.len() as f64
+        };
+        let mut holes = Vec::new();
+        for &wid in face.inner_wires() {
+            holes.push(sample_loop(wid, Some(u_mean))?);
+        }
+        Ok(Self {
+            frame,
+            surface,
+            periodic,
+            u_mean,
+            outer,
+            holes,
+            aabb,
+        })
+    }
+
+    /// `p` in this face's 2D space, `u` unwrapped next to the outer loop.
+    #[must_use]
+    pub fn to_uv(&self, p: Point3) -> Option<brepkit_math::vec::Point2> {
+        use brepkit_math::vec::Point2;
+        use std::f64::consts::{PI, TAU};
+        let q = if let Some(f) = self.frame.as_ref() {
+            f.project(p)
+        } else {
+            let (u, v) = self.surface.project_point(p)?;
+            Point2::new(u, v)
+        };
+        if self.periodic {
+            let u = self.u_mean + (q.x() - self.u_mean + PI).rem_euclid(TAU) - PI;
+            Some(Point2::new(u, q.y()))
+        } else {
+            Some(q)
+        }
+    }
+
+    /// The 3D point at `q`.
+    #[must_use]
+    pub fn to_3d(&self, q: brepkit_math::vec::Point2) -> Option<Point3> {
+        match self.frame.as_ref() {
+            Some(f) => Some(f.evaluate(q.x(), q.y())),
+            None => self.surface.evaluate(q.x(), q.y()),
+        }
+    }
+
+    /// True when `q` lies inside the outer loop and outside every hole.
+    #[must_use]
+    pub fn contains(&self, q: brepkit_math::vec::Point2) -> bool {
+        use crate::builder::classify_2d::point_in_polygon_2d;
+        self.outer.len() >= 3
+            && point_in_polygon_2d(q, &self.outer)
+            && !self
+                .holes
+                .iter()
+                .any(|h| h.len() >= 3 && point_in_polygon_2d(q, h))
+    }
+
+    /// Distance from `p` to the face's supporting surface.
+    #[must_use]
+    pub fn distance_to_surface(&self, p: Point3) -> Option<f64> {
+        match &self.surface {
+            FaceSurface::Plane { normal, d } => {
+                Some((normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs())
+            }
+            surface => {
+                let (u, v) = surface.project_point(p)?;
+                surface.evaluate(u, v).map(|q| (q - p).length())
+            }
+        }
+    }
+}
+
+/// The trimmed boundary of a solid, sampled once, for on-boundary queries.
+///
+/// A classifier's verdict for a point on the boundary is a coin toss (a ray
+/// cast grazes the face), so the builder re-samples instead of trusting it.
+pub struct BoundaryProbe {
+    faces: Vec<FaceLoops2d>,
+}
+
+impl BoundaryProbe {
+    /// Sample every face of `solid`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] on a topology lookup failure.
+    pub fn new(topo: &Topology, solid: SolidId) -> Result<Self, AlgoError> {
+        let mut faces = Vec::new();
+        for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+            faces.push(FaceLoops2d::new(topo, fid)?);
+        }
+        Ok(Self { faces })
+    }
+
+    /// True when `point` lies within `tol` of a face: on its supporting
+    /// surface and inside the face's trimmed region.
+    #[must_use]
+    pub fn point_on_boundary(&self, point: Point3, tol: f64) -> bool {
+        let p = [point.x(), point.y(), point.z()];
+        self.faces.iter().any(|face| {
+            (0..3).all(|a| p[a] >= face.aabb[a] - tol && p[a] <= face.aabb[a + 3] + tol)
+                && face.distance_to_surface(point).is_some_and(|d| d <= tol)
+                && face.to_uv(point).is_some_and(|q| face.contains(q))
+        })
+    }
+}
+
 /// Classify a planar sub-face that is coincident-coplanar with a face of the
 /// opposing solid by 2D containment, bypassing the unstable grazing ray-cast.
 ///

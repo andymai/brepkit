@@ -600,6 +600,11 @@ impl Builder {
         // path (identical behaviour, just not memoised).
         let geoms_a = classifier::RayCastGeoms::new(&self.topo, self.solid_a).ok();
         let geoms_b = classifier::RayCastGeoms::new(&self.topo, self.solid_b).ok();
+        // The trimmed boundaries, sampled once per solid, for the on-boundary
+        // test below (a per-sample walk of the opposing faces would restore
+        // the O(faces x sub-faces) cost the cached geometry avoids).
+        let probe_a = classifier::BoundaryProbe::new(&self.topo, self.solid_a)?;
+        let probe_b = classifier::BoundaryProbe::new(&self.topo, self.solid_b)?;
 
         for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
             if !sd_indices.is_empty() && sd_indices.contains(&idx) {
@@ -626,6 +631,10 @@ impl Builder {
             let opposing_geoms = match sf.rank {
                 Rank::A => geoms_b.as_ref(),
                 Rank::B => geoms_a.as_ref(),
+            };
+            let opposing_probe = match sf.rank {
+                Rank::A => &probe_b,
+                Rank::B => &probe_a,
             };
 
             let sample = if let Some(pt) = sf.interior_point {
@@ -679,6 +688,53 @@ impl Builder {
                             point,
                         )?,
                     };
+                    // A sample ON the opposing solid's boundary says nothing
+                    // about which side the sub-face lies on: a cylinder piece
+                    // inside a post is sampled on the ruling where it is
+                    // tangent to the post's top. Try other interior samples
+                    // before settling for `On`; only a face that is `On` at
+                    // every sample is coincident.
+                    let on_boundary = sf.classification == FaceClass::On
+                        || opposing_probe.point_on_boundary(point, self.tol.linear);
+                    if on_boundary && coincident.is_none() {
+                        for candidate in
+                            face_interior_candidates(&self.topo, sf.face_id, point, self.tol)?
+                        {
+                            // A candidate that is itself on the opposing
+                            // boundary (the whole sub-face coincides with an
+                            // opposing face the same-domain pass left
+                            // unpaired) decides nothing either.
+                            if opposing_probe.point_on_boundary(candidate, self.tol.linear) {
+                                continue;
+                            }
+                            let class = classifier::classify_point_cached(
+                                &self.topo,
+                                opposing_solid,
+                                opposing_geoms,
+                                candidate,
+                            )?;
+                            log::trace!(
+                                "classify_sub_faces: face {:?} candidate {candidate:?} -> {class:?} (analytic={})",
+                                sf.face_id,
+                                classifier::classify_analytic(
+                                    &self.topo,
+                                    opposing_solid,
+                                    candidate
+                                )
+                                .is_some()
+                            );
+                            if matches!(class, FaceClass::Inside | FaceClass::Outside) {
+                                log::debug!(
+                                    "classify_sub_faces: face {:?} sample {:?} on the opposing boundary; re-sampled at {:?} -> {class:?}",
+                                    sf.face_id,
+                                    point,
+                                    candidate
+                                );
+                                sf.classification = class;
+                                break;
+                            }
+                        }
+                    }
                     log::trace!(
                         "classify_sub_faces: idx={idx} face={:?} rank={:?} pt={point:?} class={:?}",
                         sf.face_id,
@@ -895,6 +951,46 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
 
     let solid_id = assemble::assemble_solid(&mut topo, &selected, &[])?;
     Ok((topo, solid_id))
+}
+
+/// Alternative interior samples of a face whose first sample landed on the
+/// opposing solid's boundary.
+///
+/// Points halfway from the sample toward the outer loop's vertices that stay
+/// inside the outer loop and outside every hole, in the face's own parameter
+/// space ([`classifier::FaceLoops2d`]).
+fn face_interior_candidates(
+    topo: &Topology,
+    face_id: FaceId,
+    sample: Point3,
+    tol: Tolerance,
+) -> Result<Vec<Point3>, AlgoError> {
+    use brepkit_math::vec::Point2;
+
+    let loops = classifier::FaceLoops2d::new(topo, face_id)?;
+    if loops.outer.len() < 3 {
+        return Ok(Vec::new());
+    }
+    let Some(p0) = loops.to_uv(sample) else {
+        return Ok(Vec::new());
+    };
+    let step = (loops.outer.len() / 12).max(1);
+    let mut candidates = Vec::new();
+    for corner in loops.outer.iter().step_by(step) {
+        let q = Point2::new(0.5 * (p0.x() + corner.x()), 0.5 * (p0.y() + corner.y()));
+        if !loops.contains(q) {
+            continue;
+        }
+        if let Some(p) = loops.to_3d(q)
+            && (p - sample).length() > tol.linear
+        {
+            candidates.push(p);
+        }
+        if candidates.len() >= 8 {
+            break;
+        }
+    }
+    Ok(candidates)
 }
 
 /// Sample a point in the interior of a face.

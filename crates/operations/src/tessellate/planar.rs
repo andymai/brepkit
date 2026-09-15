@@ -880,6 +880,58 @@ pub(super) fn cdt_triangulate_simple(positions: &[Point3], normal: Vec3) -> Vec<
 
     cdt.remove_exterior(&constraints);
 
+    // A loop that revisits a vertex is pinched there. Peel the loop into
+    // simple cycles: walking the loop with a stack of open vertices, a
+    // revisit closes the cycle opened at the earlier visit (innermost first,
+    // so nested pinches come out as their own cycles) and the walk continues
+    // from the pinch. What remains on the stack is the main loop. A cycle
+    // winding against the main loop is a hole touching the boundary at that
+    // vertex (a rod's rim tangent to the top edge of the post it passes
+    // through); one winding with it is a lobe or an island and stays. The
+    // constraints already fence every cycle; only a hole's interior still
+    // needs removing, or the face double-covers the disc inside it.
+    let mut stack: Vec<usize> = Vec::new();
+    let mut open: DetHashMap<usize, usize> = DetHashMap::default();
+    let mut cycles: Vec<Vec<usize>> = Vec::new();
+    for (idx, &cv) in cdt_indices.iter().enumerate() {
+        if let Some(&at) = open.get(&cv) {
+            // Close the cycle opened at `at`; the pinch vertex stays on the
+            // stack as the main loop's, and the cycle starts with it.
+            if stack.len() > at + 1 {
+                let cycle: Vec<usize> = stack[at..].to_vec();
+                for &i in &stack[at + 1..] {
+                    open.remove(&cdt_indices[i]);
+                }
+                stack.truncate(at + 1);
+                cycles.push(cycle);
+            }
+        } else {
+            open.insert(cv, stack.len());
+            stack.push(idx);
+        }
+    }
+    if !cycles.is_empty() && stack.len() >= 3 {
+        let signed_area = |ids: &[usize]| -> f64 {
+            ids.iter()
+                .zip(ids.iter().cycle().skip(1))
+                .map(|(&a, &b)| pts2d[a].x() * pts2d[b].y() - pts2d[b].x() * pts2d[a].y())
+                .sum::<f64>()
+        };
+        let main_area = signed_area(&stack);
+        let constraint_set: DetHashSet<(usize, usize)> = constraints
+            .iter()
+            .flat_map(|&(a, b)| [(a, b), (b, a)])
+            .collect();
+        for cycle in &cycles {
+            if cycle.len() < 3 || signed_area(cycle) * main_area >= 0.0 {
+                continue;
+            }
+            let poly: Vec<Point2> = cycle.iter().map(|&i| pts2d[i]).collect();
+            let seed = find_interior_seed(&poly);
+            let _removed = cdt.flood_remove_from_point(seed, &constraint_set);
+        }
+    }
+
     let cdt_triangles = cdt.triangles();
 
     let mut cdt_to_input: DetHashMap<usize, usize> = DetHashMap::default();

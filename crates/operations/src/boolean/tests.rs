@@ -4923,6 +4923,52 @@ fn fuse_tube_standing_on_a_plate_nests_the_bore_loop_in_the_wall_loop() {
     );
 }
 
+/// The tool's arch part: a rod (r = 4, along X) passes through a post and
+/// its top is exactly tangent to the post's top face (centre z = 46, top
+/// z = 50). The rod's end cap coincides with the post's outer face. The pair
+/// fuse came back closed by edge id with the rod outside the post dropped
+/// (volume short by the rod) and a mesh with hundreds of non-manifold edges.
+#[test]
+fn fuse_rod_tangent_to_the_top_of_a_post_keeps_the_rod() {
+    let mut topo = Topology::new();
+    let post = crate::primitives::make_box(&mut topo, 6.0, 15.0, 50.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        post,
+        &brepkit_math::mat::Mat4::translation(-36.0, -7.5, 0.0),
+    )
+    .unwrap();
+    let rod = crate::primitives::make_cylinder(&mut topo, 4.0, 72.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        rod,
+        &brepkit_math::mat::Mat4::rotation_y(std::f64::consts::FRAC_PI_2),
+    )
+    .unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        rod,
+        &brepkit_math::mat::Mat4::translation(-36.0, 0.0, 46.0),
+    )
+    .unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, post, rod).unwrap();
+
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert!(!has_free_edges(&topo, result).unwrap());
+    let mesh =
+        crate::tessellate::tessellate_solid_with_tolerance(&topo, result, 0.01, 0.2).unwrap();
+    assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+    assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+    assert_eq!(count_cylinder_faces(&topo, result), 1);
+    let expected = 6.0 * 15.0 * 50.0 + std::f64::consts::PI * 16.0 * 66.0;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "post + rod volume {vol:.3} != expected {expected:.3}"
+    );
+}
+
 #[test]
 fn fuse_stacked_rounded_rect_arc_prisms_same_footprint() {
     let mut topo = Topology::new();
