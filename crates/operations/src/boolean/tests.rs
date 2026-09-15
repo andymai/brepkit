@@ -5062,6 +5062,127 @@ fn half_pin_standing_on_a_knuckle_end_touches_and_fuses_exactly() {
     assert_watertight_with_volume(&topo, fused, 3, knuckle_volume + half_volume);
 }
 
+/// Two keyhole pins that meet end to end on a bracket's knuckle face: a
+/// fitted pin (r 0.925) bores the near knuckle and stops flush with its end,
+/// and a clearance bore (r 1.0) starts on that same plane and runs through
+/// the gap and the far knuckle. Each pin alone cuts exactly and so do the two
+/// in sequence, but the batched compound cut merges them into one tool whose
+/// 0.075 step ring lies on the knuckle face, fragmented by the keyhole
+/// corners, and that arrangement leaves free edges; the batch has to hand
+/// the job to the sequential path instead of shipping the mesh fallback.
+#[test]
+#[ignore = "ready repro: the bore's base-wall section duplicates the pin hole's base edge and the internal-loops splitter keeps the touching hole with the outer piece (roadmap OPEN row)"]
+fn compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact() {
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    fn prism(topo: &mut Topology, pts: &[(f64, f64)], z0: f64, h: f64) -> SolidId {
+        let vids: Vec<_> = pts
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, z0), 1e-7)))
+            .collect();
+        let oes: Vec<_> = (0..vids.len())
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(
+                    vids[i],
+                    vids[(i + 1) % vids.len()],
+                    EdgeCurve::Line,
+                ));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wid = topo.add_wire(Wire::new(oes, true).unwrap());
+        let face = brepkit_topology::builder::make_face_from_wire(topo, wid).unwrap();
+        crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), h).unwrap()
+    }
+    // A rod plus a triangular tail whose base is the rod's horizontal
+    // diameter dropped 0.8 below the axis and whose apex sits inside the
+    // rod, the tool's keyhole pin profile.
+    fn keyhole(topo: &mut Topology, r: f64, apex: f64, base: f64, z0: f64, h: f64) -> SolidId {
+        let rod = crate::primitives::make_cylinder(topo, r, h).unwrap();
+        transform_solid(topo, rod, &Mat4::translation(6.0, 5.0, z0)).unwrap();
+        let tail = prism(
+            topo,
+            &[(6.0 - r, base), (6.0 + r, base), (6.0, 5.0 + apex)],
+            z0,
+            h,
+        );
+        let pin = boolean(topo, BooleanOp::Fuse, rod, tail).unwrap();
+        // The fuse leaves the keyhole cap in five pieces; the tool's pins
+        // arrive with unified faces.
+        crate::heal::unify_faces(topo, pin).unwrap();
+        pin
+    }
+
+    let mut topo = Topology::new();
+    // A C bracket: knuckle 1 is z 0..4, the web x 0..2 spans the gap z 4..6,
+    // knuckle 2 is z 6..10, all y 4.5..10, so the pins' keyhole outlines
+    // (y 4.075 to 6.0) cross the knuckle faces' edges the way the tool's do.
+    let bracket = {
+        let plate = prism(
+            &mut topo,
+            &[(0.0, 4.5), (10.0, 4.5), (10.0, 10.0), (0.0, 10.0)],
+            0.0,
+            4.0,
+        );
+        let web = prism(
+            &mut topo,
+            &[(0.0, 4.5), (2.0, 4.5), (2.0, 10.0), (0.0, 10.0)],
+            4.0,
+            2.0,
+        );
+        let top = prism(
+            &mut topo,
+            &[(0.0, 4.5), (10.0, 4.5), (10.0, 10.0), (0.0, 10.0)],
+            6.0,
+            4.0,
+        );
+        let lower = boolean(&mut topo, BooleanOp::Fuse, plate, web).unwrap();
+        boolean(&mut topo, BooleanOp::Fuse, lower, top).unwrap()
+    };
+    let bracket_volume = 5.5 * (40.0 + 4.0 + 40.0);
+    assert_watertight_with_volume(&topo, bracket, 0, bracket_volume);
+
+    let before = super::mesh_fallback_count();
+    let pin = keyhole(&mut topo, 0.925, 0.508, 4.2, -1.0, 5.0);
+    let bore = keyhole(&mut topo, 1.0, 0.614, 4.2, 4.0, 7.0);
+    assert_eq!(super::mesh_fallback_count(), before);
+
+    // Oracle: the two cuts in sequence stay exact.
+    let sequential = {
+        let a = crate::copy::copy_solid(&mut topo, bracket).unwrap();
+        let p = crate::copy::copy_solid(&mut topo, pin).unwrap();
+        let b = crate::copy::copy_solid(&mut topo, bore).unwrap();
+        let near = boolean(&mut topo, BooleanOp::Cut, a, p).unwrap();
+        assert_eq!(
+            super::mesh_fallback_count(),
+            before,
+            "the pin cut fell back"
+        );
+        boolean(&mut topo, BooleanOp::Cut, near, b).unwrap()
+    };
+    assert_eq!(
+        super::mesh_fallback_count(),
+        before,
+        "the bore cut fell back"
+    );
+    let cylinders = count_cylinder_faces(&topo, sequential);
+    let expected = crate::measure::solid_volume(&topo, sequential, 0.01).unwrap();
+    assert_watertight_with_volume(&topo, sequential, cylinders, expected);
+    assert!(
+        expected < bracket_volume - 15.0 && expected > bracket_volume - 25.0,
+        "{expected}"
+    );
+
+    let cut = compound_cut(&mut topo, bracket, &[pin, bore], BooleanOptions::default()).unwrap();
+    assert_eq!(
+        super::mesh_fallback_count(),
+        before,
+        "the compound cut shipped a mesh fallback"
+    );
+    assert_watertight_with_volume(&topo, cut, cylinders, expected);
+}
+
 /// A keyhole pin: a rod fused with a box whose end faces are flush with the
 /// rod's and whose footprint crosses the rim. The disc's remainder beside
 /// the bar is bounded by a 276 degree rim piece; the same-domain detector
