@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.11](https://github.com/andymai/brepkit/compare/v3.4.10...v3.4.11) (2026-09-15)
+
+
+### Bug Fixes
+
+* **algo:** clip coplanar sections against arcs, not their chords ([#1671](https://github.com/andymai/brepkit/issues/1671)) ([c7efdce](https://github.com/andymai/brepkit/commit/c7efdce04d9efb0662960f077f7e214ed2c205ed))
+
 ## [3.4.10](https://github.com/andymai/brepkit/compare/v3.4.9...v3.4.10) (2026-09-15)
 
 
