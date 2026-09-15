@@ -601,6 +601,66 @@ fn main() {
         return;
     }
 
+    // RESULT_FACES=<z> lists the result's faces whose bounds straddle that
+    // height (or every face with RESULT_FACES=all): surface, bounds, mesh
+    // triangle count and centroid-relative flux, to find a face the mesher
+    // dropped or doubled.
+    let dump_result_faces = |topo: &Topology, sid: SolidId| {
+        let Ok(want) = std::env::var("RESULT_FACES") else {
+            return;
+        };
+        let z_want: Option<f64> = want.parse().ok();
+        let faces = solid_faces(topo, sid).unwrap();
+        let Ok((_mesh, offsets)) =
+            brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
+                topo,
+                sid,
+                0.05,
+                10.0_f64.to_radians(),
+            )
+        else {
+            println!("  RESULT_FACES: grouped tessellation failed");
+            return;
+        };
+        for (i, fid) in faces.iter().enumerate() {
+            let face = topo.face(*fid).unwrap();
+            let mut lo = [f64::MAX; 3];
+            let mut hi = [f64::MIN; 3];
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid).unwrap().edges() {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    for vid in [e.start(), e.end()] {
+                        let p = topo.vertex(vid).unwrap().point();
+                        for (a, v) in [p.x(), p.y(), p.z()].iter().enumerate() {
+                            lo[a] = lo[a].min(*v);
+                            hi[a] = hi[a].max(*v);
+                        }
+                    }
+                }
+            }
+            if let Some(z) = z_want
+                && (lo[2] > z + 1e-3 || hi[2] < z - 1e-3)
+            {
+                continue;
+            }
+            let (from, to) = (offsets[i] as usize, offsets[i + 1] as usize);
+            println!(
+                "  RESULT face {fid:?} {} rev={} wires={} tris={} bbox=({:.3},{:.3},{:.3})..({:.3},{:.3},{:.3})",
+                face.surface().type_tag(),
+                face.is_reversed(),
+                1 + face.inner_wires().len(),
+                (to - from) / 3,
+                lo[0],
+                lo[1],
+                lo[2],
+                hi[0],
+                hi[1],
+                hi[2]
+            );
+        }
+    };
+
     let raw_only = std::env::var("RAW_ONLY").is_ok();
     if !raw_only {
         println!("-- operations::boolean {op} --");
@@ -625,6 +685,7 @@ fn main() {
                         if fell_back { " [MESH FALLBACK]" } else { "" }
                     ),
                 );
+                dump_result_faces(&topo, sid);
             }
             Err(e) => println!("  OPS {op} FAILED in {}ms: {e}", t.elapsed().as_millis()),
         }
