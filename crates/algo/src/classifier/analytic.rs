@@ -230,7 +230,11 @@ impl AnalyticClassifier {
                 {
                     Some(FaceClass::Outside)
                 } else {
-                    None
+                    // Within the tolerance band of a face: on the boundary,
+                    // the same verdict the convex polyhedron gives. A ray
+                    // cast from here is a coin toss, and the builder can
+                    // re-sample a sub-face whose sample landed on a face.
+                    Some(FaceClass::On)
                 }
             }
             Self::ConvexPolyhedron { planes } => {

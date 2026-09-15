@@ -438,7 +438,10 @@ fn check_edge_face_pairs(
             {
                 if !containments[face_idx].accepts(pt) {
                     log::debug!(
-                        "EF: dropping crossing of edge {eid:?} at t={t:.6} — outside face {fid:?} boundary",
+                        "EF: dropping crossing of edge {eid:?} at t={t:.6} ({:.4},{:.4},{:.4}) — outside face {fid:?} boundary",
+                        pt.x(),
+                        pt.y(),
+                        pt.z()
                     );
                     continue;
                 }
