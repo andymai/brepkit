@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.4](https://github.com/andymai/brepkit/compare/v3.4.3...v3.4.4) (2026-09-15)
+
+
+### Bug Fixes
+
+* **blend:** notch untouched caps and seed the orientation repair at prism corners ([#1654](https://github.com/andymai/brepkit/issues/1654)) ([b156f47](https://github.com/andymai/brepkit/commit/b156f47e6e5b989f401038c95c1b947d8ff61f6e))
+
 ## [3.4.3](https://github.com/andymai/brepkit/compare/v3.4.2...v3.4.3) (2026-09-15)
 
 
