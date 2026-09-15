@@ -1,0 +1,41 @@
+crates/io/tests/data/lship_lipfuse_top.bin
+  s_1ba1aaf77c517d::t_1475b7357e3d96 1
+crates/algo/src/builder/same_domain.rs
+  s_1ba1aaf77c517d::t_69d8cc8c676391 465-475
+  s_1ba1aaf77c517d::t_018e58f9985d4f 1930-1934
+  s_1ba1aaf77c517d::t_1b2db734f62f73 1958-1960
+  s_1ba1aaf77c517d::t_d0e61496bd9724 1978-1980
+  s_1ba1aaf77c517d::t_8f2220792304dc 277-287
+crates/io/tests/lship_lipfuse_inmem.rs
+  s_1ba1aaf77c517d::t_09308fff7e4b89 4-17
+  s_1ba1aaf77c517d::t_d7ce2869a64ccb 72-73,75
+.claude/skills/roadmap/SKILL.md
+  s_1ba1aaf77c517d::t_587fdd7e127e0a 147,183-187
+  s_1ba1aaf77c517d::t_4f64a6f674be79 175-182
+  s_1ba1aaf77c517d::t_7e9cafada403b8 146,162-174
+crates/operations/src/boolean/tests.rs
+  s_1ba1aaf77c517d::t_8c54f58fd8dff2 4747-4762
+  s_1ba1aaf77c517d::t_7e6ecee94e5a96 4666-4677,4683-4690,4693-4696
+  s_1ba1aaf77c517d::t_1d75d1b184b3e6 4811-4830,4833-4848
+  s_1ba1aaf77c517d::t_85630c831436ce 4831-4832
+crates/io/tests/data/lship_lipfuse_body.bin
+  s_1ba1aaf77c517d::t_1475b7357e3d96 1
+crates/algo/src/builder/same_domain/tests.rs
+  s_1ba1aaf77c517d::t_62aa70997f12ad 537-538,540,560-638
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0d59aaf2d3be47efab9cce9c3bca83947f8e0166",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
