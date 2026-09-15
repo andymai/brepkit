@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.4.9](https://github.com/andymai/brepkit/compare/v3.4.8...v3.4.9) (2026-09-15)
+
+
+### Bug Fixes
+
+* **algo:** cut a pin bore through a knuckle fused to an on-axis bracket exactly ([#1667](https://github.com/andymai/brepkit/issues/1667)) ([9d165fb](https://github.com/andymai/brepkit/commit/9d165fb14d12da1fcd2f065f1fe0d7d900dc9fe3))
+* **algo:** fuse a barrel whose axis lies on a bracket's edge exactly ([#1666](https://github.com/andymai/brepkit/issues/1666)) ([ebf46ea](https://github.com/andymai/brepkit/commit/ebf46ea2e0ee93ef76e432821908eec6a1026380))
+
 ## [3.4.8](https://github.com/andymai/brepkit/compare/v3.4.7...v3.4.8) (2026-09-15)
 
 
