@@ -1,0 +1,66 @@
+crates/blend/src/fillet_plan.rs
+  s_1ba1aaf77c517d::t_8da3d629e9e562 351-369
+crates/blend/src/builder_utils.rs
+  s_1ba1aaf77c517d::t_23259dd8033592 487,489-491
+  s_1ba1aaf77c517d::t_c0efa52b7adb71 417-428,430-433,438-441,460,480,488,493,505
+  s_1ba1aaf77c517d::t_641b7c0382715d 429,434-437,442-459,461-479,481-486,492,494-504,506-507
+crates/wasm/src/bindings/mod.rs
+  s_1ba1aaf77c517d::t_95a067fba37a24 26
+  s_1ba1aaf77c517d::t_b741de106a4010 25
+crates/wasm/src/bindings/assembly_probe_tests.rs
+  s_1ba1aaf77c517d::t_7c18bc446b0813 400
+  s_1ba1aaf77c517d::t_3e289188219c65 1-34,57-104,108-136,243-251,269-278,299-304,333-337,339-351,367,375,391-399,401-407,410-416
+  s_1ba1aaf77c517d::t_c139238f7b18e9 203-213,219-226,230-242
+  s_1ba1aaf77c517d::t_c0efa52b7adb71 214-218,227-229
+  s_1ba1aaf77c517d::t_3f81f7f04113f1 105-107,358-363,368-374,382-387,408-409
+  s_1ba1aaf77c517d::t_6d6544a1a5be61 252-268
+  s_1ba1aaf77c517d::t_91c53e45c13c66 338
+  s_1ba1aaf77c517d::t_4233423b898ef5 352,365-366
+  s_1ba1aaf77c517d::t_63c2e2b9153d2c 353-354,357,364
+  s_1ba1aaf77c517d::t_67600d137f28de 305-332
+  s_1ba1aaf77c517d::t_5c86dffd618b80 35-56
+  s_1ba1aaf77c517d::t_1ef994eb35feed 137-172
+  s_1ba1aaf77c517d::t_c71cc65cadf3c2 173-202
+  s_1ba1aaf77c517d::t_a11530b054372b 279-298
+  s_1ba1aaf77c517d::t_c5ad7e162da9b7 376-381,388-390
+  s_1ba1aaf77c517d::t_203d5206073890 355-356
+crates/io/examples/replay_fillet_variable.rs
+  s_1ba1aaf77c517d::t_9e774981f2e22c 259-276,283-301
+  s_1ba1aaf77c517d::t_3f81f7f04113f1 277-282
+  s_1ba1aaf77c517d::t_2172606047f7a2 302
+crates/blend/src/analytic.rs
+  s_1ba1aaf77c517d::t_4fb7bc6221ced8 994-1051
+  s_1ba1aaf77c517d::t_683e2fb46443a5 776-778
+  s_1ba1aaf77c517d::t_c6c316691cd437 774-775
+crates/blend/src/trimmer.rs
+  s_1ba1aaf77c517d::t_43b2e0626a140f 1393,1399-1408,1412,1415-1421,1565-1566,1577-1580,1802
+crates/blend/src/fillet_builder.rs
+  s_1ba1aaf77c517d::t_189f34a1b1f051 914-917,978-980
+  s_1ba1aaf77c517d::t_3f81f7f04113f1 938-939
+  s_1ba1aaf77c517d::t_d3af6a8b90b88d 704-710
+  s_1ba1aaf77c517d::t_f10d9da3415749 1303,1306
+  s_1ba1aaf77c517d::t_0c0c3706389e09 698-700,703,711
+  s_1ba1aaf77c517d::t_d98720d3fbe329 1314-1319,1324-1325
+  s_1ba1aaf77c517d::t_683e2fb46443a5 1320-1323
+  s_1ba1aaf77c517d::t_c0efa52b7adb71 1326
+  s_1ba1aaf77c517d::t_71d633f4d9318d 433,923-927,930,933-937,940-977
+  s_1ba1aaf77c517d::t_43b2e0626a140f 413-432,434-445,449-452,918-922,928-929,931,2158-2197
+  s_1ba1aaf77c517d::t_f147cc82f3e703 932
+  s_1ba1aaf77c517d::t_c08ed9117e6530 1195,2198-2199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9b045a752ca83a8b98e5b20894d26ccbe5c78f48",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
