@@ -1,0 +1,26 @@
+crates/operations/src/boolean/tests.rs
+  s_1ba1aaf77c517d::t_2007f70a39aaac 5169-5175,5193-5195
+  s_1ba1aaf77c517d::t_516c8249cda2e5 5196
+crates/algo/src/builder/fill_images_faces.rs
+  s_1ba1aaf77c517d::t_537239dfbf9004 4067
+  s_1ba1aaf77c517d::t_67b3454d1e2dc4 2657,2661-2670,2672-2673,4017-4019,4024-4027,4032-4041,4044-4048,4051,4053-4066,4068-4087
+  s_1ba1aaf77c517d::t_2007f70a39aaac 1841-1846,1850,2579-2583,2604-2606,3156-3158
+  s_1ba1aaf77c517d::t_f810691a8f1521 4020-4023,4028-4031,4042-4043,4049
+  s_1ba1aaf77c517d::t_f2683dbb941a07 4050,4052
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "616d935f1414c28d7222900b8fb5a629ee40ecaa",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
