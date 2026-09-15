@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.10](https://github.com/andymai/brepkit/compare/v3.4.9...v3.4.10) (2026-09-15)
+
+
+### Bug Fixes
+
+* **algo:** unwrap a periodic band's rim pieces past the surface seam by continuity ([#1669](https://github.com/andymai/brepkit/issues/1669)) ([23ba86b](https://github.com/andymai/brepkit/commit/23ba86b9204c17485873a4d159daac3dedaa48d7))
+
 ## [3.4.9](https://github.com/andymai/brepkit/compare/v3.4.8...v3.4.9) (2026-09-15)
 
 
