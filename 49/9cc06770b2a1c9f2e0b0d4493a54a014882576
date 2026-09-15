@@ -1,0 +1,67 @@
+crates/blend/src/fillet_plan.rs
+  s_1ba1aaf77c517d::t_4b79c13e9971df 13,16
+  s_1ba1aaf77c517d::t_478e70d3799179 176-190
+  s_1ba1aaf77c517d::t_b478fe5d16fe9c 536-573
+crates/io/examples/replay_fillet_variable.rs
+  s_1ba1aaf77c517d::t_efe275af906e3a 344-350
+  s_1ba1aaf77c517d::t_f5e4f8f877360f 18-55
+  s_1ba1aaf77c517d::t_6ebfc669a6f08f 351
+  s_1ba1aaf77c517d::t_1aada6f877d9a2 308-331,333-338
+  s_1ba1aaf77c517d::t_5690767f462aa3 332
+crates/blend/src/trimmer.rs
+  s_1ba1aaf77c517d::t_e71e0ecd9af3bf 1393-1415,1420
+  s_1ba1aaf77c517d::t_389ee1853912b0 1555
+  s_1ba1aaf77c517d::t_fd3ec620b92b87 1788
+  s_1ba1aaf77c517d::t_e38ab7bb2781ce 3538
+  s_1ba1aaf77c517d::t_9539b5c7c10286 1778-1787,1790,1792,1795-1809,1811-1822,1825-1829
+  s_1ba1aaf77c517d::t_a8ca85eaed6891 3381
+  s_1ba1aaf77c517d::t_79c8686956b992 3582
+  s_1ba1aaf77c517d::t_fe44cf5df704a7 1511-1521
+  s_1ba1aaf77c517d::t_bf10cfdbac7977 2834,2837-2838
+  s_1ba1aaf77c517d::t_26c09fea984e41 1566
+  s_1ba1aaf77c517d::t_63d26d7b6f241a 1943,1948
+  s_1ba1aaf77c517d::t_fb008da6db960b 2854
+  s_1ba1aaf77c517d::t_66c580719caf3a 3715-3719
+  s_1ba1aaf77c517d::t_66507e89a2a366 3461-3463,3654-3655,3720-3721
+crates/io/tests/groupedscoop_fillet_cut_inmem.rs
+  s_1ba1aaf77c517d::t_2c01421bd03f46 4-24
+  s_1ba1aaf77c517d::t_4f291616d3aab2 39
+  s_1ba1aaf77c517d::t_09eb680b6fd351 312-334
+  s_1ba1aaf77c517d::t_66507e89a2a366 228-241
+  s_1ba1aaf77c517d::t_447622c7c7e12f 225-227,242-253
+  s_1ba1aaf77c517d::t_84aa39304e3d81 268-272,275,279,285-291,293-294
+crates/blend/src/corner.rs
+  s_1ba1aaf77c517d::t_873da2f32573da 1894,1896-1902,1904-1917
+  s_1ba1aaf77c517d::t_3879b84f033527 2035-2047
+  s_1ba1aaf77c517d::t_79815df41695df 1895,1903,2216,2227
+  s_1ba1aaf77c517d::t_51bf7aa74042d7 438
+  s_1ba1aaf77c517d::t_0dcda8aa1804eb 1927-1967
+  s_1ba1aaf77c517d::t_e6da918b08dd6b 2215,2217-2226,2228-2241
+crates/blend/src/fillet_builder.rs
+  s_1ba1aaf77c517d::t_da69d5f72e6463 711
+  s_1ba1aaf77c517d::t_1c4e3a04e1bb76 625,642-646,654-687
+  s_1ba1aaf77c517d::t_345ce2870187a1 452,456
+  s_1ba1aaf77c517d::t_7cc579999148ca 738-739,741-742,746-749
+  s_1ba1aaf77c517d::t_aac50379c37b74 400,413-441
+  s_1ba1aaf77c517d::t_66507e89a2a366 647-653
+.claude/skills/roadmap/SKILL.md
+  s_1ba1aaf77c517d::t_366f3b2c6e5408 29-34
+  s_1ba1aaf77c517d::t_f9780114c3fe83 145
+  s_1ba1aaf77c517d::t_dc235dd1fc38b5 160-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "499cc06770b2a1c9f2e0b0d4493a54a014882576",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
