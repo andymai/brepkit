@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.6](https://github.com/andymai/brepkit/compare/v3.4.5...v3.4.6) (2026-09-15)
+
+
+### Bug Fixes
+
+* **algo:** a section loop that encloses a face's hole takes that hole into its disc ([#1659](https://github.com/andymai/brepkit/issues/1659)) ([b4ee691](https://github.com/andymai/brepkit/commit/b4ee6913a693670cf519d311b1e06742b54af543))
+
 ## [3.4.5](https://github.com/andymai/brepkit/compare/v3.4.4...v3.4.5) (2026-09-15)
 
 
