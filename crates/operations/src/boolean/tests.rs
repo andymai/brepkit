@@ -5086,6 +5086,31 @@ fn cut_a_pin_bore_and_slot_through_a_knuckle_flush_with_its_bracket() {
         (measured_removed - removed).abs() < 0.005 * removed,
         "slot removed {measured_removed:.4}, expected {removed:.4}"
     );
+    // Volume alone cannot tell a shifted removal from the right one: probe
+    // material inside the slot but outside the bore, and its neighbours
+    // beyond the slot's width and length that must stay.
+    let probe = |solid: SolidId, p: Point3| {
+        crate::classify::classify_point(&topo, solid, p, 0.01, 1e-7).unwrap()
+    };
+    let in_slot = Point3::new(0.95, 0.0, 4.0);
+    let beside_slot = Point3::new(0.95, 0.45, 4.0);
+    let past_slot = Point3::new(1.8, 0.0, 4.0);
+    assert_eq!(
+        probe(bored, in_slot),
+        crate::classify::PointClassification::Inside
+    );
+    assert_eq!(
+        probe(slotted, in_slot),
+        crate::classify::PointClassification::Outside
+    );
+    assert_eq!(
+        probe(slotted, beside_slot),
+        crate::classify::PointClassification::Inside
+    );
+    assert_eq!(
+        probe(slotted, past_slot),
+        crate::classify::PointClassification::Inside
+    );
 }
 
 #[test]

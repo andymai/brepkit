@@ -292,8 +292,10 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
 /// sector arcs are minor in u, so the closer image is the consistent one;
 /// deriving the span from the circle's own parameterization is unreliable
 /// because a stored normal opposite the surface axis flips the sign).
-/// Endpoints away from the seam are never touched, so consistent faces are
-/// no-ops.
+/// Every open piece then takes the period copy of each endpoint nearest the
+/// running u (start, native-arc midpoint, end), so a rim that passes through
+/// the seam at a plain vertex stays continuous; a face whose u is already
+/// consistent is a no-op because every endpoint is already the nearest copy.
 fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurface) {
     use std::f64::consts::TAU;
 
