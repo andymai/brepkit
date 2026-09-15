@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789471659433,
+  "lastUpdate": 1789479532724,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34667,6 +34667,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45120573,
             "range": "± 475977",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ebf46ea2e0ee93ef76e432821908eec6a1026380",
+          "message": "fix(algo): fuse a barrel whose axis lies on a bracket's edge exactly (#1666)\n\n## Summary\n\nThe click-hinge knuckle (`hingeSwing.scenario`, op22 and its siblings)\nfell to the mesh fallback. The bracket's two faces through the barrel's\naxis cut the end caps radially, one of them through the rims' seam\nvertices, and the wall keeps 270 degrees around its seam. Every root\nsits in the closed-rim machinery:\n\n- **Holed planar face sections.** The line clipper dropped any section\nwith fewer than two outer crossings, so the cap annulus never got its\nring bridges. It now classifies such sections against the outer wire and\nthe holes together; the hole promotion accepts a section that ends on a\nhole vertex; a two-edge spur loop with a promoted hole routes the face\nto the arrangement.\n- **Closed rim pave blocks.** A closed rim's block spanned the circle\nfrom its own origin rather than the seam vertex, so its children walked\nbackwards, and a rim split once left two arcs sharing both endpoints\nthat the endpoint-keyed merge conflated. `make_blocks` anchors closed\ncircle and ellipse blocks at the seam and paves the longer arc's middle;\nthe planar splitter mirrors the split on rims it re-splits itself; the\nEF crossing angle is brought into the same turn.\n- **Boundary winding.** The `cw_loops` detection and the hole\n`outer_sign` sampled reversed arcs backwards through their pcurves; both\nuse the arc-true frame sampler now.\n- **Wrapped sectors.** The assembler's outward flux and the analytic\ncylinder volume both read a 270 degree wall as a full turn. The flux\nunwraps periodic samples along the wire; `angular_range_from_wire_arcs`\nwalks circle and ellipse rims (spline-bounded blend bands keep the old\nheuristic, since a rational arc carries its full circle as its domain).\n- The sector splitter accepts fragmented rims.\n\nRefuted on the way: paving FF Line sections at every boundary vertex of\nboth faces broke seven io fixtures and mis-measured one hinge op by 0.5\nmm3 while looking watertight; the holed-face clip alone yields the same\nbridges.\n\n## Verification\n\n- New pins\n`fuse_tube_with_a_bracket_edge_on_its_axis_splits_the_annulus_caps` and\n`fuse_rod_with_a_bracket_edge_on_its_axis_splits_the_end_discs`.\n- Captured hinge ops: every pairwise op replays exact and watertight\n(op22/27/32/37/42/47/65..85 were mesh fallbacks); the fuse volume\nmatches `A + B - A∩B` at fine deflection.\n- `cargo nextest run` for algo (219), operations (1057), io (293) and\nwasm (232): all green. Clippy clean on the touched crates.\n- Roadmap updated: the knuckle entry in Closed, the hang row notes that\nthe captured ops replay fast natively.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFuses involving a barrel whose axis lies on a bracket edge now produce\nexact, watertight B-Reps instead of using the mesh fallback, fixing the\nclick-hinge knuckle operations and preserving their 270° wall sectors.\n\n- Clips partial sections of holed planar faces against both the outer\nwire and holes.\n- Anchors closed circle and ellipse pave blocks at their seam and keeps\nsplit rim arcs distinct.\n- Corrects reversed-arc winding, periodic unwrapping, cylinder volume\nranges, and fragmented cylinder rims.\n- Adds rod and tube regression tests for watertight topology, cylinder\ncounts, and volume accuracy.\n- Extends the replay harness with free-edge, face-winding, volume, and\nselected-face diagnostics.\n\n<sup>Written for commit 1cd39040e9b325b8ec693cd76d1af1da7877ff44.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1666?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T13:36:32Z",
+          "tree_id": "1856e6b889b4a3f33d1e1465929cece67460cd7e",
+          "url": "https://github.com/andymai/brepkit/commit/ebf46ea2e0ee93ef76e432821908eec6a1026380"
+        },
+        "date": 1789479530183,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 801466,
+            "range": "± 1160",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 868944,
+            "range": "± 1285",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10452,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 584124,
+            "range": "± 490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35137872,
+            "range": "± 94026",
             "unit": "ns/iter"
           }
         ]
