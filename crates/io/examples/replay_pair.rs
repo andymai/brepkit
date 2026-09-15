@@ -631,12 +631,18 @@ fn main() {
             use brepkit_topology::shell::Shell;
             use brepkit_topology::solid::Solid;
             let mut all_faces = Vec::new();
+            let mut inner_shells = Vec::new();
             for &t in &tools {
-                let outer = topo.solid(t).unwrap().outer_shell();
+                let solid = topo.solid(t).unwrap();
+                let (outer, inners) = (solid.outer_shell(), solid.inner_shells().to_vec());
                 all_faces.extend_from_slice(topo.shell(outer).unwrap().faces());
+                for inner in inners {
+                    let faces = topo.shell(inner).unwrap().faces().to_vec();
+                    inner_shells.push(topo.add_shell(Shell::new(faces).unwrap()));
+                }
             }
             let outer_id = topo.add_shell(Shell::new(all_faces).unwrap());
-            b = topo.add_solid(Solid::new(outer_id, Vec::new()));
+            b = topo.add_solid(Solid::new(outer_id, inner_shells));
             describe(&topo, b, "B(merged tools)");
         } else if std::env::var("TOOLS_SEQ").is_ok() {
             println!("-- sequential cuts with {} tools --", tools.len());
