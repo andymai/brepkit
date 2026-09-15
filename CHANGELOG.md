@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.5](https://github.com/andymai/brepkit/compare/v3.4.4...v3.4.5) (2026-09-15)
+
+
+### Bug Fixes
+
+* **algo:** coaxial same-domain pairs take their orientation from the surface normal ([#1657](https://github.com/andymai/brepkit/issues/1657)) ([5dedd02](https://github.com/andymai/brepkit/commit/5dedd02feb4350bbb5f07f078d0bea6e820bfc91))
+
 ## [3.4.4](https://github.com/andymai/brepkit/compare/v3.4.3...v3.4.4) (2026-09-15)
 
 
