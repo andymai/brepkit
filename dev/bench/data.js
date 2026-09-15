@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789484224596,
+  "lastUpdate": 1789486455276,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34829,6 +34829,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42040124,
             "range": "± 105996",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "23ba86b9204c17485873a4d159daac3dedaa48d7",
+          "message": "fix(algo): unwrap a periodic band's rim pieces past the surface seam by continuity (#1669)\n\n## Summary\n\n- A periodic band whose rims pass through the surface seam at a plain\nvertex (a bore wall with its face seam a quarter turn from the\nsurface's, after a slot paves the rims) folded its boundary loop: pieces\npast the crossing got principal-value u, the wire builder traced one\nloop with rim arcs used three times, and the cut fell back to a mesh.\n- `resolve_seam_endpoint_uv` now unwraps every open boundary piece along\nthe wire by continuity (start, midpoint in the arc's native\nparameterisation, end), not only endpoints exactly on the seam. Closed\nrims keep their conventional full-period pcurve, which is not anchored\nat the seam vertex's u. A midpoint at a sphere pole or a cone apex has\nno u, so such a piece hops straight to its end.\n- Debug aids: split edges log their original edge, parameter range and\nendpoints; the splitter's STRACE-PRE lines carry 3D endpoints.\n\n## Verification\n\n- Pin extended:\n`cut_a_pin_bore_and_slot_through_a_knuckle_flush_with_its_bracket` (rod\nr2.2 fused to a 3x3 bracket, bored r0.9, then slotted 1.2x0.6 across the\nbore's seam) is watertight with the exact volume.\n- Replays of the captured hinge operands hold: the first pin cut and the\nknuckle fuses (op22, op65, the tube) stay exact; the second pin's\ncoplanar end stays on its open roadmap row.\n- algo, operations, io and wasm suites green; clippy clean.\n\n## Roadmap\n\nThe \"periodic band with the seam inside a section-bounded sector\" row\nmoves to Closed with the pin and the mechanism.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes periodic band cuts that cross a surface seam. These cuts\npreviously folded their boundary loops and fell back to a mesh; open rim\npieces now unwrap by continuity while closed rims retain their\nconventional full-period pcurves.\n\n**Bug Fixes**\n\n- Handles seam-crossing pieces by sampling their start, native midpoint,\nand end, including sphere poles and cone apexes where midpoint `u` is\nundefined.\n- Extends the pin regression test with a slot across the bore seam,\nchecking watertightness, exact removed volume, and point classification\ninside and around the slot.\n- Adds source edges, parameter ranges, and 3D endpoints to split-edge\nand face-splitter debug logs.\n\n<sup>Written for commit 4af67f13e354f85d6f6a0e0d11d8d343ae28b6b3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1669?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T15:31:41Z",
+          "tree_id": "7111c3cb438cb568f4fd2a308bd23a1fd7d4be35",
+          "url": "https://github.com/andymai/brepkit/commit/23ba86b9204c17485873a4d159daac3dedaa48d7"
+        },
+        "date": 1789486451645,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 993264,
+            "range": "± 3160",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1074505,
+            "range": "± 3347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12247,
+            "range": "± 87",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 744401,
+            "range": "± 1326",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41821851,
+            "range": "± 198544",
             "unit": "ns/iter"
           }
         ]
