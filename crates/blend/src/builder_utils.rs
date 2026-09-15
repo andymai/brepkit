@@ -414,6 +414,97 @@ pub fn create_blend_face_from_registry(
     })
 }
 
+/// Make a blend face's effective normal agree with its effective winding.
+///
+/// The orientation propagation pairs a new face with its neighbours by
+/// toggling its reversal flag, which keeps the shared edge senses consistent
+/// but inverts the face whenever its raw wire was wound clockwise around the
+/// blend surface's normal (the registry plans each contact against the
+/// support face it borders, the same pattern at a corner and at its mirror
+/// image). The seeded normal check cannot see that when every input face was
+/// rebuilt. Judge the effective winding by the boundary's area vector against
+/// the surface normal at its centroid and triple flip a disagreeing face
+/// (reverse the wire, invert its raw senses, toggle the flag): the effective
+/// senses stay, the effective normal flips. Returns whether it flipped.
+///
+/// # Errors
+///
+/// Returns [`BlendError`] when a topology lookup fails.
+pub fn orient_face_to_winding(topo: &mut Topology, face_id: FaceId) -> Result<bool, BlendError> {
+    let face = topo.face(face_id)?;
+    let surface = face.surface().clone();
+    let reversed = face.is_reversed();
+    let wire_id = face.outer_wire();
+    let mut oriented = topo.wire(wire_id)?.edges().to_vec();
+    if reversed {
+        oriented.reverse();
+    }
+    let mut points = Vec::with_capacity(oriented.len() * 8);
+    for oe in &oriented {
+        let edge = topo.edge(oe.edge())?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        for sample in 0..8 {
+            #[allow(clippy::cast_precision_loss)]
+            let fraction = f64::from(sample) / 8.0;
+            let t = if oe.is_forward() ^ reversed {
+                t0 + (t1 - t0) * fraction
+            } else {
+                t1 - (t1 - t0) * fraction
+            };
+            points.push(edge.curve().evaluate_with_endpoints(t, start, end));
+        }
+    }
+    if points.len() < 3 {
+        return Ok(false);
+    }
+    let mut area = Vec3::new(0.0, 0.0, 0.0);
+    let mut centroid = Vec3::new(0.0, 0.0, 0.0);
+    for (index, point) in points.iter().enumerate() {
+        let next = points[(index + 1) % points.len()];
+        let (p, q) = (
+            Vec3::new(point.x(), point.y(), point.z()),
+            Vec3::new(next.x(), next.y(), next.z()),
+        );
+        area += p.cross(q);
+        centroid += p;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let centroid = centroid * (1.0 / points.len() as f64);
+    let centroid = Point3::new(centroid.x(), centroid.y(), centroid.z());
+    let normal = match &surface {
+        FaceSurface::Plane { normal, .. } => *normal,
+        other => {
+            let Some((u, v)) = other.project_point(centroid) else {
+                return Ok(false);
+            };
+            other.normal(u, v)
+        }
+    };
+    let normal = if reversed { -normal } else { normal };
+    let agreement = area.dot(normal);
+    log::debug!(
+        "face {face_id:?} {} winding agreement {agreement:.4} (|area| {:.4})",
+        surface.type_tag(),
+        area.length()
+    );
+    if agreement.abs() <= 1e-9 || agreement > 0.0 {
+        return Ok(false);
+    }
+    let wire = topo.wire_mut(wire_id)?;
+    let mut flipped = wire.edges().to_vec();
+    flipped.reverse();
+    for oe in &mut flipped {
+        *oe = OrientedEdge::new(oe.edge(), !oe.is_forward());
+    }
+    for (slot, oe) in wire.edges_mut().iter_mut().zip(flipped) {
+        *slot = oe;
+    }
+    topo.face_mut(face_id)?.set_reversed(!reversed);
+    Ok(true)
+}
+
 /// Replace a face's two-edge corner path `from -> corner -> to` with the
 /// single cross-section arc `edge`, notching the fillet's end profile out of
 /// an end cap so the cap and the blend share one edge entity. Both replaced

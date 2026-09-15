@@ -251,11 +251,54 @@ fn main() {
     let _ = log::set_logger(&TAP);
     log::set_max_level(log::LevelFilter::Debug);
     let input = std::env::var_os("F").expect("F=<input.bin>");
-    let spec_path = std::env::var_os("SPEC").expect("SPEC=<spec.json>");
 
     let mut topo = Topology::new();
     let solid = deserialize_solid(&std::fs::read(input).unwrap(), &mut topo).unwrap();
     census(&topo, solid, "INPUT");
+
+    // `V2_ALL=<radius>`: every filletable edge at one constant radius through
+    // the v2 engine (the cross-one-row fixture's call), no spec needed.
+    if let Ok(radius) = std::env::var("V2_ALL") {
+        let radius: f64 = radius.parse().unwrap();
+        let mut all = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+            let face = topo.face(fid).unwrap();
+            let mut wires = vec![face.outer_wire()];
+            wires.extend_from_slice(face.inner_wires());
+            for wid in wires {
+                for oe in topo.wire(wid).unwrap().edges() {
+                    if seen.insert(oe.edge()) {
+                        all.push(oe.edge());
+                    }
+                }
+            }
+        }
+        let edges = brepkit_operations::query::filter_filletable_edges(&topo, solid, &all).unwrap();
+        println!(
+            "  V2_ALL: {} of {} edges filletable, r={radius}",
+            edges.len(),
+            all.len()
+        );
+        match brepkit_operations::blend_ops::fillet_v2(&mut topo, solid, &edges, radius) {
+            Ok(result) => {
+                println!(
+                    "  V2: succeeded={} failed={} partial={}",
+                    result.succeeded.len(),
+                    result.failed.len(),
+                    result.is_partial
+                );
+                for (eid, err) in result.failed.iter().take(1) {
+                    println!("  V2 FAILED {eid:?}: {err}");
+                }
+                census(&topo, result.solid, "V2RESULT");
+            }
+            Err(e) => println!("  V2 ERR: {e}"),
+        }
+        return;
+    }
+
+    let spec_path = std::env::var_os("SPEC").expect("SPEC=<spec.json>");
 
     let specs: Vec<serde_json::Value> =
         serde_json::from_str(&std::fs::read_to_string(spec_path).unwrap()).unwrap();

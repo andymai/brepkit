@@ -1390,25 +1390,35 @@ fn mapped_contact_forward(
 }
 
 #[allow(clippy::too_many_lines)]
-/// Which boundary edges a single-contact trim may split where a contact ends
-/// on them.
+/// Which boundary edges a trim may split where a contact ends on them.
 #[derive(Clone, Copy)]
 pub enum BoundarySplitPolicy<'a> {
     /// Every boundary edge. A one-edge fillet's untouched end caps take the
     /// split so the end-cap notch can replace their corner path.
     All,
-    /// Only boundary edges touching none of these vertices. A multi-edge
-    /// fillet splits its junction spokes so both walls share one contact
-    /// vertex, while a stripe's terminal-end spoke keeps the runout closure
-    /// that expects the untouched cap to hold the whole edge.
-    ExceptAt(&'a std::collections::HashSet<VertexId>),
+    /// A multi-edge fillet. A face with one contact splits every edge except
+    /// those touching an `unsplit` terminal vertex, whose cap cannot be
+    /// notched and keeps the runout closure that expects the whole spoke.
+    /// A face with several contacts splits only edges touching a
+    /// `notchable` terminal vertex, whose planar cap takes the arc; its
+    /// contacts elsewhere already close through shared junction edges.
+    Selective {
+        unsplit: &'a std::collections::HashSet<VertexId>,
+        notchable: &'a std::collections::HashSet<VertexId>,
+    },
 }
 
 impl BoundarySplitPolicy<'_> {
-    fn allows(self, start: VertexId, end: VertexId) -> bool {
+    fn allows(self, single_contact: bool, start: VertexId, end: VertexId) -> bool {
         match self {
             Self::All => true,
-            Self::ExceptAt(vertices) => !vertices.contains(&start) && !vertices.contains(&end),
+            Self::Selective { unsplit, notchable } => {
+                if single_contact {
+                    !unsplit.contains(&start) && !unsplit.contains(&end)
+                } else {
+                    notchable.contains(&start) || notchable.contains(&end)
+                }
+            }
         }
     }
 }
@@ -1552,7 +1562,8 @@ fn rebuild_mapped_parametric_face(
         let curve = restriction.curve.clone().unwrap_or(EdgeCurve::Line);
         contact_edges.push(topo.add_edge(Edge::new(start_vertex, end_vertex, curve)));
     }
-    if restrictions.len() == 1 {
+    {
+        let single_contact = restrictions.len() == 1;
         for &vertex_id in &new_vertices.clone() {
             let point = topo.vertex(vertex_id)?.point();
             'edges: for &wire_id in &wire_ids {
@@ -1563,7 +1574,10 @@ fn rebuild_mapped_parametric_face(
                     }
                     let edge = topo.edge(oriented.edge())?;
                     let (s, t) = (edge.start(), edge.end());
-                    if s == vertex_id || t == vertex_id || !split_policy.allows(s, t) {
+                    if s == vertex_id
+                        || t == vertex_id
+                        || !split_policy.allows(single_contact, s, t)
+                    {
                         continue;
                     }
                     let sp = topo.vertex(s)?.point();
@@ -1785,7 +1799,7 @@ fn rebuild_mapped_parametric_face(
         // trim split the same edge at another height. A run that never
         // reaches the contact's vertex belongs to a contact ending inside
         // the face and keeps its connector.
-        if restrictions.len() == 1 {
+        {
             let piece_count = pieces.len();
             let mut drop = vec![false; piece_count];
             for index in 0..piece_count {

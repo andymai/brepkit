@@ -410,34 +410,46 @@ impl<'a> FilletBuilder<'a> {
                 topo.face(face_id)
                     .is_ok_and(|face| face.surface().is_planar())
             });
-        // Without a plan every source vertex is treated as terminal, which
-        // keeps the per-edge fallback on its runout closure everywhere.
-        let unsplit_vertices: HashSet<VertexId> = plan.as_ref().map_or_else(
-            || {
-                all_edges
-                    .iter()
-                    .filter_map(|(edge_id, _)| topo.edge(*edge_id).ok())
-                    .flat_map(|edge| [edge.start(), edge.end()])
-                    .collect()
-            },
-            |fillet_plan| {
-                fillet_plan
-                    .junctions
-                    .iter()
-                    .filter(|junction| {
-                        matches!(
-                            junction.classification,
-                            crate::fillet_plan::CornerClassification::Terminal
-                        )
-                    })
-                    .map(|junction| junction.vertex)
-                    .collect()
-            },
-        );
+        // A terminal vertex whose third face is a planar cap with straight
+        // corner edges takes the notch: the spoke splits there on every
+        // face and the cap adopts the cross-section arc. Any other terminal
+        // keeps the runout closure, which expects the whole spoke. Without a
+        // plan every source vertex is treated as an unsplit terminal.
+        let mut unsplit_vertices: HashSet<VertexId> = HashSet::new();
+        let mut notchable_vertices: HashSet<VertexId> = HashSet::new();
+        if let Some(fillet_plan) = plan.as_ref() {
+            for junction in &fillet_plan.junctions {
+                if !matches!(
+                    junction.classification,
+                    crate::fillet_plan::CornerClassification::Terminal
+                ) {
+                    continue;
+                }
+                let notchable = junction
+                    .incident_contours
+                    .first()
+                    .and_then(|&contour| fillet_plan.contours.get(contour))
+                    .is_some_and(|contour| terminal_cap_is_notchable(topo, junction, contour));
+                if notchable && std::env::var("BK_NO_NOTCHABLE").is_err() {
+                    notchable_vertices.insert(junction.vertex);
+                } else {
+                    unsplit_vertices.insert(junction.vertex);
+                }
+            }
+        } else {
+            unsplit_vertices = all_edges
+                .iter()
+                .filter_map(|(edge_id, _)| topo.edge(*edge_id).ok())
+                .flat_map(|edge| [edge.start(), edge.end()])
+                .collect();
+        }
         let split_policy = if single_planar_stripe {
             trimmer::BoundarySplitPolicy::All
         } else {
-            trimmer::BoundarySplitPolicy::ExceptAt(&unsplit_vertices)
+            trimmer::BoundarySplitPolicy::Selective {
+                unsplit: &unsplit_vertices,
+                notchable: &notchable_vertices,
+            }
         };
         let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();
         restriction_faces.sort_unstable_by_key(|face| face.index());
@@ -683,8 +695,20 @@ impl<'a> FilletBuilder<'a> {
                             .entry(handle)
                             .is_some_and(|entry| entry.start.vertex == start);
                         boundary_registry.set_owner_forward(handle, 1, forward)?;
+                        log::debug!(
+                            "cross-section {start:?}->{end:?} of contour {contour_id} adopts handle {handle}"
+                        );
                         return Ok(Some((handle, 1)));
                     }
+                    log::debug!(
+                        "cross-section {start:?}->{end:?} of contour {contour_id} registered fresh ({:.7},{:.7},{:.7})->({:.7},{:.7},{:.7})",
+                        start_point.x(),
+                        start_point.y(),
+                        start_point.z(),
+                        end_point.x(),
+                        end_point.y(),
+                        end_point.z()
+                    );
                     let key = BoundaryKey::cross_section(
                         contour_id,
                         usize::from(start == p2_start || start == p2_end),
@@ -885,6 +909,73 @@ impl<'a> FilletBuilder<'a> {
             blend_cross_by_stripe[si] = (info.cross_end, info.cross_start);
             blend_cross_edges.extend(info.cross_end);
             blend_cross_edges.extend(info.cross_start);
+        }
+
+        // Terminal ends notch the untouched cap BEFORE the corner solver runs:
+        // once every wall has dropped the spoke pieces below its contact, the
+        // runout would otherwise chain the corner arcs and the walls' kept rim
+        // pieces into one loop and rebuild the whole cap as a second patch.
+        // Notch the fillet's end cross-section arcs out of the faces that
+        // still cover the scooped corner (the untouched end caps): replace
+        // each cap's two-edge corner path with the blend's own cross edge so
+        // both sides share one edge entity.
+
+        if std::env::var("BK_NO_EARLY_NOTCH").is_err() {
+            for arc in &blend_cross_edges {
+                let corner_owned = boundary_registry
+                    .handle_for_edge(arc.0)
+                    .and_then(|handle| boundary_registry.entry(handle))
+                    .and_then(|entry| entry.owners[1].face)
+                    .is_some();
+                if corner_owned {
+                    continue;
+                }
+                let candidates: Vec<(FaceId, FaceId)> = original_faces
+                    .iter()
+                    .map(|&f| (f, face_replacements.get(&f).copied().unwrap_or(f)))
+                    .collect();
+                for (orig, fid) in candidates {
+                    if let Some(nf) =
+                        crate::builder_utils::notch_face_corner_with_arc(topo, fid, *arc)?
+                    {
+                        face_replacements.insert(orig, nf);
+                        break;
+                    }
+                }
+            }
+
+            // Terminal cross-section boundaries not consumed by a corner patch
+            // belong to the support face created by notch surgery. Attach that
+            // planned owner now instead of relying on positional welding.
+            for handles in &blend_cross_handles {
+                for handle in [handles.0, handles.1].into_iter().flatten() {
+                    let Some(edge) = boundary_registry
+                        .entry(handle)
+                        .and_then(crate::boundary_registry::BoundaryEntry::edge_id)
+                    else {
+                        continue;
+                    };
+                    let owner_attached = boundary_registry
+                        .entry(handle)
+                        .and_then(|entry| entry.owners[1].face)
+                        .is_some();
+                    if owner_attached {
+                        continue;
+                    }
+                    let support_face = original_faces.iter().find_map(|&original| {
+                        let replacement = face_replacements
+                            .get(&original)
+                            .copied()
+                            .unwrap_or(original);
+                        face_edge_forward(topo, replacement, edge).map(|_| replacement)
+                    });
+                    let Some(support_face) = support_face else {
+                        continue;
+                    };
+                    boundary_registry.set_owner_face(handle, 1, support_face)?;
+                    let _ = boundary_registry.oriented_edge(topo, handle, 1)?;
+                }
+            }
         }
 
         // The ordered junction solver needs the final copy-on-write support
@@ -1101,6 +1192,7 @@ impl<'a> FilletBuilder<'a> {
                 let _ = boundary_registry.oriented_edge(topo, handle, 1)?;
             }
         }
+
         // Runout support edges are discovered from the final support wires.
         // Complete their deferred support owners now that notch surgery has
         // selected the copy-on-write face IDs.
@@ -1208,9 +1300,10 @@ impl<'a> FilletBuilder<'a> {
             .filter(|f| original_set.contains(f))
             .copied()
             .collect();
+        let seed_set: std::collections::HashSet<FaceId> = seeds.iter().copied().collect();
         let new_faces: Vec<FaceId> = result_faces
             .iter()
-            .filter(|f| !original_set.contains(f))
+            .filter(|f| !seed_set.contains(f))
             .copied()
             .collect();
         // Registry-backed boundaries are the sole closure mechanism for the
@@ -1218,7 +1311,19 @@ impl<'a> FilletBuilder<'a> {
         // filling are intentionally not available here.
         brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
         brepkit_topology::orientation::normalize_face_normals(topo, &new_faces, &seeds)?;
-        brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
+        // A band whose raw wire winds against its surface normal is paired by
+        // the propagation through a flag toggle that inverts it, and any
+        // rebuilt neighbour the walk reached through that band was toggled
+        // with it. Two rounds of winding repair and re-pairing let the seeded
+        // walk win everywhere.
+        for _ in 0..2 {
+            if std::env::var("BK_NO_WINDING").is_err() {
+                for &face_id in &new_faces {
+                    crate::builder_utils::orient_face_to_winding(topo, face_id)?;
+                }
+            }
+            brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
+        }
         boundary_registry.refresh_owner_orientations(topo)?;
         // The post-assembly shell may come out globally inverted (every
         // face's effective normal pointing inward) while still passing the
@@ -2048,6 +2153,48 @@ fn assemble_closed_rim(
     registry.install_pcurves(topo, wall_handle)?;
 
     Ok(band_face_id)
+}
+
+/// Whether a stripe's terminal vertex sits on a planar cap whose two edges
+/// at the vertex are straight: the end-cap notch can replace that corner
+/// path with the stripe's cross-section arc.
+fn terminal_cap_is_notchable(
+    topo: &Topology,
+    junction: &crate::fillet_plan::VertexJunction,
+    contour: &crate::fillet_plan::FilletContour,
+) -> bool {
+    let caps: Vec<FaceId> = junction
+        .face_fan
+        .iter()
+        .copied()
+        .filter(|&face| face != contour.side1 && face != contour.side2)
+        .collect();
+    let [cap] = caps.as_slice() else {
+        return false;
+    };
+    let Ok(face) = topo.face(*cap) else {
+        return false;
+    };
+    if !face.surface().is_planar() || !face.inner_wires().is_empty() {
+        return false;
+    }
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return false;
+    };
+    let mut straight_at_vertex = 0;
+    for oriented in wire.edges() {
+        let Ok(edge) = topo.edge(oriented.edge()) else {
+            return false;
+        };
+        if edge.start() != junction.vertex && edge.end() != junction.vertex {
+            continue;
+        }
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            return false;
+        }
+        straight_at_vertex += 1;
+    }
+    straight_at_vertex == 2
 }
 
 fn succeeded_candidates(

@@ -771,7 +771,11 @@ pub fn plane_cylinder_fillet(
     //     discriminator: a bounded disc cap has no inner wires and every
     //     boundary vertex lies within `r_c` of the cylinder axis; a plate that
     //     the post stands on has boundary vertices beyond `r_c`.
-    let rim = !concave && plane_is_bounded_disc(topo, face_plane, cyl, r_c)?;
+    let rim = !concave
+        && (plane_is_bounded_disc(topo, face_plane, cyl, r_c)?
+            || (std::env::var("BK_NO_SIDE").is_err()
+                && plane_material_inside_cylinder(topo, face_plane, cyl, spine, n_p_inward)?
+                    .unwrap_or(false)));
 
     // 3) Only a bounded disc rim contracts toward the axis. It must remain a
     // ring torus (`major > minor`). Post and hole contacts expand away from
@@ -985,6 +989,64 @@ fn plane_is_bounded_disc(
         }
     }
     Ok(true)
+}
+
+/// Whether the planar face's material next to the spine lies inside the
+/// cylinder: the cap of a rounded prism (its corner is one quarter of the
+/// cylinder and the cap continues toward the axis), as opposed to a plate a
+/// post stands on. A bounded disc cap is the special case where the whole
+/// boundary lies within the cylinder; a rounded rectangle's cap has far
+/// corners and needs this local test. The face interior lies to the left of
+/// the wire's effective traversal of the spine edge.
+///
+/// Returns `None` when the spine edge is not in the face's wires.
+fn plane_material_inside_cylinder(
+    topo: &Topology,
+    face_plane: FaceId,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    spine: &Spine,
+    n_p_inward: Vec3,
+) -> Result<Option<bool>, BlendError> {
+    let Some(&spine_edge) = spine.edges().first() else {
+        return Ok(None);
+    };
+    let face = topo.face(face_plane)?;
+    let reversed = face.is_reversed();
+    let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    let mut traversal = None;
+    for wire_id in wires {
+        if let Some(oriented) = topo
+            .wire(wire_id)?
+            .edges()
+            .iter()
+            .find(|oriented| oriented.edge() == spine_edge)
+        {
+            traversal = Some(oriented.is_forward() ^ reversed);
+            break;
+        }
+    }
+    let Some(forward) = traversal else {
+        return Ok(None);
+    };
+    let edge = topo.edge(spine_edge)?;
+    let start = topo.vertex(edge.start())?.point();
+    let end = topo.vertex(edge.end())?.point();
+    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+    let mid = 0.5 * (t0 + t1);
+    let point = edge.curve().evaluate_with_endpoints(mid, start, end);
+    let mut tangent = edge.curve().tangent_with_endpoints(mid, start, end);
+    if !forward {
+        tangent = -tangent;
+    }
+    let outward = -n_p_inward;
+    let into_face = outward.cross(tangent);
+    let d = point - cyl.origin();
+    let axis = cyl.axis();
+    let to_axis = axis * axis.dot(d) - d;
+    if into_face.length() <= ANALYTIC_TOL_LIN || to_axis.length() <= ANALYTIC_TOL_LIN {
+        return Ok(None);
+    }
+    Ok(Some(into_face.dot(to_axis) > 0.0))
 }
 
 /// Recover the cylinder's axial v-parameter for a 3D point known to lie on
