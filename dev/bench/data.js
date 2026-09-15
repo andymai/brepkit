@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789465184125,
+  "lastUpdate": 1789465914551,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34397,6 +34397,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26149327,
             "range": "± 342662",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e8db9ac427c77247e33a6a4adf0fe4280d5b6d8b",
+          "message": "fix(algo): a section loop enclosed by another loop is a hole of the enclosing disc (#1661)\n\n## Summary\n\nFollow-up to #1659 on the same tool test (the counterbored, tapered tube\nin `assemblyGenerator.scenario`). With the counterbore cut exact, the\nchain's next boolean, `fuseAll([plate, tube])`, fell back to a 287-face\nmesh: the tube stands on the plate sunk 0.01 mm, so the plate's top face\nreceives the tube's wall circle and, inside it, the bore circle.\n\n**Root.** `split_face_with_internal_loops` built the wall disc with no\nhole and gave the remainder both circles as holes, so the wall circle\nhad three owners (the remainder, the full wall disc and the tube's wall)\nand the result was rejected as non-manifold.\n\n**Fix.** A loop enclosed by another loop is a hole of the smallest\nenclosing loop's disc and not of the remainder; that disc samples its\ninterior between its rims. The loop winding normalisation runs as its\nown pass first so the disc pass can read every loop.\n\n## Verification\n\n- New pin\n`fuse_tube_standing_on_a_plate_nests_the_bore_loop_in_the_wall_loop`\n(box plate, tube = cylinder minus coaxial cylinder, sunk 0.01 mm):\nclosed, no free or non-manifold edges, watertight mesh, two analytic\ncylinders, exact volume. It failed on main.\n- The captured tool fuse replays exact (16 faces, watertight).\n- Local suites in an isolated worktree: `brepkit-algo` +\n`brepkit-operations` (1273), `brepkit-io` (293), `brepkit-wasm --lib`\n(232); clippy clean through the hook.\n- Tool-side (same tool commit and worktree, the #1659 build -> this\nbuild): `assemblyGenerator.scenario` 3 -> 2 of 23 (the tube test\npasses), `combriser` 0 of 4. The two left are the cluster fuses (arch\ntangency, tilted block x cradle), roadmap row.\n\n## Roadmap\n\nNew Closed entry with the pin; the tube line of the cluster-fuse row now\ncarries only its mouth chamfer, which fails cleanly in both chamfer\nengines (probes parked).\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the face splitter so a section loop enclosed by another loop\nbecomes a hole of the enclosing disc, not the remainder. A tube standing\non a plate (sunk 0.01 mm) used to place both the wall and bore circles\non the plate's top face, giving the wall circle three owners and forcing\nthe plate-tube fuse into a 287-face mesh fallback. The enclosing disc\nnow samples between its rims, so the fuse stays analytic and watertight\nwith exact volume. Adds a regression pin for the tube-on-plate fuse and\nupdates the roadmap's cluster-fuse row.\n\n<sup>Written for commit 74ec303815c17d1d80567e67b98bd324d2f78160.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1661?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T09:49:20Z",
+          "tree_id": "75f9e8a02c12aff0de1ec9953b0c548aee43c545",
+          "url": "https://github.com/andymai/brepkit/commit/e8db9ac427c77247e33a6a4adf0fe4280d5b6d8b"
+        },
+        "date": 1789465911058,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1023489,
+            "range": "± 1350",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1113171,
+            "range": "± 20054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13415,
+            "range": "± 111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 740897,
+            "range": "± 4055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44954791,
+            "range": "± 429891",
             "unit": "ns/iter"
           }
         ]
