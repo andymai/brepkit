@@ -1,0 +1,21 @@
+crates/operations/src/boolean/tests.rs
+  s_1ba1aaf77c517d::t_8135bd96f70b39 4949-4954,4958,4970-4973,4976-4980,4982
+  s_1ba1aaf77c517d::t_5e6194abbd782c 4927-4928,4930
+  s_1ba1aaf77c517d::t_40cff8e35d8650 4981
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "61131127172b40f5f2821afb7575272f8a72146a",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
