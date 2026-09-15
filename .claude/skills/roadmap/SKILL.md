@@ -179,8 +179,11 @@ One line each; the fixture/PR carries the story. Newest first.
   its walk convention per solid from seeds, and a rebuilt periodic face has
   no meaningful area vector: 180 wrong flips on cross_one_row); a plan-level
   "tangent unselected spokes are not sharp" filter (the aggressive scoop's
-  mixed-radius junctions then have nothing to share). The comb part now cuts
-  its slots exact; its rim ease fails cleanly (OPEN row).
+  mixed-radius junctions then have nothing to share). The wasm fillet
+  chain's validity gate (`try_fillet`) now also requires the result's mesh
+  to be watertight, so a closed-by-id overlay falls through to a clean
+  failure instead of being consumed. The comb part now cuts its slots
+  exact; its rim ease fails cleanly (OPEN row).
 - **3.4.0 blend cutover twins at sharp-cornered fillets (CLOSED 2026-09-14; pins `groupedscoop_fillet_has_no_twin_edges`, `groupedscoop_cut_stays_exact`, `groupedscoop_plan_drops_flat_edges`)** —
   three emission roots, none of them the 4-stripe fan (it never runs once the
   flat edges are gone): (1) the plan filleted three tangent-continuous edges
