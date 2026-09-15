@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789466508977,
+  "lastUpdate": 1789468363549,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34505,6 +34505,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41272764,
             "range": "± 120660",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6e2bcfc182a48b54495dc1d3803f515510656bed",
+          "message": "fix(algo): re-sample a sub-face classified on the opposing boundary; mesh pinched loops (#1663)\n\n## Summary\n\nThe `arch at the base center` assembly scenario: two posts and a rod\nwhose top is exactly tangent to the posts' top faces (centre z=46,\nradius 4, top z=50) and whose end caps coincide with the posts' outer\nfaces. The cluster fuse degraded to a mesh. Captured the three members\nand replayed: the pairwise post x rod fuse was ACCEPTED closed by edge\nid with the rod outside the post dropped and 577 non-manifold mesh\nedges; only the three-way cluster validation refused it. Two roots.\n\n1. **A sample on the opposing boundary.** The rod's piece inside the\npost is a full-turn band; its interior sample sits at the top ruling,\nexactly on the post's top face, and the ray cast from there read\nOutside, so the piece survived as a tunnel wall while the real outside\npiece was stranded. The box classifier now reports its tolerance band as\n`On` (the convex-polyhedron classifier already did), and\n`classify_sub_faces` re-samples a non-coincident sub-face whose sample\nis `On` at points halfway toward its outer wire's vertices\n(`face_interior_candidates`, in the face's own parameter space with u\nunwrapped on periodic surfaces), keeping the first `Inside`/`Outside`. A\nface that is `On` at every sample stays `On` for the coincident-face\nrules.\n\n2. **A pinched planar wire tessellated with its hole filled.** The rod's\nrim circle touches the outer face's top edge at the tangent point, so\nthe face's outer wire winds through the circle (a keyhole).\n`cdt_triangulate_simple` fenced the circle with constraints but never\nremoved its interior, so the ring also covered the coincident cap. A\nloop that revisits a vertex is now split there; a sub-loop winding\nagainst the main loop is flood-removed as a hole, one winding with it\nstays a lobe.\n\n## Verification\n\n- New pin `fuse_rod_tangent_to_the_top_of_a_post_keeps_the_rod` (6x15x50\nbox, `make_cylinder` rod rotated onto X): closed, no free edges,\nwatertight AND manifold mesh, one analytic cylinder, exact volume. On\nmain it had 361 non-manifold mesh edges.\n- The captured three-member cluster fuse (two posts and the rod,\n`replay_pair FUSE_ALL=1 FUSE_MEMBERS=...`) replays exact: 15 faces, no\nfree edges, watertight mesh. The pairwise post x rod fuse, once accepted\nwith the rod dropped, is now right too.\n- Local suites: `brepkit-algo` + `brepkit-operations` (1274 passed) in\nthe working tree; `brepkit-io` and `brepkit-wasm --lib` in the isolated\nworktree chain (293 and 232 passed); clippy clean through the hook.\n- Tool-side (same tool commit and worktree, the #1661 build -> this\nbuild): `assemblyGenerator.scenario` 2 -> 1 of 23 (the arch passes; the\ntilted block x cradle is the last, roadmap row), `combriser` 0 of 4.\n\n## Also in this PR\n\nA follow-up guard found by `deepcutout_cut_inmem`: a re-sample candidate\nthat is itself on the opposing boundary (the whole sub-face coincides\nwith an opposing face the same-domain pass left unpaired) decides\nnothing, so such candidates are skipped and the original verdict kept.\nThe phase-EF drop log now prints the crossing point.\n\n## Roadmap\n\nThe arch leaves the cluster-fuse row (Closed entry with the pin); the\nrow keeps the tilted block x cradle case with the open-shell detail, and\nthe tube's mouth chamfer with why both chamfer engines fail. The two\nbrepjs rows collapse to a Closed entry (brepjs #2314, 19.0.3; tool-side\nverification waits for the tool's brepjs bump from 18.124.8).\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo",
+          "timestamp": "2026-09-15T10:30:16Z",
+          "tree_id": "53b93658bffef37e42dee4f14504450f080739df",
+          "url": "https://github.com/andymai/brepkit/commit/6e2bcfc182a48b54495dc1d3803f515510656bed"
+        },
+        "date": 1789468360182,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 839856,
+            "range": "± 3202",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 917908,
+            "range": "± 8909",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10633,
+            "range": "± 198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 626268,
+            "range": "± 4022",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36805968,
+            "range": "± 299709",
             "unit": "ns/iter"
           }
         ]
