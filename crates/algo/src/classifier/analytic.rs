@@ -889,6 +889,18 @@ fn try_build_convex_analytic(topo: &Topology, solid: SolidId) -> Option<Analytic
     }
 
     // Convexity check: vertex centroid must be inside all constraints.
+    // The model is the INTERSECTION of the planes' half-spaces and the
+    // cylinders' and cones' interiors, which only describes the solid when
+    // it is convex. The vertex centroid alone cannot tell: a rod fused to a
+    // bracket whose faces meet on the rod's axis has its centroid in the
+    // bracket's quadrant, yet the rod's far rim vertices violate the
+    // bracket's half-spaces, and the "classifier" then reads any point on
+    // that side as outside (the pin bore's wall band was dropped from the
+    // cut). Every boundary vertex must satisfy every constraint as well.
+    let inside_all = |p: Point3, band: f64| -> bool {
+        convex_model_admits(&planes, &cylinders, &cones, p, band, tol.linear)
+    };
+
     let mut centroid = Vec3::new(0.0, 0.0, 0.0);
     let mut vert_count = 0u32;
     for &fid in shell.faces() {
@@ -898,6 +910,9 @@ fn try_build_convex_analytic(topo: &Topology, solid: SolidId) -> Option<Analytic
             let edge = topo.edge(oe.edge()).ok()?;
             let v = topo.vertex(edge.start()).ok()?;
             let p = v.point();
+            if !inside_all(p, tol.linear * 10.0) {
+                return None;
+            }
             centroid += Vec3::new(p.x(), p.y(), p.z());
             vert_count += 1;
         }
@@ -907,43 +922,11 @@ fn try_build_convex_analytic(topo: &Topology, solid: SolidId) -> Option<Analytic
     }
     #[allow(clippy::cast_precision_loss)]
     let centroid = centroid * (1.0 / vert_count as f64);
-    let centroid_pt = Point3::new(centroid.x(), centroid.y(), centroid.z());
-
-    for &(normal, d) in &planes {
-        if normal.dot(centroid) - d > tol.linear {
-            return None;
-        }
-    }
-    for &(origin, axis, radius, z_min, z_max) in &cylinders {
-        let diff = centroid_pt - origin;
-        let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
-        let axial = diff_v.dot(axis);
-        if axial < z_min - tol.linear || axial > z_max + tol.linear {
-            return None;
-        }
-        let projected = axis * axial;
-        if (diff_v - projected).length() > radius + tol.linear {
-            return None;
-        }
-    }
-    for &(origin, axis, z_min, z_max, r_min, r_max) in &cones {
-        let diff = centroid_pt - origin;
-        let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
-        let axial = diff_v.dot(axis);
-        if axial < z_min - tol.linear || axial > z_max + tol.linear {
-            return None;
-        }
-        let dz = z_max - z_min;
-        let t = if dz.abs() > tol.linear {
-            (axial - z_min) / dz
-        } else {
-            0.5
-        };
-        let expected_r = r_min + t * (r_max - r_min);
-        let projected = axis * axial;
-        if (diff_v - projected).length() > expected_r + tol.linear {
-            return None;
-        }
+    if !inside_all(
+        Point3::new(centroid.x(), centroid.y(), centroid.z()),
+        tol.linear,
+    ) {
+        return None;
     }
 
     Some(AnalyticClassifier::ConvexAnalytic {
@@ -951,6 +934,54 @@ fn try_build_convex_analytic(topo: &Topology, solid: SolidId) -> Option<Analytic
         cylinders,
         cones,
     })
+}
+
+/// Whether `p` lies inside the convex model (every plane's half-space, every
+/// cylinder's and cone's interior) within `band`.
+fn convex_model_admits(
+    planes: &[(Vec3, f64)],
+    cylinders: &[(Point3, Vec3, f64, f64, f64)],
+    cones: &[(Point3, Vec3, f64, f64, f64, f64)],
+    p: Point3,
+    band: f64,
+    tol_linear: f64,
+) -> bool {
+    let pv = Vec3::new(p.x(), p.y(), p.z());
+    if planes.iter().any(|&(normal, d)| normal.dot(pv) - d > band) {
+        return false;
+    }
+    for &(origin, axis, radius, z_min, z_max) in cylinders {
+        let diff = p - origin;
+        let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+        let axial = diff_v.dot(axis);
+        if axial < z_min - band || axial > z_max + band {
+            return false;
+        }
+        let projected = axis * axial;
+        if (diff_v - projected).length() > radius + band {
+            return false;
+        }
+    }
+    for &(origin, axis, z_min, z_max, r_min, r_max) in cones {
+        let diff = p - origin;
+        let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+        let axial = diff_v.dot(axis);
+        if axial < z_min - band || axial > z_max + band {
+            return false;
+        }
+        let dz = z_max - z_min;
+        let t = if dz.abs() > tol_linear {
+            (axial - z_min) / dz
+        } else {
+            0.5
+        };
+        let expected_r = r_min + t * (r_max - r_min);
+        let projected = axis * axial;
+        if (diff_v - projected).length() > expected_r + band {
+            return false;
+        }
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,11 +1166,36 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
         })
     };
 
+    // The same convexity guard as `try_build_convex_analytic`: every vertex
+    // of the group's faces must satisfy the group's intersection model, or
+    // the model does not describe that shell.
     let build_classifier = |planes: &[(Vec3, f64)],
                             cylinders: &[(Point3, Vec3, f64, f64, f64)],
-                            cones: &[(Point3, Vec3, f64, f64, f64, f64)]|
+                            cones: &[(Point3, Vec3, f64, f64, f64, f64)],
+                            reversed: bool|
      -> Option<AnalyticClassifier> {
         if (!cylinders.is_empty() || !cones.is_empty()) && planes.len() >= 2 {
+            for &fid in shell.faces() {
+                let face = topo.face(fid).ok()?;
+                if face.is_reversed() != reversed {
+                    continue;
+                }
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                for oe in wire.edges() {
+                    let edge = topo.edge(oe.edge()).ok()?;
+                    let p = topo.vertex(edge.start()).ok()?.point();
+                    if !convex_model_admits(
+                        planes,
+                        cylinders,
+                        cones,
+                        p,
+                        tol.linear * 10.0,
+                        tol.linear,
+                    ) {
+                        return None;
+                    }
+                }
+            }
             Some(AnalyticClassifier::ConvexAnalytic {
                 planes: planes.to_vec(),
                 cylinders: cylinders.to_vec(),
@@ -1150,8 +1206,8 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
         }
     };
 
-    let outer = build_classifier(&outer_planes, &outer_cylinders, &outer_cones)?;
-    let inner = build_classifier(&inner_planes, &inner_cylinders, &inner_cones)?;
+    let outer = build_classifier(&outer_planes, &outer_cylinders, &outer_cones, false)?;
+    let inner = build_classifier(&inner_planes, &inner_cylinders, &inner_cones, true)?;
 
     Some(AnalyticClassifier::Composite {
         outer: std::boxed::Box::new(outer),

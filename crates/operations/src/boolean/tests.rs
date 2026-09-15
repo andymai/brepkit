@@ -5032,6 +5032,33 @@ fn fuse_rod_with_a_bracket_edge_on_its_axis_splits_the_end_discs() {
     assert_watertight_with_volume(&topo, result, 1, rod * 0.75 + 3.0 * 3.0 * 12.0);
 }
 
+/// The knuckle's pin bore: a coaxial bore through a rod fused to a bracket
+/// that is flush with the rod's ends and whose edge lies on the axis. The
+/// bore circle on each end disc is shared between two coplanar sub-faces
+/// (the bracket's wedge and the disc's remainder), and the knuckle is not
+/// convex although its vertex centroid sits in the bracket's quadrant.
+#[test]
+fn cut_a_pin_bore_through_a_knuckle_flush_with_its_bracket() {
+    let mut topo = Topology::new();
+    let rod = crate::primitives::make_cylinder(&mut topo, 2.2, 8.0).unwrap();
+    let bracket = crate::primitives::make_box(&mut topo, 3.0, 3.0, 8.0).unwrap();
+    let knuckle = boolean(&mut topo, BooleanOp::Fuse, rod, bracket).unwrap();
+    let rod_volume = std::f64::consts::PI * 2.2 * 2.2 * 8.0;
+    let knuckle_volume = rod_volume * 0.75 + 3.0 * 3.0 * 8.0;
+    assert_watertight_with_volume(&topo, knuckle, 1, knuckle_volume);
+
+    let bore = crate::primitives::make_cylinder(&mut topo, 0.9, 8.02).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        bore,
+        &brepkit_math::mat::Mat4::translation(0.0, 0.0, -0.01),
+    )
+    .unwrap();
+    let bored = boolean(&mut topo, BooleanOp::Cut, knuckle, bore).unwrap();
+    let bored_volume = knuckle_volume - std::f64::consts::PI * 0.9 * 0.9 * 8.0;
+    assert_watertight_with_volume(&topo, bored, 2, bored_volume);
+}
+
 #[test]
 fn fuse_stacked_rounded_rect_arc_prisms_same_footprint() {
     let mut topo = Topology::new();

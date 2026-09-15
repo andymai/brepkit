@@ -64,7 +64,13 @@ pub fn classify_point_cached(
     geoms: Option<&ray_cast::RayCastGeoms>,
     point: Point3,
 ) -> Result<FaceClass, AlgoError> {
-    if let Some(class) = classify_analytic(topo, solid, point) {
+    let analytic = match geoms {
+        Some(g) => g
+            .analytic()
+            .and_then(|c| c.classify(point, brepkit_math::tolerance::Tolerance::new())),
+        None => classify_analytic(topo, solid, point),
+    };
+    if let Some(class) = analytic {
         return Ok(class);
     }
 

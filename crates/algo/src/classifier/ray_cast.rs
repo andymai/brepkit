@@ -129,6 +129,9 @@ pub fn ray_cast_inside_votes(
 /// Building it once turns that into a single O(faces) pass.
 pub struct RayCastGeoms {
     faces: Vec<FaceGeom>,
+    /// The solid's closed-form classifier, built once with the geometry
+    /// (its convexity guard walks every vertex, too much per point).
+    analytic: Option<super::analytic::AnalyticClassifier>,
 }
 
 impl RayCastGeoms {
@@ -140,7 +143,14 @@ impl RayCastGeoms {
     pub fn new(topo: &Topology, solid: SolidId) -> Result<Self, AlgoError> {
         Ok(Self {
             faces: collect_face_geoms(topo, solid)?,
+            analytic: super::analytic::try_build_analytic_classifier(topo, solid),
         })
+    }
+
+    /// The solid's closed-form classifier, if it has one.
+    #[must_use]
+    pub const fn analytic(&self) -> Option<&super::analytic::AnalyticClassifier> {
+        self.analytic.as_ref()
     }
 }
 
