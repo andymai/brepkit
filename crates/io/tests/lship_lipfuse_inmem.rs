@@ -1,12 +1,20 @@
 //! Captured-operand regression for the gridfinity custom-shape (3×3 L)
 //! body + lip fuse — the last link of the L-family export chain.
 //!
-//! Operands captured on 2.127.27 (loft and frustum-cut fixes in): the fuse
-//! used to reach a 124-face analytic candidate with exactly ONE non-manifold
-//! edge — a coincident-ring re-trace at the L's CONCAVE corner woven through
-//! the wall wire as an out-and-back spur, plus a two-edge slit face over the
-//! same arc — then fall to an OPEN mesh fallback (bd=32 across every L
-//! variant). With spur excision the fuse is analytic and watertight.
+//! Operands first captured on 2.127.27 (loft and frustum-cut fixes in): the
+//! fuse used to reach a 124-face analytic candidate with exactly ONE
+//! non-manifold edge — a coincident-ring re-trace at the L's CONCAVE corner
+//! woven through the wall wire as an out-and-back spur, plus a two-edge slit
+//! face over the same arc — then fall to an OPEN mesh fallback (bd=32 across
+//! every L variant). With spur excision the fuse is analytic and watertight.
+//!
+//! Operands re-captured on 2026-09-15 (tool 4a66decb on brepkit 3.4.4, the
+//! `3×3 L with lip` export's body x lip fuse). The 2.127-era lip encoded the
+//! concave corner's orientation in its cylinder AXIS (a -Z axis with the face
+//! not reversed), the convention the same-domain pass then read; today's loft
+//! marks that face reversed on a surface whose normal is the outward radial
+//! direction, and under the axis-sign rule the tool's fuse fell back to a
+//! mesh. The pass now derives the pair orientation from the surface normal.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -61,8 +69,10 @@ fn l_lip_fuse_is_analytic_and_watertight() {
         faces.len()
     );
     let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.05).unwrap();
+    // At this deflection; 29045 at 0.01 (body 25630.5 + lip 6149.7 less their
+    // overlap, 2755 by a mesh intersect within its own deflection).
     assert!(
-        (vol - 29716.6).abs() < 20.0,
+        (vol - 28993.2).abs() < 20.0,
         "fused volume out of band: got {vol}"
     );
 }

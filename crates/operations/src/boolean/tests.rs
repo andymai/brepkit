@@ -4663,25 +4663,37 @@ fn cut_shelled_target_single_tool_exact_gfa() {
 /// Build a rounded-rectangle planar face at height `z` with 4 line edges
 /// and 4 true quarter-circle `EdgeCurve::Circle` arc edges (CCW, +Z normal).
 fn make_rounded_rect_arc_face(topo: &mut Topology, hw: f64, hd: f64, r: f64, z: f64) -> FaceId {
+    make_rounded_rect_arc_face_at(topo, 0.0, hw, hd, r, z)
+}
+
+/// Same as [`make_rounded_rect_arc_face`], centred on `x = cx`.
+fn make_rounded_rect_arc_face_at(
+    topo: &mut Topology,
+    cx: f64,
+    hw: f64,
+    hd: f64,
+    r: f64,
+    z: f64,
+) -> FaceId {
     use brepkit_math::curves::Circle3D;
 
     let tol_val = 1e-7;
     // 8 tangent points, CCW starting at bottom of the right edge.
     let pts: [(f64, f64); 8] = [
-        (hw, -(hd - r)),
-        (hw, hd - r),
-        (hw - r, hd),
-        (-(hw - r), hd),
-        (-hw, hd - r),
-        (-hw, -(hd - r)),
-        (-(hw - r), -hd),
-        (hw - r, -hd),
+        (cx + hw, -(hd - r)),
+        (cx + hw, hd - r),
+        (cx + hw - r, hd),
+        (cx - (hw - r), hd),
+        (cx - hw, hd - r),
+        (cx - hw, -(hd - r)),
+        (cx - (hw - r), -hd),
+        (cx + hw - r, -hd),
     ];
     let centers: [(f64, f64); 4] = [
-        (hw - r, hd - r),
-        (-(hw - r), hd - r),
-        (-(hw - r), -(hd - r)),
-        (hw - r, -(hd - r)),
+        (cx + hw - r, hd - r),
+        (cx - (hw - r), hd - r),
+        (cx - (hw - r), -(hd - r)),
+        (cx + hw - r, -(hd - r)),
     ];
 
     let vids: Vec<_> = pts
@@ -4732,6 +4744,22 @@ fn make_rounded_rect_arc_prism(
     crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), height).unwrap()
 }
 
+/// Extrude a rounded-rect arc face at `z_top` centred on `x = cx` DOWNWARD by
+/// `depth`: its corner cylinders carry a -Z axis, the mirror image of what
+/// [`make_rounded_rect_arc_prism`] builds.
+fn make_rounded_rect_arc_band_down(
+    topo: &mut Topology,
+    cx: f64,
+    hw: f64,
+    hd: f64,
+    r: f64,
+    z_top: f64,
+    depth: f64,
+) -> SolidId {
+    let face = make_rounded_rect_arc_face_at(topo, cx, hw, hd, r, z_top);
+    crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, -1.0), depth).unwrap()
+}
+
 fn rounded_rect_area(hw: f64, hd: f64, r: f64) -> f64 {
     4.0 * hw * hd - (4.0 - std::f64::consts::PI) * r * r
 }
@@ -4778,6 +4806,44 @@ fn rounded_rect_arc_prism_volume_baseline() {
     );
     assert_eq!(count_cylinder_faces(&topo, a), 4);
     assert!(is_closed_manifold(&topo, a).unwrap());
+}
+
+/// The gridfinity assembly base: a 2x1 rounded plate extruded upward from
+/// z = -0.01 fused onto two cell socket tops whose top 0.25 mm is a vertical
+/// band lofted DOWNWARD from z = 0. Over the 0.01 mm overlap the plate's
+/// corner cylinders (+Z axis) and the bands' (-Z axis) coincide, and the
+/// fuse must keep exactly one of each coincident sliver: the same-domain
+/// pass once read the axis sign as the face orientation and dropped both,
+/// leaving the four corners open.
+#[test]
+fn fuse_plate_onto_downward_extruded_cell_bands_keeps_the_corner_slivers() {
+    let mut topo = Topology::new();
+    let plate = make_rounded_rect_arc_prism(&mut topo, 41.75, 20.75, 4.0, -0.01, 2.01);
+    let left = make_rounded_rect_arc_band_down(&mut topo, -21.0, 20.75, 20.75, 4.0, 0.0, 0.25);
+    let right = make_rounded_rect_arc_band_down(&mut topo, 21.0, 20.75, 20.75, 4.0, 0.0, 0.25);
+    assert!(is_closed_manifold(&topo, left).unwrap());
+    let bands = boolean(&mut topo, BooleanOp::Fuse, left, right).unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, plate, bands).unwrap();
+
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+    let mesh =
+        crate::tessellate::tessellate_solid_with_tolerance(&topo, result, 0.01, 0.2).unwrap();
+    assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+
+    let cell_area = rounded_rect_area(20.75, 20.75, 4.0);
+    let expected = rounded_rect_area(41.75, 20.75, 4.0) * 2.01 + 2.0 * cell_area * (0.25 - 0.01);
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "fused volume {vol:.3} != expected {expected:.3}"
+    );
+    let cyl = count_cylinder_faces(&topo, result);
+    assert!(
+        (8..=16).contains(&cyl),
+        "expected analytic corner cylinders (no mesh fallback), got {cyl}"
+    );
 }
 
 #[test]

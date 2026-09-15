@@ -274,6 +274,17 @@ fn build_sd_grouping(
                     }
                     uf.union(i, j);
                     let key = (i.min(j), i.max(j));
+                    if std::env::var("BK_SD_SEL").is_ok() {
+                        log::debug!(
+                            "SD pair (edge set) {:?} rev={} {:?} vs {:?} rev={} {:?}: same_dir={same_dir}",
+                            sub_faces[i].face_id,
+                            reversed[i],
+                            surf_i,
+                            sub_faces[j].face_id,
+                            reversed[j],
+                            surf_j
+                        );
+                    }
                     pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
                 }
             }
@@ -451,6 +462,17 @@ fn build_sd_grouping(
             if analytic_faces_overlap(topo, sub_faces, i, j, tol) {
                 uf.union(i, j);
                 let key = (i.min(j), i.max(j));
+                if std::env::var("BK_SD_SEL").is_ok() {
+                    log::debug!(
+                        "SD pair (coaxial) {:?} rev={} {:?} vs {:?} rev={} {:?}: same_dir={same_dir}",
+                        sub_faces[i].face_id,
+                        reversed[i],
+                        surfaces[i],
+                        sub_faces[j].face_id,
+                        reversed[j],
+                        surfaces[j]
+                    );
+                }
                 pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
                 geometric_overlap_groups.insert(uf.find(i));
             } else if sd_miss_trace {
@@ -1905,7 +1927,11 @@ pub(crate) fn surfaces_same_domain(
             if perp_dist > tol.linear {
                 return None;
             }
-            Some(axis_dot > 0.0)
+            // The cylinder normal is the outward radial direction whichever
+            // way the axis runs (an upward extrusion against a downward loft
+            // of the same outline), so coaxial patches always share their
+            // normals; the faces' reversal flags carry the rest.
+            Some(true)
         }
         (FaceSurface::Sphere(sa), FaceSurface::Sphere(sb)) => {
             if (sa.radius() - sb.radius()).abs() > tol.linear {
@@ -1929,6 +1955,9 @@ pub(crate) fn surfaces_same_domain(
             if dist > tol.linear {
                 return None;
             }
+            // Unlike a cylinder's, the cone normal has an axial component
+            // that flips with the axis: the shared nappe of two opposite-axis
+            // cones carries opposite normals.
             Some(axis_dot > 0.0)
         }
         (FaceSurface::Torus(ta), FaceSurface::Torus(tb)) => {
@@ -1946,7 +1975,9 @@ pub(crate) fn surfaces_same_domain(
             if dist > tol.linear {
                 return None;
             }
-            Some(axis_dot > 0.0)
+            // The torus normal points out of the tube whichever way the axis
+            // runs, so coincident tori always share their normals.
+            Some(true)
         }
         _ => None,
     }
