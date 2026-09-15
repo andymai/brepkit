@@ -1,0 +1,64 @@
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_1ba1aaf77c517d::t_539efae361df3b 204-210
+  s_1ba1aaf77c517d::t_002a3f1810d1d9 201-203,220-229
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_1ba1aaf77c517d::t_8bd6d1fd9e2bfc 269-272
+  s_1ba1aaf77c517d::t_207f19a315ea33 30,52-77,262-268
+crates/algo/src/builder/builder_solid.rs
+  s_1ba1aaf77c517d::t_002a3f1810d1d9 68-109,696-701,703-714
+  s_1ba1aaf77c517d::t_f5eb2178aea12c 702
+crates/operations/src/boolean/tests.rs
+  s_1ba1aaf77c517d::t_513a2768a6410f 4972-5034,7001-7012,7014
+crates/algo/src/builder/fill_images_faces.rs
+  s_1ba1aaf77c517d::t_135c64ec31dea6 2826-2830
+  s_1ba1aaf77c517d::t_8bd6d1fd9e2bfc 2833
+  s_1ba1aaf77c517d::t_207f19a315ea33 2825,2831-2832,2834,2961-2991,3034-3137,3521-3539
+  s_1ba1aaf77c517d::t_32eb15b5f81a43 3540
+.claude/skills/roadmap/SKILL.md
+  s_1ba1aaf77c517d::t_db2a7150557821 161-187
+  s_1ba1aaf77c517d::t_e811190ed0ba95 147,159-160
+  s_1ba1aaf77c517d::t_3f34b16277fe0a 188
+crates/io/examples/replay_pair.rs
+  s_1ba1aaf77c517d::t_48e0eefa29dcc4 265
+  s_1ba1aaf77c517d::t_6725551f303702 260-263
+  s_1ba1aaf77c517d::t_db462f1760d4c6 178-214,360-410,413,415
+crates/algo/src/pave_filler/make_blocks.rs
+  s_1ba1aaf77c517d::t_8bd6d1fd9e2bfc 67
+  s_1ba1aaf77c517d::t_207f19a315ea33 7-11,20-28,33,53,60-66,68-74,79-99,143-198
+crates/operations/src/measure/volume.rs
+  s_1ba1aaf77c517d::t_c39d8ce92407e4 10-12,1495-1496
+crates/algo/src/builder/face_splitter/mod.rs
+  s_1ba1aaf77c517d::t_539efae361df3b 4641-4644,6335
+  s_1ba1aaf77c517d::t_207f19a315ea33 4637-4640,5335-5336,5338-5339,5353-5354,6164,6169-6171,6289-6309,6332-6334,6336-6339,6842-6848,6940-6945
+  s_1ba1aaf77c517d::t_8bd6d1fd9e2bfc 5352
+  s_1ba1aaf77c517d::t_48e0eefa29dcc4 4079-4083,4086-4089,6409
+  s_1ba1aaf77c517d::t_db2a7150557821 5337
+crates/operations/src/measure/helpers.rs
+  s_1ba1aaf77c517d::t_c39d8ce92407e4 189-192,205-217,222-251,253-265,267-316
+  s_1ba1aaf77c517d::t_c539fd8a02cb87 266
+  s_1ba1aaf77c517d::t_c885695ca8fde8 193-204,218-221,252
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_1ba1aaf77c517d::t_3661430f376057 1079-1084,1089,1094-1108,1111,1267-1272,1311
+crates/algo/src/builder/wire_builder.rs
+  s_1ba1aaf77c517d::t_a3d7e1ed99cc19 114,165-179
+crates/algo/src/pave_filler/mod.rs
+  s_1ba1aaf77c517d::t_8e1f6acb2752c9 178,258
+crates/algo/src/pave_filler/tests.rs
+  s_1ba1aaf77c517d::t_b4b8b811c853d0 328,374,642
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b4931f0456e4a300de04065bb3a5a4c673d4584f",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
