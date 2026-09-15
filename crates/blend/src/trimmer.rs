@@ -1390,11 +1390,34 @@ fn mapped_contact_forward(
 }
 
 #[allow(clippy::too_many_lines)]
+/// Which boundary edges a single-contact trim may split where a contact ends
+/// on them.
+#[derive(Clone, Copy)]
+pub enum BoundarySplitPolicy<'a> {
+    /// Every boundary edge. A one-edge fillet's untouched end caps take the
+    /// split so the end-cap notch can replace their corner path.
+    All,
+    /// Only boundary edges touching none of these vertices. A multi-edge
+    /// fillet splits its junction spokes so both walls share one contact
+    /// vertex, while a stripe's terminal-end spoke keeps the runout closure
+    /// that expects the untouched cap to hold the whole edge.
+    ExceptAt(&'a std::collections::HashSet<VertexId>),
+}
+
+impl BoundarySplitPolicy<'_> {
+    fn allows(self, start: VertexId, end: VertexId) -> bool {
+        match self {
+            Self::All => true,
+            Self::ExceptAt(vertices) => !vertices.contains(&start) && !vertices.contains(&end),
+        }
+    }
+}
+
 fn rebuild_mapped_parametric_face(
     topo: &mut Topology,
     face_id: FaceId,
     restrictions: &[ParametricRestriction],
-    propagate_single_contact_splits: bool,
+    split_policy: BoundarySplitPolicy<'_>,
 ) -> Result<Option<BatchTrimResult>, BlendError> {
     if restrictions
         .iter()
@@ -1485,12 +1508,17 @@ fn rebuild_mapped_parametric_face(
     }
 
     // A single open contact landing mid-edge must split the crossed boundary
-    // edges before the wire walk. This propagates the sub-edges into
-    // untouched cap faces, allowing later notch surgery to replace the cap's
-    // corner path without leaving stale full-span edges. Multi-contact loops
-    // already close through shared junction edges; propagating every split
-    // there fragments adjacent support wires before their own trims run and
-    // leaves those junction boundaries singly used.
+    // edges before the wire walk, and the split propagates into every face
+    // sharing that edge. For a one-edge fillet that reaches the untouched
+    // caps, allowing later notch surgery to replace the cap's corner path
+    // without leaving stale full-span edges. For a multi-edge fillet the
+    // neighbour is the other support face at a junction spoke, which then
+    // ends its own contact at the shared split vertex instead of minting a
+    // second vertex at the same point and bridging to it with a connector
+    // that twins the first face's. Multi-contact loops already close through
+    // shared junction edges; propagating every split there fragments adjacent
+    // support wires before their own trims run and leaves those junction
+    // boundaries singly used.
     let mut new_vertices = Vec::new();
     let mut contact_edges = Vec::with_capacity(restrictions.len());
     for restriction in restrictions {
@@ -1524,7 +1552,7 @@ fn rebuild_mapped_parametric_face(
         let curve = restriction.curve.clone().unwrap_or(EdgeCurve::Line);
         contact_edges.push(topo.add_edge(Edge::new(start_vertex, end_vertex, curve)));
     }
-    if propagate_single_contact_splits && restrictions.len() == 1 {
+    if restrictions.len() == 1 {
         for &vertex_id in &new_vertices.clone() {
             let point = topo.vertex(vertex_id)?.point();
             'edges: for &wire_id in &wire_ids {
@@ -1535,7 +1563,7 @@ fn rebuild_mapped_parametric_face(
                     }
                     let edge = topo.edge(oriented.edge())?;
                     let (s, t) = (edge.start(), edge.end());
-                    if s == vertex_id || t == vertex_id {
+                    if s == vertex_id || t == vertex_id || !split_policy.allows(s, t) {
                         continue;
                     }
                     let sp = topo.vertex(s)?.point();
@@ -1747,40 +1775,58 @@ fn rebuild_mapped_parametric_face(
         }
 
         // The boundary edges crossed by a contact were split at the contact
-        // vertices above, so a kept run adjacent to a contact now contains
-        // the sub-piece touching the contact AND the sub-piece doubling back
-        // to the original edge endpoint. Keeping both would retrace the far
-        // side of the edge and self-intersect the wire: keep only the
-        // sub-piece whose shared vertex is the contact's own vertex.
-        if propagate_single_contact_splits && restrictions.len() == 1 {
+        // vertices above, so the kept run adjacent to a contact now walks
+        // from the contact's vertex out to the original edge endpoint and
+        // back. Keeping that tail would retrace the far side of the edge and
+        // self-intersect the wire: drop every piece between the contact and
+        // the first piece that starts at its end vertex (and, walking the
+        // other way, the last piece that ends at its start vertex). The
+        // tail is a chain, not one piece, when a neighbouring face's earlier
+        // trim split the same edge at another height. A run that never
+        // reaches the contact's vertex belongs to a contact ending inside
+        // the face and keeps its connector.
+        if restrictions.len() == 1 {
             let piece_count = pieces.len();
-            let mut truncated: Vec<(OrientedEdge, bool)> = Vec::with_capacity(piece_count);
+            let mut drop = vec![false; piece_count];
             for index in 0..piece_count {
-                let piece = pieces[index];
-                if piece.1 {
-                    truncated.push(piece);
+                if !pieces[index].1 {
                     continue;
                 }
-                let prev = pieces[(index + piece_count - 1) % piece_count];
-                let next = pieces[(index + 1) % piece_count];
-                let mut keep = true;
-                if prev.1 {
-                    let contact_edge = topo.edge(prev.0.edge())?;
-                    let contact_end = prev.0.oriented_end(contact_edge);
-                    let edge = topo.edge(piece.0.edge())?;
-                    keep = keep && piece.0.oriented_start(edge) == contact_end;
+                let contact_edge = topo.edge(pieces[index].0.edge())?;
+                let contact_start = pieces[index].0.oriented_start(contact_edge);
+                let contact_end = pieces[index].0.oriented_end(contact_edge);
+                let mut tail = Vec::new();
+                let mut cursor = (index + 1) % piece_count;
+                while cursor != index && !pieces[cursor].1 {
+                    let edge = topo.edge(pieces[cursor].0.edge())?;
+                    if pieces[cursor].0.oriented_start(edge) == contact_end {
+                        for &dropped in &tail {
+                            drop[dropped] = true;
+                        }
+                        break;
+                    }
+                    tail.push(cursor);
+                    cursor = (cursor + 1) % piece_count;
                 }
-                if next.1 {
-                    let contact_edge = topo.edge(next.0.edge())?;
-                    let contact_start = next.0.oriented_start(contact_edge);
-                    let edge = topo.edge(piece.0.edge())?;
-                    keep = keep && piece.0.oriented_end(edge) == contact_start;
-                }
-                if keep {
-                    truncated.push(piece);
+                let mut tail = Vec::new();
+                let mut cursor = (index + piece_count - 1) % piece_count;
+                while cursor != index && !pieces[cursor].1 {
+                    let edge = topo.edge(pieces[cursor].0.edge())?;
+                    if pieces[cursor].0.oriented_end(edge) == contact_start {
+                        for &dropped in &tail {
+                            drop[dropped] = true;
+                        }
+                        break;
+                    }
+                    tail.push(cursor);
+                    cursor = (cursor + piece_count - 1) % piece_count;
                 }
             }
-            pieces = truncated;
+            pieces = pieces
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, piece)| (!drop[index]).then_some(piece))
+                .collect();
         }
 
         let mut reconstructed = Vec::with_capacity(pieces.len() * 2);
@@ -1894,17 +1940,12 @@ fn trim_parametric_face_batch_in_place(
     topo: &mut Topology,
     face_id: FaceId,
     restrictions: &[ParametricRestriction],
-    propagate_single_contact_splits: bool,
+    split_policy: BoundarySplitPolicy<'_>,
 ) -> Result<BatchTrimResult, BlendError> {
     if restrictions.is_empty() {
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
-    let fast = rebuild_mapped_parametric_face(
-        topo,
-        face_id,
-        restrictions,
-        propagate_single_contact_splits,
-    )?;
+    let fast = rebuild_mapped_parametric_face(topo, face_id, restrictions, split_policy)?;
     if let Some(result) = fast {
         return Ok(result);
     }
@@ -2790,26 +2831,11 @@ pub fn trim_parametric_face_batch(
     topo: &mut Topology,
     face_id: FaceId,
     restrictions: &[ParametricRestriction],
-) -> Result<BatchTrimResult, BlendError> {
-    trim_parametric_face_batch_with_boundary_splits(topo, face_id, restrictions, false)
-}
-
-/// Transactional trim with optional split propagation for a single-contact
-/// operation. Multi-stripe operations keep independent support/junction
-/// boundaries; only the one-stripe cutover needs to split untouched caps.
-pub fn trim_parametric_face_batch_with_boundary_splits(
-    topo: &mut Topology,
-    face_id: FaceId,
-    restrictions: &[ParametricRestriction],
-    propagate_single_contact_splits: bool,
+    split_policy: BoundarySplitPolicy<'_>,
 ) -> Result<BatchTrimResult, BlendError> {
     let mut working = topo.clone();
-    let result = trim_parametric_face_batch_in_place(
-        &mut working,
-        face_id,
-        restrictions,
-        propagate_single_contact_splits,
-    )?;
+    let result =
+        trim_parametric_face_batch_in_place(&mut working, face_id, restrictions, split_policy)?;
     *topo = working;
     Ok(result)
 }
@@ -2825,7 +2851,7 @@ pub fn trim_planar_face_batch(
     if !topo.face(face_id)?.surface().is_planar() {
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
-    trim_parametric_face_batch(topo, face_id, restrictions)
+    trim_parametric_face_batch(topo, face_id, restrictions, BoundarySplitPolicy::All)
 }
 
 // ===========================================================================
@@ -3352,7 +3378,7 @@ mod tests {
         );
         assert!(
             matches!(
-                trim_parametric_face_batch(&mut topo, face, &[restriction]),
+                trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All),
                 Err(BlendError::TrimmingFailure { face: failed }) if failed == face
             ),
             "off-surface projection must be an explicit failure"
@@ -3432,7 +3458,9 @@ mod tests {
             TrimKeep::Side(TrimSide::Right),
         );
         restriction.curve = Some(EdgeCurve::Line);
-        let result = trim_parametric_face_batch(&mut topo, face, &[restriction]).unwrap();
+        let result =
+            trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All)
+                .unwrap();
         assert_ne!(result.trimmed_face, face);
         assert_eq!(result.contact_edges.len(), 1);
         assert!(
@@ -3507,6 +3535,7 @@ mod tests {
                 vec![point(0.8, 1.0), point(0.8, 2.0)],
                 TrimKeep::Side(TrimSide::Right),
             )],
+            BoundarySplitPolicy::All,
         );
         assert!(result.is_ok(), "native cone UV support must rebuild");
     }
@@ -3550,6 +3579,7 @@ mod tests {
                 vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)],
                 TrimKeep::Side(TrimSide::Right),
             )],
+            BoundarySplitPolicy::All,
         );
         assert!(
             result.is_ok(),
@@ -3621,7 +3651,8 @@ mod tests {
             .unwrap(),
         );
         restriction.pcurve = Some(brepkit_topology::pcurve::PCurve::new(pcurve, 0.0, 1.0));
-        let result = trim_parametric_face_batch(&mut topo, face, &[restriction]);
+        let result =
+            trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All);
         assert!(
             result.is_ok(),
             "periodic torus patch must rebuild: {result:?}"
@@ -3681,7 +3712,13 @@ mod tests {
             vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)],
             TrimKeep::Side(TrimSide::Right),
         );
-        let result = trim_parametric_face_batch(&mut topo, replacement, &[restriction]).unwrap();
+        let result = trim_parametric_face_batch(
+            &mut topo,
+            replacement,
+            &[restriction],
+            BoundarySplitPolicy::All,
+        )
+        .unwrap();
         let trimmed = topo.face(result.trimmed_face).unwrap();
         assert_eq!(trimmed.inner_wires().len(), 1);
         assert!(topo.wire(trimmed.inner_wires()[0]).unwrap().is_closed());

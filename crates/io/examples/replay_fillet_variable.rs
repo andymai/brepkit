@@ -15,6 +15,44 @@ use brepkit_operations::fillet::{FilletRadiusLaw, fillet_variable};
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
+/// `CUT=<body.bin>`: cut that body by the fillet result and report volumes.
+fn report_cut(topo: &mut Topology, tool: SolidId) {
+    let Some(body_path) = std::env::var_os("CUT") else {
+        return;
+    };
+    let body = deserialize_solid(&std::fs::read(body_path).unwrap(), topo).unwrap();
+    let volume = |topo: &Topology, solid: SolidId| {
+        (
+            brepkit_operations::measure::solid_volume(topo, solid, 0.01).unwrap(),
+            brepkit_operations::measure::oriented_solid_volume(topo, solid, 0.01).unwrap(),
+        )
+    };
+    let (body_volume, body_oriented) = volume(topo, body);
+    let (tool_volume, tool_oriented) = volume(topo, tool);
+    println!("  CUT body volume={body_volume:.3} oriented={body_oriented:.3}");
+    println!("  CUT tool volume={tool_volume:.3} oriented={tool_oriented:.3}");
+    let before = brepkit_operations::boolean::mesh_fallback_count();
+    let t = std::time::Instant::now();
+    match brepkit_operations::boolean::boolean(
+        topo,
+        brepkit_operations::boolean::BooleanOp::Cut,
+        body,
+        tool,
+    ) {
+        Ok(result) => {
+            let (result_volume, result_oriented) = volume(topo, result);
+            println!(
+                "  CUT result volume={result_volume:.3} oriented={result_oriented:.3} removed={:.3} fallbacks={} {}ms",
+                body_volume - result_volume,
+                brepkit_operations::boolean::mesh_fallback_count() - before,
+                t.elapsed().as_millis()
+            );
+            census(topo, result, "CUTRESULT");
+        }
+        Err(e) => println!("  CUT ERR: {e}"),
+    }
+}
+
 fn census(topo: &Topology, solid: SolidId, label: &str) {
     let mut types: HashMap<&'static str, usize> = HashMap::new();
     let mut uses: HashMap<usize, usize> = HashMap::new();
@@ -267,11 +305,50 @@ fn main() {
         edge_laws.push((best, FilletRadiusLaw::Constant(r)));
     }
 
+    if std::env::var("V2").is_ok() {
+        let v2_laws = edge_laws
+            .iter()
+            .map(|(eid, law)| {
+                let r = match law {
+                    FilletRadiusLaw::Constant(r) => *r,
+                    FilletRadiusLaw::Linear { start, .. }
+                    | FilletRadiusLaw::SCurve { start, .. } => *start,
+                };
+                (*eid, brepkit_blend::radius_law::RadiusLaw::Constant(r))
+            })
+            .collect();
+        match brepkit_operations::blend_ops::fillet_v2_variable(&mut topo, solid, v2_laws) {
+            Ok(result) => {
+                println!(
+                    "  V2: succeeded={} failed={} partial={}",
+                    result.succeeded.len(),
+                    result.failed.len(),
+                    result.is_partial
+                );
+                for (eid, err) in &result.failed {
+                    println!("  V2 FAILED {eid:?}: {err}");
+                }
+                census(&topo, result.solid, "V2RESULT");
+                report_cut(&mut topo, result.solid);
+            }
+            Err(e) => println!("  V2 ERR: {e}"),
+        }
+        return;
+    }
+
     let t = std::time::Instant::now();
     match fillet_variable(&mut topo, solid, &edge_laws) {
         Ok(result) => {
             println!("-- fillet_variable {}ms --", t.elapsed().as_millis());
             census(&topo, result, "RESULT");
+            if let Some(out) = std::env::var_os("OUT") {
+                std::fs::write(
+                    out,
+                    brepkit_io::arena_io::serialize_solid(&topo, result).unwrap(),
+                )
+                .unwrap();
+            }
+            report_cut(&mut topo, result);
             if std::env::var("FREE_DETAIL").is_ok() {
                 let mut users: HashMap<
                     usize,

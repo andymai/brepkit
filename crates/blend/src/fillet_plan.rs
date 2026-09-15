@@ -10,9 +10,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use brepkit_math::tolerance::Tolerance;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
-use brepkit_topology::face::FaceId;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::pcurve::PCurve;
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
@@ -171,8 +172,22 @@ impl FilletPlan {
             .into());
         }
 
-        let contour_edges = group_g1_contours(topo, solid, &selected, Tolerance::default())?;
         let adjacency = topo.build_adjacency(solid)?;
+        // A selected edge whose two faces are tangent-continuous across it
+        // (coplanar pieces of one face, the seam between two faces on one
+        // cylinder) has no material to round: a stripe there degenerates to
+        // a zero-width band whose two contacts coincide with the edge.
+        selected.retain(|&edge| {
+            let faces = adjacency.faces_for_edge(edge);
+            !(faces.len() == 2 && faces_tangent_along_edge(topo, edge, faces[0], faces[1]))
+        });
+        if selected.is_empty() {
+            return Err(BlendError::PlanningFailure {
+                reason: "every selected edge is tangent-continuous".to_owned(),
+            });
+        }
+
+        let contour_edges = group_g1_contours(topo, solid, &selected, Tolerance::default())?;
         let mut contours = Vec::with_capacity(contour_edges.len());
         let mut edge_contour = HashMap::<usize, usize>::new();
 
@@ -516,6 +531,44 @@ fn ordered_face_fan(
         });
     }
     Ok(ordered)
+}
+
+/// Whether two faces share one outward normal along an edge.
+fn faces_tangent_along_edge(
+    topo: &Topology,
+    edge_id: EdgeId,
+    face_a: FaceId,
+    face_b: FaceId,
+) -> bool {
+    let Ok(edge) = topo.edge(edge_id) else {
+        return false;
+    };
+    let (Ok(start), Ok(end)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+        return false;
+    };
+    let (start, end) = (start.point(), end.point());
+    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+    let normal_at = |face_id: FaceId, point: Point3| -> Option<Vec3> {
+        let face = topo.face(face_id).ok()?;
+        let normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            surface => {
+                let (u, v) = surface.project_point(point)?;
+                surface.normal(u, v)
+            }
+        };
+        let normal = normal.normalize().ok()?;
+        Some(if face.is_reversed() { -normal } else { normal })
+    };
+    [0.25, 0.5, 0.75].into_iter().all(|fraction| {
+        let point = edge
+            .curve()
+            .evaluate_with_endpoints(t0 + (t1 - t0) * fraction, start, end);
+        match (normal_at(face_a, point), normal_at(face_b, point)) {
+            (Some(na), Some(nb)) => na.dot(nb) >= 1.0 - 1e-8,
+            _ => false,
+        }
+    })
 }
 
 fn contour_touches_vertex(topo: &Topology, contour: &FilletContour, vertex: VertexId) -> bool {
