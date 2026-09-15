@@ -1,0 +1,19 @@
+crates/algo/src/builder/pcurve_compute.rs
+  s_1ba1aaf77c517d::t_37573f323ce905 247-249,627-628,638-662
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "dd337a306116e5825ee5cd4fa52b3f55c46278e2",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
