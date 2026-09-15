@@ -89,7 +89,27 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
             if let Some(pb) = arena.pave_blocks.get_mut(pb_id) {
                 pb.split_edge = Some(edge_id);
             }
-            log::debug!("MakeSplitEdges: created edge {edge_id:?} for pave block {pb_id:?}");
+            if log::log_enabled!(log::Level::Debug)
+                && let Some(pb) = arena.pave_blocks.get(pb_id)
+                && let Ok(e) = topo.edge(edge_id)
+                && let (Ok(a), Ok(b)) = (topo.vertex(e.start()), topo.vertex(e.end()))
+            {
+                let (a, b) = (a.point(), b.point());
+                log::debug!(
+                    "MakeSplitEdges: created edge {edge_id:?} for pave block {pb_id:?} of {:?} t=[{:.4},{:.4}] ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                    pb.original_edge,
+                    pb.start.parameter,
+                    pb.end.parameter,
+                    a.x(),
+                    a.y(),
+                    a.z(),
+                    b.x(),
+                    b.y(),
+                    b.z()
+                );
+            } else {
+                log::debug!("MakeSplitEdges: created edge {edge_id:?} for pave block {pb_id:?}");
+            }
         }
     }
 

@@ -6164,14 +6164,20 @@ fn split_face_2d_impl(
             .iter()
             .map(|e| {
                 format!(
-                    "STRACE-PRE ({:.7},{:.7})->({:.7},{:.7}) src={:?} fwd={} {}",
+                    "STRACE-PRE ({:.7},{:.7})->({:.7},{:.7}) src={:?} fwd={} {} 3d=({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
                     e.start_uv.x(),
                     e.start_uv.y(),
                     e.end_uv.x(),
                     e.end_uv.y(),
                     e.source_edge_idx,
                     e.forward,
-                    e.curve_3d.type_tag()
+                    e.curve_3d.type_tag(),
+                    e.start_3d.x(),
+                    e.start_3d.y(),
+                    e.start_3d.z(),
+                    e.end_3d.x(),
+                    e.end_3d.y(),
+                    e.end_3d.z()
                 )
             })
             .collect();

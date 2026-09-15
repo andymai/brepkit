@@ -275,8 +275,10 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
     result
 }
 
-/// Resolve the 0-vs-2π ambiguity of boundary endpoints that sit exactly ON
-/// the u-seam of a periodic surface.
+/// Unwrap the boundary's u along the wire on a periodic surface, so no
+/// consecutive endpoints differ by more than half a period; this also
+/// resolves the 0-vs-2π ambiguity of endpoints that sit exactly ON the
+/// u-seam.
 ///
 /// `project_point_on_surface` normalizes u into [0, TAU), so a sector face
 /// whose window is [3π/2, 2π] (the fourth-quadrant corner cone of a socket
@@ -310,6 +312,18 @@ fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurf
         return;
     };
     let n = edges.len();
+    // Every endpoint takes the period copy nearest the running u, not just
+    // the ones exactly on the seam: a rim that passes THROUGH the seam at a
+    // vertex (a bore wall whose face seam sits a quarter turn from the
+    // surface's, after a slot pave splits its rims) has principal-value
+    // pieces on the far side that jump back a period, the loop folds, and
+    // the arrangement traces one loop with rim arcs repeated. An open piece
+    // is walked start, midpoint, end so a span near a half period still
+    // lands on the right copy. A closed rim is left alone: its pcurve spans
+    // the conventional full period [0, TAU] whatever u its seam vertex
+    // projects to, so shifting it "nearest" would move it a period away
+    // from the seam lines it shares vertices with.
+    let nearest = |u: f64, target: f64| -> f64 { u - ((u - target) / TAU).round() * TAU };
     let mut cur = edges[first].start_uv.x();
     for k in 0..n {
         let e = &mut edges[(first + k) % n];
@@ -318,18 +332,37 @@ fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurf
             cur = e.end_uv.x();
             continue;
         }
-        let pick = |u: f64, target: f64| -> f64 {
-            if !at_seam(u) {
-                return u;
-            }
-            if (target - TAU).abs() < (target - 0.0).abs() {
-                TAU
-            } else {
-                0.0
-            }
+        let su = nearest(e.start_uv.x(), cur);
+        // Native orientation: `domain_with_endpoints` takes the positive
+        // parametric span from its first point, so a major arc sampled from
+        // swapped endpoints (or by the shorter-arc helper) would put the
+        // midpoint on the complementary arc.
+        let (s3, e3) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
         };
-        let su = pick(e.start_uv.x(), cur);
-        let eu = pick(e.end_uv.x(), su);
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+        let mid_3d = e.curve_3d.evaluate_with_endpoints(0.5 * (t0 + t1), s3, e3);
+        // At a sphere pole or a cone apex u is undefined (atan2 of zero), so
+        // a meridian piece through it hops straight to its end.
+        let u_defined = match surface {
+            FaceSurface::Sphere(sp) => {
+                let d = mid_3d - sp.center();
+                let axial = d.dot(sp.z_axis());
+                (d - sp.z_axis() * axial).length() > 1e-9 * sp.radius().max(1.0)
+            }
+            FaceSurface::Cone(cn) => (mid_3d - cn.apex()).length() > 1e-9,
+            _ => true,
+        };
+        let mu = if u_defined {
+            surface
+                .project_point(mid_3d)
+                .map_or(su, |(u, _)| nearest(u, su))
+        } else {
+            su
+        };
+        let eu = nearest(e.end_uv.x(), mu);
         if (su - e.start_uv.x()).abs() > 1e-12 {
             e.start_uv = Point2::new(su, e.start_uv.y());
         }
