@@ -1,0 +1,28 @@
+crates/io/examples/replay_pair.rs
+  s_1ba1aaf77c517d::t_f2067fb40ff0d4 925-927,949-951
+  s_1ba1aaf77c517d::t_250aed4de54f0f 546-548,912-913,917,923-924,928-932,947-948
+crates/io/examples/mesh_faces_probe.rs
+  s_1ba1aaf77c517d::t_a5526244aa102e 8,14-15,25-26,32,35,60
+crates/algo/src/pave_filler/phase_ff_coplanar.rs
+  s_1ba1aaf77c517d::t_09940e64a5468e 304,848,894
+  s_1ba1aaf77c517d::t_c5499b3620700d 515-517
+  s_1ba1aaf77c517d::t_084364c6891b38 569-571,573-577,596-598,601
+  s_1ba1aaf77c517d::t_cfebe16c0073c4 102
+  s_1ba1aaf77c517d::t_a5526244aa102e 273,278,290,299-301,373-374,377-378,381-382,386,449-454,470-471,494-496,502,534-557,560,563-568,572,578-595,599-600,602-618,739-741,752-757,827,866,931-935,938,951,958-971
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ae978018c5787c4dc225499eff5a1b7a111eacda",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
