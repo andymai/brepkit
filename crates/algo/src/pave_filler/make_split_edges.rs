@@ -82,14 +82,11 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
             if log::log_enabled!(log::Level::Debug) {
                 let members: Vec<String> = all_pbs
                     .iter()
-                    .filter_map(|&m| arena.pave_blocks.get(m))
-                    .map(|pb| {
+                    .filter_map(|&m| arena.pave_blocks.get(m).map(|pb| (m, pb)))
+                    .map(|(m, pb)| {
                         format!(
-                            "{:?} of {:?} t=[{:.4},{:.4}]",
-                            pb.original_edge,
-                            pb.original_edge,
-                            pb.start.parameter,
-                            pb.end.parameter
+                            "{m:?} of {:?} t=[{:.4},{:.4}]",
+                            pb.original_edge, pb.start.parameter, pb.end.parameter
                         )
                     })
                     .collect();

@@ -1295,7 +1295,7 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
         let ev = topo.vertex(edge.end()).ok()?;
         let (sp, ep) = (sv.point(), ev.point());
         // Sample each edge so arc boundaries contribute their true swept area,
-        // mirroring `planar_faces_overlap`'s shorter-arc sampling.
+        // mirroring `planar_faces_overlap`'s native-arc sampling.
         super::pcurve_compute::sample_edge_uniform_native(
             edge.curve(),
             sp,
@@ -1317,7 +1317,7 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
 /// per edge.
 ///
 /// Returns `None` for non-(cylinder/cone) faces or wires that sample to fewer
-/// than three points. Mirrors [`planar_faces_overlap`]'s shorter-arc edge
+/// than three points. Mirrors [`planar_faces_overlap`]'s native-arc edge
 /// sampling so arc boundaries contribute their true swept extent. The raw 3D
 /// points (not parameters) are returned so [`analytic_faces_overlap`] can
 /// project BOTH faces through a single shared reference surface — projecting
