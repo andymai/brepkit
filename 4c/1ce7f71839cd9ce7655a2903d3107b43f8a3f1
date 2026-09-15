@@ -1,0 +1,23 @@
+.claude/skills/roadmap/SKILL.md
+  s_1ba1aaf77c517d::t_290bd8bf143cf1 145,167-182
+  s_1ba1aaf77c517d::t_0fbfed3d2c426b 147
+  s_1ba1aaf77c517d::t_ba14809fa7e7d1 166
+crates/io/examples/replay_pair.rs
+  s_1ba1aaf77c517d::t_1c551335e779b8 604-663,688
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4c1ce7f71839cd9ce7655a2903d3107b43f8a3f1",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
