@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789498283684,
+  "lastUpdate": 1789501800114,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35261,6 +35261,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28489970,
             "range": "± 601442",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "943bbb707ecd32ec73f0188c05fb5af1891293e5",
+          "message": "fix(algo): window boundary arc crossings on the native arc and trim riding sections (#1677)\n\n## What\n\nTwo roots in the face-image builder, both found under a bore cap whose\nkeyhole outline surrounds a pin hole's outline on the same knuckle face\n(the hinge bin's pin cut, replayed on a synthetic C bracket).\n\n- `arc_segment_crossings` decided whether a section line's hit on a\nboundary circle lies on the edge's arc from the shorter-arc midpoint, so\na major boundary arc's complement admitted a phantom crossing. The bore\ncap's outline arc cut the pin hole's slanted edge mid-run and\n`link_existing` then replaced the whole hole edge with that short piece.\nThe classification polygon sampled major arcs the same way. Both now\nwalk the edge's native span.\n- A straight section riding a collinear boundary edge for part of its\nspan (the bore's tail base along the pin hole's base edge and out past\nits corner) threaded the shared run as a second copy of that edge.\n`line_section_uncovered_pieces` keeps only the uncovered runs; full-ride\nand no-ride sections take the older re-trace rule unchanged.\n\n## Pins\n\n-\n`fill_images_faces::tests::major_arc_keeps_only_crossings_on_its_own_side`:\na 276 degree arc keeps the hit on its own side, whichever way the wire\ntraverses it.\n-\n`boolean::tests::compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact`:\npin r 0.925 and bore r 1.0 keyholes meeting on a knuckle face, exact\nthrough `compound_cut` and in sequence, no mesh fallback. The batched\nresult is measured with `oriented_solid_volume`: `solid_volume` reads\nits unified bore wall one bore too high (noted in the roadmap's mesher\nrow).\n\n## Roadmap\n\nCloses the `arc_segment_crossings` row the last review opened. Records\nwhat the hinge per-op log attributed: the swing intersects run between\ntwo planar blobs. The bin blob is the batched keyhole-pin cut, which\nstill fails on the tool's own operands (outline crossing the small\nknuckle face's rim; pairwise and sequential cuts are exact and\n`compound_cut` ships the batched fallback anyway). The swing blob is the\nlid's stepped-barrel knuckle fuse. Both have OPEN rows with captured\noperands and replay recipes; the harness gains `MERGE_TOOLS` and\n`UNIFY_B` for them.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes two face-image builder bugs that made a batched compound cut of\ntwo keyhole pins meeting on a knuckle face fall back to mesh.\n\n- `arc_segment_crossings` and the classification polygon now walk the\nedge's directed native span (counter-clockwise from stored start,\nendpoints inclusive).\n- Major-arc complements admit no phantom crossings, half-turn edges keep\nonly their own semicircle, and hits on endpoints are kept.\n- `line_section_uncovered_pieces` keeps only uncovered runs and requires\neach to exceed the re-trace exemption's endpoint band; sections the\nboundary covers entirely, or not at all, keep the old re-trace rule.\n- Adds unit pins for the major-arc, half-turn, and endpoint cases, plus\na C-bracket keyhole pin that stays exact through `compound_cut` and\nsequential cuts, verified by its analytic faces.\n- The replay harness gains `MERGE_TOOLS` and `UNIFY_B`; the merged-tools\npath carries cavity shells, and the roadmap arc-window row is closed.\n- The batched volume is compared with `oriented_solid_volume` because\n`solid_volume` reads the unified bore wall one bore high.\n\n<sup>Written for commit 616d935f1414c28d7222900b8fb5a629ee40ecaa.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1677?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T19:47:50Z",
+          "tree_id": "81060ed36a98111da2a659292adb1959e23b0c55",
+          "url": "https://github.com/andymai/brepkit/commit/943bbb707ecd32ec73f0188c05fb5af1891293e5"
+        },
+        "date": 1789501795912,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 563318,
+            "range": "± 11936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 625184,
+            "range": "± 17369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7422,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 407926,
+            "range": "± 6074",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27533123,
+            "range": "± 762070",
             "unit": "ns/iter"
           }
         ]
