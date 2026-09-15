@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.12](https://github.com/andymai/brepkit/compare/v3.4.11...v3.4.12) (2026-09-15)
+
+
+### Bug Fixes
+
+* **operations:** probe a tool's boundary before calling it contained ([#1673](https://github.com/andymai/brepkit/issues/1673)) ([1f30ac5](https://github.com/andymai/brepkit/commit/1f30ac5ba5cb1d7b4e07fdb57c6e65f9827aa69b))
+
 ## [3.4.11](https://github.com/andymai/brepkit/compare/v3.4.10...v3.4.11) (2026-09-15)
 
 
