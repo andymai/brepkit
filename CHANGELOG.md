@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.13](https://github.com/andymai/brepkit/compare/v3.4.12...v3.4.13) (2026-09-15)
+
+
+### Bug Fixes
+
+* **algo:** sample boundary arcs natively in the same-domain detector ([#1675](https://github.com/andymai/brepkit/issues/1675)) ([15008bf](https://github.com/andymai/brepkit/commit/15008bf7e4fbb3f888f99cb9476097a7d0517ddf))
+
 ## [3.4.12](https://github.com/andymai/brepkit/compare/v3.4.11...v3.4.12) (2026-09-15)
 
 
