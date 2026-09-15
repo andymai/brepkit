@@ -345,7 +345,13 @@ fn main() {
 
     let mut topo = Topology::new();
     let a = deserialize_solid(&std::fs::read(&a_path).unwrap(), &mut topo).unwrap();
-    let b = deserialize_solid(&std::fs::read(&b_path).unwrap(), &mut topo).unwrap();
+    let mut b = deserialize_solid(&std::fs::read(&b_path).unwrap(), &mut topo).unwrap();
+    // UNIFY_B=1 merges B's same-domain faces first (the wasm booleans do
+    // this on their outputs, so a tool built by an internal fuse ladder is
+    // the fragmented one).
+    if std::env::var("UNIFY_B").is_ok() {
+        brepkit_operations::heal::unify_faces(&mut topo, b).unwrap();
+    }
     describe(&topo, a, "A");
     describe(&topo, b, "B");
 
@@ -618,7 +624,27 @@ fn main() {
             .filter(|t| !t.trim().is_empty())
             .map(|t| deserialize_solid(&std::fs::read(t.trim()).unwrap(), &mut topo).unwrap())
             .collect();
-        if std::env::var("TOOLS_SEQ").is_ok() {
+        // MERGE_TOOLS=1 concatenates the tool shells into one solid (the
+        // contact-thin compound_cut shortcut's tool) and runs the plain OP
+        // flow against it, so the raw GFA path reports its free edges.
+        if std::env::var("MERGE_TOOLS").is_ok() {
+            use brepkit_topology::shell::Shell;
+            use brepkit_topology::solid::Solid;
+            let mut all_faces = Vec::new();
+            let mut inner_shells = Vec::new();
+            for &t in &tools {
+                let solid = topo.solid(t).unwrap();
+                let (outer, inners) = (solid.outer_shell(), solid.inner_shells().to_vec());
+                all_faces.extend_from_slice(topo.shell(outer).unwrap().faces());
+                for inner in inners {
+                    let faces = topo.shell(inner).unwrap().faces().to_vec();
+                    inner_shells.push(topo.add_shell(Shell::new(faces).unwrap()));
+                }
+            }
+            let outer_id = topo.add_shell(Shell::new(all_faces).unwrap());
+            b = topo.add_solid(Solid::new(outer_id, inner_shells));
+            describe(&topo, b, "B(merged tools)");
+        } else if std::env::var("TOOLS_SEQ").is_ok() {
             println!("-- sequential cuts with {} tools --", tools.len());
             let t = std::time::Instant::now();
             let mut cur = a;
@@ -647,50 +673,52 @@ fn main() {
             }
             return;
         }
-        println!("-- compound_cut with {} tools --", tools.len());
-        let t = std::time::Instant::now();
-        match brepkit_operations::boolean::compound_cut(
-            &mut topo,
-            a,
-            &tools,
-            brepkit_operations::boolean::BooleanOptions::default(),
-        ) {
-            Ok(sid) => {
-                describe(
-                    &topo,
-                    sid,
-                    &format!("compound_cut {}ms", t.elapsed().as_millis()),
-                );
-                // CORNER=<path> follows with an intersect against the given
-                // solid (the baseplate corner-rounding step of #1488).
-                if let Ok(cpath) = std::env::var("CORNER") {
-                    let ctool =
-                        deserialize_solid(&std::fs::read(&cpath).unwrap(), &mut topo).unwrap();
-                    let t2 = std::time::Instant::now();
-                    match brepkit_operations::boolean::boolean(
-                        &mut topo,
-                        brepkit_operations::boolean::BooleanOp::Intersect,
+        if std::env::var("MERGE_TOOLS").is_err() {
+            println!("-- compound_cut with {} tools --", tools.len());
+            let t = std::time::Instant::now();
+            match brepkit_operations::boolean::compound_cut(
+                &mut topo,
+                a,
+                &tools,
+                brepkit_operations::boolean::BooleanOptions::default(),
+            ) {
+                Ok(sid) => {
+                    describe(
+                        &topo,
                         sid,
-                        ctool,
-                    ) {
-                        Ok(rid) => describe(
-                            &topo,
-                            rid,
-                            &format!("corner intersect {}ms", t2.elapsed().as_millis()),
-                        ),
-                        Err(e) => println!(
-                            "  corner intersect FAILED in {}ms: {e}",
-                            t2.elapsed().as_millis()
-                        ),
+                        &format!("compound_cut {}ms", t.elapsed().as_millis()),
+                    );
+                    // CORNER=<path> follows with an intersect against the given
+                    // solid (the baseplate corner-rounding step of #1488).
+                    if let Ok(cpath) = std::env::var("CORNER") {
+                        let ctool =
+                            deserialize_solid(&std::fs::read(&cpath).unwrap(), &mut topo).unwrap();
+                        let t2 = std::time::Instant::now();
+                        match brepkit_operations::boolean::boolean(
+                            &mut topo,
+                            brepkit_operations::boolean::BooleanOp::Intersect,
+                            sid,
+                            ctool,
+                        ) {
+                            Ok(rid) => describe(
+                                &topo,
+                                rid,
+                                &format!("corner intersect {}ms", t2.elapsed().as_millis()),
+                            ),
+                            Err(e) => println!(
+                                "  corner intersect FAILED in {}ms: {e}",
+                                t2.elapsed().as_millis()
+                            ),
+                        }
                     }
                 }
+                Err(e) => println!(
+                    "  compound_cut FAILED in {}ms: {e}",
+                    t.elapsed().as_millis()
+                ),
             }
-            Err(e) => println!(
-                "  compound_cut FAILED in {}ms: {e}",
-                t.elapsed().as_millis()
-            ),
+            return;
         }
-        return;
     }
 
     // FUSE_ALL=1 replays the wasm `fuseAll` path (compound_ops::fuse_all over
