@@ -1,0 +1,21 @@
+crates/wasm/src/bindings/assembly_probe_tests.rs
+  s_1ba1aaf77c517d::t_3469f4aa61364c 333-366
+.claude/skills/roadmap/SKILL.md
+  s_1ba1aaf77c517d::t_6458f9c3364b64 146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cf342ac100e2703df1462ccec2fae28fdf879b80",
+  "prompts": {},
+  "sessions": {
+    "s_1ba1aaf77c517d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b077c2c-af9f-4da8-840b-8b99b3ce1656",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
