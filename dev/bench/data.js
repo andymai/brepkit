@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789463685115,
+  "lastUpdate": 1789464255643,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34235,6 +34235,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42470356,
             "range": "± 215309",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "540d9b2f6feb04351b2760ace01c524647d60f9f",
+          "message": "chore(main): release 3.4.5 (#1658)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.4.5](https://github.com/andymai/brepkit/compare/v3.4.4...v3.4.5)\n(2026-09-15)\n\n\n### Bug Fixes\n\n* **algo:** coaxial same-domain pairs take their orientation from the\nsurface normal ([#1657](https://github.com/andymai/brepkit/issues/1657))\n([5dedd02](https://github.com/andymai/brepkit/commit/5dedd02feb4350bbb5f07f078d0bea6e820bfc91))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBumps the workspace to version 3.4.5, releasing a bug fix where coaxial\nsame-domain pairs now take their orientation from the surface normal.\n\n<sup>Written for commit 06f2d14fbcb55f3cfba40828910601e00c4f2d1b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1658?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-15T09:21:23Z",
+          "tree_id": "a2718188c52bfacea3a554023f8a0c31fecf645a",
+          "url": "https://github.com/andymai/brepkit/commit/540d9b2f6feb04351b2760ace01c524647d60f9f"
+        },
+        "date": 1789464252000,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 964011,
+            "range": "± 3826",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046424,
+            "range": "± 3918",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11767,
+            "range": "± 220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 708901,
+            "range": "± 4590",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44296237,
+            "range": "± 266586",
             "unit": "ns/iter"
           }
         ]
