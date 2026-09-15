@@ -2424,10 +2424,11 @@ fn detect_trivial_relation(
                 };
                 let (ps, pe) = (vs.point(), ve.point());
                 let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
-                [0.0, 0.25, 0.5, 0.75].into_iter().any(|f| {
-                    let p = if f == 0.0 {
+                (0..4).any(|k| {
+                    let p = if k == 0 {
                         ps
                     } else {
+                        let f = f64::from(k) / 4.0;
                         e.curve()
                             .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
                     };
