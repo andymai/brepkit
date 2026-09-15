@@ -4742,6 +4742,45 @@ fn emit_split_circle_arcs(
     let side_a = sphere_side(face_a);
     let side_b = sphere_side(face_b);
     let side_eps = tol.linear * 10.0;
+    // A planar face's trimmed region, so an arc of the circle that lies in a
+    // COPLANAR sibling face is not handed to this pair: two coplanar
+    // sub-faces of one disc (a knuckle's end split by a bracket plane
+    // through its axis) both meet the pin bore, and the AABB of either
+    // covers the whole circle. Without this the first pair took every arc,
+    // the duplicate check below then denied the sibling its own arc, and the
+    // keyhole never closed on that face. Arcs riding a face's boundary keep
+    // going through: the loops are sampled sixteen points per curved edge,
+    // so a point on a rim arc sits up to the sampling sagitta outside the
+    // inscribed polygon, and the admitting band is widened to that sagitta
+    // (of this circle, which is the rim's when the arc rides it).
+    let planar_loops = |fid: FaceId| -> Option<crate::classifier::FaceLoops2d> {
+        let face = topo.face(fid).ok()?;
+        matches!(face.surface(), FaceSurface::Plane { .. })
+            .then(|| crate::classifier::FaceLoops2d::new(topo, fid).ok())
+            .flatten()
+    };
+    let loops_a = planar_loops(face_a);
+    let loops_b = planar_loops(face_b);
+    let in_region = |loops: &Option<crate::classifier::FaceLoops2d>, p: Point3| -> bool {
+        use crate::builder::classify_2d::{boundary_eps, distance_to_polygon_boundary};
+        loops.as_ref().is_none_or(|l| {
+            l.to_uv(p).is_none_or(|q| {
+                l.contains(q)
+                    || std::iter::once(&l.outer).chain(l.holes.iter()).any(|lp| {
+                        if lp.len() < 3 {
+                            return false;
+                        }
+                        let max_chord = lp
+                            .iter()
+                            .zip(lp.iter().cycle().skip(1))
+                            .map(|(a, b)| (*b - *a).length())
+                            .fold(0.0_f64, f64::max);
+                        let sagitta = max_chord * max_chord / (8.0 * circle.radius());
+                        distance_to_polygon_boundary(q, lp) <= boundary_eps(lp).max(sagitta)
+                    })
+            })
+        })
+    };
     let in_both = |p: Point3| -> bool {
         let a_ok = bbox_a.as_ref().is_none_or(|b| b.contains_point(p));
         let b_ok = bbox_b.as_ref().is_none_or(|b| b.contains_point(p));
@@ -4749,7 +4788,11 @@ fn emit_split_circle_arcs(
             side.as_ref()
                 .is_none_or(|(c, axis)| (p - *c).dot(*axis) >= -side_eps)
         };
-        a_ok && b_ok && side_ok(&side_a) && side_ok(&side_b)
+        a_ok && b_ok
+            && side_ok(&side_a)
+            && side_ok(&side_b)
+            && in_region(&loops_a, p)
+            && in_region(&loops_b, p)
     };
 
     // Pass 1: determine which arcs survive the AABB filter, *before*

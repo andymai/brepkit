@@ -1155,13 +1155,43 @@ fn sample_face_interior(
             let e = topo.edge(oe.edge())?;
             poly.push(topo.vertex(oe.oriented_start(e))?.point());
         }
-        // A boundary with >= 3 vertices forms a real polygon to test against.
-        // A planar face bounded by a single closed curve (one circle/ellipse
-        // edge → <3 vertices) has no polygon; its centroid is the disc center
-        // (interior), so it falls through to the centroid heuristic below.
-        if inward_len > 1e-12 && poly.len() >= 3 {
+        // Arc-true boundary: a corner-only polygon chords every arc, and
+        // for a face whose boundary is mostly arcs (a barrel's end ring
+        // after a bracket fuse: two 135 degree rim arcs, two bridges, two
+        // 135 degree bore arcs) it is a thin hexagon that excludes the
+        // whole neighbourhood of every arc midpoint, so no offset
+        // candidate passes and the last-resort interior point of that
+        // hexagon lands in the bore, where the cut tool then reads the
+        // untouched ring as Inside and drops it.
+        let mut boundary: Vec<Point3> = Vec::with_capacity(edges.len() * 8);
+        for oe in edges {
+            let e = topo.edge(oe.edge())?;
+            let sp = topo.vertex(oe.oriented_start(e))?.point();
+            let ep = topo.vertex(oe.oriented_end(e))?.point();
+            boundary.push(sp);
+            if matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                continue;
+            }
+            let (ns, ne) = if oe.is_forward() { (sp, ep) } else { (ep, sp) };
+            let (d0, d1) = e.curve().domain_with_endpoints(ns, ne);
+            let mut samples: Vec<Point3> = (1..8)
+                .map(|k| {
+                    let t = (d1 - d0).mul_add(f64::from(k) / 8.0, d0);
+                    e.curve().evaluate_with_endpoints(t, ns, ne)
+                })
+                .collect();
+            if !oe.is_forward() {
+                samples.reverse();
+            }
+            boundary.extend(samples);
+        }
+        // A sampled boundary with >= 3 points forms a real polygon to test
+        // against (two arcs bound a crescent). A planar face bounded by a
+        // single closed curve has no polygon; its centroid is the disc
+        // center (interior), so it falls through to the centroid heuristic.
+        if inward_len > 1e-12 && boundary.len() >= 3 {
             let frame = plane_frame::PlaneFrame::from_plane_face(*normal, &poly);
-            let poly2d: Vec<_> = poly.iter().map(|p| frame.project(*p)).collect();
+            let poly2d: Vec<_> = boundary.iter().map(|p| frame.project(*p)).collect();
             let eps = classify_2d::boundary_eps(&poly2d);
             // Try LARGE offsets first, then shrink. The base offset is
             // diag·1e-4 — a sample that close to the boundary edge can hug a

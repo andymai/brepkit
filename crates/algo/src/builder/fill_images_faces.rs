@@ -2819,10 +2819,13 @@ fn clip_line_to_face_boundary(
     // from the interior corner vertex out to the rim, crossing the boundary
     // circle exactly once. The midpoint-classification path below admits the
     // section endpoints (t=0/t=1) as interval borders and keeps only the
-    // truly-inside window, so one crossing suffices there. The non-plane /
-    // holed fallback still selects an outermost crossing PAIR, so it keeps
-    // requiring two.
-    let single_crossing_ok = crossings.len() == 1
+    // truly-inside window, so one crossing suffices there, and so does NONE:
+    // a section with both endpoints inside the face (a keyhole's slot wall
+    // on a knuckle's end disc, closing a loop with the bore arcs) is kept
+    // whole when its midpoint is inside, and one lying outside is rejected
+    // by the same test. The non-plane / holed fallback still selects an
+    // outermost crossing PAIR, so it keeps requiring two.
+    let single_crossing_ok = crossings.len() <= 1
         && face.inner_wires().is_empty()
         && matches!(face.surface(), FaceSurface::Plane { .. });
     // A holed planar face can also be reached from INSIDE its outer wire: a
