@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789496159423,
+  "lastUpdate": 1789497725657,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35153,6 +35153,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44873394,
             "range": "± 387477",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "15008bf7e4fbb3f888f99cb9476097a7d0517ddf",
+          "message": "fix(algo): sample boundary arcs natively in the same-domain detector (#1675)\n\n## Summary\n\n- The same-domain detector sampled every boundary arc with the\nshorter-arc evaluator. A rim split at two paves keeps a 276 degree\npiece, so a disc's remainder beside a flush slot bar polygonised as its\nshort complement, paired with the bar's overlap rectangle, and was\ndropped, while the real overlap piece went as an unpaired On face: the\nfuse fell back to a mesh.\n- The detector now samples the native arc\n(`sample_edge_uniform_native`); the shorter-arc sampler stays for\nsection arcs. The split-edge stage logs each common block's members.\n- Pin `fuse_a_rod_with_a_flush_slot_bar_crossing_its_rim` is un-ignored\n(it fails on main).\n\n## Verification\n\n- The flush slot-bar fuse is exact and watertight with the expected\nvolume; the knuckle, keep-box and coplanar pins are unchanged.\n- Captured hinge replays hold with identical face censuses; two fuse\nreplays (the tube and op22) read 0.06% more volume at the default mesh\ndeflection because a different coincident copy of a coplanar cap\nsurvives, with its own triangulation.\n- Two hand-built same-domain unit patches stored their top rim backwards\n(start at the far angle, traversed forward); they now store it natively\nand traverse it reversed, as every production builder does.\n- algo, operations, io and wasm suites green; clippy clean.\n\n## Roadmap\n\nThe \"partially overlapping coplanar end caps\" row moves to Closed; five\ndeferred pins remain.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the same-domain fuse detector so a flush slot bar crossing a rod's\nrim fuses exactly instead of falling back to a mesh.\n\n**Changes**\n- Boundary arcs are now sampled along their native span via\n`sample_edge_uniform_native`, pinned by a new major-arc unit test; the\nshorter-arc sampler is removed and section arcs keep the\n`evaluate_edge_at_t` convention.\n- Previously, a 276° rim remainder was polygonised as its short\ncomplement, got paired with the bar's overlap rectangle, and dropped\nalong with the real overlap piece.\n- `MakeSplitEdges` debug logs now list each common block's member pave\nblocks instead of duplicating the original edge.\n- Removes the ignore from\n`fuse_a_rod_with_a_flush_slot_bar_crossing_its_rim` and closes the\nroadmap row for partially overlapping coplanar end caps.\n- Two hand-built unit patches now store their top rim natively and\ntraverse it reversed; the roadmap also records two more arc-convention\ngaps the review found (`arc_segment_crossings` midpoint, STEP\n`same_sense`).\n\n**Verification**\n- The flush slot-bar fuse is exact and watertight with the expected\nvolume; knuckle, keep-box, and coplanar pins are unchanged.\n- Two captured fuse replays read 0.06% more volume at the default mesh\ndeflection because a different coincident copy of a coplanar cap\nsurvives.\n- `algo`, `operations`, `io`, and `wasm` suites pass; clippy is clean.\n\n<sup>Written for commit a01ee3cb970850df87c9b40d731044f0fa184c3d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1675?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T18:39:34Z",
+          "tree_id": "0d0c8add767931449671555a44f569dc1bae892b",
+          "url": "https://github.com/andymai/brepkit/commit/15008bf7e4fbb3f888f99cb9476097a7d0517ddf"
+        },
+        "date": 1789497720517,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 832890,
+            "range": "± 21858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 915647,
+            "range": "± 23064",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10001,
+            "range": "± 375",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 620599,
+            "range": "± 10975",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36317480,
+            "range": "± 1482042",
             "unit": "ns/iter"
           }
         ]
