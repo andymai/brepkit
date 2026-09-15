@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789468919109,
+  "lastUpdate": 1789471659433,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34613,6 +34613,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 40176425,
             "range": "± 77169",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "710f130876b274151af74f9921088835fcb4d109",
+          "message": "docs(roadmap): the click-rail seating root, the tilted sub-root, the hinge hang (#1665)\n\n## Summary\n\nRoadmap maintenance for three findings, plus one replay instrument.\n\n- **Click-rail seating family (CLOSED, tool side).**\n`lidCutoutGrip.scenario` read 1.91 mm of rail interference on brepkit in\nall ten cases because the rail probe column at x = +-59.000 sits exactly\non the bin lip's corner seam, and the tool's `columnCrossings` skipped a\nbarycentric weight of -1e-16 (one triangle vertex order) while keeping\nan exact 0 (the other). Both kernels' meshes agree to 0.01 mm on a 0.5\nmm grid around that corner; brepkit needs nothing. Fixed in the tool's\nmetric: gridfinity-layout-tool #4284.\n- **Tilted block x cradle.** Sub-root 1 recorded: the block's +x face\nreached the splitter with its straight NURBS boundary edges unsplit, so\nits sections could not anchor. The expansion for straight NURBS edges is\nparked on `fix/nurbs-line-boundary-expansion` (the pair then assembles,\n26 free edges remain from two further sub-roots, and no primitive pin\ndiscriminates the change yet).\n- **Generator hangs.** `hingeSwing.scenario` is the lid file that holds\na worker at full CPU with no output.\n- `replay_pair` gains `RESULT_FACES=<z>|all`: the result's faces at a\nheight with their mesh triangle counts.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the kernel roadmap with three findings and adds a face-dump\noption to `replay_pair`. The click-rail seating interference is now\ndiagnosed (closed on the tool side), the tilted block x cradle records\nits first sub-root, and the generator hang is narrowed to\n`hingeSwing.scenario`.\n\n**Roadmap updates**\n- The probe column at x = ±59.000 sits exactly on the bin lip's corner\nseam; `columnCrossings` dropped a crossing whose barycentric weight\nrounded to -1e-16.\n- The fix is in the tool's metric (`gridfinity-layout-tool` #4284); the\npinned flush-fill count moves from four to three, and brepkit geometry\nneeds nothing.\n- The block's +x face reached the splitter with its straight NURBS\nboundary edges unsplit, so the cradle's sections could not anchor.\n- The straight-NURBS expansion is parked on\n`fix/nurbs-line-boundary-expansion`; with it the pair assembles but 26\nfree edges remain.\n- `hingeSwing.scenario` held a worker at full CPU for 18 minutes with no\noutput; the other four lid candidates pass in seconds.\n\n**Replay instrument**\n- `replay_pair` gains `RESULT_FACES=<z>|all`, printing each result\nface's surface, bounds, and mesh triangle count at a height.\n- The dump runs after each successful boolean op.\n\n<sup>Written for commit 4c1ce7f71839cd9ce7655a2903d3107b43f8a3f1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1665?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T11:24:49Z",
+          "tree_id": "bb18f00f9335fa2f899ebf1fc8fcc1a4a2dbef80",
+          "url": "https://github.com/andymai/brepkit/commit/710f130876b274151af74f9921088835fcb4d109"
+        },
+        "date": 1789471655045,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1002879,
+            "range": "± 2613",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1091546,
+            "range": "± 20914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12259,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 756057,
+            "range": "± 12750",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45120573,
+            "range": "± 475977",
             "unit": "ns/iter"
           }
         ]
