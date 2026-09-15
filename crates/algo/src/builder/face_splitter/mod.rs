@@ -4070,12 +4070,15 @@ fn clip_sections_to_outer_region(
 /// this signature only when it has woven twin section edges into one loop
 /// instead of closing a region between them; a clean partition never does.
 ///
-/// Loops of two edges are exempt: consecutive edges always share a vertex, so
-/// for `n == 2` closure alone forces the reverse pattern and every lens region
-/// (an arc plus its co-endpoint chord) matches. Only at three or more edges
-/// does the pattern actually mean the walker doubled back — at two it fired on
-/// the honeycomb cap arrangement's legitimate lens and cost `pcut3` its zero
-/// free-edge pin.
+/// Loops of two edges are exempt by default: consecutive edges always share a
+/// vertex, so for `n == 2` closure alone forces the reverse pattern and every
+/// lens region (an arc plus its co-endpoint chord) matches. Only at three or
+/// more edges does the pattern actually mean the walker doubled back — at two
+/// it fired on the honeycomb cap arrangement's legitimate lens and cost
+/// `pcut3` its zero free-edge pin. With `two_edge_spurs` (a promoted hole in
+/// the arrangement) a two-edge loop of two STRAIGHT edges counts: that is a
+/// bridge section walked to the opening and straight back, never a region,
+/// while a lens still keeps its arc and stays exempt.
 fn loops_have_out_and_back(
     loops: &[Vec<OrientedPCurveEdge>],
     tol: f64,
@@ -4083,10 +4086,10 @@ fn loops_have_out_and_back(
 ) -> bool {
     for lp in loops {
         let n = lp.len();
-        // A two-edge loop is itself an out-and-back; with a promoted hole in
-        // the arrangement it is a bridge walked there and straight back, never
-        // a region.
-        if n < 2 || (n < 3 && !two_edge_spurs) {
+        if n < 2 {
+            continue;
+        }
+        if n == 2 && !(two_edge_spurs && lp.iter().all(|e| matches!(e.curve_3d, EdgeCurve::Line))) {
             continue;
         }
         for i in 0..n {

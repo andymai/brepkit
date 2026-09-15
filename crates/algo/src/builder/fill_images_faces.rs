@@ -18,6 +18,9 @@ static TRACE_SECEDGE: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_SECEDG
 /// `clip_line_to_face_boundary`, which is what separates a chord-short clip
 /// from a genuinely absent section.
 static TRACE_CLIP: LazyLock<bool> = LazyLock::new(|| std::env::var("BK_CLIP").is_ok());
+/// `BK_SPLIT_TRACE=<face index>` also dumps that face's emitted sub-face wires.
+static TRACE_SPLIT_FACE: LazyLock<Option<String>> =
+    LazyLock::new(|| std::env::var("BK_SPLIT_TRACE").ok());
 
 /// Quantized 3D position pair for CommonBlock edge matching.
 type CbEdgeKey = ((i64, i64, i64), (i64, i64, i64));
@@ -3118,12 +3121,23 @@ fn hole_loops_along_line(
                             poly.push(frame.project(el.evaluate(a)));
                         }
                     } else {
-                        for k in 1..96 {
-                            let f = f64::from(k) / 96.0;
-                            poly.push(frame.project(super::pcurve_compute::evaluate_edge_at_t(
-                                curve, sp, ep, f,
-                            )));
+                        // Walk the edge's NATIVE span (`domain_with_endpoints`
+                        // is the arc from the stored start to the stored end),
+                        // then restore traversal order: a rim piece past 180
+                        // degrees walked by the shorter-arc convention would
+                        // trace its complement and fold the polygon.
+                        let (ns, ne) = if oe.is_forward() { (sp, ep) } else { (ep, sp) };
+                        let (t0, t1) = curve.domain_with_endpoints(ns, ne);
+                        let mut samples: Vec<Point2> = (1..96)
+                            .map(|k| {
+                                let t = (t1 - t0).mul_add(f64::from(k) / 96.0, t0);
+                                frame.project(curve.evaluate_with_endpoints(t, ns, ne))
+                            })
+                            .collect();
+                        if !oe.is_forward() {
+                            samples.reverse();
                         }
+                        poly.extend(samples);
                     }
                 }
             }
@@ -3482,7 +3496,7 @@ fn build_topology_face(
     topo: &mut Topology,
     split: &super::split_types::SplitSubFace,
     tol: Tolerance,
-    _parent_face_id: FaceId,
+    parent_face_id: FaceId,
     _shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
     _cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
@@ -3518,10 +3532,13 @@ fn build_topology_face(
     // Step 2: Create edges and oriented edges for the outer wire.
     let mut oriented_edges = Vec::with_capacity(split.outer_wire.len());
 
-    if std::env::var("BK_SPLIT_TRACE").is_ok_and(|v| v == format!("{}", _parent_face_id.index())) {
+    if TRACE_SPLIT_FACE
+        .as_deref()
+        .is_some_and(|v| v == parent_face_id.index().to_string())
+    {
         for e in &split.outer_wire {
             log::debug!(
-                "STRACE-OUT face={_parent_face_id:?} {} fwd={} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4}) uv=({:.4},{:.4})->({:.4},{:.4})",
+                "STRACE-OUT face={parent_face_id:?} {} fwd={} ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4}) uv=({:.4},{:.4})->({:.4},{:.4})",
                 e.curve_3d.type_tag(),
                 e.forward,
                 e.start_3d.x(),

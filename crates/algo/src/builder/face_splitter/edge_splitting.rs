@@ -53,7 +53,10 @@ pub(super) fn split_boundary_edges_at_3d_points(
         // sharing both endpoints; pave the longer arc at its middle exactly
         // as `make_blocks` does for the edge images, so this face's pieces
         // match its neighbours' and the assembler's endpoint-keyed merge
-        // never conflates the two arcs.
+        // never conflates the two arcs. Only a holed planar face re-splits a
+        // raw closed rim here (its outer wire is not image-expanded); every
+        // other face, the wall sharing the rim included, takes the images
+        // and so already carries the `make_blocks` midpoint.
         if frame.is_some()
             && splits.len() == 1
             && let EdgeCurve::Circle(c) = &edge.curve_3d

@@ -191,8 +191,9 @@ fn sample_edge_curve(
 /// sample of vertex angles.
 ///
 /// Each circle or ellipse boundary edge is walked along the shorter arc
-/// between its endpoints (the convention the midpoint sampling and the
-/// tessellator follow), unwrapped so the walk never jumps a period, and
+/// between its endpoints (the convention the midpoint sampling this replaces
+/// followed; a single rim edge past 180 degrees reads short here as it did
+/// there), unwrapped so the walk never jumps a period, and
 /// contributes the interval of `u` it covers (`project` returns the surface
 /// `u` of a point); the union of those intervals is the face's extent and the
 /// largest uncovered gap is its opening. A wall keeping 270 degrees around a
