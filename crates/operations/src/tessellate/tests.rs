@@ -2252,6 +2252,133 @@ fn pinched_ledge_prism_is_watertight() {
     }
 }
 
+/// A developable band whose ruling edge carries vertices near both rims (a
+/// pin's tip line sectioned by the knuckle's step plane 0.4 mm inside each
+/// end) must still be meshed with every triangle inside one rim step of arc.
+/// A boundary-only Delaunay fans flat triangles from such a vertex across
+/// the whole 70 degree span, and every mesh consumer (export, volume) then
+/// under-counts the bore by that span's sagitta.
+///
+/// Ready repro, ignored until the display/export mesher seeds developable
+/// bands: an interior row alone still leaves fans (the Delaunay of a band
+/// whose length dwarfs its arc is anisotropic), and refining fat triangles
+/// by their centroids diverges on full-turn walls. See the roadmap row.
+#[test]
+#[ignore = "ready repro: the export mesher fans a band whose ruling carries vertices"]
+fn band_with_split_ruling_keeps_triangles_on_the_arc() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::CylindricalSurface;
+
+    let mut topo = Topology::new();
+    let axis = Vec3::new(0.0, 0.0, 1.0);
+    let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), axis, 1.0).unwrap();
+    let u1 = 70.0_f64.to_radians();
+    let (c, s) = (u1.cos(), u1.sin());
+    let pts = [
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(c, s, 0.0),
+        Point3::new(c, s, 0.4),
+        Point3::new(c, s, 9.6),
+        Point3::new(c, s, 10.0),
+        Point3::new(1.0, 0.0, 10.0),
+    ];
+    let v: Vec<_> = pts
+        .iter()
+        .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+        .collect();
+    let rim =
+        |z: f64| EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, z), axis, 1.0).unwrap());
+    let bottom = topo.add_edge(Edge::new(v[0], v[1], rim(0.0)));
+    let r1 = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+    let r2 = topo.add_edge(Edge::new(v[2], v[3], EdgeCurve::Line));
+    let r3 = topo.add_edge(Edge::new(v[3], v[4], EdgeCurve::Line));
+    let top = topo.add_edge(Edge::new(v[5], v[4], rim(10.0)));
+    let seam = topo.add_edge(Edge::new(v[5], v[0], EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(bottom, true),
+            OrientedEdge::new(r1, true),
+            OrientedEdge::new(r2, true),
+            OrientedEdge::new(r3, true),
+            OrientedEdge::new(top, false),
+            OrientedEdge::new(seam, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+
+    let face_data = topo.face(face).unwrap().clone();
+    let edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
+    let mut merged = TriangleMesh::default();
+    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    super::nonplanar::tessellate_nonplanar_cdt(
+        &topo,
+        face,
+        &face_data,
+        0.01,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        false,
+        &edge_global_indices,
+        &mut merged,
+        &mut point_to_global,
+    )
+    .unwrap();
+
+    // Every vertex on the surface, every triangle centroid within a few
+    // chord sagittas of it (a 5 degree step sags 0.001; a 70 degree fan
+    // triangle's centroid sits 0.18 inside).
+    for p in &merged.positions {
+        assert!(
+            (p.x().hypot(p.y()) - 1.0).abs() < 1e-6,
+            "vertex off the cylinder: {p:?}"
+        );
+    }
+    let mut worst = (0.0_f64, String::new());
+    for t in merged.indices.chunks_exact(3) {
+        let q = |k: usize| merged.positions[t[k] as usize];
+        let (a, b, c) = (q(0), q(1), q(2));
+        let cx = (a.x() + b.x() + c.x()) / 3.0;
+        let cy = (a.y() + b.y() + c.y()) / 3.0;
+        let sag = 1.0 - cx.hypot(cy);
+        if sag > worst.0 {
+            let ang = |p: Point3| p.y().atan2(p.x()).to_degrees();
+            worst = (
+                sag,
+                format!(
+                    "({:.2}deg,z{:.2}) ({:.2}deg,z{:.2}) ({:.2}deg,z{:.2})",
+                    ang(a),
+                    a.z(),
+                    ang(b),
+                    b.z(),
+                    ang(c),
+                    c.z()
+                ),
+            );
+        }
+    }
+    // The bar: a triangle across ONE rim step (two vertices at one sample,
+    // the third at the next) has its centroid this far inside; a fan across
+    // the 70 degree arc sits 0.18 in.
+    let mut rim: Vec<f64> = merged
+        .positions
+        .iter()
+        .filter(|p| p.z().abs() < 1e-9)
+        .map(|p| p.y().atan2(p.x()))
+        .collect();
+    rim.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let step = rim.windows(2).map(|w| w[1] - w[0]).fold(0.0_f64, f64::max);
+    let one_step = 1.0 - ((2.0 + step.cos()).powi(2) + step.sin().powi(2)).sqrt() / 3.0;
+    assert!(
+        worst.0 < 1.5 * one_step,
+        "a triangle centroid sits {:.4} inside the cylinder at {} (one rim step allows {:.4}): the band was fanned across its arc",
+        worst.0,
+        worst.1,
+        one_step
+    );
+}
+
 /// #1487: constraint recovery can mint Steiner vertices the caller's
 /// `cdt_to_global` never tracked. Pre-#1478 the interior-grid resize masked
 /// the gap; with the curvature floor off, developable faces insert no

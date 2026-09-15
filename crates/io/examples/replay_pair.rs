@@ -274,11 +274,33 @@ fn describe(topo: &Topology, sid: SolidId, label: &str) {
             0.01,
             5.0_f64.to_radians(),
         ) {
-            Ok(mesh) => format!(
-                " tess_bnd={} tess_nm={}",
-                brepkit_operations::tessellate::boundary_edge_count(&mesh),
-                brepkit_operations::tessellate::non_manifold_edge_count(&mesh)
-            ),
+            Ok(mesh) => {
+                // Divergence-theorem volume of the export mesh itself: an
+                // integrator-independent check on `vol` when the two
+                // disagree on a watertight result.
+                let mesh_vol: f64 = mesh
+                    .indices
+                    .chunks_exact(3)
+                    .map(|t| {
+                        let (a, b, c) = (
+                            mesh.positions[t[0] as usize],
+                            mesh.positions[t[1] as usize],
+                            mesh.positions[t[2] as usize],
+                        );
+                        let (a, b, c) = (
+                            brepkit_math::vec::Vec3::new(a.x(), a.y(), a.z()),
+                            brepkit_math::vec::Vec3::new(b.x(), b.y(), b.z()),
+                            brepkit_math::vec::Vec3::new(c.x(), c.y(), c.z()),
+                        );
+                        a.dot(b.cross(c)) / 6.0
+                    })
+                    .sum();
+                format!(
+                    " tess_bnd={} tess_nm={} mesh_vol={mesh_vol:.3}",
+                    brepkit_operations::tessellate::boundary_edge_count(&mesh),
+                    brepkit_operations::tessellate::non_manifold_edge_count(&mesh)
+                )
+            }
             Err(e) => format!(" tess_err={e}"),
         }
     } else {
@@ -510,8 +532,21 @@ fn main() {
                             topo.vertex(e.start()).unwrap().point(),
                             topo.vertex(e.end()).unwrap().point(),
                         );
+                        let geom = match e.curve() {
+                            brepkit_topology::edge::EdgeCurve::Circle(c) => format!(
+                                " c=({:.6},{:.6},{:.6}) r={:.9} n=({:.6},{:.6},{:.6})",
+                                c.center().x(),
+                                c.center().y(),
+                                c.center().z(),
+                                c.radius(),
+                                c.normal().x(),
+                                c.normal().y(),
+                                c.normal().z()
+                            ),
+                            _ => String::new(),
+                        };
                         println!(
-                            "  {:?} {} fwd={} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                            "  {:?} {} fwd={} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}){geom}",
                             oe.edge(),
                             e.curve().type_tag(),
                             oe.is_forward(),
@@ -703,7 +738,7 @@ fn main() {
         };
         let z_want: Option<f64> = want.parse().ok();
         let faces = solid_faces(topo, sid).unwrap();
-        let Ok((_mesh, offsets)) =
+        let Ok((mesh, offsets)) =
             brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
                 topo,
                 sid,
@@ -713,6 +748,21 @@ fn main() {
         else {
             println!("  RESULT_FACES: grouped tessellation failed");
             return;
+        };
+        // Signed divergence contribution of a face's triangles: the volume
+        // integrand each face adds, so a reversed or doubled face shows up
+        // as a sign flip or a duplicate against its neighbours.
+        let flux_of = |from: usize, to: usize| -> f64 {
+            mesh.indices[from..to]
+                .chunks_exact(3)
+                .map(|t| {
+                    let p = |k: usize| {
+                        let q = mesh.positions[t[k] as usize];
+                        brepkit_math::vec::Vec3::new(q.x(), q.y(), q.z())
+                    };
+                    p(0).dot(p(1).cross(p(2))) / 6.0
+                })
+                .sum()
         };
         for (i, fid) in faces.iter().enumerate() {
             let face = topo.face(*fid).unwrap();
@@ -737,12 +787,32 @@ fn main() {
                 continue;
             }
             let (from, to) = (offsets[i] as usize, offsets[i + 1] as usize);
+            // RESULT_MESH=<face index> also prints that face's triangles.
+            if std::env::var("RESULT_MESH").is_ok_and(|v| format!("Id({v})") == format!("{fid:?}"))
+            {
+                for t in mesh.indices[from..to].chunks_exact(3) {
+                    let q = |k: usize| mesh.positions[t[k] as usize];
+                    println!(
+                        "    tri ({:.4},{:.4},{:.4}) ({:.4},{:.4},{:.4}) ({:.4},{:.4},{:.4})",
+                        q(0).x(),
+                        q(0).y(),
+                        q(0).z(),
+                        q(1).x(),
+                        q(1).y(),
+                        q(1).z(),
+                        q(2).x(),
+                        q(2).y(),
+                        q(2).z()
+                    );
+                }
+            }
             println!(
-                "  RESULT face {fid:?} {} rev={} wires={} tris={} bbox=({:.3},{:.3},{:.3})..({:.3},{:.3},{:.3})",
+                "  RESULT face {fid:?} {} rev={} wires={} tris={} flux={:.4} bbox=({:.3},{:.3},{:.3})..({:.3},{:.3},{:.3})",
                 face.surface().type_tag(),
                 face.is_reversed(),
                 1 + face.inner_wires().len(),
                 (to - from) / 3,
+                flux_of(from, to),
                 lo[0],
                 lo[1],
                 lo[2],
@@ -832,6 +902,58 @@ fn main() {
                 sid,
                 &format!("RAW {op} {}ms", t.elapsed().as_millis()),
             );
+            dump_result_faces(&topo, sid);
+            // RESULT_WIRES=<face index> prints one raw-result face's edges
+            // with their curve geometry (circle centre, radius, normal, and
+            // the native parameter span between the stored endpoints).
+            if let Ok(want) = std::env::var("RESULT_WIRES") {
+                for fid in solid_faces(&topo, sid).unwrap() {
+                    if format!("{fid:?}") != format!("Id({want})") {
+                        continue;
+                    }
+                    let face = topo.face(fid).unwrap();
+                    println!("  RESULT_WIRES {fid:?} {:?}", face.surface());
+                    for (wi, wid) in std::iter::once(face.outer_wire())
+                        .chain(face.inner_wires().iter().copied())
+                        .enumerate()
+                    {
+                        for oe in topo.wire(wid).unwrap().edges() {
+                            let e = topo.edge(oe.edge()).unwrap();
+                            let (sv, ev) = (
+                                topo.vertex(e.start()).unwrap().point(),
+                                topo.vertex(e.end()).unwrap().point(),
+                            );
+                            let (t0, t1) = e.curve().domain_with_endpoints(sv, ev);
+                            let geom = match e.curve() {
+                                brepkit_topology::edge::EdgeCurve::Circle(c) => format!(
+                                    "circle c=({:.6},{:.6},{:.6}) r={:.9} n=({:.6},{:.6},{:.6}) span=[{:.6},{:.6}]",
+                                    c.center().x(),
+                                    c.center().y(),
+                                    c.center().z(),
+                                    c.radius(),
+                                    c.normal().x(),
+                                    c.normal().y(),
+                                    c.normal().z(),
+                                    t0,
+                                    t1
+                                ),
+                                other => format!("{} span=[{:.6},{:.6}]", other.type_tag(), t0, t1),
+                            };
+                            println!(
+                                "    w{wi} {:?} fwd={} ({:.6},{:.6},{:.6})->({:.6},{:.6},{:.6}) {geom}",
+                                oe.edge(),
+                                oe.is_forward(),
+                                sv.x(),
+                                sv.y(),
+                                sv.z(),
+                                ev.x(),
+                                ev.y(),
+                                ev.z()
+                            );
+                        }
+                    }
+                }
+            }
             // OUT=<path> serializes the RAW result so region probes can run
             // on it without the ops-level heals in between.
             if let Ok(out) = std::env::var("OUT") {
