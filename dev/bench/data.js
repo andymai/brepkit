@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789436421338,
+  "lastUpdate": 1789436782434,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33911,6 +33911,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42893554,
             "range": "± 117906",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e256381630c1d7b18fcd372047421cda5acec03e",
+          "message": "docs(roadmap): record the tool-side effect of the twin-edge fix (#1652)\n\nSame-day pair on tool commit 4a66decb, 3.4.0 stock vs the #1650 build\noverlaid in the same worktree (six files): `export.solidCutouts` 1 -> 0,\n`assemblyGenerator.scenario` 13 -> 10, `export.groupedScoop` 4 -> 4,\n`combriser` 4 -> 4, `scenario.solidCutouts` 5 -> 5. The 3.3.9 counts\nwere 2 / 0 / 6, so the two-stripe corner model remains the tool bump\ngate; the roadmap row now carries these numbers and the remaining\nunattributed failures.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the roadmap’s #1650 two-stripe corner entry with tool-side\nresults from the fix, so the tool bump decision reflects same-day\ncomparisons. Against 3.4.0 stock, the #1650 overlay reduces\n`export.solidCutouts` from 1 to 0 and `assemblyGenerator.scenario` from\n13 to 10; `export.groupedScoop` and `combriser` stay at 4, while\n`scenario.solidCutouts` stays at 5.\n\n- The 3.3.9 baseline remains 2 / 0 / 6, so the two-stripe corner model\nstill blocks the tool bump.\n- The remaining assembly failures and `combriser` failures are still\nunattributed and need further investigation.\n\n<sup>Written for commit 96845e38cb7f107667e33f62b9f585a636fbb124.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1652?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T01:43:47Z",
+          "tree_id": "fc8d9ff636c4a3d0a06a062db8a135ddcf8618bc",
+          "url": "https://github.com/andymai/brepkit/commit/e256381630c1d7b18fcd372047421cda5acec03e"
+        },
+        "date": 1789436778967,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1082114,
+            "range": "± 22327",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1124739,
+            "range": "± 8087",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12952,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 731358,
+            "range": "± 17818",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44829623,
+            "range": "± 546051",
             "unit": "ns/iter"
           }
         ]
