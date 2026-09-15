@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789483667069,
+  "lastUpdate": 1789484224596,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -34775,6 +34775,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41829583,
             "range": "± 72334",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f821782f7b03dbe1cde53fe04f689343648905e6",
+          "message": "chore(main): release 3.4.9 (#1668)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.4.9](https://github.com/andymai/brepkit/compare/v3.4.8...v3.4.9)\n(2026-09-15)\n\n\n### Bug Fixes\n\n* **algo:** cut a pin bore through a knuckle fused to an on-axis bracket\nexactly ([#1667](https://github.com/andymai/brepkit/issues/1667))\n([9d165fb](https://github.com/andymai/brepkit/commit/9d165fb14d12da1fcd2f065f1fe0d7d900dc9fe3))\n* **algo:** fuse a barrel whose axis lies on a bracket's edge exactly\n([#1666](https://github.com/andymai/brepkit/issues/1666))\n([ebf46ea](https://github.com/andymai/brepkit/commit/ebf46ea2e0ee93ef76e432821908eec6a1026380))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` 3.4.9 with fixes for two edge-aligned solid\noperations that previously could produce inexact geometry: cutting a pin\nbore through a knuckle fused to an on-axis bracket, and fusing a barrel\nwhose axis lies on a bracket edge. The release also updates all\nworkspace crate versions and release metadata from 3.4.8 to 3.4.9.\n\n<sup>Written for commit 2c538771be92db651a9d99e95e0883b520e2ea7b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1668?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-15T14:54:36Z",
+          "tree_id": "846de3858bfdca8c5347fd6cd9633044d9915467",
+          "url": "https://github.com/andymai/brepkit/commit/f821782f7b03dbe1cde53fe04f689343648905e6"
+        },
+        "date": 1789484220910,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 985938,
+            "range": "± 5375",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1069460,
+            "range": "± 52061",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12201,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 769411,
+            "range": "± 8336",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42040124,
+            "range": "± 105996",
             "unit": "ns/iter"
           }
         ]
