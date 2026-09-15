@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.7](https://github.com/andymai/brepkit/compare/v3.4.6...v3.4.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* **algo:** a section loop enclosed by another loop is a hole of the enclosing disc ([#1661](https://github.com/andymai/brepkit/issues/1661)) ([e8db9ac](https://github.com/andymai/brepkit/commit/e8db9ac427c77247e33a6a4adf0fe4280d5b6d8b))
+
 ## [3.4.6](https://github.com/andymai/brepkit/compare/v3.4.5...v3.4.6) (2026-09-15)
 
 
