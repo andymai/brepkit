@@ -534,8 +534,10 @@ fn torus_same_domain_same_direction_ignores_ref_dir() {
     assert_eq!(surfaces_same_domain(&a, &b, tol), Some(true));
 }
 
+/// A torus's normal points out of its tube whichever way the axis runs, so
+/// two coincident tori built with opposite axes share their normals.
 #[test]
-fn torus_same_domain_opposite_direction() {
+fn torus_same_domain_opposite_axis_shares_normals() {
     let tol = Tolerance::new();
     let a = FaceSurface::Torus(
         brepkit_math::surfaces::ToroidalSurface::with_axis(
@@ -555,7 +557,85 @@ fn torus_same_domain_opposite_direction() {
         )
         .expect("valid torus"),
     );
-    assert_eq!(surfaces_same_domain(&a, &b, tol), Some(false));
+    assert_eq!(surfaces_same_domain(&a, &b, tol), Some(true));
+    let (FaceSurface::Torus(ta), FaceSurface::Torus(tb)) = (&a, &b) else {
+        unreachable!()
+    };
+    let p = ta.evaluate(0.4, 1.1);
+    let (ub, vb) = tb.project_point(p);
+    assert!(ta.normal(0.4, 1.1).dot(tb.normal(ub, vb)) > 0.999);
+}
+
+/// A cylinder's normal is the outward radial direction whichever way the
+/// axis runs (an upward extrusion against a downward loft of the same
+/// outline), so coaxial equal-radius cylinders always share their normals
+/// and only the faces' reversal flags decide the pair's orientation.
+#[test]
+fn cylinders_same_domain_opposite_axis_shares_normals() {
+    let tol = Tolerance::new();
+    let up = brepkit_math::surfaces::CylindricalSurface::new(
+        Point3::new(37.75, -16.75, -0.01),
+        Vec3::new(0.0, 0.0, 1.0),
+        4.0,
+    )
+    .expect("valid cylinder");
+    let down = brepkit_math::surfaces::CylindricalSurface::new(
+        Point3::new(37.75, -16.75, 0.0),
+        Vec3::new(0.0, 0.0, -1.0),
+        4.0,
+    )
+    .expect("valid cylinder");
+    let p = up.evaluate(0.4, 0.5);
+    let (ud, vd) = down.project_point(p);
+    assert!(up.normal(0.4, 0.5).dot(down.normal(ud, vd)) > 0.999);
+    let a = FaceSurface::Cylinder(up);
+    let b = FaceSurface::Cylinder(down);
+    assert_eq!(surfaces_same_domain(&a, &b, tol), Some(true));
+    assert_eq!(surfaces_same_domain(&b, &a, tol), Some(true));
+}
+
+#[test]
+fn cylinders_same_domain_same_axis() {
+    let tol = Tolerance::new();
+    let a = FaceSurface::Cylinder(
+        brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.75,
+        )
+        .expect("valid cylinder"),
+    );
+    let b = FaceSurface::Cylinder(
+        brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 13.3),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.75,
+        )
+        .expect("valid cylinder"),
+    );
+    assert_eq!(surfaces_same_domain(&a, &b, tol), Some(true));
+}
+
+#[test]
+fn cylinders_off_axis_not_same_domain() {
+    let tol = Tolerance::new();
+    let a = FaceSurface::Cylinder(
+        brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.75,
+        )
+        .expect("valid cylinder"),
+    );
+    let b = FaceSurface::Cylinder(
+        brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.001, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            3.75,
+        )
+        .expect("valid cylinder"),
+    );
+    assert_eq!(surfaces_same_domain(&a, &b, tol), None);
 }
 
 #[test]
