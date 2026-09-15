@@ -5102,6 +5102,41 @@ fn fuse_a_rod_with_a_flush_slot_bar_crossing_its_rim() {
     assert_watertight_with_volume(&topo, fused, 1, expected);
 }
 
+/// A pin whose bounds a rotated keep box encloses while half the pin lies
+/// beyond the box's diagonal face. The AABB-only containment fallback used
+/// to call the pin contained (its AABB centre sits ON the box's face, so
+/// the centre witness could not refute it) and return the whole pin from
+/// the intersect and the box from the fuse. Past the shortcut, the cap's
+/// rim was split at two opposite points and its removed half shared both
+/// endpoints with the chord, which the endpoint-keyed edge merge collapsed
+/// (the cap kept the removed half's rim in place of the chord).
+#[test]
+fn intersect_a_pin_with_a_wide_diagonal_keep_box_keeps_half_the_pin() {
+    let mut topo = Topology::new();
+    let pin = crate::primitives::make_cylinder(&mut topo, 0.9, 4.0).unwrap();
+    let keep = crate::primitives::make_box(&mut topo, 4.0, 4.0, 6.0).unwrap();
+    let place = brepkit_math::mat::Mat4::translation(0.0, 0.0, -1.0)
+        * brepkit_math::mat::Mat4::rotation_z(std::f64::consts::FRAC_PI_4)
+        * brepkit_math::mat::Mat4::translation(0.0, -2.0, 0.0);
+    crate::transform::transform_solid(&mut topo, keep, &place).unwrap();
+    let half = boolean(&mut topo, BooleanOp::Intersect, pin, keep).unwrap();
+    assert!(is_closed_manifold(&topo, half).unwrap());
+    let half_volume = std::f64::consts::PI * 0.9 * 0.9 * 4.0 / 2.0;
+    let vol = crate::measure::solid_volume(&topo, half, 0.01).unwrap();
+    assert!(
+        (vol - half_volume).abs() < 0.01 * half_volume,
+        "intersect kept {vol:.3}, expected the half pin {half_volume:.3}"
+    );
+    let fused = boolean(&mut topo, BooleanOp::Fuse, pin, keep).unwrap();
+    let box_volume = 4.0 * 4.0 * 6.0;
+    let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+    assert!(
+        (vol - (box_volume + half_volume)).abs() < 0.01 * half_volume,
+        "fuse gave {vol:.3}, expected the box plus the half pin {:.3}",
+        box_volume + half_volume
+    );
+}
+
 fn assert_watertight_with_volume(
     topo: &Topology,
     result: SolidId,

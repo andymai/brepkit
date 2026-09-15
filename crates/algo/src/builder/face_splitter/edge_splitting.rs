@@ -78,6 +78,36 @@ pub(super) fn split_boundary_edges_at_3d_points(
                 splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
             }
         }
+        // Split two or more times, a closed plane rim can still keep a piece
+        // of a half turn or more between consecutive splits (a keep box's
+        // diagonal face cutting a pin's rim at two opposite points): that
+        // piece shares both endpoints with the chord section between them
+        // and the endpoint-keyed edge merge collapses the two. The periodic
+        // path always splits a closed rim at the seam's antipode
+        // (`split_face_2d_impl`), which lies inside every such piece, so the
+        // wall sharing this rim already carries that vertex; put the cap's
+        // split there too.
+        if frame.is_some()
+            && splits.len() >= 2
+            && let EdgeCurve::Circle(c) = &edge.curve_3d
+            && (edge.start_3d - edge.end_3d).length() < tol
+        {
+            let anti_t = 0.5;
+            let inside_long_piece = splits
+                .windows(2)
+                .any(|w| w[1].0 - w[0].0 >= 0.499 && w[0].0 < anti_t && anti_t < w[1].0);
+            if inside_long_piece && splits.iter().all(|(t, _)| (t - anti_t).abs() > tol) {
+                let a0 = c.project(edge.start_3d);
+                let m = a0
+                    + if edge.forward {
+                        std::f64::consts::PI
+                    } else {
+                        -std::f64::consts::PI
+                    };
+                splits.push((anti_t, c.evaluate(m)));
+                splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            }
+        }
 
         let circle_iso_v_rim = matches!(edge.curve_3d, EdgeCurve::Circle(_))
             && circle_edge_is_iso_v_rim(&edge, surface, tol);

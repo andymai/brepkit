@@ -2368,16 +2368,71 @@ fn detect_trivial_relation(
     // AABB encloses a notch's empty volume. Guard the whole determination
     // with the `center_outside` witness — sound for every path because it
     // only fires on proven non-containment (see the lemma above).
+    // Boundary witness for the AABB-only fallback: a point ON the inner
+    // solid's boundary that classifies Outside the outer one refutes
+    // containment outright, and unlike the AABB centre it cannot be
+    // disabled by the inner's own concavity or by sitting on the outer's
+    // boundary plane. Vertices alone miss a round tool (a cylinder's only
+    // vertices are on its seam), so edge midpoints are probed too: a pin
+    // whose AABB a rotated keep box encloses while half the pin lies
+    // beyond the box's face, or a hinge pin ending in the gap past the
+    // last knuckle, both fail here and nowhere else.
+    let boundary_probe_outside =
+        |topo: &Topology, inner: SolidId, outer: SolidId, bb: &Option<(Point3, Point3)>| -> bool {
+            let Some((lo, hi)) = *bb else { return false };
+            let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
+            let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+            let Ok(s) = topo.solid(inner) else {
+                return false;
+            };
+            let Ok(sh) = topo.shell(s.outer_shell()) else {
+                return false;
+            };
+            let mut probes: Vec<Point3> = Vec::new();
+            let mut seen: std::collections::HashSet<brepkit_topology::edge::EdgeId> =
+                std::collections::HashSet::new();
+            for &fid in sh.faces() {
+                let Ok(f) = topo.face(fid) else { continue };
+                let Ok(w) = topo.wire(f.outer_wire()) else {
+                    continue;
+                };
+                for oe in w.edges() {
+                    if !seen.insert(oe.edge()) {
+                        continue;
+                    }
+                    let Ok(e) = topo.edge(oe.edge()) else {
+                        continue;
+                    };
+                    let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+                        continue;
+                    };
+                    let (ps, pe) = (vs.point(), ve.point());
+                    let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+                    probes.push(ps);
+                    probes.push(e.curve().evaluate_with_endpoints(0.5 * (t0 + t1), ps, pe));
+                }
+            }
+            let stride = probes.len().div_ceil(96).max(1);
+            probes.iter().step_by(stride).any(|&p| {
+                matches!(
+                    crate::classify::classify_point(topo, outer, p, defl, tol.linear),
+                    Ok(crate::classify::PointClassification::Outside)
+                )
+            })
+        };
+
     let b_in_a = ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
         || (ca.is_none()
             && aabb_strictly_contains(&aabb_b, &aabb_a)
             && !volume_refutes(topo, b, a)))
-        && !center_outside(topo, b, a, &aabb_b);
+        && !center_outside(topo, b, a, &aabb_b)
+        && !boundary_probe_outside(topo, b, a, &aabb_b);
     let a_in_b = ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
         || (cb.is_none()
             && aabb_strictly_contains(&aabb_a, &aabb_b)
             && !volume_refutes(topo, a, b)))
-        && !center_outside(topo, a, b, &aabb_a);
+        && !center_outside(topo, a, b, &aabb_a)
+        && !boundary_probe_outside(topo, a, b, &aabb_a);
 
     TrivialRelation {
         identical: aabbs_match && all_b_verts_in_a && all_a_verts_in_b,
