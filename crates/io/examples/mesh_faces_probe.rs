@@ -5,14 +5,14 @@
 //! ```text
 //! A=<solid.bin> DEFL=0.01 ANG=5 cargo run --release -p brepkit-io --example mesh_faces_probe
 //! ```
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
+#![allow(clippy::print_stdout)]
 
 use brepkit_math::vec::Vec3;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
 
-fn main() {
-    let path = std::env::var_os("A").expect("A=<path>");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::env::var_os("A").ok_or("A=<path> is required")?;
     let defl: f64 = std::env::var("DEFL")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -22,19 +22,17 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(5.0);
     let mut topo = Topology::new();
-    let sid =
-        brepkit_io::arena_io::deserialize_solid(&std::fs::read(path).unwrap(), &mut topo).unwrap();
-    let faces = solid_faces(&topo, sid).unwrap();
+    let sid = brepkit_io::arena_io::deserialize_solid(&std::fs::read(path)?, &mut topo)?;
+    let faces = solid_faces(&topo, sid)?;
     let (mesh, offsets) = brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
         &topo,
         sid,
         defl,
         ang.to_radians(),
-    )
-    .unwrap();
+    )?;
     let mut total = 0.0;
     for (i, fid) in faces.iter().enumerate() {
-        let face = topo.face(*fid).unwrap();
+        let face = topo.face(*fid)?;
         let (from, to) = (offsets[i] as usize, offsets[i + 1] as usize);
         let flux: f64 = mesh.indices[from..to]
             .chunks_exact(3)
@@ -59,4 +57,5 @@ fn main() {
         brepkit_operations::tessellate::boundary_edge_count(&mesh),
         brepkit_operations::tessellate::non_manifold_edge_count(&mesh)
     );
+    Ok(())
 }

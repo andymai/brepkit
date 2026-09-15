@@ -99,7 +99,7 @@ pub fn perform(
             let frame = PlaneFrame2D::canonical(na, da);
             for fid in [fa, fb] {
                 if let Entry::Vacant(slot) = regions.entry(fid) {
-                    slot.insert(face_region_2d(topo, fid, &frame, tol.linear)?);
+                    slot.insert(face_region_2d(topo, fid, &frame)?);
                 }
             }
             process_coplanar_pair(
@@ -270,12 +270,12 @@ fn process_coplanar_pair(
     let mut pieces: Vec<SectionPiece> = Vec::new();
     for e in &region_b.edges {
         if coincident_boundary_edge(e, &region_a.edges, tol.linear).is_none() {
-            clip_to_region(e, region_a, frame, tol.linear, &mut pieces);
+            clip_to_region(e, (face_a, region_a), frame, tol.linear, &mut pieces);
         }
     }
     for e in &region_a.edges {
         if coincident_boundary_edge(e, &region_b.edges, tol.linear).is_none() {
-            clip_to_region(e, region_b, frame, tol.linear, &mut pieces);
+            clip_to_region(e, (face_b, region_b), frame, tol.linear, &mut pieces);
         }
     }
     let faces = [face_a, face_b];
@@ -287,6 +287,7 @@ fn process_coplanar_pair(
                 }
             }
             SectionPiece::Arc {
+                target,
                 circle,
                 start,
                 end,
@@ -295,10 +296,12 @@ fn process_coplanar_pair(
                 // The wall sharing this arc meets the partner plane in the
                 // same circle, so the regular FF phase usually emitted the
                 // arc already, split at the same partner crossings; only
-                // what it left uncovered is emitted here.
+                // what it left uncovered ON THE FACE TO SPLIT is emitted
+                // here (a section attached to the other face alone leaves
+                // the target unsplit).
                 let (t_s, t_e, p_s, p_e) = oriented_arc_span(&circle, start, end, mid);
                 let ang_tol = tol.linear * 10.0 / circle.radius();
-                for (a, b) in uncovered_arc_spans(arena, faces, &circle, t_s, t_e, ang_tol) {
+                for (a, b) in uncovered_arc_spans(arena, target, &circle, t_s, t_e, ang_tol) {
                     let p0 = if (a - t_s).abs() <= ang_tol {
                         p_s
                     } else {
@@ -367,17 +370,20 @@ struct BoundaryEdge {
     shape: Shape2,
 }
 
-/// A face's boundary in the plane's frame: every wire's edges, plus one
-/// arc-true sampled polygon per wire for the even-odd region test.
+/// A face's boundary in the plane's frame: every wire's edges, and the
+/// bounds of their endpoints for the containment ray.
 struct Region2 {
     edges: Vec<BoundaryEdge>,
-    loops: Vec<Vec<Point2>>,
+    lo: Point2,
+    hi: Point2,
 }
 
-/// A clipped piece of a boundary edge inside the partner face.
+/// A clipped piece of a boundary edge inside the partner face; `target` is
+/// that partner, the face the piece must split.
 enum SectionPiece {
     Line(Point3, Point3),
     Arc {
+        target: FaceId,
         circle: brepkit_math::curves::Circle3D,
         start: Point3,
         end: Point3,
@@ -423,24 +429,6 @@ fn arc_offset_of(arc: &Arc2, phi: f64, ang_tol: f64) -> Option<f64> {
     }
 }
 
-/// Interior samples of an arc (start and end excluded) for the region
-/// polygon: chords within a hundred linear tolerances of the arc up to a
-/// radius of about 34 mm, and within the 8192-segment cap's sagitta
-/// (`r * (1 - cos(pi / 8192))`, 7e-6 at r = 100) beyond that.
-fn arc_samples(arc: &Arc2, tol: f64) -> Vec<Point2> {
-    let sag = (tol * 100.0).min(arc.radius * 0.5);
-    let step = 2.0 * (1.0 - sag / arc.radius).acos();
-    let len = arc.sweep.abs();
-    let n = if step > 0.0 {
-        ((len / step).ceil() as usize).clamp(8, 8192)
-    } else {
-        8
-    };
-    (1..n)
-        .map(|k| arc_point(arc, len * k as f64 / n as f64))
-        .collect()
-}
-
 fn lerp3(a: Point3, b: Point3, t: f64) -> Point3 {
     Point3::new(
         (b.x() - a.x()).mul_add(t, a.x()),
@@ -454,15 +442,18 @@ fn face_region_2d(
     topo: &Topology,
     face_id: FaceId,
     frame: &PlaneFrame2D,
-    tol: f64,
 ) -> Result<Region2, AlgoError> {
     use std::f64::consts::TAU;
     let face = topo.face(face_id)?;
     let mut edges = Vec::new();
-    let mut loops = Vec::new();
+    let mut lo = Point2::new(f64::INFINITY, f64::INFINITY);
+    let mut hi = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut grow = |p: Point2| {
+        lo = Point2::new(lo.x().min(p.x()), lo.y().min(p.y()));
+        hi = Point2::new(hi.x().max(p.x()), hi.y().max(p.y()));
+    };
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         let wire = topo.wire(wid)?;
-        let mut polygon = Vec::new();
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
             let (v_start, v_end) = (
@@ -476,7 +467,8 @@ fn face_region_2d(
             };
             let p2_start = frame.project(p3_start);
             let p2_end = frame.project(p3_end);
-            polygon.push(p2_start);
+            grow(p2_start);
+            grow(p2_end);
             let shape = match edge.curve() {
                 EdgeCurve::Line => Shape2::Seg,
                 EdgeCurve::Circle(circle) => {
@@ -499,15 +491,15 @@ fn face_region_2d(
                         let to_mid = (angle_of(center, mid2) - a0).rem_euclid(TAU);
                         if to_mid <= ccw { ccw } else { ccw - TAU }
                     };
-                    let arc = Arc2 {
+                    grow(Point2::new(center.x() - radius, center.y() - radius));
+                    grow(Point2::new(center.x() + radius, center.y() + radius));
+                    Shape2::Arc(Arc2 {
                         center,
                         radius,
                         a0,
                         sweep,
                         circle: circle.clone(),
-                    };
-                    polygon.extend(arc_samples(&arc, tol));
-                    Shape2::Arc(arc)
+                    })
                 }
                 EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
                     let (t0, t1) = edge.curve().domain_with_endpoints(v_start, v_end);
@@ -520,7 +512,9 @@ fn face_region_2d(
                     if !oe.is_forward() {
                         samples.reverse();
                     }
-                    polygon.extend(samples.iter().copied());
+                    for &p in &samples {
+                        grow(p);
+                    }
                     let mut poly = Vec::with_capacity(POLY_SAMPLES + 1);
                     poly.push(p2_start);
                     poly.extend(samples);
@@ -537,19 +531,91 @@ fn face_region_2d(
                 shape,
             });
         }
-        if polygon.len() >= 3 {
-            loops.push(polygon);
-        }
     }
-    Ok(Region2 { edges, loops })
+    Ok(Region2 { edges, lo, hi })
 }
 
-/// Even-odd containment over every wire of the region.
-fn inside_region(pt: Point2, region: &Region2) -> bool {
-    region
-        .loops
-        .iter()
-        .fold(false, |acc, lp| acc ^ point_in_polygon_2d(pt, lp))
+/// Even-odd containment against the exact boundary (segments and arcs;
+/// sampled curves by their samples): a ray from `pt` is cast along a
+/// direction that passes no boundary vertex and grazes no arc, and its
+/// crossings with every wire's edges are counted. No sampled polygon, so
+/// no sagitta band along the arcs where a span's midpoint could read the
+/// wrong side.
+fn inside_region(pt: Point2, region: &Region2, tol: f64) -> bool {
+    let reach = (region.hi.x() - region.lo.x()).hypot(region.hi.y() - region.lo.y())
+        + (pt.x() - region.lo.x()).hypot(pt.y() - region.lo.y())
+        + 1.0;
+    // Directions with no rational relation to the frame axes, tried until
+    // one is clear of every vertex and tangency.
+    for k in 0..16 {
+        let ang = 0.3_f64 + 0.71 * f64::from(k);
+        let end = Point2::new(
+            reach.mul_add(ang.cos(), pt.x()),
+            reach.mul_add(ang.sin(), pt.y()),
+        );
+        if let Some(n) = ray_crossings(pt, end, region, tol) {
+            return n % 2 == 1;
+        }
+    }
+    false
+}
+
+/// Crossings of the ray `a..b` with the region's boundary, or `None` when
+/// the ray passes within `tol` of an edge end or grazes an arc (an
+/// ambiguous count; the caller tries another direction).
+fn ray_crossings(a: Point2, b: Point2, region: &Region2, tol: f64) -> Option<usize> {
+    let mut n = 0usize;
+    let ray_len = (b.x() - a.x()).hypot(b.y() - a.y());
+    let (rx, ry) = ((b.x() - a.x()) / ray_len, (b.y() - a.y()) / ray_len);
+    // Signed distance of a point from the ray's line.
+    let off_line = |p: Point2| (p.x() - a.x()) * ry - (p.y() - a.y()) * rx;
+    let clean_seg = |c: Point2, d: Point2| -> Option<usize> {
+        let Some((t, u)) = seg_seg_params(a, b, c, d) else {
+            // Parallel: a collinear edge along the ray is ambiguous, any
+            // other parallel edge is simply not crossed.
+            return (off_line(c).abs() > tol).then_some(0);
+        };
+        let seg_len = (d.x() - c.x()).hypot(d.y() - c.y());
+        if !(0.0..=1.0).contains(&t) || !(0.0..=1.0).contains(&u) {
+            return Some(0);
+        }
+        if u * seg_len <= tol || (1.0 - u) * seg_len <= tol || t * ray_len <= tol {
+            return None;
+        }
+        Some(1)
+    };
+    for e in &region.edges {
+        match &e.shape {
+            Shape2::Seg => n += clean_seg(e.p2_start, e.p2_end)?,
+            Shape2::Poly(poly) => {
+                for w in poly.windows(2) {
+                    n += clean_seg(w[0], w[1])?;
+                }
+            }
+            Shape2::Arc(arc) => {
+                // A ray tangent to the circle is ambiguous; one starting
+                // inside it legitimately leaves through a single hit.
+                if (off_line(arc.center).abs() - arc.radius).abs() <= tol {
+                    return None;
+                }
+                let hits = seg_circle(a, b, arc.center, arc.radius, tol);
+                let ang_tol = tol / arc.radius;
+                let len = arc.sweep.abs();
+                for (t, p) in hits {
+                    if t * ray_len <= tol {
+                        return None;
+                    }
+                    if let Some(s) = arc_offset_of(arc, angle_of(arc.center, p), ang_tol) {
+                        if s <= ang_tol || s >= len - ang_tol {
+                            return None;
+                        }
+                        n += 1;
+                    }
+                }
+            }
+        }
+    }
+    Some(n)
 }
 
 /// Whether `pt` lies on the boundary edge within `tol`.
@@ -670,8 +736,9 @@ fn arc_crossings(arc: &Arc2, t: &BoundaryEdge, tol: f64, out: &mut Vec<f64>) {
     }
 }
 
-/// Parameter along `a..b` of its crossing with `c..d`, if the segments cross.
-fn seg_seg_param(a: Point2, b: Point2, c: Point2, d: Point2) -> Option<f64> {
+/// Parameters `(t, u)` of the crossing of the lines through `a..b` and
+/// `c..d` (`None` when parallel).
+fn seg_seg_params(a: Point2, b: Point2, c: Point2, d: Point2) -> Option<(f64, f64)> {
     let dx = b.x() - a.x();
     let dy = b.y() - a.y();
     let ex = d.x() - c.x();
@@ -682,6 +749,12 @@ fn seg_seg_param(a: Point2, b: Point2, c: Point2, d: Point2) -> Option<f64> {
     }
     let t = ((c.x() - a.x()) * ey - (c.y() - a.y()) * ex) / denom;
     let u = ((c.x() - a.x()) * dy - (c.y() - a.y()) * dx) / denom;
+    Some((t, u))
+}
+
+/// Parameter along `a..b` of its crossing with `c..d`, if the segments cross.
+fn seg_seg_param(a: Point2, b: Point2, c: Point2, d: Point2) -> Option<f64> {
+    let (t, u) = seg_seg_params(a, b, c, d)?;
     ((-1e-9..=1.0 + 1e-9).contains(&t) && (-1e-9..=1.0 + 1e-9).contains(&u))
         .then(|| t.clamp(0.0, 1.0))
 }
@@ -751,7 +824,7 @@ fn circle_circle(c1: Point2, r1: f64, c2: Point2, r2: f64, tol: f64) -> Vec<Poin
 /// boundary is not a section.
 fn clip_to_region(
     e: &BoundaryEdge,
-    target: &Region2,
+    (target_face, target): (FaceId, &Region2),
     frame: &PlaneFrame2D,
     tol: f64,
     out: &mut Vec<SectionPiece>,
@@ -772,7 +845,7 @@ fn clip_to_region(
                     continue;
                 }
                 let mid2 = arc_point(arc, 0.5 * (sa + sb));
-                if on_boundary(mid2, &target.edges, tol) || !inside_region(mid2, target) {
+                if on_boundary(mid2, &target.edges, tol) || !inside_region(mid2, target, tol) {
                     continue;
                 }
                 let on_circle = |p2: Point2| -> Point3 {
@@ -790,6 +863,7 @@ fn clip_to_region(
                     on_circle(arc_point(arc, sb))
                 };
                 out.push(SectionPiece::Arc {
+                    target: target_face,
                     circle: arc.circle.clone(),
                     start,
                     end,
@@ -817,7 +891,7 @@ fn clip_to_region(
                 }
                 let tm = 0.5 * (ta + tb);
                 let mid = Point2::new(d.x().mul_add(tm, a.x()), d.y().mul_add(tm, a.y()));
-                if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target) {
+                if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
                     continue;
                 }
                 out.push(SectionPiece::Line(
@@ -854,12 +928,14 @@ fn oriented_arc_span(
 }
 
 /// The parts of `[t_s, t_e]` on `circle` that no existing Circle section
-/// involving either face already spans. Sections are compared on the same
-/// circle (centre, radius, carrier plane) and their spans are taken modulo
-/// the period.
+/// attached to `target` already spans. Sections are compared on the same
+/// circle (centre, radius, carrier plane, either normal sign), their
+/// endpoints and midpoint re-projected onto this circle's parameter so an
+/// oppositely oriented carrier covers the same arc, and spans are taken
+/// modulo the period.
 fn uncovered_arc_spans(
     arena: &GfaArena,
-    faces: [FaceId; 2],
+    target: FaceId,
     circle: &brepkit_math::curves::Circle3D,
     t_s: f64,
     t_e: f64,
@@ -872,18 +948,27 @@ fn uncovered_arc_spans(
         let EdgeCurve::Circle(existing) = &c.curve else {
             continue;
         };
-        let shares_face = faces.contains(&c.face_a) || faces.contains(&c.face_b);
-        if !shares_face
+        if (c.face_a != target && c.face_b != target)
             || (existing.center() - circle.center()).length() > lin_tol
             || (existing.radius() - circle.radius()).abs() > lin_tol
             || existing.normal().cross(circle.normal()).length() > 1e-9
         {
             continue;
         }
-        // The existing section's parameters are the other circle object's;
-        // re-project its endpoints so both spans share one origin.
-        let c0 = circle.project(existing.evaluate(c.t_range.0));
-        let width = c.t_range.1 - c.t_range.0;
+        let (x0, x1) = c.t_range;
+        let e0 = circle.project(existing.evaluate(x0));
+        let e1 = circle.project(existing.evaluate(x1));
+        let em = circle.project(existing.evaluate(0.5 * (x0 + x1)));
+        let (c0, width) = {
+            let w = (e1 - e0).rem_euclid(TAU);
+            let w = if w < 1e-12 { TAU } else { w };
+            if (em - e0).rem_euclid(TAU) <= w {
+                (e0, w)
+            } else {
+                let w = (e0 - e1).rem_euclid(TAU);
+                (e1, if w < 1e-12 { TAU } else { w })
+            }
+        };
         for k in -1..=1 {
             let lo = (c0 - t_s).rem_euclid(TAU) + t_s + f64::from(k) * TAU - ang_tol;
             let hi = lo + width + 2.0 * ang_tol;
@@ -1220,38 +1305,6 @@ impl PlaneFrame2D {
     }
 }
 
-/// Ray-casting point-in-polygon test.
-///
-/// Returns `true` if `pt` is strictly inside `polygon` (CCW or CW vertex order).
-fn point_in_polygon_2d(pt: Point2, polygon: &[Point2]) -> bool {
-    if polygon.len() < 3 {
-        return false;
-    }
-
-    let mut inside = false;
-    let n = polygon.len();
-    let mut j = n - 1;
-
-    for i in 0..n {
-        let pi = polygon[i];
-        let pj = polygon[j];
-
-        let yi = pi.y();
-        let yj = pj.y();
-        let xi = pi.x();
-        let xj = pj.x();
-
-        if ((yi > pt.y()) != (yj > pt.y())) && (pt.x() < (xj - xi) * (pt.y() - yi) / (yj - yi) + xi)
-        {
-            inside = !inside;
-        }
-
-        j = i;
-    }
-
-    inside
-}
-
 /// Check if a 2D point lies on a line segment within tolerance.
 fn point_on_segment_2d(pt: Point2, a: Point2, b: Point2, tol: f64) -> bool {
     let ab = Point2::new(b.x() - a.x(), b.y() - a.y());
@@ -1280,19 +1333,6 @@ fn point_on_segment_2d(pt: Point2, a: Point2, b: Point2, tol: f64) -> bool {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
-
-    #[test]
-    fn point_in_unit_square() {
-        let square = vec![
-            Point2::new(0.0, 0.0),
-            Point2::new(1.0, 0.0),
-            Point2::new(1.0, 1.0),
-            Point2::new(0.0, 1.0),
-        ];
-        assert!(point_in_polygon_2d(Point2::new(0.5, 0.5), &square));
-        assert!(!point_in_polygon_2d(Point2::new(2.0, 0.5), &square));
-        assert!(!point_in_polygon_2d(Point2::new(-0.1, 0.5), &square));
-    }
 
     #[test]
     fn point_on_segment() {

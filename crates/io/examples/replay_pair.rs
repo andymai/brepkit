@@ -543,7 +543,9 @@ fn main() {
                                 c.normal().y(),
                                 c.normal().z()
                             ),
-                            _ => String::new(),
+                            brepkit_topology::edge::EdgeCurve::Line
+                            | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                            | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => String::new(),
                         };
                         println!(
                             "  {:?} {} fwd={} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}){geom}",
@@ -907,22 +909,27 @@ fn main() {
             // with their curve geometry (circle centre, radius, normal, and
             // the native parameter span between the stored endpoints).
             if let Ok(want) = std::env::var("RESULT_WIRES") {
-                for fid in solid_faces(&topo, sid).unwrap() {
+                let faces = solid_faces(&topo, sid).unwrap_or_default();
+                for fid in faces {
                     if format!("{fid:?}") != format!("Id({want})") {
                         continue;
                     }
-                    let face = topo.face(fid).unwrap();
+                    let Ok(face) = topo.face(fid) else { continue };
                     println!("  RESULT_WIRES {fid:?} {:?}", face.surface());
                     for (wi, wid) in std::iter::once(face.outer_wire())
                         .chain(face.inner_wires().iter().copied())
                         .enumerate()
                     {
-                        for oe in topo.wire(wid).unwrap().edges() {
-                            let e = topo.edge(oe.edge()).unwrap();
-                            let (sv, ev) = (
-                                topo.vertex(e.start()).unwrap().point(),
-                                topo.vertex(e.end()).unwrap().point(),
-                            );
+                        let Ok(wire) = topo.wire(wid) else { continue };
+                        for oe in wire.edges() {
+                            let Ok(e) = topo.edge(oe.edge()) else {
+                                continue;
+                            };
+                            let (Ok(sv), Ok(ev)) = (topo.vertex(e.start()), topo.vertex(e.end()))
+                            else {
+                                continue;
+                            };
+                            let (sv, ev) = (sv.point(), ev.point());
                             let (t0, t1) = e.curve().domain_with_endpoints(sv, ev);
                             let geom = match e.curve() {
                                 brepkit_topology::edge::EdgeCurve::Circle(c) => format!(
@@ -937,7 +944,11 @@ fn main() {
                                     t0,
                                     t1
                                 ),
-                                other => format!("{} span=[{:.6},{:.6}]", other.type_tag(), t0, t1),
+                                brepkit_topology::edge::EdgeCurve::Line
+                                | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                                | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => {
+                                    format!("{} span=[{:.6},{:.6}]", e.curve().type_tag(), t0, t1)
+                                }
                             };
                             println!(
                                 "    w{wi} {:?} fwd={} ({:.6},{:.6},{:.6})->({:.6},{:.6},{:.6}) {geom}",
