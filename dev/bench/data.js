@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789436782434,
+  "lastUpdate": 1789457971970,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33965,6 +33965,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44829623,
             "range": "± 546051",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51d0768f59d86e353324d6e3fddcf4f3391a889e",
+          "message": "test(blend): native replay of the assembly parts' corner fillets (#1653)\n\n## Summary\n\nThe tool's assembly parts (`block`, `comb`, `riser`, `boreBank`) all\nstart by easing a prism's four vertical corners, and that first stage\nalready comes out of the corrected fillet engine closed by edge id but\nnot watertight: 32 open mesh edges, 8 extra planar faces. Each stripe's\nterminal end on an untouched cap is closed by a reversed planar runout\npatch that overlays the cap's corner instead of notching the cap. The\nrim ease and slot cuts that follow (the `combriser` and remaining\n`assemblyGenerator.scenario` failures) are collateral.\n\nThis PR lands the instruments and the pin, not the fix:\n\n- `crates/wasm/src/bindings/assembly_probe_tests.rs`:\n`prism_vertical_corner_fillets_are_watertight` (ignored ready-repro) and\n`comb_part_probe` (diagnostic, `STAGE=corners|rim`, `FLUX=1`,\n`DUMP_WIRES=1`, `LOG=1`), replaying `assemblyPartTemplate.ts` through\nthe wasm `try_fillet` chain with the tool's radius reductions.\n- `FilletPlan::build` logs its contours and junction classes; band\nassembly logs whether a cross-section adopts an existing edge or\nregisters fresh (with endpoints); `replay_fillet_variable` gains\n`V2_ALL=<radius>`.\n- Roadmap: a new OPEN row with the three roots, the mechanism tried for\neach, and the fixture that rejects it.\n\nThe mechanisms (notchable-terminal spoke splits, cap notch before the\ncorner solver, a post-propagation winding repair, a local material-side\ntest for the plane x cylinder stripe) live on branch\n`wip/prism-corner-fillets`, env-gated. With all four on, stage 1 is\nexact and watertight and the slot cuts stay exact; `cross_one_row`'s\nvolume oracle, the aggressive scoop and the gridfinity d5 canary each\nreject a subset, so nothing ships yet.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a native replay of the assembly parts' vertical-corner fillets to\npin the non-watertight first stage behind the `combriser` and remaining\n`assemblyGenerator.scenario` failures. The corner fillets close by edge\nid but leave 32 open mesh edges because each stripe's terminal end is\nclosed by a reversed planar runout patch overlaying an untouched cap;\nthe rim ease and slot cuts that follow are collateral. This PR lands the\nrepro and instruments, not the fix.\n\n**Tests**\n- `prism_vertical_corner_fillets_are_watertight` is an ignored ready\nrepro that fails on the 32 open mesh edges and the inverted-volume\ncheck.\n- `comb_part_probe` replays the comb pipeline through the wasm\n`try_fillet` chain with per-stage census, per-face flux, wire dumps, and\nthe engine's debug log.\n- The roadmap gains an OPEN row listing the three roots and the fixtures\nthat reject the candidate mechanisms; the mechanisms stay on\n`wip/prism-corner-fillets`.\n\n**Diagnostics**\n- `FilletPlan::build` logs its contours and junction classifications.\n- Band assembly logs whether each cross-section adopts an existing edge\nor registers fresh.\n- `replay_fillet_variable` accepts `V2_ALL=<radius>` to fillet every\nfilletable edge at one constant radius without a spec.\n\n<sup>Written for commit e4f8f5f2b5315cacc878f78a914f08471a1f91cb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1653?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T07:36:56Z",
+          "tree_id": "d8cc1f7f33705190819efa61e40e994b5b0d6900",
+          "url": "https://github.com/andymai/brepkit/commit/51d0768f59d86e353324d6e3fddcf4f3391a889e"
+        },
+        "date": 1789457968500,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 983042,
+            "range": "± 4912",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1064160,
+            "range": "± 1445",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12166,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 728337,
+            "range": "± 1126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41551687,
+            "range": "± 49643",
             "unit": "ns/iter"
           }
         ]
