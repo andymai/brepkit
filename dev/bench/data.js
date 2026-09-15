@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789431167677,
+  "lastUpdate": 1789435860471,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -33803,6 +33803,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41435068,
             "range": "± 48855",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f90645f913a222d8acc6b42c49e3a8b745697508",
+          "message": "fix(blend): stop sharp-cornered fillets emitting twin edges (#1650)\n\n## Summary\n\nThe grouped-scoop cutout (`binGenerator.export.groupedScoop`) regressed\non 3.4.0 because the corrected fillet engine emitted eleven twin edges\non the scoop tool. The tool was closed by edge id, so publication\naccepted it, but the bin cut's endpoint-keyed merge collapsed the twins\ninto a four-owner edge and the cut took the mesh fallback.\n\nThe roadmap attributed this to the four-stripe junction fan. It was not:\nthree emission defects, none of them the fan (which never runs once the\nflat edges are gone).\n\n1. **Tangent-continuous selected edges** (the three edges between the\ngroup outline's coplanar bottom pieces) became zero-width bands with\ntwin contacts. `FilletPlan::build` now drops a selected edge whose two\nfaces share one outward normal along it.\n2. **Junction spokes were never split.** The batch trimmer split a\nboundary edge at a contact end only for one-edge planar fillets, so each\nwall at a spoke minted its own vertex at the same point and bridged to\nit with a connector twinning the other wall's. Splitting is now\n`BoundarySplitPolicy`: junction spokes split so both walls share the\nvertex, terminal-end spokes keep the runout closure, one-edge planar\nfillets split everything for the end-cap notch. The doubled-back tail is\ndropped as a chain, since a neighbour's earlier trim can have split the\nsame spoke at another height.\n3. **Coincident cross-sections across a seam.** Two r=2 stripes meeting\nwhere the cylinder wall is split at a seam each registered their own\ncross-section. The second band now adopts the first band's edge as its\nsecond owner and the junction builds no patch.\n\n## Verification\n\n- `groupedscoop_fillet_cut_inmem`: the two ready-repros are active and\ngreen (no twin edges; the cut stays exact and is manifold by id and by\nposition). New `groupedscoop_plan_drops_flat_edges` pins root 1.\n- `cargo test -p brepkit-blend` (123), the io fillet fixtures\n(`cross_one_row_fillet_inmem`, `scoop_fillet_variable_inmem`,\n`gscoop_pinch_cut_inmem`, `scoop_fix_inmem`,\n`scoop_corner_cylinder_fuse`, `scooplabel_ef_margin_inmem`,\n`compartscoop_fuse_inmem`, `scoop_fuse_order_independence`), the\noperations blend tests, and `cargo test -p brepkit-wasm --lib\ngridfinity` all pass.\n- `replay_fillet_variable` gains `V2=1` (direct engine call with\nper-edge failure reasons), `CUT=<body.bin>` (volumes and fallback count\nof the cut) and `OUT=` (serialize the result); `BK_CORNER_TRACE` now\nalso dumps junction candidates and fan cycles.\n\n## What is still open\n\nThe two-stripe convex corner closure with an unfilleted spoke is not a\nsolid: both bands run full-length and cross in the corner cube, the\nbottom contact lines cross and the closing chord makes a reversed lobe,\nand the horn torus pinches. This is the same model 3.3.9 shipped:\nmeasured with the new `CUT=` mode, 3.3.9's \"exact\" cut removed 2.1x the\ntool's volume with 144 open mesh edges (the tool file's two failures on\nthat version). After this PR the cut removes 1.5x with 105 open mesh\nedges. Two new ignored ready-repros\n(`groupedscoop_tool_tessellates_watertight`,\n`groupedscoop_cut_removes_at_most_the_tool`) and the rewritten roadmap\nrow carry the next step: trim both stripes to their mutual intersection\ninstead of patching.\n\nhttps://claude.ai/code/session_01EhVC5g3Xpp3YnvgrH4diLo\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nStops sharp-cornered fillets from emitting twin edges, which regressed\nthe grouped-scoop cutout on 3.4.0 by pushing the bin cut into the mesh\nfallback. The scoop tool now has no twin edges, and the cut stays exact\nand manifold.\n\nThe twins came from three emission defects:\n- The plan filleted tangent-continuous edges (coplanar bottom pieces)\ninto zero-width bands; it now drops any selected edge whose two faces\nshare one outward normal along it.\n- The trimmer only split boundary edges at contact ends for one-edge\nfillets, so each wall at a junction spoke created its own vertex and a\nconnector twinning the other wall's. Splitting is now a policy: junction\nspokes split so both walls share the vertex, terminal-end spokes keep\nthe runout closure, one-edge planar fillets split everything, and the\ndoubled-back tail is dropped as a chain.\n- Two stripes meeting across a seam each registered a coincident\ncross-section; the second band now adopts the first's edge as its second\nowner and the junction builds no patch.\n\nThe two-stripe convex corner closure is still not a solid, and is the\nsame model 3.3.9 shipped. Two ignored repros pin it\n(`groupedscoop_tool_tessellates_watertight`,\n`groupedscoop_cut_removes_at_most_the_tool`).\n\n<sup>Written for commit 499cc06770b2a1c9f2e0b0d4493a54a014882576.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1650?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-15T01:28:24Z",
+          "tree_id": "d82ed57cd3175db97bde2c6994fb9019ed619776",
+          "url": "https://github.com/andymai/brepkit/commit/f90645f913a222d8acc6b42c49e3a8b745697508"
+        },
+        "date": 1789435856790,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 983282,
+            "range": "± 45356",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1062208,
+            "range": "± 19970",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12336,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 724231,
+            "range": "± 2025",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41898436,
+            "range": "± 319141",
             "unit": "ns/iter"
           }
         ]
