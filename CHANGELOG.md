@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.3](https://github.com/andymai/brepkit/compare/v3.4.2...v3.4.3) (2026-09-15)
+
+
+### Bug Fixes
+
+* **blend:** stop sharp-cornered fillets emitting twin edges ([#1650](https://github.com/andymai/brepkit/issues/1650)) ([f90645f](https://github.com/andymai/brepkit/commit/f90645f913a222d8acc6b42c49e3a8b745697508))
+
 ## [3.4.2](https://github.com/andymai/brepkit/compare/v3.4.1...v3.4.2) (2026-09-14)
 
 
