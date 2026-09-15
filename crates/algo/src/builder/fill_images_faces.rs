@@ -1838,14 +1838,16 @@ fn build_section_edges(
                     // hole's base edge and out past its corner) would thread the
                     // shared run as a second copy of that edge. Keep only the
                     // uncovered runs; a section the boundary covers entirely, or
-                    // not at all, takes the re-trace test below unchanged.
+                    // not at all, takes the re-trace test below unchanged. An
+                    // uncovered run must exceed the re-trace exemption's endpoint
+                    // band: a whole-edge duplicate whose end a grazing solver
+                    // mislocated by microns past the corner is that exemption's
+                    // case, not a partial ride.
+                    let ride_band = tol * 1e5;
                     if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
                         && let Some(pieces) =
                             line_section_uncovered_pieces(topo, face_id, start, end, tol)
-                        && !pieces.is_empty()
-                        && pieces
-                            .iter()
-                            .any(|(a, b)| (*b - *a).length() < (end - start).length() - tol)
+                        && pieces.iter().any(|(a, b)| (*b - *a).length() > ride_band)
                     {
                         work.extend(pieces);
                         continue;
@@ -2574,6 +2576,11 @@ fn arc_segment_crossings(
     tol: f64,
     plane_normal: Option<brepkit_math::vec::Vec3>,
 ) -> Vec<(Point3, f64)> {
+    let (stored_start, stored_end) = if forward {
+        (edge_start, edge_end)
+    } else {
+        (edge_end, edge_start)
+    };
     let circle = match curve {
         EdgeCurve::Circle(c) => c,
         // A NURBS boundary edge (e.g. a revolve's arc, which serializes as
@@ -2594,8 +2601,9 @@ fn arc_segment_crossings(
             let _ = tol;
             let dir = line_end - line_start;
             let side = |p: Point3| (p - line_start).cross(dir).dot(n);
-            let eval =
-                |f: f64| super::pcurve_compute::evaluate_edge_at_t(curve, edge_start, edge_end, f);
+            let eval = |f: f64| {
+                super::pcurve_compute::evaluate_edge_at_t(curve, stored_start, stored_end, f)
+            };
             let mut hits = Vec::new();
             let mut prev_f = 0.0_f64;
             let mut prev_s = side(eval(0.0));
@@ -2645,50 +2653,25 @@ fn arc_segment_crossings(
     if hits.is_empty() {
         return hits;
     }
-    // Angular interval of the arc edge: from start angle to end angle on the
-    // side that passes through the edge's geometric midpoint.
-    let a_start = circle.project(edge_start);
-    let a_end = circle.project(edge_end);
-    let (stored_start, stored_end) = if forward {
-        (edge_start, edge_end)
-    } else {
-        (edge_end, edge_start)
-    };
-    let (t0, t1) = curve.domain_with_endpoints(stored_start, stored_end);
-    let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), stored_start, stored_end);
-    let a_mid = circle.project(mid);
-    // Normalize so the test is "is `a` between a_start and a_end the short/long
-    // way that contains a_mid". Use unsigned angular distances on the circle.
-    let ang_dist = |x: f64, y: f64| -> f64 {
-        let d = (x - y).abs() % std::f64::consts::TAU;
-        d.min(std::f64::consts::TAU - d)
-    };
-    let span = ang_dist(a_start, a_end);
     // A CLOSED rim edge (vertex identity, per the caller) covers the whole
-    // circle: every hit is on the arc. Without this, the major-arc
-    // complement filter below excludes a hit that lands exactly at the seam
-    // angle (dsa + dae = 0), losing one of a cap disc's two chord crossings
-    // and with it the cap's half-disc split.
+    // circle: every hit is on the arc.
     if closed {
         return hits;
     }
-    // `a` is on the arc iff dist(start,a)+dist(a,end) ≈ the arc span that
-    // contains the midpoint. Validate the midpoint satisfies this first so a
-    // degenerate (near-full) circle doesn't admit everything.
+    // The edge's native span: counter-clockwise in the circle's own
+    // parameter from its stored start to its stored end. A hit is on the
+    // arc when its angle, taken counter-clockwise from the start, does not
+    // exceed that span; both endpoints are inclusive. A directed interval
+    // is what settles a half-turn edge (an unsigned angular distance cannot
+    // tell its two semicircles apart) and keeps a hit that lands exactly on
+    // an endpoint of a major arc.
+    let (t0, t1) = curve.domain_with_endpoints(stored_start, stored_end);
+    let span = t1 - t0;
+    let eps = 1e-6;
     let on_arc = |a: f64| -> bool {
-        let dsa = ang_dist(a_start, a);
-        let dae = ang_dist(a, a_end);
-        (dsa + dae - span).abs() < 1e-6 || (dsa + dae) <= span + 1e-6
+        let rel = (a - t0).rem_euclid(std::f64::consts::TAU);
+        rel <= span + eps || rel >= std::f64::consts::TAU - eps
     };
-    if !on_arc(a_mid) {
-        // Edge is the COMPLEMENT (major) arc; flip the test.
-        let major = |a: f64| -> bool {
-            let dsa = ang_dist(a_start, a);
-            let dae = ang_dist(a, a_end);
-            (dsa + dae) > span + 1e-9
-        };
-        return hits.into_iter().filter(|(_, t)| major(*t)).collect();
-    }
     hits.into_iter().filter(|(_, t)| on_arc(*t)).collect()
 }
 
@@ -3170,7 +3153,9 @@ fn hole_loops_along_line(
                         }
                     }
                 }
-                curve => {
+                curve @ (EdgeCurve::Circle(_)
+                | EdgeCurve::Ellipse(_)
+                | EdgeCurve::NurbsCurve(_)) => {
                     for (p, _) in arc_segment_crossings(
                         curve,
                         sp,
@@ -4028,5 +4013,76 @@ mod tests {
                 "forward={forward}: {hits:?}"
             );
         }
+    }
+
+    #[test]
+    fn half_turn_arc_keeps_only_its_own_semicircle() {
+        // Stored from 0 to 180 degrees in the circle's own parameter. A
+        // diameter through the arc's midpoint (90 degrees, on) and its
+        // antipode (270 degrees, off) meets both semicircles; an unsigned
+        // angular distance cannot separate them.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let (stored_start, stored_end) =
+            (circle.evaluate(0.0), circle.evaluate(std::f64::consts::PI));
+        let on_arc = circle.evaluate(std::f64::consts::FRAC_PI_2);
+        let off_arc = circle.evaluate(1.5 * std::f64::consts::PI);
+        let dir = off_arc - on_arc;
+        let (line_start, line_end) = (on_arc - dir * 0.25, off_arc + dir * 0.25);
+        for (a, b, forward) in [
+            (stored_start, stored_end, true),
+            (stored_end, stored_start, false),
+        ] {
+            let hits = arc_segment_crossings(
+                &EdgeCurve::Circle(circle.clone()),
+                a,
+                b,
+                false,
+                forward,
+                line_start,
+                line_end,
+                1e-7,
+                None,
+            );
+            assert_eq!(hits.len(), 1, "forward={forward}: {hits:?}");
+            assert!(
+                (hits[0].0 - on_arc).length() < 1e-9,
+                "forward={forward}: {hits:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn major_arc_keeps_a_hit_on_its_endpoint() {
+        // A 276 degree arc from 0 degrees: a chord through the start point
+        // and the arc's interior at 200 degrees keeps both hits, the endpoint
+        // included.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let stored_start = circle.evaluate(0.0);
+        let stored_end = circle.evaluate(276.0_f64.to_radians());
+        let inner = circle.evaluate(200.0_f64.to_radians());
+        let dir = inner - stored_start;
+        let hits = arc_segment_crossings(
+            &EdgeCurve::Circle(circle),
+            stored_start,
+            stored_end,
+            false,
+            true,
+            stored_start - dir * 0.25,
+            inner + dir * 0.25,
+            1e-7,
+            None,
+        );
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        assert!(
+            hits.iter()
+                .any(|(p, _)| (*p - stored_start).length() < 1e-9),
+            "{hits:?}"
+        );
+        assert!(
+            hits.iter().any(|(p, _)| (*p - inner).length() < 1e-9),
+            "{hits:?}"
+        );
     }
 }

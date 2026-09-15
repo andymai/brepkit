@@ -5166,12 +5166,14 @@ fn compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact() {
     };
     let cylinders = count_cylinder_faces(&topo, sequential);
     assert!(cylinders > 0, "the bore cut fell back");
-    let expected = crate::measure::solid_volume(&topo, sequential, 0.01).unwrap();
+    // The two removals are disjoint: the pin bores z 0..4 of knuckle 1 and the
+    // bore z 6..10 of knuckle 2, each a keyhole profile times 4, read off the
+    // pins' own volumes (5 and 7 long).
+    let profile = |sid: SolidId, len: f64| {
+        crate::measure::oriented_solid_volume(&topo, sid, 0.001).unwrap() / len
+    };
+    let expected = bracket_volume - 4.0 * (profile(pin, 5.0) + profile(bore, 7.0));
     assert_watertight_with_volume(&topo, sequential, cylinders, expected);
-    assert!(
-        expected < bracket_volume - 15.0 && expected > bracket_volume - 25.0,
-        "{expected}"
-    );
 
     // The batched result's unified bore walls are misread by the
     // `solid_volume` mesh (11 mm3 high, one bore's worth); the oriented
@@ -5187,6 +5189,10 @@ fn compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact() {
     assert!(
         (batched - oracle).abs() / oracle < 1e-4,
         "batched volume {batched:.3} != sequential {oracle:.3}"
+    );
+    assert!(
+        (batched - expected).abs() / expected < 1e-3,
+        "batched volume {batched:.3} != expected {expected:.3}"
     );
 }
 
