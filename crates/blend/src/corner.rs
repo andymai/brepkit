@@ -2684,13 +2684,13 @@ mod tests {
             face2: face_xz,
             sections: vec![
                 CircSection {
-                    p1: Point3::new(0.0, 0.0, radius),
-                    p2: Point3::new(0.0, radius, 0.0),
-                    center: Point3::new(0.0, radius, radius),
+                    p1: Point3::new(radius, 0.0, radius),
+                    p2: Point3::new(radius, radius, 0.0),
+                    center: Point3::new(radius, radius, radius),
                     radius,
                     uv1: (0.0, 0.0),
                     uv2: (0.0, 0.0),
-                    t: 0.0,
+                    t: radius,
                 },
                 CircSection {
                     p1: Point3::new(1.0, 0.0, radius),
@@ -2743,13 +2743,13 @@ mod tests {
             face2: face_yz,
             sections: vec![
                 CircSection {
-                    p1: Point3::new(0.0, 0.0, radius),
-                    p2: Point3::new(radius, 0.0, 0.0),
-                    center: Point3::new(radius, 0.0, radius),
+                    p1: Point3::new(0.0, radius, radius),
+                    p2: Point3::new(radius, radius, 0.0),
+                    center: Point3::new(radius, radius, radius),
                     radius,
                     uv1: (0.0, 0.0),
                     uv2: (0.0, 0.0),
-                    t: 0.0,
+                    t: radius,
                 },
                 CircSection {
                     p1: Point3::new(0.0, 1.0, radius),
@@ -2802,13 +2802,13 @@ mod tests {
             face2: face_yz,
             sections: vec![
                 CircSection {
-                    p1: Point3::new(0.0, radius, 0.0),
-                    p2: Point3::new(radius, 0.0, 0.0),
-                    center: Point3::new(radius, radius, 0.0),
+                    p1: Point3::new(0.0, radius, radius),
+                    p2: Point3::new(radius, 0.0, radius),
+                    center: Point3::new(radius, radius, radius),
                     radius,
                     uv1: (0.0, 0.0),
                     uv2: (0.0, 0.0),
-                    t: 0.0,
+                    t: radius,
                 },
                 CircSection {
                     p1: Point3::new(0.0, radius, 1.0),

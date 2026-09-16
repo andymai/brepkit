@@ -89,6 +89,13 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), Blen
         });
     }
 
+    // The contacts must also belong to the sphere requested by the caller.
+    if (sphere_radius - data.radius).abs() > TOL * 100.0 {
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
+    }
+
     // All boundary contacts must lie on the same rolling-ball sphere.
     for contact in &data.contact_points {
         let distance = (*contact - center).length();
@@ -431,10 +438,8 @@ mod tests {
         let ny = Vec3::new(0.0, 1.0, 0.0);
         let nz = Vec3::new(0.0, 0.0, 1.0);
 
-        // Sphere center = origin + r * normalize(nx+ny+nz)
-        let normal_sum = nx + ny + nz;
-        let normal_dir = normal_sum * (1.0 / normal_sum.length());
-        let center = origin + normal_dir * r;
+        // Sphere center = origin + r * (nx+ny+nz)
+        let center = origin + (nx + ny + nz) * r;
 
         // Contact points: where the sphere touches each face plane.
         // Contact on face with normal n_i is C - r * n_i
@@ -528,5 +533,39 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn test_sphere_center_rejects_requested_radius_mismatch() {
+        let (_topo, vid) = make_vertex_id();
+        let mut data = unit_cube_corner_data(vid);
+        let r = data.radius;
+
+        // These are mutually equidistant from the computed center, but lie
+        // on a sphere of radius r*sqrt(2), not the requested radius r.
+        data.contact_points = vec![
+            Point3::new(0.0, r, 0.0),
+            Point3::new(0.0, 0.0, r),
+            Point3::new(r, 0.0, 0.0),
+        ];
+
+        let error = compute_sphere_center(&data).expect_err("mismatched radius must fail");
+        assert!(matches!(
+            error,
+            BlendError::CornerFailure { vertex } if vertex == vid
+        ));
+    }
+
+    #[test]
+    fn test_sphere_center_accepts_requested_radius() {
+        let (_topo, vid) = make_vertex_id();
+        let data = unit_cube_corner_data(vid);
+        let (_center, sphere_radius) =
+            compute_sphere_center(&data).expect("tangent contacts must pass");
+
+        assert!(
+            (sphere_radius - data.radius).abs() <= TOL * 100.0,
+            "derived radius {sphere_radius} differs from requested {}",
+            data.radius
+        );
     }
 }
