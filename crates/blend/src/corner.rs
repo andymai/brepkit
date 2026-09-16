@@ -3044,9 +3044,27 @@ fn splice_miter_top_face_without_arc(
 ///
 /// Returns the new shared top-contact meeting vertex; both contacts are
 /// shortened in place (same identity before and after, see below).
+///
+/// N433: a contact whose *remaining* length is exactly the radius being
+/// consumed has nothing left to shorten — trimming it produces a
+/// single-control-point NURBS the curve builder rejects
+/// (`invalid knot vector: expected 3 knots, got 2`). That is the
+/// four-edge pillow's second trim at `r = S/2`: each corner trims a
+/// contact from its own end, and by the time the stripe's *other* corner
+/// reaches it, exactly `radius` is left. The contact then collapses into
+/// the corner's meeting vertex and is removed from the construction the
+/// same way `close_collapsed_miter_corner` removes the two-edge limit's
+/// collapsed contacts: dropped from its own stripe's wire (so the stripe's
+/// boundary is the bottom contact plus the two corner creases), restricted
+/// to the meeting vertex in the shared face's wire (the pipeline's
+/// zero-extent face exclusion then drops that point-boundary remnant), and
+/// retired from the registry so its planned two-owner use is no longer
+/// audited. The trim itself never runs with a whole-contact fraction.
 fn shorten_top_contacts_and_splice_top_face(
     topo: &mut Topology,
     miter: &MiterCorner,
+    stripe_faces: &[FaceId],
+    registry: &mut BoundaryRegistry,
 ) -> Result<VertexId, BlendError> {
     let fail = || BlendError::CornerFailure {
         vertex: miter.vertex,
@@ -3068,8 +3086,8 @@ fn shorten_top_contacts_and_splice_top_face(
     // new edge is minted that the registry's `postassembly_audit` would
     // then need — and be unable — to account for (see
     // docs/N414-evidence/miter-construction-design.md).
-    let vtop_vertex = topo.add_vertex(Vertex::new(miter.vtop, TOL));
-    let shorten = |topo: &mut Topology, pos: usize| -> Result<(), BlendError> {
+    let vtop_vertex = miter_meeting_vertex(topo, miter, stripe_faces);
+    let mut shorten = |topo: &mut Topology, pos: usize| -> Result<(), BlendError> {
         let oe = edges[pos];
         let e = topo.edge(oe.edge())?.clone();
         let EdgeCurve::NurbsCurve(curve) = e.curve() else {
@@ -3091,16 +3109,29 @@ fn shorten_top_contacts_and_splice_top_face(
             };
         let far_point = if near_is_start { ep } else { sp };
         let length = (far_point - near_point).length();
-        // The trim consumes `radius` from the near end. At the exact limit
-        // (`length == radius`) this path is not reached: there is no retained
-        // vertical edge to adopt, and `close_collapsed_miter_corner` closes
-        // the corner without either contact. Reaching it with a radius that
-        // does not fit the contact at all is a genuine overshoot.
-        if miter.radius > length {
+        // The trim consumes `radius` from the near end. When that is more
+        // than the remaining length the request does not fit this contact
+        // at all — a genuine overshoot, refused before any mutation. At
+        // `length == radius` (within `TOL`) the trim would consume the
+        // whole remaining contact, so the contact collapses instead of
+        // being trimmed to a degenerate curve (N433; the four-edge pillow's
+        // second trim per contact).
+        if miter.radius - length > TOL {
             return Err(BlendError::RadiusTooLarge {
                 edge: oe.edge(),
                 max_radius: length.max(0.0),
             });
+        }
+        if length - miter.radius <= TOL {
+            collapse_miter_top_contact(
+                topo,
+                miter,
+                stripe_faces,
+                registry,
+                oe.edge(),
+                vtop_vertex,
+            )?;
+            return Ok(());
         }
         let fraction = miter.radius / length;
         let trimmed = if near_is_start {
@@ -3121,6 +3152,116 @@ fn shorten_top_contacts_and_splice_top_face(
     shorten(topo, after_pos)?;
     splice_miter_top_face_without_arc(topo, miter, &edges, arc_pos)?;
     Ok(vtop_vertex)
+}
+
+/// The miter's top-contact meeting vertex: an existing vertex at
+/// `miter.vtop` among the miter's own wires when one is already there, a
+/// fresh vertex otherwise.
+///
+/// The four-edge pillow's four corners all meet at one point at the exact
+/// limit (`vertex + ex*r + ey*r` is the same `(S/2, S/2, S)` for every
+/// corner at `r = S/2`), and the corner that runs second reuses the vertex
+/// the first corner's crease already ends at. Minting a fresh twin per
+/// corner instead would leave the stripe's wire chained through
+/// distinct-but-coincident ids, and `insert_miter_crease_into_stripe_face`
+/// identifies the break it fills by vertex identity alone — the crease's
+/// own endpoints — so the collapsed contact's trim point and the crease's
+/// far end must be the same vertex, not merely the same position.
+///
+/// Below the limit every corner's `vtop` is a different point
+/// (`(S - r, r, S)` versus `(r, r, S)` and so on; they coincide only at
+/// `r = S/2`), so no existing vertex is ever within `TOL` and this reduces
+/// to the previous always-mint behaviour.
+fn miter_meeting_vertex(
+    topo: &mut Topology,
+    miter: &MiterCorner,
+    stripe_faces: &[FaceId],
+) -> VertexId {
+    for face in std::iter::once(miter.top_face).chain(stripe_faces.iter().copied()) {
+        let Ok(face_data) = topo.face(face) else {
+            continue;
+        };
+        let Ok(wire) = topo.wire(face_data.outer_wire()) else {
+            continue;
+        };
+        for oriented in wire.edges() {
+            let Ok(edge) = topo.edge(oriented.edge()) else {
+                continue;
+            };
+            for vertex in [edge.start(), edge.end()] {
+                let Ok(point) = topo.vertex(vertex).map(Vertex::point) else {
+                    continue;
+                };
+                if (point - miter.vtop).length() <= TOL {
+                    return vertex;
+                }
+            }
+        }
+    }
+    topo.add_vertex(Vertex::new(miter.vtop, TOL))
+}
+
+/// Collapse a shared-face contact that the corner's trim consumes entirely
+/// into the miter's meeting vertex (N433; see
+/// [`shorten_top_contacts_and_splice_top_face`]).
+///
+/// The contact is dropped from whichever of the corner's two stripe faces
+/// owns it — including its pcurve on that face, which described a boundary
+/// the face no longer has — and restricted in place to `vtop_vertex` with
+/// `EdgeCurve::Line` (a zero-length segment, whose geometry *is* its
+/// vertices, exactly as `close_collapsed_miter_corner` states). It stays in
+/// the shared face's wire: that face's whole boundary is then a point, and
+/// `fillet_builder.rs`'s zero-extent exclusion drops it from the result
+/// shell. Its registry entry is retired so its planned two-owner use — the
+/// shared face (excluded) and the stripe face (no longer bounded by it) —
+/// is no longer audited.
+fn collapse_miter_top_contact(
+    topo: &mut Topology,
+    miter: &MiterCorner,
+    stripe_faces: &[FaceId],
+    registry: &mut BoundaryRegistry,
+    contact: EdgeId,
+    vtop_vertex: VertexId,
+) -> Result<(), BlendError> {
+    for &face in stripe_faces {
+        let Ok(face_data) = topo.face(face) else {
+            continue;
+        };
+        let wire_id = face_data.outer_wire();
+        let wire_edges = topo.wire(wire_id)?.edges().to_vec();
+        if !wire_edges.iter().any(|oe| oe.edge() == contact) {
+            continue;
+        }
+        let remaining: Vec<OrientedEdge> = wire_edges
+            .iter()
+            .copied()
+            .filter(|oe| oe.edge() != contact)
+            .collect();
+        if remaining.len() == wire_edges.len() {
+            continue;
+        }
+        topo.pcurves_mut().remove(contact, face);
+        let new_wire = topo.add_wire(Wire::new(remaining, true)?);
+        topo.face_mut(face)?.set_outer_wire(new_wire);
+        if miter_trace() {
+            log::debug!(
+                "MITER limit: collapsed contact {contact:?} removed from stripe face {face:?} at vertex {:?}",
+                miter.vertex
+            );
+        }
+    }
+    let edge_mut = topo.edge_mut(contact)?;
+    if edge_mut.start() != vtop_vertex {
+        edge_mut.set_start(vtop_vertex);
+    }
+    if edge_mut.end() != vtop_vertex {
+        edge_mut.set_end(vtop_vertex);
+    }
+    edge_mut.set_curve(EdgeCurve::Line);
+    if let Some(handle) = registry.handle_for_edge(contact) {
+        registry.retire(handle);
+    }
+    Ok(())
 }
 
 /// Close this stripe's own face wire at a miter-corner end with the crease
@@ -3513,8 +3654,11 @@ fn apply_equal_two_edge_miter_corner(
 
     // Step 2: shorten both stripes' shared-face contacts (in place — same
     // identity before and after) and splice the top face directly at the
-    // new top-contact meeting vertex.
-    let vtop_vertex = shorten_top_contacts_and_splice_top_face(topo, miter)?;
+    // new top-contact meeting vertex. A contact the trim consumes entirely
+    // (the four-edge pillow's second trim per contact at `r = S/2`)
+    // collapses into the meeting vertex instead (N433).
+    let vtop_vertex =
+        shorten_top_contacts_and_splice_top_face(topo, miter, &[face_a, face_b], registry)?;
     if miter_trace() {
         log::debug!(
             "MITER step2: top_face={:?} vtop={vtop_vertex:?}",

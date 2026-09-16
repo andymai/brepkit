@@ -1897,18 +1897,32 @@ pub(super) fn tessellate_nonplanar_cdt(
         uv_bounds(&boundary_uv)
     };
     // The affected native fillet stripe has two marched NURBS contact
-    // boundaries and two transverse circle/ellipse boundaries. At the exact
-    // limit (`r = S`, `corner::close_collapsed_miter_corner`) the miter's
-    // shared-face contact is consumed entirely and drops out of the stripe's
-    // wire: the same developable patch is then bounded by ONE NURBS side
-    // contact, the miter's exact ELLIPSE crease and the ONE CIRCLE terminal
-    // cross-section arc. Both shapes are the same trimmed cylinder patch and
-    // need the same repair — without it the raw UV (radians against mm) makes
-    // the CDT join the stripe's opposite ends across the curved interior: the
-    // limit stripe measured 813.95 mm^2 instead of S^2 = 645.16 and the two
-    // adjacent top edges at `r = S` enclosed 31% too little volume. Keep this
-    // repair on that exact topology class; other curved trims feed boolean
-    // volume/classification paths whose triangulation is separately qualified.
+    // boundaries and two transverse circle/ellipse boundaries. At an exact
+    // limit the miter's shared-face contacts are consumed entirely and drop
+    // out of the stripe's wire — the developable patch itself is unchanged,
+    // and `corner.rs` states the collapse (N432's
+    // `close_collapsed_miter_corner`, N433's `collapse_miter_top_contact`).
+    // The same patch then reads as ONE NURBS side contact plus two
+    // transverse boundaries, in two measured shapes:
+    //
+    // - `r = S` on two adjacent top edges: the NURBS side contact, the
+    //   miter's exact ELLIPSE crease and the ONE CIRCLE terminal
+    //   cross-section arc;
+    // - `r = S/2` on the four-edge pillow (N433): the NURBS side contact
+    //   (bottom) and the TWO ELLIPSE creases of the stripe's own two
+    //   mitered ends — bottom contact plus both creases is the stripe's
+    //   entire boundary.
+    //
+    // All of them are the same trimmed cylinder patch and need the same
+    // repair — without it the raw UV (radians against mm) makes the CDT join
+    // the stripe's opposite ends across the curved interior: the `r = S`
+    // stripe measured 813.95 mm^2 instead of `S^2 = 645.16` (the two
+    // adjacent top edges then enclosed 31% too little volume), and each
+    // pillow stripe measured 326.35 mm^2 with the solid at 11903.19 mm^3
+    // instead of `(5/6)S^3 = 13655.89` (N433 probe, before this class was
+    // added). Keep this repair on that exact topology class; other curved
+    // trims feed boolean volume/classification paths whose triangulation is
+    // separately qualified.
     let outer_wire = topo.wire(face_data.outer_wire())?;
     let mut nurbs_boundaries = 0;
     let mut circle_boundaries = 0;
@@ -1922,12 +1936,12 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
     let transverse_boundaries = circle_boundaries + ellipse_boundaries;
-    let is_fillet_stripe_boundary =
-        (outer_wire.edges().len() == 4 && nurbs_boundaries == 2 && transverse_boundaries == 2)
-            || (outer_wire.edges().len() == 3
-                && nurbs_boundaries == 1
-                && ellipse_boundaries == 1
-                && circle_boundaries == 1);
+    let is_fillet_stripe_boundary = (outer_wire.edges().len() == 4
+        && nurbs_boundaries == 2
+        && transverse_boundaries == 2)
+        || (outer_wire.edges().len() == 3
+            && nurbs_boundaries == 1
+            && ((ellipse_boundaries == 1 && circle_boundaries == 1) || ellipse_boundaries == 2));
 
     // CDT uses Euclidean distances to choose diagonals. Raw cylindrical/conical
     // UV mixes radians with model units, making a long axial stripe appear
