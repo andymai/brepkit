@@ -9,7 +9,12 @@
 //! N340 repaired): one edge accepted at R1, then an ADJACENT edge requested
 //! at R2 != R1.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stderr,
+    deprecated
+)]
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};

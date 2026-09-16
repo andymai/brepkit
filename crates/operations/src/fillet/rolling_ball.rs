@@ -88,21 +88,39 @@ pub fn fillet_rolling_ball(
         return Ok(result);
     }
 
-    build(topo, solid, edges, radius, None, None)
+    build(topo, solid, edges, radius, None, None, None)
 }
 
 /// Optional corner treatments are constructed only by the bounded geometric
-/// recognizers: N339 rebuilds an equal-radius two-strip setback and N340 grows
-/// a smaller third strip from that setback's singular endpoint.
+/// recognizers: N339 rebuilds an equal-radius two-strip setback (N341: now
+/// possibly at two independent radii, one per edge) and N340 grows a smaller
+/// third strip from that setback's singular endpoint.
+///
+/// `edge_radii` (N341) gives each edge in `edges` its own fillet radius,
+/// overriding the uniform `radius` for that specific edge; `radius` remains
+/// the value used for every edge not present in `edge_radii`, and for the
+/// handful of genuinely edge-independent tolerances (mesh deflection, area
+/// floor) that do not need to be exact per edge. `edges: &[EdgeId]` is always
+/// either every edge of one uniform-radius selection (`edge_radii: None`) or
+/// -- the only case that puts more than one radius in `edge_radii` -- the
+/// exact two-edge `[inherited, requested]` pair `reblend::try_adjoining_strip`
+/// recognizes.
 pub(super) fn build(
     topo: &mut Topology,
     solid: SolidId,
     edges: &[EdgeId],
     radius: f64,
+    edge_radii: Option<&DetHashMap<usize, f64>>,
     setback_corner: Option<&super::reblend::SetbackCorner>,
     mixed_runout: Option<&super::reblend::MixedRadiusRunout>,
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
+    let radius_of = |edge_id: EdgeId| -> f64 {
+        edge_radii
+            .and_then(|map| map.get(&edge_id.index()))
+            .copied()
+            .unwrap_or(radius)
+    };
 
     // Phase 1: Collect face data and build adjacency.
     let solid_data = topo.solid(solid)?;
@@ -283,10 +301,11 @@ pub(super) fn build(
                         }
                     }
                 }
-                if radius > min_adj && min_adj < f64::MAX {
+                let this_radius = radius_of(edge_id);
+                if this_radius > min_adj && min_adj < f64::MAX {
                     return Err(crate::OperationsError::InvalidInput {
                         reason: format!(
-                            "fillet radius {radius:.6} exceeds adjacent edge length {min_adj:.6}"
+                            "fillet radius {this_radius:.6} exceeds adjacent edge length {min_adj:.6}"
                         ),
                     });
                 }
@@ -346,10 +365,11 @@ pub(super) fn build(
                     v_min * cos_a / sin_a
                 }
             };
-            if radius >= min_curvature_r {
+            let this_radius = radius_of(edge_id);
+            if this_radius >= min_curvature_r {
                 return Err(crate::OperationsError::InvalidInput {
                     reason: format!(
-                        "fillet radius {radius:.6} meets or exceeds minimum surface \
+                        "fillet radius {this_radius:.6} meets or exceeds minimum surface \
                          curvature radius {min_curvature_r:.6} of adjacent face"
                     ),
                 });
@@ -404,7 +424,13 @@ pub(super) fn build(
                     if half_tan < tol.linear {
                         break 'start 0.0;
                     }
-                    radius / half_tan
+                    // N341: the setback consumed from E's own length is caused
+                    // by the PREV edge's own rolling ball reaching into the
+                    // shared vertex, so it scales with the prev edge's own
+                    // radius, not E's -- the same cross relationship the
+                    // setback-corner patch itself is built from (see
+                    // setback_patch.rs's module doc).
+                    radius_of(poly.wire_edge_ids[prev_i]) / half_tan
                 } else {
                     0.0
                 }
@@ -430,7 +456,7 @@ pub(super) fn build(
                     if half_tan < tol.linear {
                         break 'end 0.0;
                     }
-                    radius / half_tan
+                    radius_of(poly.wire_edge_ids[next_i]) / half_tan
                 } else {
                     0.0
                 }
@@ -517,7 +543,7 @@ pub(super) fn build(
                         let theta = cos_t.acos();
                         let half_tan = (theta / 2.0).tan();
                         if half_tan > tol.linear {
-                            setback_start = setback_start.max(radius / half_tan);
+                            setback_start = setback_start.max(radius_of(adj_eid) / half_tan);
                         }
                     }
                 }
@@ -536,7 +562,7 @@ pub(super) fn build(
                         let theta = cos_t.acos();
                         let half_tan = (theta / 2.0).tan();
                         if half_tan > tol.linear {
-                            setback_end = setback_end.max(radius / half_tan);
+                            setback_end = setback_end.max(radius_of(adj_eid) / half_tan);
                         }
                     }
                 }
@@ -647,7 +673,9 @@ pub(super) fn build(
                     let theta = cos_t.acos();
                     let half_tan = (theta / 2.0).tan();
                     if half_tan > tol.linear {
-                        max_setback = max_setback.max(radius / half_tan);
+                        // N341: the neighbor's own radius, not this edge's --
+                        // see the matching comment in Phase 2d above.
+                        max_setback = max_setback.max(radius_of(nb) / half_tan);
                     }
                 }
 
@@ -749,7 +777,14 @@ pub(super) fn build(
             let r1 = face_reversed.get(&f1.index()).copied().unwrap_or(false);
             let r2 = face_reversed.get(&f2.index()).copied().unwrap_or(false);
             if let Ok(sections) = brepkit_blend::fillet_builder::blend_cross_sections(
-                topo, edge_id, s1, r1, s2, r2, radius, &fractions,
+                topo,
+                edge_id,
+                s1,
+                r1,
+                s2,
+                r2,
+                radius_of(edge_id),
+                &fractions,
             ) {
                 cache.insert(edge_id.index(), sections);
             }
@@ -857,8 +892,9 @@ pub(super) fn build(
                 let ld1 = ld1.normalize().unwrap_or(c1);
                 let ld2 = ld2.normalize().unwrap_or(c2);
 
-                let contact1 = p + ld1 * radius;
-                let contact2 = p + ld2 * radius;
+                let this_radius = radius_of(edge_id);
+                let contact1 = p + ld1 * this_radius;
+                let contact2 = p + ld2 * this_radius;
 
                 // At G1 junctions, keep the first edge's contacts.
                 if g1_chain_vertices.contains(&vid.index()) {
@@ -1115,7 +1151,7 @@ pub(super) fn build(
                         if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
                             trimmed_verts.push(pt);
                         } else if let Ok(dir) = (next_pos - pos).normalize() {
-                            trimmed_verts.push(pos + dir * radius);
+                            trimmed_verts.push(pos + dir * radius_of(wire_edge_ids[prev_i]));
                         } else {
                             trimmed_verts.push(pos);
                         }
@@ -1158,7 +1194,7 @@ pub(super) fn build(
                         if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
                             trimmed_verts.push(pt);
                         } else if let Ok(dir) = (prev_pos - pos).normalize() {
-                            trimmed_verts.push(pos + dir * radius);
+                            trimmed_verts.push(pos + dir * radius_of(wire_edge_ids[i]));
                         } else {
                             trimmed_verts.push(pos);
                         }
@@ -1170,7 +1206,7 @@ pub(super) fn build(
                         if let Some(&pt) = fillet_contact_map.get(&(vi, ei_after, fi)) {
                             trimmed_verts.push(pt);
                         } else if let Ok(dir_prev) = (prev_pos - pos).normalize() {
-                            trimmed_verts.push(pos + dir_prev * radius);
+                            trimmed_verts.push(pos + dir_prev * radius_of(wire_edge_ids[i]));
                         } else {
                             trimmed_verts.push(pos);
                         }
@@ -1180,7 +1216,7 @@ pub(super) fn build(
                         if let Some(&pt) = fillet_contact_map.get(&(vi, ei_before, fi)) {
                             trimmed_verts.push(pt);
                         } else if let Ok(dir_next) = (next_pos - pos).normalize() {
-                            trimmed_verts.push(pos + dir_next * radius);
+                            trimmed_verts.push(pos + dir_next * radius_of(wire_edge_ids[prev_i]));
                         } else {
                             trimmed_verts.push(pos);
                         }
@@ -1339,7 +1375,7 @@ pub(super) fn build(
                         new_verts.push(pt);
                     } else {
                         let dir = (next_pos - pos).normalize()?;
-                        new_verts.push(pos + dir * radius);
+                        new_verts.push(pos + dir * radius_of(poly.wire_edge_ids[prev_i]));
                     }
                     // Arc runout: keep the original corner so the runout
                     // triangle's leg (contact→corner, along the unfilleted edge)
@@ -1394,7 +1430,7 @@ pub(super) fn build(
                         new_verts.push(pt);
                     } else {
                         let dir = (prev_pos - pos).normalize()?;
-                        new_verts.push(pos + dir * radius);
+                        new_verts.push(pos + dir * radius_of(poly.wire_edge_ids[i]));
                     }
                 }
                 (true, true, _) => {
@@ -1405,7 +1441,7 @@ pub(super) fn build(
                         new_verts.push(pt);
                     } else {
                         let dir_prev = (prev_pos - pos).normalize()?;
-                        new_verts.push(pos + dir_prev * radius);
+                        new_verts.push(pos + dir_prev * radius_of(poly.wire_edge_ids[i]));
                     }
                     // dir_next (along "after" edge) → perpendicular to
                     // the "before" fillet edge → use "before" edge's contact.
@@ -1414,7 +1450,7 @@ pub(super) fn build(
                         new_verts.push(pt);
                     } else {
                         let dir_next = (next_pos - pos).normalize()?;
-                        new_verts.push(pos + dir_next * radius);
+                        new_verts.push(pos + dir_next * radius_of(poly.wire_edge_ids[prev_i]));
                     }
                 }
             }
@@ -1493,6 +1529,12 @@ pub(super) fn build(
         let edge = topo.edge(edge_id)?;
         let p_start = topo.vertex(edge.start())?.point();
         let p_end = topo.vertex(edge.end())?.point();
+        // N341: this edge's own fillet radius, which may differ from the
+        // other edge(s) in this same `build` call -- see `edge_radii` above.
+        // Shadows the outer `radius` for the rest of this iteration so every
+        // per-edge computation below (contacts, the analytic cylinder wall)
+        // uses the right one without a large mechanical rename.
+        let radius = radius_of(edge_id);
 
         let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
             continue; // Edge not in map, skip

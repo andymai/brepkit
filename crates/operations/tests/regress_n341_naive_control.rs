@@ -1,10 +1,35 @@
-//! N341 attempt-1 control: deleting reblend::recognize's equal-radius guard
-//! alone, with no other change, is not a repair. This test is EXPECTED to
-//! demonstrate wrong output (either non-closed, or closed but with the
-//! wrong radius on the previously-accepted strip) -- it exists only to
-//! provide evidence for the attempt ledger and must not be left green
-//! against production semantics.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
+//! N341 history: session 1's attempt-1 control proved that deleting
+//! `reblend::recognize`'s equal-radius guard alone, with no other change,
+//! is not a repair -- `recognize` still returned `None` for every face
+//! (other equality checks remained), so the naive removal never even
+//! reached corner construction and reproduced the unmodified baseline's
+//! open shell. That evidence lived in this file as a deliberately-red
+//! negative control (`report.is_valid()` was expected to be false, or, if
+//! ever true, to expose radius drift).
+//!
+//! Session 3 shipped the real repair: `recognize` now accepts the inherited
+//! strip at its own radius (`Strip::radius`) instead of requiring equality
+//! to the newly requested radius, and `SetbackCorner`/`setback_patch::surface_mixed`
+//! build the exact two-radius corner patch from both radii independently
+//! (see that module's doc for the derivation). That is a materially
+//! different code path from "delete the guard and change nothing else" --
+//! it is the concrete next-prerequisite construction the guard-removal
+//! control always said was still missing, now implemented and numerically
+//! qualified in `setback_patch`'s own tests.
+//!
+//! This file now asserts the POSITIVE, current behavior instead of the old
+//! negative one: the previously-accepted strip's radius must survive
+//! unchanged, the newly requested strip must carry its own (different)
+//! radius, and both must be simultaneously present as distinct cylindrical
+//! faces in the closed result. Keeping this file (rather than deleting it)
+//! preserves the same source/edge geometry the original control used as an
+//! independent regression alongside `regress_fillet_mixed_radius_adjoining.rs`.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stderr,
+    deprecated
+)]
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -61,7 +86,7 @@ fn edge_at(topo: &Topology, solid: SolidId, a: Point3, b: Point3) -> EdgeId {
 
 #[test]
 #[allow(deprecated)]
-fn naive_guard_removal_produces_wrong_radius_not_a_repair() {
+fn repaired_route_preserves_the_accepted_radius_and_carries_the_new_one() {
     let _ = env_logger::try_init();
     let mut topo = Topology::new();
     let source = source(&mut topo);
@@ -83,32 +108,41 @@ fn naive_guard_removal_produces_wrong_radius_not_a_repair() {
     let second = fillet_rolling_ball(&mut topo, first, &[e2], r2).unwrap();
     let report = validate_solid(&topo, second).unwrap();
     eprintln!(
-        "N341 naive-control valid={} issues={:?}",
+        "N341 repaired-route valid={} issues={:?}",
         report.is_valid(),
         report.issues
     );
-    if report.is_valid() {
-        // If it validates as closed at all, prove the inherited strip's
-        // cylinder radius silently changed from r1 to r2 -- geometry drift,
-        // not a repair. Collect all cylindrical face radii present.
-        let mut radii = Vec::new();
-        for fid in solid_faces(&topo, second).unwrap() {
-            if let FaceSurface::Cylinder(c) = topo.face(fid).unwrap().surface() {
-                radii.push(c.radius());
-            }
-        }
-        radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        eprintln!(
-            "N341 naive-control cylinder radii present: {radii:?} (expected both {r1} and {r2} present if the accepted strip's radius was preserved)"
-        );
-        let has_r1 = radii.iter().any(|r| (r - r1).abs() < 1e-6);
-        assert!(
-            !has_r1,
-            "naive guard removal unexpectedly preserved the accepted r1={r1} radius -- re-examine before trusting this as a control"
-        );
-    }
-    eprintln!(
-        "N341 naive-control volume={:?}",
-        solid_volume(&topo, second, 0.01)
+    assert!(
+        report.is_valid(),
+        "N341 repair must close the shell: {:?}",
+        report.issues
     );
+
+    // Both the previously-accepted strip's own radius (r1) and the newly
+    // requested strip's own radius (r2) must be simultaneously present as
+    // distinct cylindrical faces -- neither strip's radius may drift to
+    // match the other, which is exactly the failure mode the original
+    // guard-removal control (this file's history, above) demonstrated.
+    let mut radii = Vec::new();
+    for fid in solid_faces(&topo, second).unwrap() {
+        if let FaceSurface::Cylinder(c) = topo.face(fid).unwrap().surface() {
+            radii.push(c.radius());
+        }
+    }
+    radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    eprintln!("N341 repaired-route cylinder radii present: {radii:?}");
+    let has_r1 = radii.iter().any(|r| (r - r1).abs() < 1e-6);
+    let has_r2 = radii.iter().any(|r| (r - r2).abs() < 1e-6);
+    assert!(
+        has_r1,
+        "accepted r1={r1} radius must survive unchanged: {radii:?}"
+    );
+    assert!(
+        has_r2,
+        "requested r2={r2} radius must be present: {radii:?}"
+    );
+
+    let volume = solid_volume(&topo, second, 0.01).unwrap();
+    eprintln!("N341 repaired-route volume={volume:?}");
+    assert!(volume.is_finite() && volume > 0.0 && volume < 30_000.0);
 }

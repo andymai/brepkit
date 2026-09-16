@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 
+use brepkit_math::det_hash::DetHashMap;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -37,6 +38,13 @@ struct Strip {
     face: FaceId,
     axial: [EdgeId; 2],
     ends: [([VertexId; 2], Point3); 2],
+    /// The strip's own (already-built) radius. N341: this need not equal the
+    /// newly requested radius any more -- `recognize` only checks internal
+    /// consistency (cylinder radius == both end-arc radii), not equality to
+    /// the caller's `radius`. The corner patch is then built from this exact
+    /// radius on the inherited side and the caller's `radius` on the requested
+    /// side, never a rescale of one template.
+    radius: f64,
 }
 
 /// Return `None` unless exactly one isolated equal-radius strip adjoins the
@@ -61,7 +69,7 @@ pub(super) fn try_adjoining_strip(
     // it as an ordinary full-radius strip leaves five unmatched boundaries.
     if let Some(runout) = MixedRadiusRunout::recognize(topo, solid, &adjacency, *target, radius)? {
         let result =
-            super::rolling_ball::build(topo, solid, &[*target], radius, None, Some(&runout))?;
+            super::rolling_ball::build(topo, solid, &[*target], radius, None, None, Some(&runout))?;
         qualify_adjoining_result(topo, result, "N340")?;
         return Ok(Some(result));
     }
@@ -82,22 +90,41 @@ pub(super) fn try_adjoining_strip(
     if !can_extend(topo, solid, strip)? {
         return Ok(None);
     }
+    let inherited_radius = strip.radius;
     let (recovered, inherited, requested) = reconstruct(topo, solid, strip, *target)?;
     if !crate::validate::validate_solid(topo, recovered)?.is_valid() {
         return Err(OperationsError::NonManifoldResult);
     }
     // Rebuild the inherited strip with a G1-constrained rational setback
     // corner. A positional Coons patch closes the shell but leaves creases.
-    let corner = SetbackCorner::new(topo, recovered, inherited, requested, radius)?;
+    //
+    // N341: `inherited_radius` (the strip's own, already-accepted radius) and
+    // `radius` (the newly requested radius on the adjacent edge) need not be
+    // equal any more. `SetbackCorner` builds the exact two-radius patch
+    // (`setback_patch::surface_mixed`) rather than a rescale of one template,
+    // and `rolling_ball::build` is given each edge's own radius via
+    // `edge_radii` rather than one radius applied to both.
+    let corner = SetbackCorner::new(
+        topo,
+        recovered,
+        inherited,
+        requested,
+        inherited_radius,
+        radius,
+    )?;
+    let mut edge_radii = DetHashMap::default();
+    edge_radii.insert(inherited.index(), inherited_radius);
+    edge_radii.insert(requested.index(), radius);
     let result = super::rolling_ball::build(
         topo,
         recovered,
         &[inherited, requested],
         radius,
+        Some(&edge_radii),
         Some(&corner),
         None,
     )?;
-    qualify_adjoining_result(topo, result, "N339")?;
+    qualify_adjoining_result(topo, result, "N339/N341")?;
     Ok(Some(result))
 }
 
@@ -558,14 +585,23 @@ fn matches_n339_patch(
         .all(|(actual, expected)| (actual - expected).abs() < f64::EPSILON * 100.0))
 }
 
-/// G1 rational transition for the recognized convex right-angle/equal-radius case.
+/// G1 rational transition for the recognized convex right-angle corner.
+///
+/// N341: `first`'s own radius (`radius_first`, the inherited edge) and
+/// `second`'s own radius (`radius_second`, the newly requested edge) need not
+/// be equal any more. The corner patch is `setback_patch::surface_mixed`,
+/// the exact two-radius generalization of the original equal-radius
+/// `setback_patch::surface` (which is `surface_mixed`'s own `r1 == r2` case,
+/// checked numerically in `setback_patch`'s own tests) -- never a rescale of
+/// one radius's template by the other's ratio.
 pub(super) struct SetbackCorner {
     pub vertex: usize,
     origin: Point3,
     first: brepkit_math::vec::Vec3,
     second: brepkit_math::vec::Vec3,
     inward: brepkit_math::vec::Vec3,
-    radius: f64,
+    radius_first: f64,
+    radius_second: f64,
 }
 
 impl SetbackCorner {
@@ -574,7 +610,8 @@ impl SetbackCorner {
         solid: SolidId,
         first: EdgeId,
         second: EdgeId,
-        radius: f64,
+        radius_first: f64,
+        radius_second: f64,
     ) -> Result<Self, OperationsError> {
         let fail = || OperationsError::InvalidInput {
             reason:
@@ -639,6 +676,18 @@ impl SetbackCorner {
             }
         }
         let mut directions = Vec::new();
+        // N341: the corner patch's extent along an edge's own axis is set by
+        // the OTHER edge's radius, not its own -- e.g. `first`'s own edge
+        // (local axis `first`) is consumed out to `radius_second` before the
+        // patch's shared corner point, the same cross relationship
+        // `setback_patch::surface_mixed`'s corner positions are built from
+        // (see that module's doc: `A = (r2, r1, 0)`, `B = (0, r2, r1)`).
+        // This clearance check is therefore conservative (uses the sum of
+        // both radii, `>= max(2*radius_second, 2*radius_first)` when the two
+        // are unequal) rather than picking the exact cross radius per edge,
+        // to avoid asserting a tighter bound than has been independently
+        // re-derived for the asymmetric case.
+        let clearance = 2.0 * radius_first.max(radius_second);
         for (eid, edge) in [(first, a), (second, b)] {
             let far = if edge.start() == *vertex {
                 edge.end()
@@ -646,7 +695,7 @@ impl SetbackCorner {
                 edge.start()
             };
             let direction = (topo.vertex(far)?.point() - origin).normalize()?;
-            if (topo.vertex(far)?.point() - origin).length() <= 2.0 * radius {
+            if (topo.vertex(far)?.point() - origin).length() <= clearance {
                 return Err(OperationsError::InvalidInput { reason: "adjoining fillet setback requires both sharp edges longer than twice the radius".into() });
             }
             let other = other_face(&adjacency, eid, *common).ok_or_else(fail)?;
@@ -684,9 +733,12 @@ impl SetbackCorner {
             edge.start()
         };
         let span = topo.vertex(far)?.point() - origin;
+        // The retained edge's own setback height is exactly `h = r1 + r2`
+        // (`setback_patch::surface_mixed`'s derived, oracle-checked corner
+        // height; `2 * radius` at `radius_first == radius_second`).
         if !matches!(edge.curve(), EdgeCurve::Line)
             || span.cross(normal).length() > Tolerance::new().linear
-            || span.dot(-normal) <= 2.0 * radius
+            || span.dot(-normal) <= radius_first + radius_second
         {
             return Err(OperationsError::InvalidInput { reason: "adjoining fillet setback requires more than twice the radius of clearance along the retained sharp edge".into() });
         }
@@ -696,22 +748,30 @@ impl SetbackCorner {
             first: directions[0].0,
             second: directions[1].0,
             inward: -normal,
-            radius,
+            radius_first,
+            radius_second,
         })
     }
 
+    /// Map a point already expressed in physical (radius-scaled) local
+    /// `(first, inward, second)` coordinates into world space. N341: unlike
+    /// the old single-scalar `point()`, `local` is not a unit-template
+    /// coordinate needing a further `* radius` -- `setback_patch::surface_mixed`
+    /// and `mixed_planar_controls` already bake `radius_first`/`radius_second`
+    /// into every coordinate they emit (this is what makes the two-radius
+    /// construction possible at all: see that module's doc for why no single
+    /// linear rescale of one radius's template can stand in for this).
     fn point(&self, local: Point3) -> Point3 {
-        self.origin
-            + (self.first * local.x() + self.inward * local.y() + self.second * local.z())
-                * self.radius
+        self.origin + self.first * local.x() + self.inward * local.y() + self.second * local.z()
     }
 
     pub(super) fn preserved(&self) -> Point3 {
-        self.point(Point3::new(0.0, 2.0, 0.0))
+        let h = self.radius_first + self.radius_second;
+        self.point(Point3::new(0.0, h, 0.0))
     }
 
     pub(super) fn face_spec(&self) -> Result<crate::boolean::FaceSpec, OperationsError> {
-        let local = super::setback_patch::surface()?;
+        let local = super::setback_patch::surface_mixed(self.radius_first, self.radius_second)?;
         let points = local
             .control_points()
             .iter()
@@ -725,11 +785,13 @@ impl SetbackCorner {
             points,
             local.weights().to_vec(),
         )?;
+        let h = self.radius_first + self.radius_second;
+        let (r1, r2) = (self.radius_first, self.radius_second);
         let mut vertices = [
-            Point3::new(0.0, 2.0, 0.0),
-            Point3::new(1.0, 1.0, 0.0),
-            Point3::new(1.0, 0.0, 1.0),
-            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(0.0, h, 0.0),
+            Point3::new(r2, r1, 0.0),
+            Point3::new(r2, 0.0, r1),
+            Point3::new(0.0, r2, r1),
         ]
         .map(|p| self.point(p))
         .to_vec();
@@ -753,7 +815,9 @@ impl SetbackCorner {
         topo: &mut Topology,
         solid: SolidId,
     ) -> Result<(), OperationsError> {
-        for control in super::setback_patch::planar_controls() {
+        for control in
+            super::setback_patch::mixed_planar_controls(self.radius_first, self.radius_second)
+        {
             let points = control.map(|p| self.point(p));
             let [a, _, _, b] = points;
             let mut matches = Vec::new();
@@ -787,23 +851,34 @@ impl SetbackCorner {
 /// Recognize geometry before allocating anything. In particular, a circle's
 /// endpoints alone do not prove the selected arc is the quarter-circle rather
 /// than its three-quarter complement.
+///
+/// N341: the newly requested radius is no longer compared against the
+/// recognized strip's own radius here -- see `Strip::radius` and the doc on
+/// `strip_radius` below. The parameter is kept (renamed) so the call site
+/// reads clearly and future checks that genuinely need the requested radius
+/// (as opposed to the strip's own) have an obvious place to add them.
 #[allow(clippy::too_many_lines)]
 fn recognize(
     topo: &Topology,
     adjacency: &AdjacencyIndex,
     face_id: FaceId,
     target: EdgeId,
-    radius: f64,
+    _requested_radius: f64,
 ) -> Result<Option<Strip>, OperationsError> {
     let tol = Tolerance::new();
     let face = topo.face(face_id)?;
     let FaceSurface::Cylinder(cylinder) = face.surface() else {
         return Ok(None);
     };
-    if face.is_reversed()
-        || !face.inner_wires().is_empty()
-        || (cylinder.radius() - radius).abs() > tol.linear
-    {
+    // N341: the inherited strip's own radius need not equal the newly
+    // requested `radius` any more. `strip_radius` is that strip's own,
+    // already-built radius; every check below that used to compare against
+    // the caller's `radius` now checks internal self-consistency of the
+    // recognized strip instead (its cylinder and both end arcs must agree
+    // with each other), and the corner patch is built from `strip_radius`
+    // (inherited side) and `radius` (requested side) independently.
+    let strip_radius = cylinder.radius();
+    if face.is_reversed() || !face.inner_wires().is_empty() || strip_radius <= tol.linear {
         return Ok(None);
     }
     let wire = topo.wire(face.outer_wire())?;
@@ -841,14 +916,15 @@ fn recognize(
         let edge = topo.edge(edge_id)?;
         let p = topo.vertex(edge.start())?.point();
         let q = topo.vertex(edge.end())?.point();
-        if (q - p).cross(cylinder.axis()).length() > tol.linear || (q - p).length() <= 2.0 * radius
+        if (q - p).cross(cylinder.axis()).length() > tol.linear
+            || (q - p).length() <= 2.0 * strip_radius
         {
             return Ok(None);
         }
         for point in [p, q] {
             let center = cylinder.origin()
                 + cylinder.axis() * (point - cylinder.origin()).dot(cylinder.axis());
-            if (point - center - normal * radius).length() > tol.linear {
+            if (point - center - normal * strip_radius).length() > tol.linear {
                 return Ok(None);
             }
         }
@@ -884,9 +960,9 @@ fn recognize(
             cylinder.origin() + cylinder.axis() * (pa - cylinder.origin()).dot(cylinder.axis());
         let (t0, t1) = edge.curve().domain_with_endpoints(pa, pb);
         if (circle.center() - center).length() > tol.linear
-            || (circle.radius() - radius).abs() > tol.linear
+            || (circle.radius() - strip_radius).abs() > tol.linear
             || circle.normal().cross(cylinder.axis()).length() > tol.angular
-            || ((pb - center).length() - radius).abs() > tol.linear
+            || ((pb - center).length() - strip_radius).abs() > tol.linear
             || (pa - pb).dot(cylinder.axis()).abs() > tol.linear
             || (t1 - t0 - std::f64::consts::FRAC_PI_2).abs() > tol.angular
         {
@@ -935,6 +1011,7 @@ fn recognize(
         face: face_id,
         axial: [*a0, *a1],
         ends: [ends[0], ends[1]],
+        radius: strip_radius,
     }))
 }
 
