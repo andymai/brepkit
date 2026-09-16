@@ -267,6 +267,18 @@ pub(super) fn build(
     // Phase 2b: Validate that the fillet radius fits within adjacent face geometry.
     // For each target edge on each adjacent face, the shortest non-target edge
     // from the shared vertices bounds how far the contact point can extend.
+    //
+    // The measurement basis is `face_polygons`, the Phase 1 snapshot of this
+    // call's *input* solid — never a face this same call has already trimmed. A
+    // per-edge chain (OttoCAD's `dispatch::blend_batch` re-entering once per
+    // target after a failed bulk call) hands this builder the previous step's
+    // result, so on a near-limit batch the adjacent edge measured here can be a
+    // sliver those earlier steps left behind, not anything in the user's request
+    // (N431 measured exactly that at `r = 0.999999·S`, where the reported
+    // 0.000025 mm is the strip a first step left on the way to consuming the top
+    // face). The refusal is still true of the solid in hand — that radius does
+    // not fit that geometry — so the message names the solid it is true of and
+    // claims nothing about the request.
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
         let p_start = topo.vertex(edge.start())?.point();
@@ -305,7 +317,9 @@ pub(super) fn build(
                 if this_radius > min_adj && min_adj < f64::MAX {
                     return Err(crate::OperationsError::InvalidInput {
                         reason: format!(
-                            "fillet radius {this_radius:.6} exceeds adjacent edge length {min_adj:.6}"
+                            "fillet radius {this_radius:.6} exceeds adjacent edge length \
+                             {min_adj:.6} on the solid being filleted: the requested radius is \
+                             too large for that solid's actual geometry"
                         ),
                     });
                 }
@@ -2905,5 +2919,45 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("vanishing planar remnant"), "{message}");
+    }
+
+    /// N431: the adjacent-edge-length refusal must name the reason it is
+    /// actually true of — the radius is too large for the *solid being
+    /// filleted* — and not present an intermediate artifact as if it were the
+    /// request's own geometry. A per-edge chain at `r = 0.999999·S` builds its
+    /// first step (a single-edge fillet below `S`), and that step's near-limit
+    /// trim leaves a 0.000025 mm strip of the top face. The next step's radius
+    /// does not fit that strip, so refusing is right, but the reported symptom
+    /// read `exceeds adjacent edge length 0.000025` — a length the user's 1
+    /// inch cube never had. The wording now states the real reason.
+    #[test]
+    fn chain_step_refusal_names_the_solid_geometry_not_the_request() {
+        let mut topo = Topology::new();
+        let solid = inch_cube(&mut topo);
+        let chain_radius = S * 0.999_999;
+        let first = edge_between(
+            &topo,
+            solid,
+            Point3::new(0.0, 0.0, S),
+            Point3::new(S, 0.0, S),
+        );
+        let stepped = crate::fillet::fillet_rolling_ball(&mut topo, solid, &[first], chain_radius)
+            .expect("the first chain step is a single-edge fillet below S, which builds");
+        let second = edge_between(&topo, stepped, Point3::new(0.0, S, S), Point3::new(S, S, S));
+        let error = crate::fillet::fillet_rolling_ball(&mut topo, stepped, &[second], chain_radius)
+            .expect_err("the second step's radius does not fit the strip the first step left");
+        let message = error.to_string();
+        assert!(
+            message.contains("exceeds adjacent edge length"),
+            "{message}"
+        );
+        assert!(message.contains("on the solid being filleted"), "{message}");
+        assert!(
+            message.contains("too large for that solid's actual geometry"),
+            "{message}"
+        );
+        // The reported length is the first step's leftover strip (`S - r`): the
+        // intermediate artifact the old wording passed off as request geometry.
+        assert!(message.contains("0.000025"), "{message}");
     }
 }
