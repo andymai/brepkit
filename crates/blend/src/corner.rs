@@ -582,14 +582,9 @@ fn convex_trihedral_setback(
         let fraction = (center - start).dot(direction) / length_squared;
         let projected = start + direction * fraction;
         // A setback trims the stripe end down to the rolling-ball center.
-        // Corners whose center projects onto a stripe mid-section are
-        // short-spine junctions (e.g. rib-top corners): trimming there
-        // removes valid material. Require the center to sit within the
-        // end decile of every incident spine.
+        // The center must lie on the bounded stripe centerline; the caller's
+        // combined trim ranges reject setbacks that consume an entire stripe.
         if !(TOL..=1.0 - TOL).contains(&fraction) || (projected - center).length() > TOL * 100.0 {
-            return Ok(None);
-        }
-        if fraction.min(1.0 - fraction) > 0.1 + TOL {
             return Ok(None);
         }
         fractions.push(fraction);
@@ -2461,8 +2456,199 @@ mod tests {
     use brepkit_topology::face::{Face, FaceSurface};
     use brepkit_topology::shell::Shell;
     use brepkit_topology::solid::Solid;
+    use brepkit_topology::test_utils::make_unit_cube_manifold;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    fn make_box(topo: &mut Topology, dimensions: Vec3) -> brepkit_topology::solid::SolidId {
+        let solid = make_unit_cube_manifold(topo);
+        for vertex_id in brepkit_topology::explorer::solid_vertices(topo, solid).unwrap() {
+            let point = topo.vertex(vertex_id).unwrap().point();
+            topo.vertex_mut(vertex_id).unwrap().set_point(Point3::new(
+                point.x() * dimensions.x(),
+                point.y() * dimensions.y(),
+                point.z() * dimensions.z(),
+            ));
+        }
+        for face_id in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+            let face = topo.face(face_id).unwrap();
+            let FaceSurface::Plane { normal, .. } = face.surface() else {
+                unreachable!("test box faces are planar")
+            };
+            let normal = *normal;
+            let d = normal.x().max(0.0) * dimensions.x()
+                + normal.y().max(0.0) * dimensions.y()
+                + normal.z().max(0.0) * dimensions.z();
+            topo.face_mut(face_id)
+                .unwrap()
+                .set_surface(FaceSurface::Plane { normal, d });
+        }
+        solid
+    }
+
+    fn box_edges_at_origin(
+        topo: &Topology,
+        solid: brepkit_topology::solid::SolidId,
+    ) -> (VertexId, Vec<EdgeId>) {
+        let origin = brepkit_topology::explorer::solid_vertices(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&vertex| {
+                (topo.vertex(vertex).unwrap().point() - Point3::new(0.0, 0.0, 0.0)).length() <= TOL
+            })
+            .expect("test box must have a vertex at the origin");
+        let edges = brepkit_topology::explorer::solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .filter(|&edge_id| {
+                let edge = topo.edge(edge_id).unwrap();
+                edge.start() == origin || edge.end() == origin
+            })
+            .collect();
+        (origin, edges)
+    }
+
+    fn inward_plane_normal(topo: &Topology, face_id: FaceId) -> Vec3 {
+        let face = topo.face(face_id).unwrap();
+        let FaceSurface::Plane { normal, .. } = face.surface() else {
+            unreachable!("test box faces are planar")
+        };
+        if face.is_reversed() {
+            *normal
+        } else {
+            -*normal
+        }
+    }
+
+    fn line_curve(start: Point3, end: Point3) -> NurbsCurve {
+        NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![start, end],
+            vec![1.0, 1.0],
+        )
+        .unwrap()
+    }
+
+    fn line_pcurve() -> brepkit_math::curves2d::Curve2D {
+        brepkit_math::curves2d::Curve2D::Line(
+            brepkit_math::curves2d::Line2D::new(
+                brepkit_math::vec::Point2::new(0.0, 0.0),
+                brepkit_math::vec::Vec2::new(1.0, 0.0),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn analytic_box_stripes(topo: &Topology, plan: &FilletPlan, radius: f64) -> Vec<StripeResult> {
+        plan.contours
+            .iter()
+            .map(|contour| {
+                assert_eq!(contour.edges.len(), 1, "box contours must be single edges");
+                let spine = contour.spine.clone();
+                let spine_length = spine.length();
+                let start = spine.evaluate(topo, 0.0).unwrap();
+                let end = spine.evaluate(topo, spine_length).unwrap();
+                let inward1 = inward_plane_normal(topo, contour.side1);
+                let inward2 = inward_plane_normal(topo, contour.side2);
+                let offset = (inward1 + inward2) * radius;
+                let start_center = start + offset;
+                let end_center = end + offset;
+                let start_p1 = start_center - inward1 * radius;
+                let end_p1 = end_center - inward1 * radius;
+                let start_p2 = start_center - inward2 * radius;
+                let end_p2 = end_center - inward2 * radius;
+                StripeResult {
+                    stripe: Stripe {
+                        spine,
+                        surface: FaceSurface::Plane {
+                            normal: Vec3::new(0.0, 0.0, 1.0),
+                            d: 0.0,
+                        },
+                        pcurve1: line_pcurve(),
+                        pcurve2: line_pcurve(),
+                        contact1: line_curve(start_p1, end_p1),
+                        contact2: line_curve(start_p2, end_p2),
+                        face1: contour.side1,
+                        face2: contour.side2,
+                        sections: vec![
+                            CircSection {
+                                p1: start_p1,
+                                p2: start_p2,
+                                center: start_center,
+                                radius,
+                                uv1: (0.0, 0.0),
+                                uv2: (0.0, 0.0),
+                                t: 0.0,
+                            },
+                            CircSection {
+                                p1: end_p1,
+                                p2: end_p2,
+                                center: end_center,
+                                radius,
+                                uv1: (1.0, 0.0),
+                                uv2: (1.0, 0.0),
+                                t: spine_length,
+                            },
+                        ],
+                    },
+                    new_edges: Vec::new(),
+                }
+            })
+            .collect()
+    }
+
+    fn plan_box_edges(
+        topo: &Topology,
+        solid: brepkit_topology::solid::SolidId,
+        edges: Vec<EdgeId>,
+        radius: f64,
+    ) -> FilletPlan {
+        FilletPlan::build(
+            topo,
+            solid,
+            &[(edges, crate::radius_law::RadiusLaw::Constant(radius))],
+        )
+        .unwrap()
+    }
+
+    fn assert_all_cube_edges_succeed(radius: f64) {
+        use crate::fillet_builder::FilletBuilder;
+
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, Vec3::new(30.0, 30.0, 30.0));
+        let edges = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap();
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&edges, radius);
+        let result = builder
+            .build()
+            .expect("sub-half all-edge fillet should build");
+        assert_eq!(result.succeeded.len(), 12);
+        assert!(result.failed.is_empty());
+        assert!(!result.is_partial);
+        let shell = topo.solid(result.solid).unwrap().outer_shell();
+        brepkit_topology::validation::validate_shell_closed(topo.shell(shell).unwrap(), &topo)
+            .expect("sub-half all-edge fillet must remain closed");
+    }
+
+    fn assert_all_cube_edges_consumed(radius: f64) {
+        use crate::fillet_builder::FilletBuilder;
+
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, Vec3::new(30.0, 30.0, 30.0));
+        let edges = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap();
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&edges, radius);
+        let error = match builder.build() {
+            Ok(_) => panic!("half-or-greater all-edge fillet must fail cleanly"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            BlendError::PlanningFailure { ref reason }
+                if reason == "trihedral setbacks consume an entire stripe"
+        ));
+    }
 
     /// Helper: build a simple box topology with 8 vertices, 12 edges, 6 faces,
     /// and return the corner vertex at the origin along with 3 stripes that
@@ -3016,5 +3202,126 @@ mod tests {
         )
         .expect("periodic contour bypasses endpoint solving");
         assert!(corners.is_empty());
+    }
+
+    #[test]
+    fn convex_trihedral_setback_has_no_old_decile_cliff() {
+        let cases = [
+            (Vec3::new(40.0, 25.0, 30.0), 25_u32, 26_u32, 124_u32),
+            (Vec3::new(30.0, 30.0, 30.0), 30, 31, 149),
+            (Vec3::new(60.0, 35.0, 50.0), 35, 36, 174),
+        ];
+
+        for (dimensions, old_last_applied, old_first_refused, last_radius) in cases {
+            assert_eq!(old_first_refused, old_last_applied + 1);
+            let mut topo = Topology::new();
+            let solid = make_box(&mut topo, dimensions);
+            let (vertex, selected) = box_edges_at_origin(&topo, solid);
+            assert_eq!(selected.len(), 3);
+
+            for radius_tenths in old_last_applied..=last_radius {
+                let radius = f64::from(radius_tenths) / 10.0;
+                let plan = plan_box_edges(&topo, solid, selected.clone(), radius);
+                let junction = plan
+                    .junctions
+                    .iter()
+                    .find(|junction| junction.vertex == vertex)
+                    .unwrap();
+                assert_eq!(junction.incident_contours.len(), 3);
+                assert_eq!(junction.face_fan.len(), 3);
+                let inward_sum = junction
+                    .face_fan
+                    .iter()
+                    .fold(Vec3::new(0.0, 0.0, 0.0), |sum, &face| {
+                        sum + inward_plane_normal(&topo, face)
+                    });
+                let expected_center = topo.vertex(vertex).unwrap().point() + inward_sum * radius;
+                let mut stripe_results = analytic_box_stripes(&topo, &plan, radius);
+
+                let setback_edges =
+                    set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results).unwrap();
+                assert_eq!(
+                    setback_edges.len(),
+                    3,
+                    "setback skipped for dimensions {dimensions:?}, radius {radius}"
+                );
+                for result in &stripe_results {
+                    let spine_start = result.stripe.spine.evaluate(&topo, 0.0).unwrap();
+                    let spine_end = result
+                        .stripe
+                        .spine
+                        .evaluate(&topo, result.stripe.spine.length())
+                        .unwrap();
+                    let vertex_point = topo.vertex(vertex).unwrap().point();
+                    let section = if (spine_start - vertex_point).length()
+                        <= (spine_end - vertex_point).length()
+                    {
+                        &result.stripe.sections[0]
+                    } else {
+                        &result.stripe.sections[1]
+                    };
+                    assert!(
+                        (section.center - expected_center).length() <= TOL * 100.0,
+                        "wrong setback center for dimensions {dimensions:?}, radius {radius}"
+                    );
+                    for contact in [section.p1, section.p2] {
+                        assert!(
+                            ((contact - expected_center).length() - radius).abs() <= TOL * 100.0,
+                            "contact is not radius {radius} from the analytic center for dimensions {dimensions:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn convex_trihedral_all_cube_edges_stop_at_half_length() {
+        assert_all_cube_edges_succeed(14.7);
+        assert_all_cube_edges_consumed(15.0);
+        assert_all_cube_edges_consumed(15.3);
+    }
+
+    #[test]
+    fn convex_trihedral_all_cube_edges_respect_tolerance_margin_below_half() {
+        assert_all_cube_edges_succeed(15.0 - TOL * 20.0);
+        assert_all_cube_edges_consumed(15.0 - TOL * 2.0);
+    }
+
+    #[test]
+    fn convex_trihedral_short_rib_still_skips_setback() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, Vec3::new(90.0, 60.0, 10.0));
+        let (_vertex, selected) = box_edges_at_origin(&topo, solid);
+        assert_eq!(selected.len(), 3);
+        let plan = plan_box_edges(&topo, solid, selected, 1.0);
+        let mut stripe_results = analytic_box_stripes(&topo, &plan, 1.0);
+        let mut lengths: Vec<_> = stripe_results
+            .iter()
+            .map(|result| result.stripe.spine.length())
+            .collect();
+        lengths.sort_by(f64::total_cmp);
+        assert_eq!(lengths, vec![10.0, 60.0, 90.0]);
+        let centers_before: Vec<_> = stripe_results
+            .iter()
+            .map(|result| {
+                [
+                    result.stripe.sections[0].center,
+                    result.stripe.sections[1].center,
+                ]
+            })
+            .collect();
+
+        let setback_edges =
+            set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results).unwrap();
+
+        assert!(
+            setback_edges.is_empty(),
+            "outer 2x gate must skip the setback"
+        );
+        for (result, before) in stripe_results.iter().zip(centers_before) {
+            assert_eq!(result.stripe.sections[0].center, before[0]);
+            assert_eq!(result.stripe.sections[1].center, before[1]);
+        }
     }
 }
