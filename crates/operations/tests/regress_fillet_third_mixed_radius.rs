@@ -840,3 +840,129 @@ fn mixed_runout_clearance_and_unrecognized_invalid_output_preserve_accepted_sour
         "excessive-radius refusal mutated source"
     );
 }
+
+/// N342b: `MixedRadiusRunout::recognize` shares `matches_n339_patch`'s same
+/// single-fixed-order boundary match `try_spherical_corner` had (see
+/// `regress_fillet_third_equal_radius_corner.rs`'s own permutation sweep and
+/// `reblend.rs`'s `matches_n339_patch_either`) -- confirmed by direct
+/// instrumentation to be independently order-dependent for THIS smaller-
+/// third-radius runout too, not merely a copy-paste risk: three of the six
+/// fillet orders reproduced the identical `V=16,E=25,F=10` open-shell defect
+/// before this fix, exactly matching N342's own equal-radius signature.
+/// Fixed in the same `reblend.rs` change (the `swapped` reorder of
+/// `boundaries` before `Self { first, second, supports, .. }` is built).
+/// This sweep locks in order-independence across all 6 fillet orders and
+/// all 8 cube corners for the smaller-third-radius runout, since N340's own
+/// original coverage (like N342's) only ever exercised one order.
+#[test]
+fn mixed_third_edge_is_valid_for_every_order_and_every_corner() {
+    const W: f64 = 40.0;
+    const D: f64 = 25.0;
+    const H: f64 = 30.0;
+    const LENGTHS: [f64; 3] = [W, D, H];
+
+    fn edge_pts(corner: [f64; 3], axis: usize, trim: f64) -> (Point3, Point3) {
+        let mut near = corner;
+        let mut far = corner;
+        let dir = if corner[axis] == 0.0 { 1.0 } else { -1.0 };
+        near[axis] = corner[axis] + dir * trim;
+        far[axis] = if corner[axis] == 0.0 {
+            LENGTHS[axis]
+        } else {
+            0.0
+        };
+        (
+            Point3::new(near[0], near[1], near[2]),
+            Point3::new(far[0], far[1], far[2]),
+        )
+    }
+
+    let orders: [[usize; 3]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let corners: [[f64; 3]; 8] = [
+        [0.0, 0.0, 0.0],
+        [W, 0.0, 0.0],
+        [0.0, D, 0.0],
+        [0.0, 0.0, H],
+        [W, D, 0.0],
+        [W, 0.0, H],
+        [0.0, D, H],
+        [W, D, H],
+    ];
+
+    let mut cases = 0;
+    for &corner in &corners {
+        for &order in &orders {
+            let mut topo = Topology::new();
+            let mut solid = captured_ordered_source(&mut topo);
+            for (step, &axis) in order.iter().enumerate() {
+                let radius = if step == 2 {
+                    THIRD_RADIUS_MM
+                } else {
+                    ACCEPTED_RADIUS_MM
+                };
+                let trim = f64::from(u8::try_from(step).unwrap()) * ACCEPTED_RADIUS_MM;
+                let (near, far) = edge_pts(corner, axis, trim);
+                let target = edge_at(&topo, solid, near, far);
+                let result = fillet_rolling_ball(&mut topo, solid, &[target], radius);
+                if let Err(e) = &result {
+                    eprintln!("corner={corner:?} order={order:?} step={step}: fillet error {e:?}");
+                }
+                solid = result.unwrap();
+            }
+
+            let validation = validate_solid(&topo, solid).unwrap();
+            assert!(
+                validation.is_valid(),
+                "corner={corner:?} order={order:?}: {:?}",
+                validation.issues
+            );
+            assert_eq!(
+                (
+                    solid_vertices(&topo, solid).unwrap().len(),
+                    solid_edges(&topo, solid).unwrap().len(),
+                    solid_faces(&topo, solid).unwrap().len(),
+                ),
+                (16, 25, 11),
+                "corner={corner:?} order={order:?}"
+            );
+
+            let mut radii: Vec<_> = solid_faces(&topo, solid)
+                .unwrap()
+                .into_iter()
+                .filter_map(|face_id| match topo.face(face_id).unwrap().surface() {
+                    FaceSurface::Cylinder(cylinder) => Some(cylinder.radius()),
+                    _ => None,
+                })
+                .collect();
+            radii.sort_by(f64::total_cmp);
+            assert_eq!(radii.len(), 3, "corner={corner:?} order={order:?}");
+            for (actual, expected) in
+                radii
+                    .iter()
+                    .zip([THIRD_RADIUS_MM, ACCEPTED_RADIUS_MM, ACCEPTED_RADIUS_MM])
+            {
+                assert!(
+                    (*actual - expected).abs() < Tolerance::new().linear,
+                    "corner={corner:?} order={order:?}"
+                );
+            }
+
+            assert_nurbs_seams_are_g1(&topo, solid);
+            let oriented = oriented_solid_volume(&topo, solid, 0.01).unwrap();
+            assert!(
+                oriented.is_finite() && oriented > 0.0,
+                "corner={corner:?} order={order:?}"
+            );
+            cases += 1;
+        }
+    }
+    eprintln!("N340 order/corner sweep: {cases} cases valid, all 6 orders x 8 corners");
+    assert_eq!(cases, 48);
+}

@@ -386,14 +386,28 @@ fn try_spherical_corner(
         }
 
         let sharp = origin - along * (2.0 * inherited_radius);
-        if !matches_n339_patch(
+        // `boundaries[0]`/`boundaries[1]` come from `incident`, which walks
+        // `solid_edges` in the topology's own storage order -- an
+        // implementation artifact of which of the two ALREADY-accepted
+        // strips happened to be filleted first, not a property of the
+        // geometry. The patch itself was built once with a fixed physical
+        // (first, second) role assignment (`SetbackCorner::new`'s
+        // `inherited`/`requested`), so recognition must accept EITHER
+        // enumeration order of the same two physical boundaries -- see
+        // `matches_n339_patch_either`'s own doc for the full order-dependence
+        // this fixes (confirmed by direct instrumentation before this fix:
+        // exactly one of the two orders matches, and which one flips with
+        // fillet order, not with geometry).
+        if matches_n339_patch_either(
             patch_surface,
             sharp,
             boundaries[0].2,
             along,
             boundaries[1].2,
             inherited_radius,
-        )? {
+        )?
+        .is_none()
+        {
             continue;
         }
 
@@ -1034,15 +1048,32 @@ impl MixedRadiusRunout {
             }
 
             let sharp = origin - along * (2.0 * inherited_radius);
-            if !matches_n339_patch(
+            // See `try_spherical_corner`'s identical fix and
+            // `matches_n339_patch_either`'s doc: `boundaries[0]`/`[1]`'s
+            // enumeration order is an artifact of which already-accepted
+            // strip was filleted first, not a property of the geometry, so
+            // the match must be tried both ways. Unlike `try_spherical_corner`
+            // (which only needs a yes/no recognition and never reads
+            // `boundaries` again), this runout DOES carry `first`/`second`
+            // forward asymmetrically (`Self::first`/`Self::second`,
+            // `carried_curves`, `supports`) -- so when the match is only
+            // found swapped, `boundaries` itself is reordered here to match
+            // the patch's own physical (first, second) roles, and every
+            // downstream use of `boundaries[0]`/`[1]` below is then correct
+            // unchanged.
+            let Some(swapped) = matches_n339_patch_either(
                 patch_surface,
                 sharp,
                 boundaries[0].3,
                 along,
                 boundaries[1].3,
                 inherited_radius,
-            )? {
+            )?
+            else {
                 continue;
+            };
+            if swapped {
+                boundaries.swap(0, 1);
             }
             if span.length() <= 2.0 * radius + tol.linear {
                 return Err(OperationsError::InvalidInput {
@@ -1212,6 +1243,46 @@ fn matches_n339_patch(
         .flatten()
         .zip(expected.weights().iter().flatten())
         .all(|(actual, expected)| (actual - expected).abs() < f64::EPSILON * 100.0))
+}
+
+/// Try both physical assignments of the two boundary directions against the
+/// recognized N339 patch, and report which one (if either) matches.
+///
+/// `try_spherical_corner` and `MixedRadiusRunout::recognize` both discover
+/// their two boundary edges by walking `solid_edges` incident to the shared
+/// corner vertex; that walk's own order tracks the topology's internal
+/// storage order, which in turn tracks the ORDER the two already-accepted
+/// strips were created in -- an implementation artifact of which edge the
+/// user filleted first, not a property of the corner's geometry. The N339
+/// patch itself, however, is built exactly once with a FIXED physical role
+/// assignment (`SetbackCorner::new` always takes `first` from its own
+/// `inherited` edge and `second` from its own `requested` edge, regardless of
+/// enumeration order elsewhere), and `matches_n339_patch` compares the
+/// patch's control-point grid index-for-index against one specific
+/// (first, second) axis assignment without transposing. Confirmed by direct
+/// instrumentation before this fix: for a fixed corner and fixed third edge,
+/// exactly one of the two enumeration orders of the first two edges'
+/// boundary directions matches the already-built patch, and which one
+/// flips depending on which of the first two edges was filleted first --
+/// never on the corner's geometry itself. Recognition therefore must accept
+/// either order; `Ok(Some(false))` means `(a, b)` is the right assignment,
+/// `Ok(Some(true))` means it is `(b, a)`, and `Ok(None)` means neither
+/// matches (not this patch at all).
+fn matches_n339_patch_either(
+    patch_surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    sharp: Point3,
+    a: Vec3,
+    along: Vec3,
+    b: Vec3,
+    radius: f64,
+) -> Result<Option<bool>, OperationsError> {
+    if matches_n339_patch(patch_surface, sharp, a, along, b, radius)? {
+        return Ok(Some(false));
+    }
+    if matches_n339_patch(patch_surface, sharp, b, along, a, radius)? {
+        return Ok(Some(true));
+    }
+    Ok(None)
 }
 
 /// G1 rational transition for the recognized convex right-angle corner.

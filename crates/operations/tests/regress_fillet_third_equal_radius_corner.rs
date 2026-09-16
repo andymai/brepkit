@@ -446,3 +446,174 @@ fn equal_radius_third_edge_is_rigidly_covariant_across_poses_and_scales() {
         }
     }
 }
+
+/// N342 defect fix: the equal-radius third corner used to be built via
+/// `try_spherical_corner`'s single fixed-order boundary match against
+/// `matches_n339_patch`. That match's own two boundary directions are
+/// discovered by walking topology storage order, which tracks which of the
+/// first two edges the user filleted first -- not the corner's geometry --
+/// so for a given physical corner, three of the six possible fillet orders
+/// (the ones whose first two edges were filleted in the "wrong" relative
+/// order) silently reproduced the exact reported user failure
+/// (`V=16,E=25,F=10`, 5 boundary edges) while the other three passed. Fixed
+/// by `matches_n339_patch_either` in `reblend.rs`, which tries both
+/// enumeration orders instead of just one. This sweep locks in the fix
+/// across every one of the 6 fillet orders and all 8 cube corners (48
+/// cases) so the same order-dependence cannot silently regress: N342's
+/// original coverage above exercised exactly one order
+/// (`[X, Z, Y]`, one of the three that happened to already work) and did
+/// not catch this.
+#[test]
+fn equal_radius_third_edge_is_valid_for_every_order_and_every_corner() {
+    const W: f64 = 40.0;
+    const D: f64 = 25.0;
+    const H: f64 = 30.0;
+    const LENGTHS: [f64; 3] = [W, D, H];
+
+    fn edge_pts(corner: [f64; 3], axis: usize, trim: f64) -> (Point3, Point3) {
+        let mut near = corner;
+        let mut far = corner;
+        let dir = if corner[axis] == 0.0 { 1.0 } else { -1.0 };
+        near[axis] = corner[axis] + dir * trim;
+        far[axis] = if corner[axis] == 0.0 {
+            LENGTHS[axis]
+        } else {
+            0.0
+        };
+        (
+            Point3::new(near[0], near[1], near[2]),
+            Point3::new(far[0], far[1], far[2]),
+        )
+    }
+
+    fn sphere_center(corner: [f64; 3], r: f64) -> Point3 {
+        let mut center = corner;
+        for (axis, value) in center.iter_mut().enumerate() {
+            let dir = if corner[axis] == 0.0 { 1.0 } else { -1.0 };
+            *value += dir * r;
+        }
+        Point3::new(center[0], center[1], center[2])
+    }
+
+    let orders: [[usize; 3]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let corners: [[f64; 3]; 8] = [
+        [0.0, 0.0, 0.0],
+        [W, 0.0, 0.0],
+        [0.0, D, 0.0],
+        [0.0, 0.0, H],
+        [W, D, 0.0],
+        [W, 0.0, H],
+        [0.0, D, H],
+        [W, D, H],
+    ];
+
+    let mut cases = 0;
+    for &corner in &corners {
+        for &order in &orders {
+            let mut topo = Topology::new();
+            let mut solid = captured_ordered_source(&mut topo);
+            for (step, &axis) in order.iter().enumerate() {
+                let trim = f64::from(u8::try_from(step).unwrap()) * R_MM;
+                let (near, far) = edge_pts(corner, axis, trim);
+                let target = edge_at(&topo, solid, near, far);
+                let result = fillet_rolling_ball(&mut topo, solid, &[target], R_MM);
+                if let Err(e) = &result {
+                    eprintln!("corner={corner:?} order={order:?} step={step}: fillet error {e:?}");
+                }
+                solid = result.unwrap();
+            }
+
+            let validation = validate_solid(&topo, solid).unwrap();
+            assert!(
+                validation.is_valid(),
+                "corner={corner:?} order={order:?}: {:?}",
+                validation.issues
+            );
+            assert_eq!(
+                (
+                    solid_vertices(&topo, solid).unwrap().len(),
+                    solid_edges(&topo, solid).unwrap().len(),
+                    solid_faces(&topo, solid).unwrap().len(),
+                ),
+                (13, 21, 10),
+                "corner={corner:?} order={order:?}"
+            );
+
+            let mut cyl_radii: Vec<_> = solid_faces(&topo, solid)
+                .unwrap()
+                .into_iter()
+                .filter_map(|f| match topo.face(f).unwrap().surface() {
+                    FaceSurface::Cylinder(c) => Some(c.radius()),
+                    _ => None,
+                })
+                .collect();
+            cyl_radii.sort_by(f64::total_cmp);
+            assert_eq!(cyl_radii.len(), 3, "corner={corner:?} order={order:?}");
+            for r in cyl_radii {
+                assert!(
+                    (r - R_MM).abs() < Tolerance::new().linear,
+                    "corner={corner:?} order={order:?}"
+                );
+            }
+
+            let sphere_faces: Vec<_> = solid_faces(&topo, solid)
+                .unwrap()
+                .into_iter()
+                .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+                .collect();
+            assert_eq!(
+                sphere_faces.len(),
+                1,
+                "corner={corner:?} order={order:?}: exactly one exact analytic sphere face"
+            );
+            let FaceSurface::Sphere(sphere) = topo.face(sphere_faces[0]).unwrap().surface() else {
+                unreachable!()
+            };
+            assert!(
+                (sphere.radius() - R_MM).abs() < Tolerance::new().linear,
+                "corner={corner:?} order={order:?}"
+            );
+            assert!(
+                (sphere.center() - sphere_center(corner, R_MM)).length() < 1.0e-9,
+                "corner={corner:?} order={order:?}: sphere center {:?} expected {:?}",
+                sphere.center(),
+                sphere_center(corner, R_MM)
+            );
+
+            let (tangent_seams, minimum_dot) = assert_corner_seams_are_g1(&topo, solid);
+            assert_eq!(
+                tangent_seams, 9,
+                "corner={corner:?} order={order:?}: 3 sphere<->cylinder + 6 cylinder<->plane axial tangent lines"
+            );
+            assert!(
+                minimum_dot > 1.0 - 1.0e-6,
+                "corner={corner:?} order={order:?}: min_dot={minimum_dot}"
+            );
+
+            let oriented = oriented_solid_volume(&topo, solid, 0.01).unwrap();
+            let coarse = solid_volume(&topo, solid, 0.01).unwrap();
+            assert!(
+                oriented.is_finite() && oriented > 0.0,
+                "corner={corner:?} order={order:?}"
+            );
+            assert!(
+                coarse.is_finite() && coarse > 0.0,
+                "corner={corner:?} order={order:?}"
+            );
+            assert!(
+                (oriented - coarse).abs() < 5.0,
+                "corner={corner:?} order={order:?}: oriented={oriented} vs coarse={coarse}"
+            );
+            cases += 1;
+        }
+    }
+    eprintln!("N342 order/corner sweep: {cases} cases valid, all 6 orders x 8 corners");
+    assert_eq!(cases, 48);
+}
