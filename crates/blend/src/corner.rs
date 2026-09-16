@@ -324,6 +324,11 @@ fn multi_edge_corner_data(
     }
 
     let vertex_pos = topo.vertex(vertex_id)?.point();
+    // N424: record which of the two trihedral constructions this junction is
+    // in, so `compute_sphere_center` asserts its requested-radius theorem
+    // only where that theorem holds (see `setback_trimmed_classification`).
+    let setback_trimmed =
+        setback_trimmed_classification(vertex_id, indices, stripes, topo, radius)?;
     let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
     for normal in &face_normals {
         normal_sum += *normal;
@@ -350,6 +355,7 @@ fn multi_edge_corner_data(
         radius,
         is_convex,
         vertex_id,
+        setback_trimmed,
     })
 }
 fn trim_nurbs_curve(
@@ -1031,29 +1037,12 @@ fn convex_trihedral_setback(
         return Ok(None);
     }
 
-    let mut matrix = [[0.0_f64; 3]; 3];
-    let mut targets = [0.0_f64; 3];
-    for (row, face_id) in support_faces.into_iter().enumerate() {
-        let face = topo.face(face_id)?;
-        let FaceSurface::Plane { normal, d } = face.surface().clone() else {
-            return Ok(None);
-        };
-        let (inward_normal, inward_d) = if face.is_reversed() {
-            (normal, d)
-        } else {
-            (-normal, -d)
-        };
-        matrix[row] = [inward_normal.x(), inward_normal.y(), inward_normal.z()];
-        targets[row] = inward_d + radius;
-    }
-    let Some(inverse) = inverse_3x3(matrix) else {
+    // The setback ball centre is the three support planes' common offset by
+    // the fillet radius — the same solve `multi_edge_corner_data` uses to
+    // classify a junction as set-back or un-set-back (N424).
+    let Some(center) = trihedral_ball_centre(topo, radius, &support_faces) else {
         return Ok(None);
     };
-    let center = Point3::new(
-        inverse[0][0] * targets[0] + inverse[0][1] * targets[1] + inverse[0][2] * targets[2],
-        inverse[1][0] * targets[0] + inverse[1][1] * targets[1] + inverse[1][2] * targets[2],
-        inverse[2][0] * targets[0] + inverse[2][1] * targets[1] + inverse[2][2] * targets[2],
-    );
 
     let mut fractions = Vec::with_capacity(indices.len());
     for &index in indices {
@@ -1146,6 +1135,112 @@ fn inverse_3x3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
             (a * e - b * d) * scale,
         ],
     ])
+}
+
+/// Solve the common offset of three planar support faces by a shared
+/// fillet radius: the rolling-ball centre of a convex trihedral corner.
+///
+/// Each row is a support face's inward normal and each target is that
+/// plane's inward offset distance plus `radius`; inverting the 3x3 system
+/// gives the point at distance `radius` from all three planes. Returns
+/// `None` for non-planar supports or a singular (e.g. parallel) system.
+///
+/// Shared by [`convex_trihedral_setback`] (which trims stripes down to this
+/// centre) and [`multi_edge_corner_data`]'s setback classification (N424):
+/// the two must agree bit-for-bit on what "at the ball centre" means, so
+/// they must solve it the same way.
+fn trihedral_ball_centre(topo: &Topology, radius: f64, support_faces: &[FaceId]) -> Option<Point3> {
+    if support_faces.len() != 3 {
+        return None;
+    }
+    let mut matrix = [[0.0_f64; 3]; 3];
+    let mut targets = [0.0_f64; 3];
+    for (row, face_id) in support_faces.iter().enumerate() {
+        let face = topo.face(*face_id).ok()?;
+        let FaceSurface::Plane { normal, d } = face.surface().clone() else {
+            return None;
+        };
+        let (inward_normal, inward_d) = if face.is_reversed() {
+            (normal, d)
+        } else {
+            (-normal, -d)
+        };
+        matrix[row] = [inward_normal.x(), inward_normal.y(), inward_normal.z()];
+        targets[row] = inward_d + radius;
+    }
+    let inverse = inverse_3x3(matrix)?;
+    Some(Point3::new(
+        inverse[0][0] * targets[0] + inverse[0][1] * targets[1] + inverse[0][2] * targets[2],
+        inverse[1][0] * targets[0] + inverse[1][1] * targets[1] + inverse[1][2] * targets[2],
+        inverse[2][0] * targets[0] + inverse[2][1] * targets[1] + inverse[2][2] * targets[2],
+    ))
+}
+
+/// N424: classify whether a trihedral junction's terminal sections were
+/// trimmed to the solved ball centre, `None` when no ball centre exists.
+///
+/// The two constructions the engine builds at a trihedral junction are
+/// distinguishable by where their terminal section centres sit:
+///
+/// - the set-back construction (`convex_trihedral_setback` trims each
+///   stripe end down to the solved centre) reports all three centres at the
+///   ball centre, and its contacts are the tangency points at `|contact −
+///   centre| == radius`;
+/// - the un-set-back construction (the near-equal-stripe guard deliberately
+///   leaves the junction untrimmed) reports none of them at the centre, and
+///   its contacts are the vertex-plane section endpoints at `|contact −
+///   vertex| == radius` — the class upstream's `a7ba558d` guard ships.
+///
+/// A mixture (some trimmed, some not) is a genuine inconsistency and is
+/// refused. `None` is returned when no ball centre can be solved at all
+/// (non-planar or non-three support faces, unequal radii, a singular
+/// plane system, or a missing terminal section), in which case neither
+/// contact convention is asserted.
+fn setback_trimmed_classification(
+    vertex_id: VertexId,
+    indices: &[usize],
+    stripes: &[Stripe],
+    topo: &Topology,
+    radius: f64,
+) -> Result<Option<bool>, BlendError> {
+    if indices.len() != 3 {
+        return Ok(None);
+    }
+    let mut support_faces = Vec::with_capacity(3);
+    for &index in indices {
+        let stripe = &stripes[index];
+        if stripe.sections.len() != 2
+            || (stripe.sections[0].radius - radius).abs() > TOL
+            || (stripe.sections[1].radius - radius).abs() > TOL
+        {
+            return Ok(None);
+        }
+        for face_id in [stripe.face1, stripe.face2] {
+            if !support_faces
+                .iter()
+                .any(|existing: &FaceId| existing.index() == face_id.index())
+            {
+                support_faces.push(face_id);
+            }
+        }
+    }
+    let Some(ball_centre) = trihedral_ball_centre(topo, radius, &support_faces) else {
+        return Ok(None);
+    };
+    let mut at_ball_centre = 0_usize;
+    for &index in indices {
+        let Some(section) = contact_section_at_vertex(vertex_id, &stripes[index], topo) else {
+            return Ok(None);
+        };
+        if (section.center - ball_centre).length() <= TOL * 100.0 {
+            at_ball_centre += 1;
+        }
+    }
+    match at_ball_centre {
+        3 => Ok(Some(true)),
+        0 => Ok(Some(false)),
+        _ => Err(BlendError::CornerFailure { vertex: vertex_id }),
+    }
 }
 
 fn multi_edge_corner_geometry(
@@ -4563,6 +4658,197 @@ mod tests {
             assert_eq!(result.stripe.sections[0].center, before[0]);
             assert_eq!(result.stripe.sections[1].center, before[1]);
         }
+    }
+
+    /// N424 regression (N423 spec item 2): the un-set-back trihedral
+    /// junction — the 90:60:10 corner the near-equal-stripe guard
+    /// deliberately leaves untrimmed — classifies `Some(false)` and builds
+    /// its cap on the geometrically determined `r*sqrt(2)` sphere through
+    /// contacts at exactly `r` from the vertex. These are the numbers N423
+    /// measured at the fixture's vertex `Id(0)` (§2.2, §5): every contact
+    /// `1.110e-16` inside `r` of the vertex and exactly `r*sqrt(2)` from the
+    /// solved centre.
+    ///
+    /// On the shipping tree `9dee6009` this junction cannot reach this
+    /// assertion at all: `compute_sphere_center` refuses it first (the
+    /// build-level half of the regression is
+    /// `regress_fillet_unset_back_trihedral_corner` in `crates/operations`,
+    /// which fails there with `Blend(CornerFailure { vertex: Id(0) })`).
+    #[test]
+    fn n424_unset_back_junction_classifies_false_and_cap_is_rsqrt2() {
+        for (dimensions, radius) in [
+            (Vec3::new(90.0, 60.0, 10.0), 0.5),
+            (Vec3::new(90.0, 60.0, 10.0), 0.25),
+        ] {
+            let mut topo = Topology::new();
+            let solid = make_box(&mut topo, dimensions);
+            let (vertex, selected) = box_edges_at_origin(&topo, solid);
+            assert_eq!(selected.len(), 3);
+            let plan = plan_box_edges(&topo, solid, selected, radius);
+            let junction = plan
+                .junctions
+                .iter()
+                .find(|junction| junction.vertex == vertex)
+                .unwrap();
+            assert_eq!(junction.incident_contours.len(), 3);
+            let indices: Vec<usize> = junction.incident_contours.clone();
+            let mut stripe_results = analytic_box_stripes(&topo, &plan, radius);
+            let solid_faces = solid_shell_faces(&topo, solid);
+            let setback_edges =
+                set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &solid_faces)
+                    .unwrap();
+            assert!(
+                setback_edges.is_empty(),
+                "the 90:60:10 near-equal guard must skip the setback"
+            );
+            let stripes: Vec<Stripe> = stripe_results
+                .iter()
+                .map(|result| result.stripe.clone())
+                .collect();
+            let data = multi_edge_corner_data(vertex, &indices, &stripes, &topo)
+                .expect("un-set-back junction data must build");
+            assert_eq!(data.setback_trimmed, Some(false));
+
+            let vertex_pos = topo.vertex(vertex).unwrap().point();
+            for contact in &data.contact_points {
+                let from_vertex = (*contact - vertex_pos).length();
+                assert!(
+                    (from_vertex - radius).abs() <= TOL * 100.0,
+                    "contact {contact:?} must sit at radius {radius} from the vertex, got {from_vertex}"
+                );
+            }
+            let centre = sphere_center(&data).unwrap();
+            let expected = radius * std::f64::consts::SQRT_2;
+            for contact in &data.contact_points {
+                let from_centre = (*contact - centre).length();
+                assert!(
+                    (from_centre - expected).abs() <= TOL * 100.0,
+                    "contact {contact:?} must sit at the geometrically determined \
+                     r*sqrt(2) = {expected} from the centre, got {from_centre}"
+                );
+            }
+        }
+    }
+
+    /// N424 regression (N423 spec item 3): the near-equal controls keep
+    /// their set-back construction — every terminal section centre equals
+    /// the solved ball centre and every contact sits at exactly `radius`
+    /// from it — and classify `Some(true)`, so the qualified class does not
+    /// move onto the untrimmed path.
+    #[test]
+    fn n424_setback_junction_classifies_true_with_bit_exact_contacts() {
+        let radius = 0.5;
+        for dimensions in [Vec3::new(30.0, 30.0, 30.0), Vec3::new(60.0, 60.0, 60.0)] {
+            let mut topo = Topology::new();
+            let solid = make_box(&mut topo, dimensions);
+            let (vertex, selected) = box_edges_at_origin(&topo, solid);
+            assert_eq!(selected.len(), 3);
+            let plan = plan_box_edges(&topo, solid, selected, radius);
+            let junction = plan
+                .junctions
+                .iter()
+                .find(|junction| junction.vertex == vertex)
+                .unwrap();
+            assert_eq!(junction.incident_contours.len(), 3);
+            let indices: Vec<usize> = junction.incident_contours.clone();
+            let mut stripe_results = analytic_box_stripes(&topo, &plan, radius);
+            let solid_faces = solid_shell_faces(&topo, solid);
+            let setback_edges =
+                set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &solid_faces)
+                    .unwrap();
+            assert_eq!(setback_edges.len(), 3);
+            let stripes: Vec<Stripe> = stripe_results
+                .iter()
+                .map(|result| result.stripe.clone())
+                .collect();
+            let data = multi_edge_corner_data(vertex, &indices, &stripes, &topo)
+                .expect("set-back junction data must build");
+            assert_eq!(data.setback_trimmed, Some(true));
+
+            let centre = sphere_center(&data).unwrap();
+            for &index in &indices {
+                let section = contact_section_at_vertex(vertex, &stripes[index], &topo).unwrap();
+                assert!(
+                    (section.center - centre).length() <= TOL * 100.0,
+                    "set-back terminal section centre must equal the solved ball centre \
+                     for dimensions {dimensions:?}"
+                );
+            }
+            for contact in &data.contact_points {
+                let from_centre = (*contact - centre).length();
+                assert!(
+                    (from_centre - radius).abs() <= 1e-12,
+                    "set-back contact must sit at exactly radius {radius} from the centre, \
+                     got {from_centre} for dimensions {dimensions:?}"
+                );
+            }
+        }
+    }
+
+    /// N424 regression (N423 spec item 4): the check's new teeth — a
+    /// synthetic mixed junction (two stripes' terminal sections trimmed to
+    /// the ball centre, one left untrimmed) is a genuine inconsistency and
+    /// must be refused.
+    #[test]
+    fn n424_mixed_trimmed_junction_is_refused() {
+        let radius = 0.5;
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, Vec3::new(30.0, 30.0, 30.0));
+        let (vertex, selected) = box_edges_at_origin(&topo, solid);
+        assert_eq!(selected.len(), 3);
+        let plan = plan_box_edges(&topo, solid, selected, radius);
+        let junction = plan
+            .junctions
+            .iter()
+            .find(|junction| junction.vertex == vertex)
+            .unwrap();
+        assert_eq!(junction.incident_contours.len(), 3);
+        let indices: Vec<usize> = junction.incident_contours.clone();
+        let mut stripe_results = analytic_box_stripes(&topo, &plan, radius);
+        let centers_before: Vec<[Point3; 2]> = stripe_results
+            .iter()
+            .map(|result| {
+                [
+                    result.stripe.sections[0].center,
+                    result.stripe.sections[1].center,
+                ]
+            })
+            .collect();
+        let solid_faces = solid_shell_faces(&topo, solid);
+        let setback_edges =
+            set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &solid_faces)
+                .unwrap();
+        assert_eq!(setback_edges.len(), 3);
+
+        // Un-trim exactly one stripe's vertex-end section centre; the other
+        // two stay at the solved ball centre.
+        let vertex_point = topo.vertex(vertex).unwrap().point();
+        let mut stripes: Vec<Stripe> = stripe_results
+            .iter()
+            .map(|result| result.stripe.clone())
+            .collect();
+        let untrimmed = &mut stripes[indices[0]];
+        let spine_start = untrimmed.spine.evaluate(&topo, 0.0).unwrap();
+        let spine_end = untrimmed
+            .spine
+            .evaluate(&topo, untrimmed.spine.length())
+            .unwrap();
+        let (slot, before) =
+            if (spine_start - vertex_point).length() <= (spine_end - vertex_point).length() {
+                (0, centers_before[indices[0]][0])
+            } else {
+                (1, centers_before[indices[0]][1])
+            };
+        untrimmed.sections[slot].center = before;
+
+        let result = multi_edge_corner_data(vertex, &indices, &stripes, &topo);
+        let Err(error) = result else {
+            panic!("a mixed trimmed/untrimmed junction must be refused");
+        };
+        assert!(matches!(
+            error,
+            BlendError::CornerFailure { vertex: failed } if failed == vertex
+        ));
     }
 
     /// N414 evidence (design/verification step, ahead of the full

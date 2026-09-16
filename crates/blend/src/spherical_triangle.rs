@@ -32,6 +32,19 @@ pub struct VertexContactData {
     pub is_convex: bool,
     /// Vertex ID for error reporting.
     pub vertex_id: VertexId,
+    /// Whether the caller's terminal sections were trimmed to the solved
+    /// trihedral ball centre, in which case the contacts must lie on the
+    /// requested-radius sphere (`|contact - centre| == radius` is then a
+    /// theorem of `convex_trihedral_setback`'s trim). `Some(false)` is the
+    /// deliberate un-set-back construction the near-equal-stripe guard
+    /// selects: contacts are the vertex-plane section endpoints at
+    /// `|contact - vertex| == radius`, and the cap radius is the
+    /// geometrically determined `|contact - centre|` (upstream `a7ba558d`
+    /// builds this class on every release that ships the guard). `None`
+    /// means no trihedral ball centre was solved at all (non-planar
+    /// supports, unequal radii, a valence other than three), so neither
+    /// convention is asserted.
+    pub setback_trimmed: Option<bool>,
 }
 
 /// Result of building a spherical corner patch.
@@ -89,8 +102,18 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), Blen
         });
     }
 
-    // The contacts must also belong to the sphere requested by the caller.
-    if (sphere_radius - data.radius).abs() > TOL * 100.0 {
+    // The contacts must lie on the requested-radius ball exactly when the
+    // caller's sections were set back to that ball's centre
+    // (`convex_trihedral_setback` trims a stripe end down to the rolling-ball
+    // centre, so `|contact - centre| == radius` is a theorem of that
+    // construction). A junction the near-equal-stripe guard leaves
+    // un-set-back (upstream `a7ba558d`, whose comment names the
+    // cross-one-row fixture) builds the other construction: its contacts are
+    // the vertex-plane section endpoints at `|contact - vertex| == radius`
+    // and its cap radius is the geometrically determined `|contact - centre|`.
+    // Both are refused unless their own contacts are mutually equidistant
+    // (the loop below, unchanged).
+    if data.setback_trimmed == Some(true) && (sphere_radius - data.radius).abs() > TOL * 100.0 {
         return Err(BlendError::CornerFailure {
             vertex: data.vertex_id,
         });
@@ -455,6 +478,9 @@ mod tests {
             radius: r,
             is_convex: true,
             vertex_id,
+            // Tangency-point contacts: the set-back construction's
+            // convention, where `|contact - centre| == radius` is asserted.
+            setback_trimmed: Some(true),
         }
     }
 
@@ -567,5 +593,71 @@ mod tests {
             "derived radius {sphere_radius} differs from requested {}",
             data.radius
         );
+    }
+
+    /// N424: the un-set-back construction's contacts — the vertex-plane
+    /// section endpoints at `|contact - vertex| == radius`, mutually
+    /// equidistant from the centre at the geometrically determined
+    /// `radius * sqrt(2)` (N423 §2.2, §5) — must now build instead of being
+    /// refused by the requested-radius check, whose theorem only holds for
+    /// the set-back convention (`setback_trimmed == Some(true)`).
+    #[test]
+    fn test_sphere_center_accepts_unset_back_rsqrt2_contacts() {
+        let (_topo, vid) = make_vertex_id();
+        let mut data = unit_cube_corner_data(vid);
+        let r = data.radius;
+
+        // The exact contact set N423 measured at the fixture's vertex Id(0)
+        // and on the 90:60:10 box: contacts at distance r from the vertex,
+        // equidistant from the solved centre at r*sqrt(2).
+        data.contact_points = vec![
+            Point3::new(0.0, r, 0.0),
+            Point3::new(0.0, 0.0, r),
+            Point3::new(r, 0.0, 0.0),
+        ];
+        data.setback_trimmed = Some(false);
+
+        let (center, sphere_radius) =
+            compute_sphere_center(&data).expect("un-set-back cap must build");
+        let expected = r * std::f64::consts::SQRT_2;
+        assert!(
+            (sphere_radius - expected).abs() <= TOL * 100.0,
+            "cap radius {sphere_radius} must be the geometrically determined r*sqrt(2) = {expected}"
+        );
+        for contact in &data.contact_points {
+            assert!(
+                ((*contact - data.vertex_pos).length() - r).abs() <= TOL * 100.0,
+                "un-set-back contacts must sit at distance r from the vertex"
+            );
+            assert!(
+                ((*contact - center).length() - sphere_radius).abs() <= TOL * 100.0,
+                "contacts must be mutually equidistant from the cap centre"
+            );
+        }
+    }
+
+    /// N424: a junction that never solved a trihedral ball centre (None)
+    /// keeps the degenerate/equidistance guards only — the requested-radius
+    /// theorem is not asserted there.
+    #[test]
+    fn test_sphere_center_unclassified_keeps_equidistance_guard() {
+        let (_topo, vid) = make_vertex_id();
+        let mut data = unit_cube_corner_data(vid);
+        let r = data.radius;
+        data.contact_points = vec![
+            Point3::new(0.0, r, 0.0),
+            Point3::new(0.0, 0.0, r),
+            Point3::new(r, 0.0, 0.0),
+        ];
+        data.setback_trimmed = None;
+        compute_sphere_center(&data).expect("unclassified junction must build");
+
+        // ... but contacts that are NOT mutually equidistant still refuse.
+        data.contact_points[2] = Point3::new(r, r, 0.0);
+        let error = compute_sphere_center(&data).expect_err("non-equidistant contacts must fail");
+        assert!(matches!(
+            error,
+            BlendError::CornerFailure { vertex } if vertex == vid
+        ));
     }
 }
