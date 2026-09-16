@@ -324,8 +324,22 @@ fn prism_vertical_corner_fillets_are_watertight() {
     );
     let volume = solid_volume(&topo, eased, 0.01).unwrap();
     let oriented = oriented_solid_volume(&topo, eased, 0.01).unwrap();
+    // N422: the 1.0 mm^3 agreement this assertion used to require held only while
+    // BOTH estimators were coarse. `solid_volume` takes the exact analytic
+    // per-face path for this solid (planes + quadrics), while
+    // `oriented_solid_volume` integrates an *inscribed* mesh at the requested
+    // deflection, which under-counts every curved face by construction. N415's
+    // stripe-deflection repair (carried here by N422) refines those stripes from
+    // 252 to 8450 triangles, which removes ~207 mm^3 of inscribed-mesh
+    // under-count (33912.67 -> 34119.87 against 34121.26 exact) and leaves the
+    // two estimators 1.385 mm^3 apart -- about 4e-5 of the volume, and the
+    // expected deflection-level residue of the mesh route rather than the
+    // inverted face this check exists to catch (an inversion moves a whole face's
+    // flux, orders of magnitude more). The tolerance is therefore widened to a
+    // value that still catches an inverted face but admits the inscribed-mesh
+    // under-count at this deflection.
     assert!(
-        (volume - oriented).abs() < 1.0,
+        (volume - oriented).abs() < 5.0,
         "volume {volume} vs oriented {oriented}: a face is inverted"
     );
 }

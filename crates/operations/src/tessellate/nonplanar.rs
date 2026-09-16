@@ -1896,11 +1896,43 @@ pub(super) fn tessellate_nonplanar_cdt(
         // Recompute UV bounding box after seam fix.
         uv_bounds(&boundary_uv)
     };
+    // The affected native fillet stripe has two marched NURBS contact
+    // boundaries and two transverse circle/ellipse boundaries. Keep this
+    // repair on that exact topology class; other curved trims feed boolean
+    // volume/classification paths whose triangulation is separately qualified.
+    let outer_wire = topo.wire(face_data.outer_wire())?;
+    let mut nurbs_boundaries = 0;
+    let mut transverse_boundaries = 0;
+    for oriented in outer_wire.edges() {
+        match topo.edge(oriented.edge())?.curve() {
+            EdgeCurve::NurbsCurve(_) => nurbs_boundaries += 1,
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => transverse_boundaries += 1,
+            EdgeCurve::Line => {}
+        }
+    }
+    let is_fillet_stripe_boundary =
+        outer_wire.edges().len() == 4 && nurbs_boundaries == 2 && transverse_boundaries == 2;
 
+    // CDT uses Euclidean distances to choose diagonals. Raw cylindrical/conical
+    // UV mixes radians with model units, making a long axial stripe appear
+    // arbitrarily narrow and encouraging opposite-angle chords. Scale only the
+    // CDT's angular coordinate into model units; boundary identity and every
+    // surface/domain evaluation remain in the original parameterization.
+    let cdt_u_scale = if !circle_floor && is_fillet_stripe_boundary {
+        match face_data.surface() {
+            FaceSurface::Cylinder(cylinder) => cylinder.radius().abs().max(0.01),
+            FaceSurface::Cone(cone) => cone.radius_at(v_min.abs().max(v_max.abs())).abs().max(0.01),
+            _ => 1.0,
+        }
+    } else {
+        1.0
+    };
+    let to_cdt = |point: Point2| Point2::new(point.x() * cdt_u_scale, point.y());
+    let from_cdt = |point: Point2| Point2::new(point.x() / cdt_u_scale, point.y());
     let margin = 0.01;
     let bounds = (
-        Point2::new(u_min - margin, v_min - margin),
-        Point2::new(u_max + margin, v_max + margin),
+        to_cdt(Point2::new(u_min - margin, v_min - margin)),
+        to_cdt(Point2::new(u_max + margin, v_max + margin)),
     );
     let mut cdt = Cdt::with_capacity(bounds, n_boundary);
 
@@ -1908,7 +1940,7 @@ pub(super) fn tessellate_nonplanar_cdt(
 
     let boundary_pts: Vec<Point2> = boundary_uv
         .iter()
-        .map(|&(u, v)| Point2::new(u, v))
+        .map(|&(u, v)| to_cdt(Point2::new(u, v)))
         .collect();
     let boundary_cdt_ids = cdt
         .insert_points_hilbert(&boundary_pts)
@@ -1937,6 +1969,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         cdt.insert_constraint(v0, v1)
             .map_err(crate::OperationsError::Math)?;
     }
+    let constraints_added_steiner_vertices = cdt.vertices().len() > cdt_to_global.len();
 
     let du = u_max - u_min;
     let dv = v_max - v_min;
@@ -1956,8 +1989,8 @@ pub(super) fn tessellate_nonplanar_cdt(
                 (1..n_v).filter_map(move |iv| {
                     let u = u_min + du * (iu as f64 / n_u as f64);
                     let v = v_min + dv * (iv as f64 / n_v as f64);
-                    let pt2 = Point2::new(u, v);
-                    point_in_polygon_2d(boundary_uv_ref, pt2).then_some(pt2)
+                    let parameter = Point2::new(u, v);
+                    point_in_polygon_2d(boundary_uv_ref, parameter).then_some(to_cdt(parameter))
                 })
             })
             .collect();
@@ -1972,6 +2005,73 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
 
+    // Metric scaling improves the initial diagonals but cannot itself prove the
+    // display/export contract for a trimmed developable fillet stripe. Refine
+    // that exact boundary class until sampled surface-vs-chord deflection and
+    // normal variation both satisfy the caller's requested tolerances.
+    // Boolean/classifier tessellation (`circle_floor`) and every other
+    // cylinder/cone trim retain their existing qualified behavior, including
+    // issue #696's ring handling. Constraints and their shared global boundary
+    // ids remain untouched.
+    //
+    // A crossing constraint creates an untracked Steiner vertex and denotes a
+    // self-intersecting parameter-space boundary. Preserve the legacy recovery
+    // behavior for that synthetic/degenerate class: there is no unambiguous
+    // trimmed interior whose deflection this loop could certify.
+    if !circle_floor
+        && is_fillet_stripe_boundary
+        && !constraints_added_steiner_vertices
+        && matches!(
+            face_data.surface(),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+        )
+    {
+        const MAX_REFINEMENT_PASSES: usize = 32;
+        let mut converged = false;
+        for _ in 0..MAX_REFINEMENT_PASSES {
+            let vertices = cdt.vertices();
+            let mut refinement_points = Vec::new();
+            for (i0, i1, i2) in cdt.triangles() {
+                if i0 < 3 || i1 < 3 || i2 < 3 {
+                    continue;
+                }
+                let triangle = [
+                    from_cdt(vertices[i0]),
+                    from_cdt(vertices[i1]),
+                    from_cdt(vertices[i2]),
+                ];
+                let centroid = Point2::new(
+                    (triangle[0].x() + triangle[1].x() + triangle[2].x()) / 3.0,
+                    (triangle[0].y() + triangle[1].y() + triangle[2].y()) / 3.0,
+                );
+                if point_in_polygon_2d(&boundary_uv, centroid)
+                    && developable_triangle_exceeds_tolerance(
+                        face_data.surface(),
+                        triangle,
+                        deflection,
+                        angular_tol,
+                    )
+                {
+                    refinement_points.push(to_cdt(centroid));
+                }
+            }
+            if refinement_points.is_empty() {
+                converged = true;
+                break;
+            }
+            let before = cdt.vertices().len();
+            cdt.insert_points_hilbert(&refinement_points)
+                .map_err(crate::OperationsError::Math)?;
+            if cdt.vertices().len() == before {
+                break;
+            }
+        }
+        if !converged {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "developable-face CDT refinement did not converge".to_string(),
+            });
+        }
+    }
     let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
         .collect();
@@ -1993,7 +2093,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         if let Some(gid) = cdt_to_global[i] {
             final_global_ids[i] = gid;
         } else if i >= 3 {
-            let pt2 = cdt_verts[i];
+            let pt2 = from_cdt(cdt_verts[i]);
             let surface = face_data.surface();
             let pt3 = eval_surface_point(surface, pt2.x(), pt2.y());
             let nrm = surface.normal(pt2.x(), pt2.y());
@@ -2029,7 +2129,11 @@ pub(super) fn tessellate_nonplanar_cdt(
             merged.positions[final_global_ids[i2] as usize],
         );
         let geo = (p1 - p0).cross(p2 - p0);
-        let (uv0, uv1, uv2) = (cdt_verts[i0], cdt_verts[i1], cdt_verts[i2]);
+        let (uv0, uv1, uv2) = (
+            from_cdt(cdt_verts[i0]),
+            from_cdt(cdt_verts[i1]),
+            from_cdt(cdt_verts[i2]),
+        );
         let uc = (uv0.x() + uv1.x() + uv2.x()) / 3.0;
         let vc = (uv0.y() + uv1.y() + uv2.y()) / 3.0;
         let outward = face_data.surface().normal(uc, vc);
@@ -2141,6 +2245,60 @@ fn estimate_surface_radius(surface: &FaceSurface) -> f64 {
         FaceSurface::Torus(torus) => torus.major_radius() + torus.minor_radius(),
         FaceSurface::Nurbs(_) | FaceSurface::Plane { .. } => 1.0,
     }
+}
+
+/// Whether a cylinder/cone CDT triangle violates the requested spatial chord
+/// deflection or angular-normal tolerance.
+fn developable_triangle_exceeds_tolerance(
+    surface: &FaceSurface,
+    uv: [brepkit_math::vec::Point2; 3],
+    deflection: f64,
+    angular_tol: f64,
+) -> bool {
+    const SAMPLE_STEPS: usize = 4;
+    let positions = [
+        eval_surface_point(surface, uv[0].x(), uv[0].y()),
+        eval_surface_point(surface, uv[1].x(), uv[1].y()),
+        eval_surface_point(surface, uv[2].x(), uv[2].y()),
+    ];
+    for i in 0..=SAMPLE_STEPS {
+        for j in 0..=SAMPLE_STEPS - i {
+            let w1 = i as f64 / SAMPLE_STEPS as f64;
+            let w2 = j as f64 / SAMPLE_STEPS as f64;
+            let w0 = 1.0 - w1 - w2;
+            let sample_uv = (
+                w0 * uv[0].x() + w1 * uv[1].x() + w2 * uv[2].x(),
+                w0 * uv[0].y() + w1 * uv[1].y() + w2 * uv[2].y(),
+            );
+            let chord_point = Point3::new(
+                w0 * positions[0].x() + w1 * positions[1].x() + w2 * positions[2].x(),
+                w0 * positions[0].y() + w1 * positions[1].y() + w2 * positions[2].y(),
+                w0 * positions[0].z() + w1 * positions[1].z() + w2 * positions[2].z(),
+            );
+            if (eval_surface_point(surface, sample_uv.0, sample_uv.1) - chord_point).length()
+                > deflection
+            {
+                return true;
+            }
+        }
+    }
+
+    if angular_tol > 0.0 {
+        let normals = [
+            surface.normal(uv[0].x(), uv[0].y()),
+            surface.normal(uv[1].x(), uv[1].y()),
+            surface.normal(uv[2].x(), uv[2].y()),
+        ];
+        let min_dot = angular_tol.cos();
+        for i in 0..normals.len() {
+            for j in i + 1..normals.len() {
+                if normals[i].dot(normals[j]) < min_dot {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Compute interior grid resolution for `tessellate_nonplanar_cdt`.
