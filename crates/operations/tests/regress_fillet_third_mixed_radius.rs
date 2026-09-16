@@ -751,9 +751,18 @@ fn mixed_runout_clearance_and_unrecognized_invalid_output_preserve_accepted_sour
         "clearance refusal mutated accepted source"
     );
 
-    // An equal third radius is deliberately outside the smaller-radius recognizer.
-    // The unchanged ordinary engine still returns its historically invalid open
-    // output; this is the native-output rollback control, not a supported result.
+    // N342 (pin v3.4.0-ottocad.4): an equal third radius was, through
+    // v3.4.0-ottocad.3, deliberately outside the smaller-radius runout
+    // recognizer, and the unchanged ordinary engine returned a historically
+    // invalid open shell here (V=16 E=25 F=10, 5 boundary edges) -- this
+    // control asserted exactly that `!report.is_valid()`. N342 repairs this
+    // specific case (all three radii equal) with a different, simpler exact
+    // construction -- a genuine sphere octant, not an extension of N340's
+    // runout -- see `crates/operations/src/fillet/reblend.rs`'s
+    // `try_spherical_corner` and `docs/N342-*.md`. This control now asserts
+    // the resulting positive behavior; its history is preserved in this
+    // comment rather than deleting the test, matching
+    // `regress_n341_naive_control.rs`'s own precedent.
     let mut topo = Topology::new();
     let source = captured_ordered_source(&mut topo);
     let first_target = edge_at(
@@ -779,22 +788,49 @@ fn mixed_runout_clearance_and_unrecognized_invalid_output_preserve_accepted_sour
         Point3::new(0.0, 2.0 * ACCEPTED_RADIUS_MM, 0.0),
         Point3::new(0.0, 25.0, 0.0),
     );
-    let invalid =
+    let equal_radius_corner =
         fillet_rolling_ball(&mut topo, second, &[third_target], ACCEPTED_RADIUS_MM).unwrap();
-    let report = validate_solid(&topo, invalid).unwrap();
-    assert!(!report.is_valid());
+    let report = validate_solid(&topo, equal_radius_corner).unwrap();
     assert!(
-        !topo
-            .build_adjacency(invalid)
+        report.is_valid(),
+        "N342 equal-radius corner: {:?}",
+        report.issues
+    );
+    assert!(
+        topo.build_adjacency(equal_radius_corner)
             .unwrap()
             .boundary_edges()
             .is_empty()
     );
     assert_eq!(
+        (
+            solid_vertices(&topo, equal_radius_corner).unwrap().len(),
+            solid_edges(&topo, equal_radius_corner).unwrap().len(),
+            solid_faces(&topo, equal_radius_corner).unwrap().len(),
+        ),
+        (13, 21, 10),
+        "N342 sphere-octant corner topology"
+    );
+    let sphere_faces: Vec<_> = solid_faces(&topo, equal_radius_corner)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+        .collect();
+    assert_eq!(
+        sphere_faces.len(),
+        1,
+        "exactly one exact sphere-octant face"
+    );
+    let FaceSurface::Sphere(sphere) = topo.face(sphere_faces[0]).unwrap().surface() else {
+        unreachable!()
+    };
+    assert!((sphere.radius() - ACCEPTED_RADIUS_MM).abs() < Tolerance::new().linear);
+    assert_eq!(
         snapshot(&topo, second),
         state,
-        "invalid native output mutated accepted source"
+        "accepted two-strip source mutated by the equal-radius corner build"
     );
+    assert!(oriented_solid_volume(&topo, equal_radius_corner, 0.01).unwrap() > 0.0);
 
     let excessive = fillet_rolling_ball(&mut topo, second, &[third_target], 100.0);
     assert!(excessive.is_err());

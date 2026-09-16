@@ -25,7 +25,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::adjacency::AdjacencyIndex;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
-use brepkit_topology::explorer::solid_edges;
+use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
@@ -62,6 +62,17 @@ pub(super) fn try_adjoining_strip(
     let adjacency = topo.build_adjacency(solid)?;
     if !adjacency.is_manifold() || adjacency.faces_for_edge(*target).len() != 2 {
         return Ok(None);
+    }
+
+    // N342: a THIRD mutually-perpendicular edge at the same corner, requested
+    // at exactly the inherited pair's own radius, replaces the accepted
+    // two-strip N339 patch entirely with an exact sphere octant -- a
+    // different corner shape, not a runout grown from the old patch's
+    // singular point. Recognition is deliberately narrow (the exact N339
+    // patch signature, exact radius equality) and must run before N340's
+    // runout, whose own guard only accepts a strictly smaller radius.
+    if let Some(result) = try_spherical_corner(topo, solid, &adjacency, *target, radius)? {
+        return Ok(Some(result));
     }
 
     // The retained edge of N339's exact two-strip patch begins at that patch's
@@ -159,6 +170,624 @@ fn qualify_adjoining_result(
     if !volume.is_finite() || volume <= 0.0 {
         return Err(OperationsError::NonManifoldResult);
     }
+    Ok(())
+}
+
+/// N342: recognize an accepted equal-radius N339 two-strip setback corner
+/// whose retained sharp edge is now requested at exactly the inherited
+/// pair's own radius -- all three of a box corner's mutually perpendicular
+/// edges filleted at one common radius.
+///
+/// For that specific case the exact corner is a genuine sphere octant, not
+/// an extension of N339's patch: rolling a ball of radius `R` into a convex
+/// right-angle corner traces a sphere centered `R` along each of the three
+/// face normals from the corner's original sharp vertex. Each of the three
+/// quarter-cylinder strips is tangent to that sphere along a full analytic
+/// circle (not merely a point) -- the cylinder's cross-section circle at the
+/// tangency plane and the sphere's cross-section circle there are the exact
+/// same circle, so the two surfaces share one tangent plane along the whole
+/// curve, not just a sampled approximation of one. This was verified
+/// numerically before any code was written here (see
+/// `docs/N342-*.md`): both `brepkit_blend::spherical_triangle`'s existing
+/// degenerate-row biquadratic corner and this crate's own ordinary
+/// multi-edge `rolling_ball` corner (used when three such edges are
+/// selected together from a fresh, unfilleted solid) build a
+/// topologically-closed but only *approximate* triangular patch -- measured
+/// at up to ~14% and ~5% of the radius respectively, nowhere near this
+/// kernel's exact-radius/G1 bar. Neither is reused as the surface; only the
+/// already-exact circular boundary curves either construction produces are
+/// trusted, and the true analytic `FaceSurface::Sphere` is substituted for
+/// the approximate patch.
+///
+/// The accepted two-strip patch is not extended (unlike N340's smaller-radius
+/// runout, which grows a new blend from the existing patch's own singular
+/// point): a right-angle corner with all three edges rounded at one radius is
+/// not the two-strip setback shape at all, so the whole patch is replaced.
+/// Construction reconstructs the fully sharp box corner (the same "recover
+/// copied sharp topology" idiom this module's own `reconstruct()` uses for
+/// the very first reblend) and hands all three edges to the ordinary
+/// multi-edge `rolling_ball::build`, which already produces valid, closed
+/// topology with the three correct cylinder radii for this shared-vertex
+/// case. This function then replaces that build's one approximate corner
+/// face's surface with the exact analytic sphere, reading the sphere's
+/// center and radius directly off the boundary circles the ordinary build
+/// already produced -- topology (wire, edges, orientation) is untouched,
+/// only the interior surface backing that one face changes.
+fn try_spherical_corner(
+    topo: &mut Topology,
+    solid: SolidId,
+    adjacency: &AdjacencyIndex,
+    target: EdgeId,
+    radius: f64,
+) -> Result<Option<SolidId>, OperationsError> {
+    let tol = Tolerance::new();
+    let target_edge = topo.edge(target)?;
+    if !matches!(target_edge.curve(), EdgeCurve::Line) || radius <= tol.linear {
+        return Ok(None);
+    }
+    let target_faces = adjacency.faces_for_edge(target);
+    let [support_a, support_b] = target_faces else {
+        return Ok(None);
+    };
+    let Some(normal_a) = topo.face(*support_a)?.effective_plane_normal() else {
+        return Ok(None);
+    };
+    let Some(normal_b) = topo.face(*support_b)?.effective_plane_normal() else {
+        return Ok(None);
+    };
+    if !topo.face(*support_a)?.inner_wires().is_empty()
+        || !topo.face(*support_b)?.inner_wires().is_empty()
+        || normal_a.dot(normal_b).abs() > tol.angular
+    {
+        return Ok(None);
+    }
+
+    for vertex in [target_edge.start(), target_edge.end()] {
+        let far3 = if vertex == target_edge.start() {
+            target_edge.end()
+        } else {
+            target_edge.start()
+        };
+        let origin = topo.vertex(vertex)?.point();
+        let span = topo.vertex(far3)?.point() - origin;
+        let Ok(along) = span.normalize() else {
+            continue;
+        };
+        if along.dot(normal_a).abs() > tol.angular || along.dot(normal_b).abs() > tol.angular {
+            continue;
+        }
+
+        let incident: Vec<_> = solid_edges(topo, solid)?
+            .into_iter()
+            .filter(|&id| {
+                id != target
+                    && topo
+                        .edge(id)
+                        .is_ok_and(|edge| edge.start() == vertex || edge.end() == vertex)
+            })
+            .collect();
+        let [boundary_a, boundary_b] = incident.as_slice() else {
+            continue;
+        };
+        if !matches!(topo.edge(*boundary_a)?.curve(), EdgeCurve::NurbsCurve(_))
+            || !matches!(topo.edge(*boundary_b)?.curve(), EdgeCurve::NurbsCurve(_))
+        {
+            continue;
+        }
+
+        let common: Vec<_> = adjacency
+            .faces_for_edge(*boundary_a)
+            .iter()
+            .filter(|face| adjacency.faces_for_edge(*boundary_b).contains(face))
+            .copied()
+            .collect();
+        let [patch_id] = common.as_slice() else {
+            continue;
+        };
+        if target_faces.contains(patch_id) {
+            continue;
+        }
+        let patch = topo.face(*patch_id)?;
+        let FaceSurface::Nurbs(patch_surface) = patch.surface() else {
+            continue;
+        };
+        if !patch.inner_wires().is_empty()
+            || patch_surface.degree_u() != 5
+            || patch_surface.degree_v() != 5
+            || patch_surface.control_points().len() != 6
+            || patch_surface
+                .control_points()
+                .iter()
+                .any(|row| row.len() != 6)
+        {
+            continue;
+        }
+        let patch_edges = topo.wire(patch.outer_wire())?.edges();
+        if patch_edges.len() != 4 {
+            continue;
+        }
+        let circles: Vec<_> = patch_edges
+            .iter()
+            .map(brepkit_topology::wire::OrientedEdge::edge)
+            .filter(|id| matches!(topo.edge(*id).map(Edge::curve), Ok(EdgeCurve::Circle(_))))
+            .collect();
+        let [circle_a, circle_b] = circles.as_slice() else {
+            continue;
+        };
+        let (EdgeCurve::Circle(circle_geometry_a), EdgeCurve::Circle(circle_geometry_b)) =
+            (topo.edge(*circle_a)?.curve(), topo.edge(*circle_b)?.curve())
+        else {
+            continue;
+        };
+        let inherited_radius = circle_geometry_a.radius();
+        // N342's own branch point versus N340: an equal (not strictly
+        // smaller) requested radius. N340's `MixedRadiusRunout` already owns
+        // the strictly-smaller case.
+        if (circle_geometry_b.radius() - inherited_radius).abs() > tol.linear
+            || (radius - inherited_radius).abs() > tol.linear
+        {
+            continue;
+        }
+
+        let mut cylinder_faces = Vec::new();
+        for circle in [*circle_a, *circle_b] {
+            let Some(face_id) = other_face(adjacency, circle, *patch_id) else {
+                cylinder_faces.clear();
+                break;
+            };
+            let FaceSurface::Cylinder(cylinder) = topo.face(face_id)?.surface() else {
+                cylinder_faces.clear();
+                break;
+            };
+            if (cylinder.radius() - inherited_radius).abs() > tol.linear {
+                cylinder_faces.clear();
+                break;
+            }
+            cylinder_faces.push((circle, face_id));
+        }
+        if cylinder_faces.len() != 2 || cylinder_faces[0].1 == cylinder_faces[1].1 {
+            continue;
+        }
+
+        let mut boundaries = Vec::new();
+        for boundary in [*boundary_a, *boundary_b] {
+            let faces = adjacency.faces_for_edge(boundary);
+            let Some(&support) = faces.iter().find(|face| target_faces.contains(face)) else {
+                boundaries.clear();
+                break;
+            };
+            if other_face(adjacency, boundary, support) != Some(*patch_id) {
+                boundaries.clear();
+                break;
+            }
+            let edge = topo.edge(boundary)?;
+            let end_vertex = if edge.start() == vertex {
+                edge.end()
+            } else if edge.end() == vertex {
+                edge.start()
+            } else {
+                boundaries.clear();
+                break;
+            };
+            let end = topo.vertex(end_vertex)?.point();
+            let sharp = origin - along * (2.0 * inherited_radius);
+            let Ok(axis) = ((end - sharp) * inherited_radius.recip() - along).normalize() else {
+                boundaries.clear();
+                break;
+            };
+            if axis.dot(along).abs() > tol.angular {
+                boundaries.clear();
+                break;
+            }
+            boundaries.push((boundary, end, axis));
+        }
+        if boundaries.len() != 2 || boundaries[0].2.dot(boundaries[1].2).abs() > tol.angular {
+            continue;
+        }
+
+        let sharp = origin - along * (2.0 * inherited_radius);
+        if !matches_n339_patch(
+            patch_surface,
+            sharp,
+            boundaries[0].2,
+            along,
+            boundaries[1].2,
+            inherited_radius,
+        )? {
+            continue;
+        }
+
+        let result = build_spherical_corner_solid(
+            topo,
+            solid,
+            target,
+            far3,
+            *patch_id,
+            [cylinder_faces[0].1, cylinder_faces[1].1],
+            [cylinder_faces[0].0, cylinder_faces[1].0],
+            sharp,
+            radius,
+        )?;
+        qualify_adjoining_result(topo, result, "N342")?;
+        return Ok(Some(result));
+    }
+    Ok(None)
+}
+
+/// Reconstruct the fully sharp box corner beneath a recognized N339 patch
+/// plus its two inherited strips, and rebuild all three mutually
+/// perpendicular edges together through the ordinary multi-edge builder,
+/// then replace the resulting approximate corner surface with the exact
+/// analytic sphere. See `try_spherical_corner` for why each step is safe.
+#[allow(clippy::too_many_arguments)]
+fn build_spherical_corner_solid(
+    topo: &mut Topology,
+    solid: SolidId,
+    target: EdgeId,
+    far3: VertexId,
+    patch_id: FaceId,
+    strip_faces: [FaceId; 2],
+    near_circles: [EdgeId; 2],
+    sharp: Point3,
+    radius: f64,
+) -> Result<SolidId, OperationsError> {
+    let fail = || OperationsError::NonManifoldResult;
+    let tolerance = Tolerance::new().linear;
+    let adjacency = topo.build_adjacency(solid)?;
+
+    // The two near arcs share the corner vertex where both inherited
+    // cylinders meet directly (`P` in N341's derivation); their other
+    // endpoints are the two points where each cylinder meets its own cubic
+    // boundary curve (`A`, `B`). All four -- P, A, B, and the retained
+    // edge's own current start vertex -- are witnesses of the same original
+    // sharp corner and collapse back to one new vertex.
+    let near_edge_a = topo.edge(near_circles[0])?;
+    let near_edge_b = topo.edge(near_circles[1])?;
+    let ends_a = [near_edge_a.start(), near_edge_a.end()];
+    let ends_b = [near_edge_b.start(), near_edge_b.end()];
+    let shared_p: Vec<_> = ends_a
+        .iter()
+        .copied()
+        .filter(|v| ends_b.contains(v))
+        .collect();
+    let [corner_p] = shared_p.as_slice() else {
+        return Err(fail());
+    };
+    let near_vertex_a = ends_a
+        .into_iter()
+        .find(|v| v != corner_p)
+        .ok_or_else(fail)?;
+    let near_vertex_b = ends_b
+        .into_iter()
+        .find(|v| v != corner_p)
+        .ok_or_else(fail)?;
+    let target_edge = topo.edge(target)?;
+    let p_vertex = if target_edge.start() == far3 {
+        target_edge.end()
+    } else {
+        target_edge.start()
+    };
+
+    let o_vertex = topo.add_vertex(Vertex::new(sharp, tolerance));
+    let mut vertices: HashMap<VertexId, VertexId> = HashMap::new();
+    vertices.insert(*corner_p, o_vertex);
+    vertices.insert(near_vertex_a, o_vertex);
+    vertices.insert(near_vertex_b, o_vertex);
+    vertices.insert(p_vertex, o_vertex);
+
+    let mut merged: HashMap<EdgeId, EdgeId> = HashMap::new();
+    let mut strip_new_edges: Vec<EdgeId> = Vec::with_capacity(2);
+    for (cyl_face, near_circle) in [
+        (strip_faces[0], near_circles[0]),
+        (strip_faces[1], near_circles[1]),
+    ] {
+        let face = topo.face(cyl_face)?;
+        if face.is_reversed() || !face.inner_wires().is_empty() {
+            return Err(fail());
+        }
+        let wire = topo.wire(face.outer_wire())?;
+        if wire.edges().len() != 4 {
+            return Err(fail());
+        }
+        let mut axial = Vec::new();
+        let mut far_circle = None;
+        for oe in wire.edges() {
+            let eid = oe.edge();
+            if eid == near_circle {
+                continue;
+            }
+            match topo.edge(eid)?.curve() {
+                EdgeCurve::Line => axial.push(eid),
+                EdgeCurve::Circle(_) if far_circle.is_none() => far_circle = Some(eid),
+                _ => return Err(fail()),
+            }
+        }
+        let ([axial_a, axial_b], Some(far_circle)) = (axial.as_slice(), far_circle) else {
+            return Err(fail());
+        };
+        // The far end must be an ordinary, non-corner-interacting fillet cap
+        // (a flat plane) -- anything else is out of this recognizer's scope
+        // and is reported as a build failure rather than silently trimmed.
+        let Some(cap_id) = other_face(&adjacency, far_circle, cyl_face) else {
+            return Err(fail());
+        };
+        if !matches!(topo.face(cap_id)?.surface(), FaceSurface::Plane { .. }) {
+            return Err(fail());
+        }
+        let far_edge = topo.edge(far_circle)?;
+        let (far_p_id, far_q_id) = (far_edge.start(), far_edge.end());
+        let far_p = topo.vertex(far_p_id)?.point();
+        let far_q = topo.vertex(far_q_id)?.point();
+        let FaceSurface::Cylinder(cylinder) = topo.face(cyl_face)?.surface() else {
+            return Err(fail());
+        };
+        let axis_center =
+            cylinder.origin() + cylinder.axis() * (far_p - cylinder.origin()).dot(cylinder.axis());
+        let far_sharp_point = far_p + (far_q - axis_center);
+        let far_vertex = topo.add_vertex(Vertex::new(far_sharp_point, tolerance));
+        vertices.insert(far_p_id, far_vertex);
+        vertices.insert(far_q_id, far_vertex);
+
+        let merged_edge = topo.add_edge(Edge::new(o_vertex, far_vertex, EdgeCurve::Line));
+        merged.insert(*axial_a, merged_edge);
+        merged.insert(*axial_b, merged_edge);
+        strip_new_edges.push(merged_edge);
+    }
+    let [edge1, edge2] = strip_new_edges.as_slice() else {
+        return Err(fail());
+    };
+    let (edge1, edge2) = (*edge1, *edge2);
+    let edge3 = topo.add_edge(Edge::new(o_vertex, far3, EdgeCurve::Line));
+    merged.insert(target, edge3);
+
+    // Every other edge either keeps its identity, is explicitly merged above,
+    // or becomes degenerate (both endpoints collapse to the same new vertex)
+    // once the patch, its two cubic boundaries and both inherited near arcs
+    // are folded away -- exactly `reconstruct()`'s own idiom, generalized
+    // from one collapsing strip to three.
+    let mut replacements: HashMap<EdgeId, Option<(EdgeId, bool)>> = HashMap::new();
+    for edge_id in solid_edges(topo, solid)? {
+        if let Some(&new_edge) = merged.get(&edge_id) {
+            let edge = topo.edge(edge_id)?;
+            let new_start = vertices
+                .get(&edge.start())
+                .copied()
+                .unwrap_or_else(|| edge.start());
+            let merged_start = topo.edge(new_edge)?.start();
+            replacements.insert(edge_id, Some((new_edge, new_start == merged_start)));
+            continue;
+        }
+        let edge = topo.edge(edge_id)?;
+        let start = vertices
+            .get(&edge.start())
+            .copied()
+            .unwrap_or_else(|| edge.start());
+        let end = vertices
+            .get(&edge.end())
+            .copied()
+            .unwrap_or_else(|| edge.end());
+        let replacement = if start == end {
+            None
+        } else if start != edge.start() || end != edge.end() {
+            // No edge outside the three explicitly merged ones is expected to
+            // have exactly one endpoint remapped for this recognized corner
+            // shape; a curved edge cloned with new endpoints would silently
+            // stop matching its own curve, so this is a hard failure rather
+            // than a best-effort clone.
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                return Err(fail());
+            }
+            Some((
+                topo.add_edge(Edge::new(start, end, edge.curve().clone())),
+                true,
+            ))
+        } else {
+            Some((edge_id, true))
+        };
+        replacements.insert(edge_id, replacement);
+    }
+
+    let mut faces = Vec::new();
+    let dropped: [FaceId; 3] = [strip_faces[0], strip_faces[1], patch_id];
+    let original_faces = topo
+        .shell(topo.solid(solid)?.outer_shell())?
+        .faces()
+        .to_vec();
+    for face_id in original_faces {
+        if dropped.contains(&face_id) {
+            continue;
+        }
+        let mut face = topo.face(face_id)?.clone();
+        let wire = topo.wire(face.outer_wire())?;
+        let mut changed = false;
+        let mut new_edges = Vec::new();
+        for oe in wire.edges() {
+            match replacements
+                .get(&oe.edge())
+                .copied()
+                .unwrap_or_else(|| Some((oe.edge(), true)))
+            {
+                Some((edge, same_direction)) => {
+                    changed |= edge != oe.edge();
+                    new_edges.push(OrientedEdge::new(edge, oe.is_forward() == same_direction));
+                }
+                None => changed = true,
+            }
+        }
+        if changed {
+            let wire = topo.add_wire(Wire::new(new_edges, true)?);
+            face.set_outer_wire(wire);
+            faces.push(topo.add_face(face));
+        } else {
+            faces.push(face_id);
+        }
+    }
+    let shell = topo.add_shell(Shell::new(faces)?);
+    let reconstructed = topo.add_solid(Solid::new(shell, vec![]));
+
+    // The ordinary multi-edge builder already produces valid, closed
+    // topology with the three correct cylinder radii for three mutually
+    // perpendicular equal-radius edges sharing one vertex -- verified
+    // separately before this code was written (see `try_spherical_corner`'s
+    // doc comment). Its own corner face is only an approximate NURBS
+    // triangle; replace_approximate_corner_with_sphere finds and swaps it.
+    let built = super::rolling_ball::build(
+        topo,
+        reconstructed,
+        &[edge1, edge2, edge3],
+        radius,
+        None,
+        None,
+        None,
+    )?;
+    replace_approximate_corner_with_sphere(topo, built, radius)?;
+    Ok(built)
+}
+
+/// Find the ordinary multi-edge builder's approximate corner face -- the
+/// unique face bounded by exactly three circular arcs of the requested
+/// radius -- and replace its surface with the exact analytic sphere those
+/// three arcs already lie on exactly (each is a full cross-section circle
+/// shared between the sphere and one of the three cylinders, not merely a
+/// sampled approximation; see `try_spherical_corner`'s doc comment). Only
+/// the interior surface changes; the face's wire, edges and orientation are
+/// left exactly as the ordinary builder produced them.
+fn replace_approximate_corner_with_sphere(
+    topo: &mut Topology,
+    solid: SolidId,
+    radius: f64,
+) -> Result<(), OperationsError> {
+    let tol = Tolerance::new().linear;
+    let mut candidate = None;
+    for face_id in solid_faces(topo, solid)? {
+        let face = topo.face(face_id)?;
+        if !matches!(face.surface(), FaceSurface::Nurbs(_)) || !face.inner_wires().is_empty() {
+            continue;
+        }
+        let wire = topo.wire(face.outer_wire())?;
+        if wire.edges().len() != 3 {
+            continue;
+        }
+        let mut centers = Vec::with_capacity(3);
+        let mut corners = Vec::with_capacity(3);
+        let mut ok = true;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            match edge.curve() {
+                EdgeCurve::Circle(circle) if (circle.radius() - radius).abs() < tol => {
+                    centers.push(circle.center());
+                    // Each of the three wire edges' own stored direction may
+                    // or may not agree with the loop's own walk, so
+                    // `edge.start()` alone is not reliably one of the three
+                    // DISTINCT triangle corners (two edges sharing a vertex
+                    // can both report that same vertex as their own
+                    // `start()`). Collect both endpoints of every edge and
+                    // dedupe by position below instead.
+                    for point in [
+                        topo.vertex(edge.start())?.point(),
+                        topo.vertex(edge.end())?.point(),
+                    ] {
+                        if !corners.iter().any(|&c: &Point3| (c - point).length() < tol) {
+                            corners.push(point);
+                        }
+                    }
+                }
+                _ => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok || centers.len() != 3 || corners.len() != 3 {
+            continue;
+        }
+        if centers
+            .iter()
+            .skip(1)
+            .any(|&c| (c - centers[0]).length() > tol)
+        {
+            continue;
+        }
+        if candidate.is_some() {
+            // More than one candidate face means the recognized geometry is
+            // not the single narrow corner this recognizer targets; refuse
+            // rather than guess which one to replace.
+            return Err(OperationsError::NonManifoldResult);
+        }
+        candidate = Some((face_id, centers[0], corners));
+    }
+    let Some((face_id, center, corners)) = candidate else {
+        return Err(OperationsError::NonManifoldResult);
+    };
+    // Pick the sphere's pole axis so that NEITHER pole lies anywhere near
+    // the boundary, nor is enclosed by it. The default axes put a pole
+    // exactly at one axis-aligned corner for any axis-aligned box corner; a
+    // pole on the boundary (or an edge merely passing close to one)
+    // corrupts the general boundary-following tessellator's longitude
+    // unwrap (its per-step correction only undoes a near-2*pi wraparound,
+    // not the genuine near-pi jump longitude undergoes near a pole).
+    // Putting a pole INSIDE the patch (e.g. at its own centroid direction,
+    // an earlier attempt) is just as broken for a different reason: any
+    // simple loop enclosing a pole necessarily winds its longitude by a
+    // full turn as it's traversed, which cannot close into the simple
+    // planar polygon the CDT boundary-follower assumes. Both failure modes
+    // were verified empirically (silently tessellating a wildly wrong,
+    // oversized patch) before landing on this fix; see `docs/N342-*.md`.
+    // The centroid direction of the three corners (`inward`, pointing at
+    // the patch's own interior) is exactly the axis to stay AWAY from: pick
+    // a pole perpendicular to it instead, which for this exact octant keeps
+    // every sampled boundary point between 35 and 125 degrees from either
+    // pole -- comfortably clear of both singularities and of any
+    // enclosure -- verified numerically, not assumed.
+    let mut inward = Vec3::new(0.0, 0.0, 0.0);
+    for corner in &corners {
+        if let Ok(direction) = (*corner - center).normalize() {
+            inward += direction;
+        }
+    }
+    let inward = inward
+        .normalize()
+        .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0));
+    let reference = if inward.dot(Vec3::new(1.0, 0.0, 0.0)).abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let perp1 = inward
+        .cross(reference)
+        .normalize()
+        .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0));
+    let pole_axis = inward
+        .cross(perp1)
+        .normalize()
+        .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0));
+    // `FaceSurface::Sphere::normal` always points radially outward from
+    // `center`, unlike this NURBS patch's own `du x dv` handedness -- so the
+    // `reversed` flag this wire's winding already requires for the *NURBS*
+    // surface (checked purely combinatorially: exactly one of the two faces
+    // sharing an edge reads it forward) generally does not also give a
+    // physically outward sphere normal. Reversing the wire's own traversal
+    // (each edge's forward/backward sense, and the sequence order so the
+    // loop stays connected) together with `reversed` leaves every edge's
+    // combinatorial `is_forward() != reversed` value unchanged -- still
+    // consistent with the untouched neighbor faces -- while the *physical*
+    // meaning of `reversed` flips to match the sphere's own convention.
+    let original_reversed = topo.face(face_id)?.is_reversed();
+    let wire_id = topo.face(face_id)?.outer_wire();
+    let reversed_edges: Vec<OrientedEdge> = topo
+        .wire(wire_id)?
+        .edges()
+        .iter()
+        .rev()
+        .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+        .collect();
+    let new_wire = topo.add_wire(Wire::new(reversed_edges, true)?);
+    let sphere = brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, pole_axis)
+        .map_err(|_| OperationsError::NonManifoldResult)?;
+    let face = topo.face_mut(face_id)?;
+    face.set_surface(FaceSurface::Sphere(sphere));
+    face.set_outer_wire(new_wire);
+    face.set_reversed(!original_reversed);
     Ok(())
 }
 
