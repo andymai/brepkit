@@ -524,6 +524,41 @@ impl StepWriteContext {
         let v_vals_str: Vec<String> = v_vals.iter().map(|v| fmt_f64(*v)).collect();
 
         let id = self.next_id();
+        // Rational surfaces need the complex entity form: the base surface,
+        // knots, and weights are separate subtype components. Omitting weights
+        // changes geometry even when the control points and topology survive.
+        if nurbs
+            .weights()
+            .iter()
+            .flatten()
+            .any(|w| w.to_bits() != 1.0_f64.to_bits())
+        {
+            let weight_rows: Vec<String> = nurbs
+                .weights()
+                .iter()
+                .map(|row| {
+                    let values: Vec<String> = row.iter().map(|w| fmt_f64(*w)).collect();
+                    format!("({})", values.join(", "))
+                })
+                .collect();
+            let _ = writeln!(
+                self.entities,
+                "#{id} = (BOUNDED_SURFACE() \
+                 B_SPLINE_SURFACE({}, {}, ({}), .UNSPECIFIED., .F., .F., .F.) \
+                 B_SPLINE_SURFACE_WITH_KNOTS(({}), ({}), ({}), ({}), .UNSPECIFIED.) \
+                 GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE(({})) \
+                 REPRESENTATION_ITEM('') SURFACE());",
+                nurbs.degree_u(),
+                nurbs.degree_v(),
+                cp_grid_refs.join(", "),
+                u_mults_str.join(", "),
+                v_mults_str.join(", "),
+                u_vals_str.join(", "),
+                v_vals_str.join(", "),
+                weight_rows.join(", "),
+            );
+            return Ok(id);
+        }
         let _ = writeln!(
             self.entities,
             "#{id} = B_SPLINE_SURFACE_WITH_KNOTS('', {}, {}, ({}), \
