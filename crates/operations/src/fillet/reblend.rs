@@ -8,14 +8,19 @@
 //! collinear straight edges, and rebuilds the inherited and requested blends
 //! together. It never sews unrelated boundaries or changes tolerances/radii.
 //!
-//! Other cylinders, unequal radii, inner shells, and non-isolated strips do
-//! not enter this route. Both the source and recovered topology stay immutable
-//! during reconstruction; no partial reconstruction is a successful result.
+//! N340 additionally recognizes the exact N339 two-strip setback surface when
+//! its retained sharp edge is subsequently selected at a smaller radius. That
+//! edge starts at the setback surface's documented singular endpoint. The old
+//! corner remains immutable while an exact, monotone rational runout grows from
+//! that point into the new constant-radius strip. Unrelated cylinders, arbitrary
+//! NURBS corners, inner shells, and non-isolated strips do not enter either route;
+//! no partial reconstruction is a successful result.
 
 use std::collections::HashMap;
 
+use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::adjacency::AdjacencyIndex;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -50,6 +55,17 @@ pub(super) fn try_adjoining_strip(
     if !adjacency.is_manifold() || adjacency.faces_for_edge(*target).len() != 2 {
         return Ok(None);
     }
+
+    // The retained edge of N339's exact two-strip patch begins at that patch's
+    // singular endpoint. A smaller third radius needs a runout there; treating
+    // it as an ordinary full-radius strip leaves five unmatched boundaries.
+    if let Some(runout) = MixedRadiusRunout::recognize(topo, solid, &adjacency, *target, radius)? {
+        let result =
+            super::rolling_ball::build(topo, solid, &[*target], radius, None, Some(&runout))?;
+        qualify_adjoining_result(topo, result, "N340")?;
+        return Ok(Some(result));
+    }
+
     let faces = topo
         .shell(topo.solid(solid)?.outer_shell())?
         .faces()
@@ -79,14 +95,24 @@ pub(super) fn try_adjoining_strip(
         &[inherited, requested],
         radius,
         Some(&corner),
+        None,
     )?;
+    qualify_adjoining_result(topo, result, "N339")?;
+    Ok(Some(result))
+}
+
+fn qualify_adjoining_result(
+    topo: &Topology,
+    result: SolidId,
+    task: &str,
+) -> Result<(), OperationsError> {
     let validation = crate::validate::validate_solid(topo, result)?;
     if !validation.is_valid() {
         let adjacency = topo.build_adjacency(result)?;
         for &id in adjacency.boundary_edges() {
             let edge = topo.edge(id)?;
             log::debug!(
-                "N339 free edge {id:?}: {:?} -> {:?}, curve={:?}, faces={:?}",
+                "{task} free edge {id:?}: {:?} -> {:?}, curve={:?}, faces={:?}",
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
                 edge.curve(),
@@ -106,7 +132,430 @@ pub(super) fn try_adjoining_strip(
     if !volume.is_finite() || volume <= 0.0 {
         return Err(OperationsError::NonManifoldResult);
     }
-    Ok(Some(result))
+    Ok(())
+}
+
+#[derive(Clone)]
+struct CarriedCurve {
+    start: Point3,
+    end: Point3,
+    curve: EdgeCurve,
+}
+
+/// Exact endpoint runout for a smaller third radius at N339's singular point.
+///
+/// This object is created only after matching N339's complete rational patch,
+/// its two equal-radius cylinders, both planar supports, and the retained sharp
+/// edge. The runout grows over two requested radii and is constant-radius after
+/// that station. It never infers support from operation history or entity ids.
+pub(super) struct MixedRadiusRunout {
+    pub vertex: usize,
+    pub target: EdgeId,
+    origin: Point3,
+    along: Vec3,
+    first: Vec3,
+    second: Vec3,
+    supports: [FaceId; 2],
+    radius: f64,
+    carried_curves: Vec<CarriedCurve>,
+}
+
+impl MixedRadiusRunout {
+    fn recognize(
+        topo: &Topology,
+        solid: SolidId,
+        adjacency: &AdjacencyIndex,
+        target: EdgeId,
+        radius: f64,
+    ) -> Result<Option<Self>, OperationsError> {
+        let tol = Tolerance::new();
+        let target_edge = topo.edge(target)?;
+        if !matches!(target_edge.curve(), EdgeCurve::Line) || radius <= tol.linear {
+            return Ok(None);
+        }
+        let target_faces = adjacency.faces_for_edge(target);
+        let [support_a, support_b] = target_faces else {
+            return Ok(None);
+        };
+        let Some(normal_a) = topo.face(*support_a)?.effective_plane_normal() else {
+            return Ok(None);
+        };
+        let Some(normal_b) = topo.face(*support_b)?.effective_plane_normal() else {
+            return Ok(None);
+        };
+        if !topo.face(*support_a)?.inner_wires().is_empty()
+            || !topo.face(*support_b)?.inner_wires().is_empty()
+            || normal_a.dot(normal_b).abs() > tol.angular
+        {
+            return Ok(None);
+        }
+
+        for vertex in [target_edge.start(), target_edge.end()] {
+            let far = if vertex == target_edge.start() {
+                target_edge.end()
+            } else {
+                target_edge.start()
+            };
+            let origin = topo.vertex(vertex)?.point();
+            let span = topo.vertex(far)?.point() - origin;
+            let Ok(along) = span.normalize() else {
+                continue;
+            };
+            if along.dot(normal_a).abs() > tol.angular || along.dot(normal_b).abs() > tol.angular {
+                continue;
+            }
+
+            let incident: Vec<_> = solid_edges(topo, solid)?
+                .into_iter()
+                .filter(|&id| {
+                    id != target
+                        && topo
+                            .edge(id)
+                            .is_ok_and(|edge| edge.start() == vertex || edge.end() == vertex)
+                })
+                .collect();
+            let [boundary_a, boundary_b] = incident.as_slice() else {
+                continue;
+            };
+            if !matches!(topo.edge(*boundary_a)?.curve(), EdgeCurve::NurbsCurve(_))
+                || !matches!(topo.edge(*boundary_b)?.curve(), EdgeCurve::NurbsCurve(_))
+            {
+                continue;
+            }
+
+            let common: Vec<_> = adjacency
+                .faces_for_edge(*boundary_a)
+                .iter()
+                .filter(|face| adjacency.faces_for_edge(*boundary_b).contains(face))
+                .copied()
+                .collect();
+            let [patch_id] = common.as_slice() else {
+                continue;
+            };
+            if target_faces.contains(patch_id) {
+                continue;
+            }
+            let patch = topo.face(*patch_id)?;
+            let FaceSurface::Nurbs(patch_surface) = patch.surface() else {
+                continue;
+            };
+            if !patch.inner_wires().is_empty()
+                || patch_surface.degree_u() != 5
+                || patch_surface.degree_v() != 5
+                || patch_surface.control_points().len() != 6
+                || patch_surface
+                    .control_points()
+                    .iter()
+                    .any(|row| row.len() != 6)
+            {
+                continue;
+            }
+            let patch_edges = topo.wire(patch.outer_wire())?.edges();
+            if patch_edges.len() != 4 {
+                continue;
+            }
+            let circles: Vec<_> = patch_edges
+                .iter()
+                .map(brepkit_topology::wire::OrientedEdge::edge)
+                .filter(|id| matches!(topo.edge(*id).map(Edge::curve), Ok(EdgeCurve::Circle(_))))
+                .collect();
+            let [circle_a, circle_b] = circles.as_slice() else {
+                continue;
+            };
+            let (EdgeCurve::Circle(circle_geometry_a), EdgeCurve::Circle(circle_geometry_b)) =
+                (topo.edge(*circle_a)?.curve(), topo.edge(*circle_b)?.curve())
+            else {
+                continue;
+            };
+            let inherited_radius = circle_geometry_a.radius();
+            if (circle_geometry_b.radius() - inherited_radius).abs() > tol.linear
+                || radius >= inherited_radius - tol.linear
+            {
+                continue;
+            }
+
+            let mut cylinder_faces = Vec::new();
+            for circle in [*circle_a, *circle_b] {
+                let Some(face_id) = other_face(adjacency, circle, *patch_id) else {
+                    cylinder_faces.clear();
+                    break;
+                };
+                let FaceSurface::Cylinder(cylinder) = topo.face(face_id)?.surface() else {
+                    cylinder_faces.clear();
+                    break;
+                };
+                if (cylinder.radius() - inherited_radius).abs() > tol.linear {
+                    cylinder_faces.clear();
+                    break;
+                }
+                cylinder_faces.push((circle, face_id, cylinder.axis()));
+            }
+            if cylinder_faces.len() != 2 || cylinder_faces[0].1 == cylinder_faces[1].1 {
+                continue;
+            }
+
+            let mut boundaries = Vec::new();
+            for boundary in [*boundary_a, *boundary_b] {
+                let faces = adjacency.faces_for_edge(boundary);
+                let Some(&support) = faces.iter().find(|face| target_faces.contains(face)) else {
+                    boundaries.clear();
+                    break;
+                };
+                if other_face(adjacency, boundary, support) != Some(*patch_id) {
+                    boundaries.clear();
+                    break;
+                }
+                let edge = topo.edge(boundary)?;
+                let end_vertex = if edge.start() == vertex {
+                    edge.end()
+                } else if edge.end() == vertex {
+                    edge.start()
+                } else {
+                    boundaries.clear();
+                    break;
+                };
+                let end = topo.vertex(end_vertex)?.point();
+                let sharp = origin - along * (2.0 * inherited_radius);
+                let Ok(axis) = ((end - sharp) * inherited_radius.recip() - along).normalize()
+                else {
+                    boundaries.clear();
+                    break;
+                };
+                let Some(support_normal) = topo.face(support)?.effective_plane_normal() else {
+                    boundaries.clear();
+                    break;
+                };
+                let other_support = if support == *support_a {
+                    *support_b
+                } else {
+                    *support_a
+                };
+                let Some(other_normal) = topo.face(other_support)?.effective_plane_normal() else {
+                    boundaries.clear();
+                    break;
+                };
+                if axis.dot(along).abs() > tol.angular
+                    || axis.dot(support_normal).abs() > tol.angular
+                    || axis.dot(-other_normal) < 1.0 - tol.angular
+                    || ((end - origin) - (axis - along) * inherited_radius).length()
+                        > tol.linear * 100.0
+                {
+                    boundaries.clear();
+                    break;
+                }
+                boundaries.push((boundary, support, end, axis));
+            }
+            if boundaries.len() != 2 || boundaries[0].1 == boundaries[1].1 {
+                continue;
+            }
+            if boundaries[0].3.dot(boundaries[1].3).abs() > tol.angular {
+                continue;
+            }
+
+            // Each planar boundary's far point lies on the corresponding
+            // inherited cylinder end. This ties the support frame to both exact
+            // radius strips, rather than accepting an arbitrary degree-5 patch.
+            let mut axes_match_cylinders = true;
+            for (_, _, end, axis) in &boundaries {
+                let mut matching = 0;
+                for (circle, _, cylinder_axis) in &cylinder_faces {
+                    let edge = topo.edge(*circle)?;
+                    let p = topo.vertex(edge.start())?.point();
+                    let q = topo.vertex(edge.end())?.point();
+                    if ((*end - p).length() < tol.linear || (*end - q).length() < tol.linear)
+                        && cylinder_axis.cross(*axis).length() < tol.angular
+                    {
+                        matching += 1;
+                    }
+                }
+                if matching != 1 {
+                    axes_match_cylinders = false;
+                    break;
+                }
+            }
+            if !axes_match_cylinders {
+                continue;
+            }
+
+            let sharp = origin - along * (2.0 * inherited_radius);
+            if !matches_n339_patch(
+                patch_surface,
+                sharp,
+                boundaries[0].3,
+                along,
+                boundaries[1].3,
+                inherited_radius,
+            )? {
+                continue;
+            }
+            if span.length() <= 2.0 * radius + tol.linear {
+                return Err(OperationsError::InvalidInput {
+                    reason: "mixed-radius adjoining fillet runout requires more than twice the requested radius of target-edge clearance".into(),
+                });
+            }
+
+            let mut carried_curves = Vec::with_capacity(2);
+            for (edge_id, _, end, _) in &boundaries {
+                carried_curves.push(CarriedCurve {
+                    start: origin,
+                    end: *end,
+                    curve: topo.edge(*edge_id)?.curve().clone(),
+                });
+            }
+            return Ok(Some(Self {
+                vertex: vertex.index(),
+                target,
+                origin,
+                along,
+                first: boundaries[0].3,
+                second: boundaries[1].3,
+                supports: [boundaries[0].1, boundaries[1].1],
+                radius,
+                carried_curves,
+            }));
+        }
+        Ok(None)
+    }
+
+    pub(super) fn setback(&self) -> f64 {
+        2.0 * self.radius
+    }
+
+    pub(super) fn preserved(&self) -> Point3 {
+        self.origin
+    }
+
+    fn point(&self, local: Point3) -> Point3 {
+        self.origin
+            + (self.first * local.x() + self.along * local.y() + self.second * local.z())
+                * self.radius
+    }
+
+    pub(super) fn contacts(&self) -> [(FaceId, Point3); 2] {
+        [
+            (self.supports[0], self.point(Point3::new(1.0, 2.0, 0.0))),
+            (self.supports[1], self.point(Point3::new(0.0, 2.0, 1.0))),
+        ]
+    }
+
+    pub(super) fn face_spec(&self) -> Result<crate::boolean::FaceSpec, OperationsError> {
+        let local = super::setback_patch::mixed_runout_surface()?;
+        let points = local
+            .control_points()
+            .iter()
+            .map(|row| row.iter().map(|&point| self.point(point)).collect())
+            .collect();
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            local.degree_u(),
+            local.degree_v(),
+            local.knots_u().to_vec(),
+            local.knots_v().to_vec(),
+            points,
+            local.weights().to_vec(),
+        )?;
+        // Natural boundary order for `du x dv`: singular point, side contact,
+        // bottom contact. Reverse both topology and surface sense if the local
+        // frame is left-handed.
+        let mut vertices = vec![
+            self.origin,
+            self.point(Point3::new(0.0, 2.0, 1.0)),
+            self.point(Point3::new(1.0, 2.0, 0.0)),
+        ];
+        let reversed = self.first.cross(self.along).dot(self.second) < 0.0;
+        if reversed {
+            vertices.reverse();
+        }
+        Ok(crate::boolean::FaceSpec::Surface {
+            vertices,
+            surface: FaceSurface::Nurbs(surface),
+            reversed,
+            inner_wires: vec![],
+        })
+    }
+
+    /// Restore both retained N339 cubic boundaries and install the exact two
+    /// cubic runout/support contacts after mixed-surface assembly.
+    pub(super) fn install_contact_curves(
+        &self,
+        topo: &mut Topology,
+        solid: SolidId,
+    ) -> Result<(), OperationsError> {
+        let mut curves = self.carried_curves.clone();
+        for controls in super::setback_patch::mixed_runout_planar_controls() {
+            let points = controls.map(|point| self.point(point));
+            let knots = [0.0; 4].into_iter().chain([1.0; 4]).collect();
+            let curve = NurbsCurve::new(3, knots, points.to_vec(), vec![1.0; 4])?;
+            curves.push(CarriedCurve {
+                start: points[0],
+                end: points[3],
+                curve: EdgeCurve::NurbsCurve(curve),
+            });
+        }
+        let tolerance = Tolerance::new().linear;
+        for carried in curves {
+            let matches: Vec<_> = solid_edges(topo, solid)?
+                .into_iter()
+                .filter(|&id| {
+                    let Ok(edge) = topo.edge(id) else {
+                        return false;
+                    };
+                    let Ok(start) = topo.vertex(edge.start()).map(Vertex::point) else {
+                        return false;
+                    };
+                    let Ok(end) = topo.vertex(edge.end()).map(Vertex::point) else {
+                        return false;
+                    };
+                    ((start - carried.start).length() < tolerance
+                        && (end - carried.end).length() < tolerance)
+                        || ((start - carried.end).length() < tolerance
+                            && (end - carried.start).length() < tolerance)
+                })
+                .collect();
+            let [edge] = matches.as_slice() else {
+                return Err(OperationsError::NonManifoldResult);
+            };
+            topo.edge_mut(*edge)?.set_curve(carried.curve);
+        }
+        Ok(())
+    }
+}
+
+fn matches_n339_patch(
+    actual: &brepkit_math::nurbs::surface::NurbsSurface,
+    sharp: Point3,
+    first: Vec3,
+    along: Vec3,
+    second: Vec3,
+    radius: f64,
+) -> Result<bool, OperationsError> {
+    let expected = super::setback_patch::surface()?;
+    if actual.knots_u() != expected.knots_u()
+        || actual.knots_v() != expected.knots_v()
+        || actual.weights().len() != expected.weights().len()
+    {
+        return Ok(false);
+    }
+    let tolerance = Tolerance::new().linear * 100.0;
+    let direct = actual
+        .control_points()
+        .iter()
+        .zip(expected.control_points())
+        .all(|(actual_row, expected_row)| {
+            actual_row.iter().zip(expected_row).all(|(actual, local)| {
+                let mapped =
+                    sharp + (first * local.x() + along * local.y() + second * local.z()) * radius;
+                (*actual - mapped).length() < tolerance
+            })
+        });
+    if !direct {
+        return Ok(false);
+    }
+    Ok(actual
+        .weights()
+        .iter()
+        .flatten()
+        .zip(expected.weights().iter().flatten())
+        .all(|(actual, expected)| (actual - expected).abs() < f64::EPSILON * 100.0))
 }
 
 /// G1 rational transition for the recognized convex right-angle/equal-radius case.

@@ -42,6 +42,54 @@ pub(super) fn planar_controls() -> [[Point3; 4]; 2] {
     ]
 }
 
+/// Cubic contact curves for a radius-one runout over two radii of axial travel.
+///
+/// The first lies on the local `z=0` support and the second on `x=0`.
+/// Both start at the pre-existing corner singularity and reach the constant-radius
+/// strip with zero radial slope, so the runout is tangent to that strip.
+pub(super) fn mixed_runout_planar_controls() -> [[Point3; 4]; 2] {
+    [
+        [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 2.0 / 3.0, 0.0),
+            Point3::new(1.0, 4.0 / 3.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+        ],
+        [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 2.0 / 3.0, 0.0),
+            Point3::new(0.0, 4.0 / 3.0, 1.0),
+            Point3::new(0.0, 2.0, 1.0),
+        ],
+    ]
+}
+
+/// Exact quarter-circle runout from a point to a radius-one cylindrical strip.
+///
+/// At axial parameter `v`, `a(v) = 3v² - 2v³`; every `u` cross-section is the
+/// exact rational quarter-circle of radius `a(v)` centered at `(a, y, a)`.
+/// The zero derivative of `a` at `v=1` gives a G1 join to the constant cylinder.
+/// At `v=0` the quarter-circle collapses to the existing boundary singularity.
+pub(super) fn mixed_runout_surface() -> Result<NurbsSurface, MathError> {
+    let [bottom, side] = mixed_runout_planar_controls();
+    let y = bottom.map(Point3::y);
+    let middle: Vec<Point3> = y
+        .into_iter()
+        .map(|value| Point3::new(0.0, value, 0.0))
+        .collect();
+    let knots_u: Vec<_> = [0.0; 3].into_iter().chain([1.0; 3]).collect();
+    let knots_v: Vec<_> = [0.0; 4].into_iter().chain([1.0; 4]).collect();
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    NurbsSurface::new(
+        2,
+        3,
+        knots_u,
+        knots_v,
+        vec![bottom.to_vec(), middle, side.to_vec()],
+        vec![vec![1.0; 4], vec![w; 4], vec![1.0; 4]],
+    )
+}
+
 pub(super) fn surface() -> Result<NurbsSurface, MathError> {
     let w = std::f64::consts::FRAC_1_SQRT_2;
     let q = [1.0, 2.0 * (w - 1.0), 2.0 * (1.0 - w)];
@@ -202,6 +250,44 @@ fn curve_power(points: &[Point3], weights: &[f64]) -> [Vec3; 6] {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn mixed_runout_is_exact_tangent_and_fold_free_away_from_its_singular_point() {
+        let s = mixed_runout_surface().unwrap();
+        let tol = brepkit_math::tolerance::Tolerance::new();
+        for i in 0..=100 {
+            let u = f64::from(i) / 100.0;
+            assert!((s.evaluate(u, 0.0) - Point3::new(0.0, 0.0, 0.0)).length() < tol.linear);
+            let end = s.evaluate(u, 1.0);
+            let radial = Vec3::new(end.x() - 1.0, 0.0, end.z() - 1.0);
+            assert!((radial.length() - 1.0).abs() < tol.linear);
+            let sample_u = u.clamp(0.001, 0.999);
+            let sample = s.evaluate(sample_u, 1.0);
+            let sample_radial = Vec3::new(sample.x() - 1.0, 0.0, sample.z() - 1.0);
+            assert!(s.normal(sample_u, 1.0).unwrap().dot(sample_radial) > 1.0 - tol.angular);
+            for j in 1..=100 {
+                let v = f64::from(j) / 100.0;
+                let p = s.evaluate(u, v);
+                let a = 3.0 * v * v - 2.0 * v * v * v;
+                assert!((p.y() - 2.0 * v).abs() < tol.linear);
+                assert!(((p.x() - a).powi(2) + (p.z() - a).powi(2) - a * a).abs() < tol.linear);
+                assert!(p.x() >= -tol.linear && p.z() >= -tol.linear);
+                let sample_u = u.clamp(0.001, 0.999);
+                let normal = s.normal(sample_u, v).unwrap();
+                let q = s.evaluate(sample_u, v);
+                let outward = Vec3::new(q.x() - a, 0.0, q.z() - a);
+                assert!(
+                    normal.dot(outward) > 0.0,
+                    "fold at ({sample_u},{v}): {normal:?}"
+                );
+            }
+        }
+        for i in 1..100 {
+            let v = f64::from(i) / 100.0;
+            assert!((s.normal(0.0, v).unwrap() - Vec3::new(0.0, 0.0, -1.0)).length() < tol.angular);
+            assert!((s.normal(1.0, v).unwrap() - Vec3::new(-1.0, 0.0, 0.0)).length() < tol.angular);
+        }
+    }
 
     #[test]
     fn setback_patch_has_four_tangent_boundaries_and_no_interior_fold() {

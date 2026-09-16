@@ -88,16 +88,19 @@ pub fn fillet_rolling_ball(
         return Ok(result);
     }
 
-    build(topo, solid, edges, radius, None)
+    build(topo, solid, edges, radius, None, None)
 }
 
-/// The optional corner is constructed only by the isolated-strip recognizer.
+/// Optional corner treatments are constructed only by the bounded geometric
+/// recognizers: N339 rebuilds an equal-radius two-strip setback and N340 grows
+/// a smaller third strip from that setback's singular endpoint.
 pub(super) fn build(
     topo: &mut Topology,
     solid: SolidId,
     edges: &[EdgeId],
     radius: f64,
     setback_corner: Option<&super::reblend::SetbackCorner>,
+    mixed_runout: Option<&super::reblend::MixedRadiusRunout>,
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
@@ -653,6 +656,9 @@ pub(super) fn build(
                 }
             }
         }
+        if let Some(runout) = mixed_runout {
+            map.insert((runout.target.index(), runout.vertex), runout.setback());
+        }
         map
     };
 
@@ -864,6 +870,11 @@ pub(super) fn build(
                     map.insert((vid.index(), edge_id.index(), f1.index()), contact1);
                     map.insert((vid.index(), edge_id.index(), f2.index()), contact2);
                 }
+            }
+        }
+        if let Some(runout) = mixed_runout {
+            for (face, point) in runout.contacts() {
+                map.insert((runout.vertex, runout.target.index(), face.index()), point);
             }
         }
         map
@@ -1112,10 +1123,15 @@ pub(super) fn build(
                         if setback_map.contains_key(&(ei, vi))
                             && let Ok(dir) = (next_pos - pos).normalize()
                         {
-                            let p = setback_corner.filter(|corner| corner.vertex == vi).map_or(
-                                pos + dir * radius,
-                                super::reblend::SetbackCorner::preserved,
-                            );
+                            let p = setback_corner
+                                .filter(|corner| corner.vertex == vi)
+                                .map(super::reblend::SetbackCorner::preserved)
+                                .or_else(|| {
+                                    mixed_runout
+                                        .filter(|runout| runout.vertex == vi)
+                                        .map(super::reblend::MixedRadiusRunout::preserved)
+                                })
+                                .unwrap_or(pos + dir * radius);
                             trimmed_verts.push(p);
                             corner_preserved.entry(vi).or_insert(p);
                         }
@@ -1127,10 +1143,15 @@ pub(super) fn build(
                         if setback_map.contains_key(&(ei, vi))
                             && let Ok(dir) = (prev_pos - pos).normalize()
                         {
-                            let p = setback_corner.filter(|corner| corner.vertex == vi).map_or(
-                                pos + dir * radius,
-                                super::reblend::SetbackCorner::preserved,
-                            );
+                            let p = setback_corner
+                                .filter(|corner| corner.vertex == vi)
+                                .map(super::reblend::SetbackCorner::preserved)
+                                .or_else(|| {
+                                    mixed_runout
+                                        .filter(|runout| runout.vertex == vi)
+                                        .map(super::reblend::MixedRadiusRunout::preserved)
+                                })
+                                .unwrap_or(pos + dir * radius);
                             trimmed_verts.push(p);
                             corner_preserved.entry(vi).or_insert(p);
                         }
@@ -1333,7 +1354,13 @@ pub(super) fn build(
                     {
                         let p = setback_corner
                             .filter(|corner| corner.vertex == vi)
-                            .map_or(pos + dir * radius, super::reblend::SetbackCorner::preserved);
+                            .map(super::reblend::SetbackCorner::preserved)
+                            .or_else(|| {
+                                mixed_runout
+                                    .filter(|runout| runout.vertex == vi)
+                                    .map(super::reblend::MixedRadiusRunout::preserved)
+                            })
+                            .unwrap_or(pos + dir * radius);
                         new_verts.push(p);
                         corner_preserved.entry(vi).or_insert(p);
                     }
@@ -1348,7 +1375,13 @@ pub(super) fn build(
                     {
                         let p = setback_corner
                             .filter(|corner| corner.vertex == vi)
-                            .map_or(pos + dir * radius, super::reblend::SetbackCorner::preserved);
+                            .map(super::reblend::SetbackCorner::preserved)
+                            .or_else(|| {
+                                mixed_runout
+                                    .filter(|runout| runout.vertex == vi)
+                                    .map(super::reblend::MixedRadiusRunout::preserved)
+                            })
+                            .unwrap_or(pos + dir * radius);
                         new_verts.push(p);
                         corner_preserved.entry(vi).or_insert(p);
                     }
@@ -1766,6 +1799,13 @@ pub(super) fn build(
             .entry(end_vi)
             .or_default()
             .push((f2.index(), contact2_end));
+    }
+
+    // N340's single target has no ordinary multi-edge junction for Phase 5b.
+    // Its exact rational runout supplies the missing face between the preserved
+    // N339 singular point and the set-back constant-radius strip.
+    if let Some(runout) = mixed_runout {
+        all_specs.push(runout.face_spec()?);
     }
 
     // Phase 5b: Build vertex blend patches at junctions where 2+ fillet edges meet.
@@ -2351,6 +2391,9 @@ pub(super) fn build(
     let solid_id = crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)?;
     if let Some(corner) = setback_corner {
         corner.install_contact_curves(topo, solid_id)?;
+    }
+    if let Some(runout) = mixed_runout {
+        runout.install_contact_curves(topo, solid_id)?;
     }
 
     // Merge co-surface faces that the fillet may have split. This keeps the
