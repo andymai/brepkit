@@ -696,6 +696,14 @@ fn unselected_edge_seam_continuation(
 /// (`docs/N413-twoedge-construction-diagnosis.md`, "Radius admissibility"),
 /// checked on real source-edge lengths **before any topology mutation**.
 ///
+/// N432: the *exact* limit (`r == S`, remainder exactly zero) is admissible.
+/// The miter corner closes it without the vanished material:
+/// `close_collapsed_miter_corner` detects that both shared-face contacts have
+/// collapsed (the same `TOL` this file compares lengths with), drops them, and
+/// closes each stripe's wire against the crease. A request that exceeds the
+/// available length is still refused here, before any mutation — the rules
+/// refuse a genuine overshoot, never an exact fit.
+///
 /// Scope: only the equal-radius, orthogonal, convex, planar n=2 corner class
 /// the miter construction implements. The qualifying test here (Junction
 /// classification, exactly two incident contours, both constant-law with
@@ -707,18 +715,18 @@ fn unselected_edge_seam_continuation(
 /// it; this function never refuses those, and never falls through to the
 /// legacy horn-torus path for a request it does refuse.
 ///
-/// Three rules, `tol` = [`TOL`], all measured as real 3D chord length
-/// between the actual source vertices (exact for the straight edges this
-/// scope covers, and invariant under rigid placement and uniform scale):
+/// Three rules, all measured as real 3D chord length between the actual
+/// source vertices (exact for the straight edges this scope covers, and
+/// invariant under rigid placement and uniform scale):
 ///
 /// - a selected contour of length `L` with `m` mitered ends (1 or 2, per
 ///   the amendment; a contour with 0 qualifying ends is out of scope here):
-///   `L - m*r > tol`;
+///   `L >= m*r` (an exact tie is the admissible limit);
 /// - the retained (unselected) third edge at each qualifying corner, length
-///   `H`: `H - r > tol`;
+///   `H`: `H >= r`;
 /// - the unselected edge(s) at a runout terminal — the far, non-mitered end
 ///   of a contour whose *other* end is a qualifying corner — each length
-///   `L`: `L - r > tol`. This checks every `unselected_sharp_edges` entry at
+///   `L`: `L >= r`. This checks every `unselected_sharp_edges` entry at
 ///   that terminal (this scope's box/extrusion fixtures have exactly one),
 ///   which is never more permissive than checking only the one edge the
 ///   runout construction ultimately consumes (the amendment's `k`, always 1
@@ -728,8 +736,10 @@ fn unselected_edge_seam_continuation(
 /// [`BlendError::RadiusTooLarge`] naming the first violating edge, in
 /// deterministic order (junctions and contours in `plan`'s own order,
 /// never float-sorted or request-order-dependent) — never a generic
-/// planning failure, so a caller can recover `max_radius`. A length at or
-/// below `tol` is refused; an exact tie never produces a zero-length edge.
+/// planning failure, so a caller can recover `max_radius`. Only a genuine
+/// overshoot is refused: at the exact limit the rule's length is fully
+/// consumed, and `close_collapsed_miter_corner` builds the corner around
+/// the material that vanishing consumed.
 pub fn check_equal_two_edge_admissibility(
     topo: &Topology,
     plan: &FilletPlan,
@@ -757,7 +767,7 @@ pub fn check_equal_two_edge_admissibility(
         }
         let r = by_contour_r[ci];
         let length = contour.spine.length();
-        if length - (m as f64) * r <= TOL {
+        if (m as f64) * r > length {
             return Err(BlendError::RadiusTooLarge {
                 edge: contour.edges[0],
                 max_radius: (length / (m as f64)).max(0.0),
@@ -779,7 +789,7 @@ pub fn check_equal_two_edge_admissibility(
         };
         let edge = topo.edge(retained)?;
         let h = vertex_length(edge.start(), edge.end())?;
-        if h - miter.radius <= TOL {
+        if miter.radius > h {
             return Err(BlendError::RadiusTooLarge {
                 edge: retained,
                 max_radius: h.max(0.0),
@@ -834,7 +844,7 @@ pub fn check_equal_two_edge_admissibility(
                 Some(continuation) => length + continuation,
                 None => length,
             };
-            if run - r <= TOL {
+            if r > run {
                 return Err(BlendError::RadiusTooLarge {
                     edge: edge_id,
                     max_radius: run.max(0.0),
@@ -2976,30 +2986,16 @@ fn adopt_side_face_vertical_edge(
     }
     Ok((shared_edge, p00_vertex, shared_bottom))
 }
-/// Shorten each stripe's shared-face (top) contact to end at the
-/// top-contact meeting vertex, splicing the top face's two shortened
-/// contacts together directly with no edge between them — removing the
-/// rounded corner-fill arc `mapped_planar_corner_geometry` placed there for
-/// the (now-superseded) unrestricted construction (see
-/// `docs/N414-evidence/miter-construction-design.md`). Mutates
-/// `miter.top_face` in place.
-///
-/// Returns `(contact_a, contact_b, vtop_vertex)`: stripe `a`'s (`ex`-aligned)
-/// and stripe `b`'s (`ey`-aligned) top-contact edge ids (shortened in
-/// place — same identity before and after, see below) and the new shared
-/// top-contact meeting vertex.
-fn shorten_top_contacts_and_splice_top_face(
-    topo: &mut Topology,
+/// Locate the rounded corner-fill arc in the shared face's wire: the
+/// circle-curve edge whose both endpoints sit within the radius of the
+/// corner vertex (see `docs/N414-evidence/miter-construction-design.md`).
+/// `edges` is that face's current outer-wire edge list.
+fn find_miter_corner_fill_arc(
+    topo: &Topology,
     miter: &MiterCorner,
-) -> Result<(EdgeId, EdgeId, VertexId), BlendError> {
-    let fail = || BlendError::CornerFailure {
-        vertex: miter.vertex,
-    };
+    edges: &[OrientedEdge],
+) -> Result<usize, BlendError> {
     let vertex_point = topo.vertex(miter.vertex)?.point();
-    let wire_id = topo.face(miter.top_face)?.outer_wire();
-    let edges = topo.wire(wire_id)?.edges().to_vec();
-
-    let mut arc_pos = None;
     for (i, oe) in edges.iter().enumerate() {
         let e = topo.edge(oe.edge())?;
         let EdgeCurve::Circle(_) = e.curve() else {
@@ -3010,11 +3006,55 @@ fn shorten_top_contacts_and_splice_top_face(
         if (sp - vertex_point).length() <= miter.radius + TOL
             && (ep - vertex_point).length() <= miter.radius + TOL
         {
-            arc_pos = Some(i);
-            break;
+            return Ok(i);
         }
     }
-    let arc_pos = arc_pos.ok_or_else(fail)?;
+    Err(BlendError::CornerFailure {
+        vertex: miter.vertex,
+    })
+}
+
+/// Drop the rounded corner-fill arc at `arc_pos` from the shared face's
+/// wire, re-splicing its remaining boundary directly (mutates
+/// `miter.top_face` in place).
+fn splice_miter_top_face_without_arc(
+    topo: &mut Topology,
+    miter: &MiterCorner,
+    edges: &[OrientedEdge],
+    arc_pos: usize,
+) -> Result<(), BlendError> {
+    let mut new_edges = Vec::with_capacity(edges.len() - 1);
+    for (i, oe) in edges.iter().enumerate() {
+        if i != arc_pos {
+            new_edges.push(*oe);
+        }
+    }
+    let new_wire = topo.add_wire(Wire::new(new_edges, true)?);
+    topo.face_mut(miter.top_face)?.set_outer_wire(new_wire);
+    Ok(())
+}
+
+/// Shorten each stripe's shared-face (top) contact to end at the
+/// top-contact meeting vertex, splicing the top face's two shortened
+/// contacts together directly with no edge between them — removing the
+/// rounded corner-fill arc `mapped_planar_corner_geometry` placed there for
+/// the (now-superseded) unrestricted construction (see
+/// `docs/N414-evidence/miter-construction-design.md`). Mutates
+/// `miter.top_face` in place.
+///
+/// Returns the new shared top-contact meeting vertex; both contacts are
+/// shortened in place (same identity before and after, see below).
+fn shorten_top_contacts_and_splice_top_face(
+    topo: &mut Topology,
+    miter: &MiterCorner,
+) -> Result<VertexId, BlendError> {
+    let fail = || BlendError::CornerFailure {
+        vertex: miter.vertex,
+    };
+    let vertex_point = topo.vertex(miter.vertex)?.point();
+    let wire_id = topo.face(miter.top_face)?.outer_wire();
+    let edges = topo.wire(wire_id)?.edges().to_vec();
+    let arc_pos = find_miter_corner_fill_arc(topo, miter, &edges)?;
     let count = edges.len();
     let before_pos = (arc_pos + count - 1) % count;
     let after_pos = (arc_pos + 1) % count;
@@ -3051,7 +3091,12 @@ fn shorten_top_contacts_and_splice_top_face(
             };
         let far_point = if near_is_start { ep } else { sp };
         let length = (far_point - near_point).length();
-        if length - miter.radius <= TOL {
+        // The trim consumes `radius` from the near end. At the exact limit
+        // (`length == radius`) this path is not reached: there is no retained
+        // vertical edge to adopt, and `close_collapsed_miter_corner` closes
+        // the corner without either contact. Reaching it with a radius that
+        // does not fit the contact at all is a genuine overshoot.
+        if miter.radius > length {
             return Err(BlendError::RadiusTooLarge {
                 edge: oe.edge(),
                 max_radius: length.max(0.0),
@@ -3074,117 +3119,307 @@ fn shorten_top_contacts_and_splice_top_face(
     };
     shorten(topo, before_pos)?;
     shorten(topo, after_pos)?;
-
-    let mut new_edges = Vec::with_capacity(count - 1);
-    for (i, oe) in edges.iter().enumerate() {
-        if i != arc_pos {
-            new_edges.push(*oe);
-        }
-    }
-    let new_wire = topo.add_wire(Wire::new(new_edges, true)?);
-    topo.face_mut(miter.top_face)?.set_outer_wire(new_wire);
-
-    // Disambiguate by direction: the far endpoint of stripe a's own contact
-    // lies along `ex`, stripe b's along `ey` (both exact by construction:
-    // these are the straight top-contact lines parallel to their own
-    // selected edge).
-    let far_point_of = |topo: &Topology, edge: EdgeId| -> Result<Point3, BlendError> {
-        let e = topo.edge(edge)?;
-        let sp = topo.vertex(e.start())?.point();
-        let ep = topo.vertex(e.end())?.point();
-        let vtop_point = topo.vertex(vtop_vertex)?.point();
-        Ok(if (sp - vtop_point).length() <= TOL {
-            ep
-        } else {
-            sp
-        })
-    };
-    let before_edge = edges[before_pos].edge();
-    let after_edge = edges[after_pos].edge();
-    let before_far = far_point_of(topo, before_edge)?;
-    let vtop_point = topo.vertex(vtop_vertex)?.point();
-    let before_dir = (before_far - vtop_point)
-        .normalize()
-        .map_err(BlendError::Math)?;
-    let (contact_a, contact_b) = if before_dir.dot(miter.ex) > before_dir.dot(miter.ey) {
-        (before_edge, after_edge)
-    } else {
-        (after_edge, before_edge)
-    };
-    Ok((contact_a, contact_b, vtop_vertex))
+    splice_miter_top_face_without_arc(topo, miter, &edges, arc_pos)?;
+    Ok(vtop_vertex)
 }
 
-/// Splice the crease edge into one stripe's own face: replace its old
-/// (full-length) shared-face contact edge with the shortened one, and
-/// replace its deferred cross-section placeholder arc (located via
-/// `cross_boundaries`, never by position or geometric guess) with the
-/// crease. Mutates `face_id` in place.
+/// Close this stripe's own face wire at a miter-corner end with the crease
+/// edge.
 ///
-/// Close this stripe's own face wire at one miter-corner end by inserting
-/// the crease edge into the gap that end's *never-registered*
-/// cross-section boundary would otherwise have filled (`fillet_builder.rs`
-/// deliberately skips registering a placeholder there for a miter vertex —
-/// see `docs/N414-evidence/miter-construction-design.md` — so there is no
-/// old arc here to find or replace; the wire is genuinely open at that one
-/// position). `contact` (the shared-face contact, already shortened *in
-/// place* by `shorten_top_contacts_and_splice_top_face`, so its `EdgeId`
-/// is unchanged) is assumed already present in `face_id`'s wire.
-///
-/// The insertion side and the crease's forward sense are both derived from
-/// real wire connectivity — which raw endpoint of `contact` actually
-/// matches one of the crease's two endpoints, combined with the wire
-/// slot's own forward flag — never assumed from the stripe's
-/// spine-start/spine-end convention. That convention interacts
-/// unpredictably with each contact edge's own (independently chosen,
-/// positionally arbitrary) forward flag: the corner-adjacent point can
-/// land on a contact's wire-effective start *or* end depending on that
-/// flag, not on which cross-section slot it historically filled.
+/// `fillet_builder.rs` deliberately registers no cross-section placeholder
+/// for a miter vertex (see `docs/N414-evidence/miter-construction-design.md`),
+/// so the wire is open at every end this corner owns: exactly one break for
+/// a stripe with one mitered end, two for the four-edge pillow's stripes,
+/// whose both ends are mitered and are closed by two *different* corners'
+/// creases. The break this call fills is therefore identified by the crease
+/// itself — the one open position whose two sides are exactly the crease's
+/// own endpoint vertices — and its forward sense follows from which of those
+/// two vertices the preceding edge leaves off at. Nothing is assumed from
+/// the stripe's spine-start/spine-end convention, from which edge happens to
+/// sit next to a break, or from the cross-section slot the break
+/// historically filled. At the exact limit that distinction is
+/// load-bearing: the collapsed shared-face contact shares its single vertex
+/// with the crease's far end, so a contact-position rule inserts the crease
+/// on the wrong side of the gap and leaves the wire open (measured:
+/// `wire 16 on face 11 is not closed`).
 fn insert_miter_crease_into_stripe_face(
     topo: &mut Topology,
     face_id: FaceId,
-    contact: EdgeId,
     crease_edge: EdgeId,
 ) -> Result<(), BlendError> {
     let fail = || BlendError::TrimmingFailure { face: face_id };
     let wire_id = topo.face(face_id)?.outer_wire();
     let mut edges = topo.wire(wire_id)?.edges().to_vec();
-
-    let contact_pos = edges
-        .iter()
-        .position(|oe| oe.edge() == contact)
-        .ok_or_else(fail)?;
-    let contact_forward = edges[contact_pos].is_forward();
-
-    let contact_edge = topo.edge(contact)?;
-    let effective_start = if contact_forward {
-        contact_edge.start()
-    } else {
-        contact_edge.end()
-    };
-    let effective_end = if contact_forward {
-        contact_edge.end()
-    } else {
-        contact_edge.start()
-    };
+    let count = edges.len();
+    if count == 0 {
+        return Err(fail());
+    }
     let crease = topo.edge(crease_edge)?;
-    let matches_crease = |v: VertexId| v == crease.start() || v == crease.end();
-    let (insert_pos, forward) = if matches_crease(effective_start) {
-        // The gap is immediately before this contact in the wire: the
-        // crease's own effective end must land on this contact's
-        // effective start.
-        (contact_pos, crease.end() == effective_start)
-    } else if matches_crease(effective_end) {
-        // The gap is immediately after: the crease's effective start must
-        // land on this contact's effective end.
-        (contact_pos + 1, crease.start() == effective_end)
-    } else {
+    let (crease_start, crease_end) = (crease.start(), crease.end());
+
+    let mut gap: Option<(usize, bool)> = None;
+    for i in 0..count {
+        let previous = edges[i];
+        let next = edges[(i + 1) % count];
+        let previous_edge = topo.edge(previous.edge())?;
+        let next_edge = topo.edge(next.edge())?;
+        let end = previous.oriented_end(previous_edge);
+        let start = next.oriented_start(next_edge);
+        if end == start {
+            continue;
+        }
+        let end_point = topo.vertex(end)?.point();
+        let start_point = topo.vertex(start)?.point();
+        if (end_point - start_point).length() <= TOL {
+            continue;
+        }
+        // This corner's crease spans exactly this break: the preceding edge
+        // must leave off at one of the crease's endpoints and the following
+        // edge must pick up at the other. Any other open position (this
+        // stripe's other mitered end) belongs to another corner's crease.
+        if end == crease_start && start == crease_end {
+            if gap.is_some() {
+                return Err(fail());
+            }
+            gap = Some((i + 1, true));
+        } else if end == crease_end && start == crease_start {
+            if gap.is_some() {
+                return Err(fail());
+            }
+            gap = Some((i + 1, false));
+        }
+    }
+    let Some((insert_pos, forward)) = gap else {
         return Err(fail());
     };
+
+    // The crease has to actually close the break: its far end must land on
+    // the edge that follows the gap.
+    let following = edges[insert_pos % count];
+    let following_start = following.oriented_start(topo.edge(following.edge())?);
+    let far = if forward { crease_end } else { crease_start };
+    if far != following_start {
+        let far_point = topo.vertex(far)?.point();
+        let start_point = topo.vertex(following_start)?.point();
+        if (far_point - start_point).length() > TOL {
+            return Err(fail());
+        }
+    }
 
     edges.insert(insert_pos, OrientedEdge::new(crease_edge, forward));
     let new_wire = topo.add_wire(Wire::new(edges, true)?);
     topo.face_mut(face_id)?.set_outer_wire(new_wire);
     Ok(())
+}
+
+/// Build the exact `Ellipse3D` crease edge shared by both stripe faces of a
+/// sharp-mitered n=2 corner, from `p00_vertex` to `vtop_vertex` (verified
+/// frame/formula: `n414_miter_crease_ellipse_frame_matches_analytic_reference`).
+fn miter_crease_edge(
+    topo: &mut Topology,
+    miter: &MiterCorner,
+    p00_vertex: VertexId,
+    vtop_vertex: VertexId,
+) -> Result<EdgeId, BlendError> {
+    let center = miter.p00 + miter.ex * miter.radius + miter.ey * miter.radius;
+    let u = (-(miter.ex + miter.ey))
+        .normalize()
+        .map_err(BlendError::Math)?;
+    let ellipse_normal = u.cross(miter.n);
+    let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+        center,
+        ellipse_normal,
+        miter.radius * std::f64::consts::SQRT_2,
+        miter.radius,
+        u,
+    )
+    .map_err(BlendError::Math)?;
+    Ok(topo.add_edge(Edge::new(
+        p00_vertex,
+        vtop_vertex,
+        EdgeCurve::Ellipse(ellipse),
+    )))
+}
+
+/// N432: close the sharp-mitered n=2 corner when the material it closes
+/// around has vanished at the exact limit (`r == S`).
+///
+/// At `r == S` on a convex trihedral corner three things collapse together,
+/// all measured on the 1 in cube fixture:
+///
+/// - the retained third edge (`vertex - n*S` is the source solid's own far
+///   vertex), so the two side supports are the zero-width slivers the
+///   trimmer already leaves along their own bottom edges and there is no
+///   vertical edge for `adopt_side_face_vertical_edge` to adopt — they meet
+///   at the source vertex at `p00` alone;
+/// - each stripe's shared-face (top) contact, whose length *is* the radius
+///   being consumed at its mitered end, so shortening it (as the general
+///   case does) would trim it to a point — `shorten_top_contacts_and_splice_top_face`'s
+///   own `length - radius` site is what refused here;
+/// - the shared face's retained remnant, whose area goes to zero.
+///
+/// The corner therefore closes on the two stripe faces alone: at the limit
+/// neither stripe's own face is bounded by its shared-face contact any more
+/// (its corner end is the crease, exactly as at every smaller radius), so
+/// each collapsed contact is removed from its stripe's wire and retired
+/// from the registry, whose two-owner contract — shared face plus stripe
+/// face — no longer has two live consumers to audit. The rounded
+/// corner-fill arc and the shared face itself are left exactly as the
+/// trimmer built them; the pipeline's own zero-area handling excludes both
+/// from the published shell, and one exact crease edge closes each stripe's
+/// wire against its own side contact.
+///
+/// Returns `Ok(false)` when the collapse is *not* the reason the retained
+/// vertical edge is missing — the caller then reports the attempt's own
+/// error unchanged.
+fn close_collapsed_miter_corner(
+    topo: &mut Topology,
+    miter: &MiterCorner,
+    face_a: FaceId,
+    face_b: FaceId,
+    registry: &mut BoundaryRegistry,
+) -> Result<bool, BlendError> {
+    // The two shared-face contacts, located through the registry (the only
+    // registered boundaries of the shared face's wire), never by position.
+    let wire_id = topo.face(miter.top_face)?.outer_wire();
+    let edges = topo.wire(wire_id)?.edges().to_vec();
+    let mut contacts = Vec::new();
+    for oe in &edges {
+        let Some(handle) = registry.handle_for_edge(oe.edge()) else {
+            continue;
+        };
+        let Some(entry) = registry.entry(handle) else {
+            continue;
+        };
+        if entry.key.kind == BoundaryKind::Contact {
+            contacts.push((oe.edge(), handle));
+        }
+    }
+    if contacts.len() != 2 {
+        return Ok(false);
+    }
+    let mut endpoints = Vec::new();
+    for &(edge, _) in &contacts {
+        let e = topo.edge(edge)?;
+        // The collapse: the contact is exactly as long as the radius the
+        // mitered end consumes. Anything shorter than that would leave the
+        // request unsatisfied rather than collapsed, and anything longer
+        // means the vertical edge went missing for some other reason.
+        let length = (topo.vertex(e.end())?.point() - topo.vertex(e.start())?.point()).length();
+        if length - miter.radius > TOL || miter.radius - length > TOL {
+            return Ok(false);
+        }
+        endpoints.push((e.start(), e.end()));
+    }
+    // The two contacts meet at the top-contact meeting vertex; the trimmer
+    // has already put that vertex in the wires (the contacts' own far end,
+    // the stripes' terminal cross-sections, the corner-fill arc), so the
+    // limit construction reuses it instead of minting a twin no other wire
+    // would reference.
+    let vtop_vertex = [endpoints[0].0, endpoints[0].1]
+        .into_iter()
+        .find(|candidate| endpoints[1].0 == *candidate || endpoints[1].1 == *candidate);
+    let Some(vtop_vertex) = vtop_vertex else {
+        return Ok(false);
+    };
+    // `p00` is likewise an existing source vertex: the one both side
+    // contacts end at, which is also where the two side supports' bottom
+    // edges meet. Locate it by position among the wires the miter is about
+    // to close (never by assuming which endpoint slot it fills).
+    let mut p00_vertex = None;
+    for face in [miter.side_a, miter.side_b, face_a, face_b, miter.top_face] {
+        let Some(wire) = topo.face(face).ok().map(Face::outer_wire) else {
+            continue;
+        };
+        let Ok(wire) = topo.wire(wire) else { continue };
+        for oe in wire.edges() {
+            let Ok(e) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            for vertex in [e.start(), e.end()] {
+                let Ok(point) = topo.vertex(vertex).map(Vertex::point) else {
+                    continue;
+                };
+                if (point - miter.p00).length() > TOL {
+                    continue;
+                }
+                match p00_vertex {
+                    None => p00_vertex = Some(vertex),
+                    Some(existing) if existing == vertex => {}
+                    Some(_) => return Ok(false),
+                }
+            }
+        }
+    }
+    let Some(p00_vertex) = p00_vertex else {
+        return Ok(false);
+    };
+    if p00_vertex == vtop_vertex {
+        return Ok(false);
+    }
+
+    // Drop each collapsed contact from its own stripe's wire and retire its
+    // registry entry; the shared face keeps both contacts until the shell
+    // assembly discards it, but they are restricted in place to the
+    // meeting vertex, exactly the "same identity before and after"
+    // treatment the general case gives them, so the face's remaining
+    // boundary is the degenerate remnant it has actually become.
+    for face in [face_a, face_b] {
+        let wire_id = topo.face(face)?.outer_wire();
+        let wire_edges = topo.wire(wire_id)?.edges().to_vec();
+        let remaining: Vec<OrientedEdge> = wire_edges
+            .iter()
+            .copied()
+            .filter(|oe| !contacts.iter().any(|(edge, _)| *edge == oe.edge()))
+            .collect();
+        if remaining.len() == wire_edges.len() {
+            continue;
+        }
+        if remaining.is_empty() {
+            return Ok(false);
+        }
+        // The removed contact's parametric curve on this face goes with it:
+        // the face is no longer bounded by that edge, and a stale entry would
+        // still describe a boundary the face does not have.
+        for &(edge, _) in &contacts {
+            topo.pcurves_mut().remove(edge, face);
+        }
+        let new_wire = topo.add_wire(Wire::new(remaining, true)?);
+        topo.face_mut(face)?.set_outer_wire(new_wire);
+    }
+    for &(edge, handle) in &contacts {
+        let e = topo.edge(edge)?.clone();
+        let edge_mut = topo.edge_mut(edge)?;
+        if edge_mut.start() != vtop_vertex {
+            edge_mut.set_start(vtop_vertex);
+        }
+        if edge_mut.end() != vtop_vertex {
+            edge_mut.set_end(vtop_vertex);
+        }
+        // A full-length curve whose endpoints have just been restricted to
+        // one point is not a boundary any longer: the collapsed contact is
+        // a zero-length segment, which is what `EdgeCurve::Line` states
+        // exactly (its geometry *is* its vertices).
+        edge_mut.set_curve(EdgeCurve::Line);
+        registry.retire(handle);
+        if miter_trace() {
+            log::debug!(
+                "MITER limit: collapsed contact {edge:?} ({:?}->{:?}) onto {vtop_vertex:?}, retired (handle {handle})",
+                e.start(),
+                e.end()
+            );
+        }
+    }
+    let arc_pos = find_miter_corner_fill_arc(topo, miter, &edges)?;
+    splice_miter_top_face_without_arc(topo, miter, &edges, arc_pos)?;
+
+    // The crease, then the same gap closure each stripe's general-case
+    // path uses: the wire's own break is where the crease belongs, on
+    // whichever side of the removed contact it turns out to be.
+    let crease_edge = miter_crease_edge(topo, miter, p00_vertex, vtop_vertex)?;
+    insert_miter_crease_into_stripe_face(topo, face_a, crease_edge)?;
+    insert_miter_crease_into_stripe_face(topo, face_b, crease_edge)?;
+    Ok(true)
 }
 
 /// Build the N413/N414 amendment's sharp mitered n=2 corner in full: the
@@ -3194,11 +3429,14 @@ fn insert_miter_crease_into_stripe_face(
 /// removed, and one exact `Ellipse3D` crease edge shared by both stripe
 /// faces installed in place of their deferred cross-section placeholder.
 /// No corner face is created — this is the amendment's entire per-corner
-/// obligation.
+/// obligation. When the retained third edge and both contacts have
+/// collapsed at the exact limit, [`close_collapsed_miter_corner`] closes
+/// the same corner with the same crease instead.
 fn apply_equal_two_edge_miter_corner(
     topo: &mut Topology,
     miter: &MiterCorner,
     stripe_faces: &[Option<FaceId>],
+    registry: &mut BoundaryRegistry,
 ) -> Result<(), BlendError> {
     let fail = || BlendError::CornerFailure {
         vertex: miter.vertex,
@@ -3236,15 +3474,25 @@ fn apply_equal_two_edge_miter_corner(
     // Step 1: the shared retained vertical edge. The trimmer has already
     // shortened each side support's copy to `p00` (see
     // `adopt_side_face_vertical_edge`); the miter only adopts it and makes
-    // both side supports use the one shared edge/vertex pair.
-    let (vertical_edge, p00_vertex, bottom) = adopt_side_face_vertical_edge(
+    // both side supports use the one shared edge/vertex pair. At the exact
+    // limit there is no such edge left to adopt — the corner then closes
+    // on the two stripe faces instead.
+    let (vertical_edge, p00_vertex, bottom) = match adopt_side_face_vertical_edge(
         topo,
         miter.side_a,
         miter.vertex,
         miter.n,
         miter.radius,
         None,
-    )?;
+    ) {
+        Ok(adopted) => adopted,
+        Err(error) => {
+            if close_collapsed_miter_corner(topo, miter, face_a, face_b, registry)? {
+                return Ok(());
+            }
+            return Err(error);
+        }
+    };
     if miter_trace() {
         log::debug!(
             "MITER step1a: side_a={:?} vertical={vertical_edge:?} p00={p00_vertex:?} bottom={bottom:?}",
@@ -3266,40 +3514,21 @@ fn apply_equal_two_edge_miter_corner(
     // Step 2: shorten both stripes' shared-face contacts (in place — same
     // identity before and after) and splice the top face directly at the
     // new top-contact meeting vertex.
-    let (contact_a, contact_b, vtop_vertex) =
-        shorten_top_contacts_and_splice_top_face(topo, miter)?;
+    let vtop_vertex = shorten_top_contacts_and_splice_top_face(topo, miter)?;
     if miter_trace() {
         log::debug!(
-            "MITER step2: top_face={:?} contact_a={contact_a:?} contact_b={contact_b:?} vtop={vtop_vertex:?}",
+            "MITER step2: top_face={:?} vtop={vtop_vertex:?}",
             miter.top_face
         );
     }
 
-    // Step 3: the exact crease edge (verified frame/formula:
-    // `n414_miter_crease_ellipse_frame_matches_analytic_reference`).
-    let center = miter.p00 + miter.ex * miter.radius + miter.ey * miter.radius;
-    let u = (-(miter.ex + miter.ey))
-        .normalize()
-        .map_err(BlendError::Math)?;
-    let ellipse_normal = u.cross(miter.n);
-    let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
-        center,
-        ellipse_normal,
-        miter.radius * std::f64::consts::SQRT_2,
-        miter.radius,
-        u,
-    )
-    .map_err(BlendError::Math)?;
-    let crease_edge = topo.add_edge(Edge::new(
-        p00_vertex,
-        vtop_vertex,
-        EdgeCurve::Ellipse(ellipse),
-    ));
+    // Step 3: the exact crease edge.
+    let crease_edge = miter_crease_edge(topo, miter, p00_vertex, vtop_vertex)?;
 
     // Step 4: close the gap in each stripe's own face wire with the
     // crease edge.
-    insert_miter_crease_into_stripe_face(topo, face_a, contact_a, crease_edge)?;
-    insert_miter_crease_into_stripe_face(topo, face_b, contact_b, crease_edge)?;
+    insert_miter_crease_into_stripe_face(topo, face_a, crease_edge)?;
+    insert_miter_crease_into_stripe_face(topo, face_b, crease_edge)?;
 
     Ok(())
 }
@@ -3685,7 +3914,7 @@ pub fn compute_ordered_corners(
         if let Some(miter) =
             detect_equal_two_edge_miter(topo, junction, stripes, &indices, support_faces)?
         {
-            apply_equal_two_edge_miter_corner(topo, &miter, stripe_faces)?;
+            apply_equal_two_edge_miter_corner(topo, &miter, stripe_faces, registry)?;
             miter_handled.insert(junction.vertex);
         }
     }

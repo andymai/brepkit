@@ -175,6 +175,10 @@ pub struct BoundaryEntry {
     deferred: [bool; 2],
     /// Materialized shared topology edge.
     pub edge: Option<EdgeId>,
+    /// Retired by [`BoundaryRegistry::retire`]: the construction this
+    /// boundary was planned for no longer exists, so neither its planned
+    /// owner uses nor its edge are auditable any more.
+    retired: bool,
     uses: Vec<BoundaryUse>,
 }
 
@@ -268,6 +272,9 @@ pub struct BoundaryRegistry {
     entries: Vec<BoundaryEntry>,
     by_key: HashMap<BoundaryKey, BoundaryHandle>,
     by_edge: HashMap<EdgeId, BoundaryHandle>,
+    /// Edges retired by [`BoundaryRegistry::retire`], skipped by the
+    /// postassembly incidence audit exactly like their entries.
+    retired_edges: std::collections::HashSet<EdgeId>,
 }
 
 impl BoundaryRegistry {
@@ -365,6 +372,7 @@ impl BoundaryRegistry {
             owners,
             deferred: [false, false],
             edge: None,
+            retired: false,
             uses: Vec::new(),
         });
         self.by_key.insert(key, handle);
@@ -382,6 +390,40 @@ impl BoundaryRegistry {
         owners: [BoundaryOwner; 2],
     ) -> Result<BoundaryHandle, BoundaryAuditError> {
         self.register(key, start, end, curve, parameter_range, owners)
+    }
+
+    /// Retire a planned boundary whose construction no longer exists.
+    ///
+    /// The exact-limit miter corner retires a shared-face contact that has
+    /// collapsed to zero length: at the limit neither of the boundary's two
+    /// planned owners is bounded by it any more (see
+    /// `corner::close_collapsed_miter_corner`), so its planned uses and its
+    /// materialized edge are no longer auditable. Retiring marks the entry
+    /// and its edge as unauditable; the entry keeps its place and its edge
+    /// (handles are indices into `entries`, so no other handle moves, and a
+    /// late call through a stale handle keeps returning the same edge
+    /// instead of materializing one nothing would use). No non-retired
+    /// entry's behaviour changes.
+    pub fn retire(&mut self, handle: BoundaryHandle) -> Option<EdgeId> {
+        let entry = self.entries.get_mut(handle)?;
+        if entry.retired {
+            return entry.edge;
+        }
+        entry.retired = true;
+        let key = entry.key;
+        let edge = entry.edge;
+        if let Some(edge) = edge {
+            self.retired_edges.insert(edge);
+            self.by_edge.remove(&edge);
+        }
+        self.by_key.remove(&key);
+        edge
+    }
+
+    /// Whether [`Self::retire`] has retired this boundary.
+    #[must_use]
+    pub fn is_retired(&self, handle: BoundaryHandle) -> bool {
+        self.entries.get(handle).is_some_and(|entry| entry.retired)
     }
 
     /// Set the optional pcurve for one expected owner.
@@ -649,6 +691,9 @@ impl BoundaryRegistry {
     pub fn preassembly_audit(&self) -> Result<(), BoundaryAuditError> {
         let mut issues = Vec::new();
         for entry in &self.entries {
+            if entry.retired {
+                continue;
+            }
             if entry.edge.is_none() {
                 issues.push(format!(
                     "boundary {:?} (owners: {}, {}) has no materialized EdgeId",
@@ -820,6 +865,12 @@ impl BoundaryRegistry {
                         .count()
                 })
                 .unwrap_or(2);
+            // A retired boundary's construction no longer exists, so
+            // neither its expected owner uses nor its edge's incidence is
+            // audited (see `Self::retire`).
+            if self.retired_edges.contains(edge) {
+                continue;
+            }
             if uses.len() != expected_uses {
                 let owner_labels = handle
                     .map(|h| {
@@ -854,6 +905,9 @@ impl BoundaryRegistry {
             }
         }
         for entry in &self.entries {
+            if entry.retired {
+                continue;
+            }
             let Some(edge) = entry.edge else { continue };
             if !incidences.contains_key(&edge) {
                 issues.push(format!(

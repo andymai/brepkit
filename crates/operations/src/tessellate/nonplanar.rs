@@ -1897,21 +1897,37 @@ pub(super) fn tessellate_nonplanar_cdt(
         uv_bounds(&boundary_uv)
     };
     // The affected native fillet stripe has two marched NURBS contact
-    // boundaries and two transverse circle/ellipse boundaries. Keep this
+    // boundaries and two transverse circle/ellipse boundaries. At the exact
+    // limit (`r = S`, `corner::close_collapsed_miter_corner`) the miter's
+    // shared-face contact is consumed entirely and drops out of the stripe's
+    // wire: the same developable patch is then bounded by ONE NURBS side
+    // contact, the miter's exact ELLIPSE crease and the ONE CIRCLE terminal
+    // cross-section arc. Both shapes are the same trimmed cylinder patch and
+    // need the same repair — without it the raw UV (radians against mm) makes
+    // the CDT join the stripe's opposite ends across the curved interior: the
+    // limit stripe measured 813.95 mm^2 instead of S^2 = 645.16 and the two
+    // adjacent top edges at `r = S` enclosed 31% too little volume. Keep this
     // repair on that exact topology class; other curved trims feed boolean
     // volume/classification paths whose triangulation is separately qualified.
     let outer_wire = topo.wire(face_data.outer_wire())?;
     let mut nurbs_boundaries = 0;
-    let mut transverse_boundaries = 0;
+    let mut circle_boundaries = 0;
+    let mut ellipse_boundaries = 0;
     for oriented in outer_wire.edges() {
         match topo.edge(oriented.edge())?.curve() {
             EdgeCurve::NurbsCurve(_) => nurbs_boundaries += 1,
-            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => transverse_boundaries += 1,
+            EdgeCurve::Circle(_) => circle_boundaries += 1,
+            EdgeCurve::Ellipse(_) => ellipse_boundaries += 1,
             EdgeCurve::Line => {}
         }
     }
+    let transverse_boundaries = circle_boundaries + ellipse_boundaries;
     let is_fillet_stripe_boundary =
-        outer_wire.edges().len() == 4 && nurbs_boundaries == 2 && transverse_boundaries == 2;
+        (outer_wire.edges().len() == 4 && nurbs_boundaries == 2 && transverse_boundaries == 2)
+            || (outer_wire.edges().len() == 3
+                && nurbs_boundaries == 1
+                && ellipse_boundaries == 1
+                && circle_boundaries == 1);
 
     // CDT uses Euclidean distances to choose diagonals. Raw cylindrical/conical
     // UV mixes radians with model units, making a long axial stripe appear

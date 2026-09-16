@@ -501,6 +501,10 @@ fn n414_orders_repeats_and_refusal_preserve_sources() {
 /// qualifying corner, so every edge is consumed from both ends) is bounded
 /// by half that length. See
 /// docs/N414-evidence/radius-admissibility-derivation.md, sections 2-5.
+///
+/// N432: case A's exact boundary is now admissible — the limit construction
+/// closes the corner around the vanished third edge — and must build on the
+/// closed form; case B's still refuses, routed to N433.
 #[test]
 fn n414_radius_admissibility_bound_matches_derivation() {
     for size in [1.0, 254.0] {
@@ -578,13 +582,41 @@ fn n414_radius_admissibility_bound_matches_derivation() {
                     );
 
                     // Exactly at the derived maximum: the residual domain is
-                    // exactly zero. Deliberately refused, not accepted by a
-                    // floating-point accident (derivation section 5).
-                    let refused = fillet_v2(&mut topo, source_solid, &edges, max_radius);
-                    assert!(
-                        refused.is_err() || refused.unwrap().succeeded.is_empty(),
-                        "{label}: exact boundary radius must refuse"
-                    );
+                    // exactly zero. N432 admits it for the two-edge corner —
+                    // the limit construction closes around the vanished
+                    // material (`close_collapsed_miter_corner`) — so it must
+                    // build one valid, closed, oriented solid on the closed
+                    // form `(2/3) size^3`. The four-edge pillow's exact limit
+                    // is still routed to N433 and must refuse.
+                    let at_max = fillet_v2(&mut topo, source_solid, &edges, max_radius);
+                    if count == 2 {
+                        let result = at_max.unwrap_or_else(|e| {
+                            panic!("{label}: the two-edge exact limit must now build: {e:?}")
+                        });
+                        assert_eq!(result.succeeded.len(), count);
+                        let volume = brepkit_operations::measure::solid_volume(
+                            &topo,
+                            result.solid,
+                            1e-3 * size,
+                        )
+                        .unwrap();
+                        let exact = 2.0 / 3.0 * size * size * size;
+                        assert!(
+                            (volume - exact).abs() <= exact * 5e-4,
+                            "{label}: limit volume {volume} is not the closed form {exact}"
+                        );
+                        assert!(
+                            brepkit_operations::validate::validate_solid(&topo, result.solid)
+                                .unwrap()
+                                .is_valid(),
+                            "{label}: the exact limit must remain valid/closed/oriented"
+                        );
+                    } else {
+                        assert!(
+                            at_max.is_err() || at_max.unwrap().succeeded.is_empty(),
+                            "{label}: exact boundary radius must refuse"
+                        );
+                    }
                     assert_eq!(before, source_snapshot(&topo, source_solid));
 
                     // Just above the derived maximum: refused.

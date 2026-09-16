@@ -1382,6 +1382,46 @@ impl<'a> FilletBuilder<'a> {
         result_faces.extend(&blend_face_ids);
         result_faces.extend(&corner_face_ids);
 
+        // N432: a face whose *entire* boundary has collapsed to a single point
+        // encloses no surface and cannot close a shell — it can only make the
+        // assembly non-manifold. The exact-limit miter corner produces exactly
+        // one: at `r = S` the shared face's retained remnant is consumed down
+        // to the top-contact meeting vertex where the two stripes' creases and
+        // cross-section arcs already meet (`corner::close_collapsed_miter_corner`
+        // restricts the two collapsed contacts onto that vertex), so its two
+        // edges become zero-length and the face contributes no boundary
+        // anywhere. Dropping it leaves the shell closed and valid (measured:
+        // V=5, E=10, F=7, Euler=2, every edge used exactly twice); keeping it
+        // reports free edges and a one-vertex face. The test is extent, not
+        // vertex count: every edge of the wire must be a point (its endpoints
+        // coincide), and a wire with fewer than two edges is left alone — a
+        // disc bounded by one closed circle also has a single vertex, but a
+        // real boundary. A two-vertex face whose edges are anti-parallel (the
+        // zero-area planar remnants N430's guard admits) fails the extent test
+        // and keeps closing the shell it closes today.
+        result_faces.retain(|&face_id| {
+            let Ok(face) = topo.face(face_id) else {
+                return true;
+            };
+            let Ok(wire) = topo.wire(face.outer_wire()) else {
+                return true;
+            };
+            let edges = wire.edges();
+            if edges.len() < 2 {
+                return true;
+            }
+            edges.iter().any(|oriented| {
+                let Ok(edge) = topo.edge(oriented.edge()) else {
+                    return true;
+                };
+                let (Ok(start), Ok(end)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                else {
+                    return true;
+                };
+                (start.point() - end.point()).length() > 1e-7
+            })
+        });
+
         // Faces carried over from the input solid keep their (correct)
         // orientation: they seed the sense propagation and calibrate the
         // boundary-walk convention. Only faces built by THIS pass — walls,

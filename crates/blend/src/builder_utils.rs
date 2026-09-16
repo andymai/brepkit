@@ -466,6 +466,29 @@ pub fn notch_face_corner_with_arc(
         if !both_straight {
             continue;
         }
+        // The arc is the blend's own cross-section circle at this cap: the
+        // two-edge path the blend consumed lies outside that circle, the
+        // kept path around its center (the ball's center sits at distance
+        // `r` from both tangent faces, strictly inside the kept material).
+        // Below the limit only one path ever spans `va -> vb`, so this test
+        // only confirms it — its corner is the cap's own corner, at distance
+        // `r*sqrt(2)` from the center, always outside the circle. At the
+        // exact limit `r = S` the consumed corner has collapsed onto the
+        // arc's endpoint vertices, so *both* of the cap's two-edge paths
+        // span `va -> vb` and wiring order alone would replace the kept side
+        // (measured: the y = S cap came out as the removed corner region,
+        // leaving its remnant's two source edges with a single use each and
+        // failing the post-assembly incidence gate). Judge the candidate by
+        // the arc's own circle instead: replace the path whose corner is
+        // outside it, never the path through its center.
+        if let Ok(arc_edge) = topo.edge(arc_eid)
+            && let EdgeCurve::Circle(circle) = arc_edge.curve()
+        {
+            let corner = topo.vertex(e0)?.point();
+            if (corner - circle.center()).length() <= circle.radius() + 1e-7 {
+                continue;
+            }
+        }
         let mut new_oes: Vec<OrientedEdge> = Vec::with_capacity(n - 1);
         for (k, oe) in oes.iter().enumerate() {
             if k == i {
