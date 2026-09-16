@@ -26,7 +26,7 @@ use crate::BlendError;
 use crate::boundary_registry::{
     BoundaryHandle, BoundaryKey, BoundaryKind, BoundaryOwner, BoundaryRegistry, PlannedVertex,
 };
-use crate::fillet_plan::{CornerClassification, FilletPlan, VertexJunction};
+use crate::fillet_plan::{CornerClassification, FilletPlan, RadiusLawPlan, VertexJunction};
 use crate::section::CircSection;
 use crate::spherical_triangle::{
     SphericalCornerResult, VertexContactData, build_n_edge_corner, build_spherical_corner,
@@ -390,6 +390,456 @@ fn interpolate_section(start: &CircSection, end: &CircSection, fraction: f64) ->
     }
 }
 
+/// A junction vertex qualifying for the N413/N414 amendment's sharp
+/// mitered n=2 corner class: exactly two incident contours, equal constant
+/// radius, a trihedral (three-plane) orthogonal convex corner.
+pub struct MiterJunction {
+    pub vertex: VertexId,
+    pub radius: f64,
+    pub contours: [usize; 2],
+}
+
+/// Find every junction in `plan` qualifying for the amendment's sharp
+/// mitered n=2 corner class. Shared by
+/// [`check_equal_two_edge_admissibility`] (refusal, before any mutation)
+/// and `fillet_builder.rs`'s stripe cross-section placeholder construction
+/// (which must register exactly one shared boundary per miter junction —
+/// not two independent ones that a later corner pass cannot merge into a
+/// single true shared edge without leaving one of them permanently
+/// orphaned; see `docs/N414-evidence/miter-construction-design.md`), so
+/// both always agree on exactly the same qualifying set.
+pub fn find_equal_two_edge_miter_junctions(
+    topo: &Topology,
+    plan: &FilletPlan,
+) -> Vec<MiterJunction> {
+    let mut miters = Vec::new();
+    for junction in &plan.junctions {
+        if junction.classification != CornerClassification::Junction
+            || junction.incident_contours.len() != 2
+        {
+            continue;
+        }
+        let ia = junction.incident_contours[0];
+        let ib = junction.incident_contours[1];
+        let (RadiusLawPlan::Constant(ra), RadiusLawPlan::Constant(rb)) =
+            (&plan.contours[ia].radius_law, &plan.contours[ib].radius_law)
+        else {
+            continue;
+        };
+        if (ra - rb).abs() > TOL || *ra <= TOL {
+            continue;
+        }
+        if junction.face_fan.len() != 3 {
+            continue;
+        }
+        let normals: Vec<Vec3> = junction
+            .face_fan
+            .iter()
+            .filter_map(|&face| match topo.face(face).ok()?.surface() {
+                FaceSurface::Plane { normal, .. } => Some(*normal),
+                _ => None,
+            })
+            .collect();
+        if normals.len() != 3
+            || normals
+                .iter()
+                .enumerate()
+                .any(|(i, n)| normals.iter().skip(i + 1).any(|m| n.dot(*m).abs() > 1e-10))
+        {
+            continue;
+        }
+        miters.push(MiterJunction {
+            vertex: junction.vertex,
+            radius: *ra,
+            contours: [ia, ib],
+        });
+    }
+    miters
+}
+
+/// The contour's own local direction at `vertex`, pointing away from it.
+///
+/// Taken from the *tangent of the contour's spine edge incident at
+/// `vertex`*, never from the chord between the contour's endpoints: a
+/// contour may leave the shared vertex along a given direction and curve
+/// away from it, and the seam test must judge the direction the material
+/// actually sets off in at the shared vertex.
+fn edge_direction_away_from(topo: &Topology, edge: &Edge, vertex: VertexId) -> Option<Vec3> {
+    let start_point = topo.vertex(edge.start()).ok()?.point();
+    let end_point = topo.vertex(edge.end()).ok()?.point();
+    let (t, forward) = if edge.start() == vertex {
+        (
+            edge.curve().domain_with_endpoints(start_point, end_point).0,
+            true,
+        )
+    } else if edge.end() == vertex {
+        (
+            edge.curve().domain_with_endpoints(start_point, end_point).1,
+            false,
+        )
+    } else {
+        return None;
+    };
+    let tangent = edge
+        .curve()
+        .tangent_with_endpoints(t, start_point, end_point);
+    let direction = if forward { tangent } else { -tangent };
+    direction.normalize().ok()
+}
+
+fn contour_direction_away_from(
+    topo: &Topology,
+    contour: &crate::fillet_plan::FilletContour,
+    vertex: VertexId,
+) -> Result<Option<Vec3>, BlendError> {
+    for &edge_id in contour.spine.edges() {
+        let edge = topo.edge(edge_id)?;
+        if edge.start() != vertex && edge.end() != vertex {
+            continue;
+        }
+        return Ok(edge_direction_away_from(topo, edge, vertex));
+    }
+    Ok(None)
+}
+
+/// A *requested* source edge incident at `far` that continues the seam
+/// direction, when the plan itself no longer carries it.
+///
+/// `FilletPlan` drops tangent-continuous selected edges (upstream #1650's
+/// "stop sharp-cornered fillets emitting twin edges"): on the aggressive
+/// scoop fixture the user's radius-1.497 edge collinear with the 0.0839mm
+/// stub is a *requested* member of the same build but is absent from
+/// `plan.selected_edges`, so the seam cannot be recognized from the plan's
+/// contours alone — and the terminal's material was then measured as the
+/// stub's own 0.0839mm, refusing a request the base builds. The material
+/// argument is unchanged by the drop: the continuation is still filleted in
+/// this same request (or refused/validated on its own terms), so it is still
+/// not a hard wall. Measured over the source topology instead of the plan,
+/// with the same `1e-6` direction tolerance.
+fn requested_collinear_continuation(
+    topo: &Topology,
+    requested: &std::collections::HashSet<EdgeId>,
+    seam_edge: EdgeId,
+    far: VertexId,
+    dir1: Vec3,
+) -> Result<Option<f64>, BlendError> {
+    let far_point = topo.vertex(far)?.point();
+    let mut longest: Option<f64> = None;
+    let mut seen = std::collections::HashSet::new();
+    for (_, face) in topo.faces().iter() {
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            let Ok(wire) = topo.wire(wire_id) else {
+                continue;
+            };
+            for oriented in wire.edges() {
+                let candidate = oriented.edge();
+                if candidate == seam_edge || !seen.insert(candidate) {
+                    continue;
+                }
+
+                if !requested.contains(&candidate) {
+                    continue;
+                }
+                let Ok(edge) = topo.edge(candidate) else {
+                    continue;
+                };
+                // No curve-type requirement: a continuation can be a fitted
+                // NURBS edge whose endpoints are collinear with the seam
+                // (the aggressive scoop fixture's radius-1.497 continuation
+                // is exactly that).
+                //
+                // Direction by the edge's chord from the shared vertex, not
+                // its endpoint tangent: the evidenced shape this fallback
+                // exists for is a *bowed* fitted boundary (the aggressive
+                // scoop fixture's radius-1.497 continuation leaves the stub's
+                // far vertex at ~100 degrees and bows out ~5mm before
+                // returning to the seam line 11.8mm further along). Read by
+                // its endpoint tangent that boundary is a genuine corner and
+                // the stub is refused; read by its extent the material
+                // plainly continues along the seam, which is the reading
+                // N417's evidence records and the one the base's own
+                // construction needs to keep building this qualified fixture.
+                // (Planned contours keep the tangent rule above: that is
+                // finding D's requirement, and a contour's spine there is
+                // the curve the runout actually lands on.)
+                if edge.start() != far && edge.end() != far {
+                    continue;
+                }
+                let other = if edge.start() == far {
+                    edge.end()
+                } else {
+                    edge.start()
+                };
+                let delta = topo.vertex(other)?.point() - far_point;
+                let Ok(direction) = delta.normalize() else {
+                    continue;
+                };
+                if dir1.cross(direction).length() <= 1e-6 && dir1.dot(direction) >= 1.0 - 1e-6 {
+                    longest = Some(
+                        longest
+                            .map_or_else(|| delta.length(), |best: f64| best.max(delta.length())),
+                    );
+                }
+            }
+        }
+    }
+    Ok(longest)
+}
+
+/// N418 findings A/C/D: how far real material continues past an unselected
+/// sharp edge that seams into a different, independently selected contour.
+///
+/// An unselected edge at a runout terminal is normally the hard material
+/// boundary the runout consumes, and [`check_equal_two_edge_admissibility`]'s
+/// Rule 2 measures its own length. But when that edge is a short residual
+/// seam — the aggressive scoop fixture's 0.08392021690038476 mm stub, the
+/// seam prism's 0.05 mm stub — whose far vertex is the near terminal of
+/// another selected contour running *collinearly* onward, real material
+/// plainly continues. The honest measure there is the combined run (the
+/// stub plus that continuation), which is what this function returns.
+///
+/// Returns `Ok(Some(continuation_length))` only for the evidenced seam
+/// shape: a straight unselected edge whose far vertex hosts another
+/// non-periodic selected contour, that contour leaving the shared vertex
+/// collinearly with the seam edge (tangent at the shared vertex — finding
+/// D — at the same `1e-6` direction tolerance this file already uses
+/// elsewhere). A curved continuation that happens to share its chord is a
+/// genuine corner, not a seam; so is an angled one.
+///
+/// The interior-vertex shape (the shared vertex is *not* a terminal of the
+/// continuation contour) is unreachable on manifold topology — the N418
+/// instrumented sweep produced zero hits on that branch — but it is
+/// measured here rather than assumed (finding A): it continues to whichever
+/// of that contour's own terminals lies along the seam direction, never
+/// more.
+fn unselected_edge_seam_continuation(
+    topo: &Topology,
+    plan: &FilletPlan,
+    requested: &std::collections::HashSet<EdgeId>,
+    vertex: VertexId,
+    edge_id: EdgeId,
+) -> Result<Option<f64>, BlendError> {
+    let edge = topo.edge(edge_id)?;
+    if !matches!(edge.curve(), EdgeCurve::Line) {
+        return Ok(None);
+    }
+    let far = if edge.start() == vertex {
+        edge.end()
+    } else {
+        edge.start()
+    };
+    let vertex_point = topo.vertex(vertex)?.point();
+    let far_point = topo.vertex(far)?.point();
+    let Ok(dir1) = (far_point - vertex_point).normalize() else {
+        return Ok(None);
+    };
+    // The requested-selection reading first (a plan that dropped a
+    // tangent-continuous continuation edge must not hide the material), then
+    // the plan's own contours.
+    if let Some(length) = requested_collinear_continuation(topo, requested, edge_id, far, dir1)? {
+        return Ok(Some(length));
+    }
+    // `far` is in `plan.junctions` at all only when some selected contour
+    // touches it: the junction list is built exactly from selected-edge
+    // endpoints, whatever each vertex's own classification then is.
+    let Some(other) = plan
+        .junctions
+        .iter()
+        .find(|junction| junction.vertex == far)
+    else {
+        return Ok(None);
+    };
+    for &contour_index in &other.incident_contours {
+        let contour = &plan.contours[contour_index];
+        if contour.periodic {
+            continue;
+        }
+        let Some(dir2) = contour_direction_away_from(topo, contour, far)? else {
+            continue;
+        };
+        if dir1.cross(dir2).length() > 1e-6 || dir1.dot(dir2) < 1.0 - 1e-6 {
+            continue;
+        }
+        if contour.terminal_junctions.contains(&far) {
+            return Ok(Some(contour.spine.length()));
+        }
+        // Interior vertex (finding A): measure to the contour terminal that
+        // actually lies along the seam direction instead of claiming an
+        // unbounded continuation.
+        let mut continuation: Option<f64> = None;
+        for &terminal in &contour.terminal_junctions {
+            let delta = topo.vertex(terminal)?.point() - far_point;
+            let Ok(direction) = delta.normalize() else {
+                continue;
+            };
+            if direction.dot(dir1) > 1.0 - 1e-6 {
+                continuation = Some(
+                    continuation.map_or_else(|| delta.length(), |v: f64| v.min(delta.length())),
+                );
+            }
+        }
+        if let Some(length) = continuation {
+            return Ok(Some(length));
+        }
+    }
+    Ok(None)
+}
+
+/// N413/N414 amendment radius admissibility
+/// (`docs/N413-twoedge-construction-diagnosis.md`, "Radius admissibility"),
+/// checked on real source-edge lengths **before any topology mutation**.
+///
+/// Scope: only the equal-radius, orthogonal, convex, planar n=2 corner class
+/// the miter construction implements. The qualifying test here (Junction
+/// classification, exactly two incident contours, both constant-law with
+/// equal radius, a trihedral three-plane orthogonal corner) deliberately
+/// mirrors the miter recognizer rather than calling it, so this check can
+/// run — and refuse — before that recognizer does any construction work. A
+/// junction outside this class (mixed radius, non-trihedral, non-orthogonal,
+/// a variable radius law) is left to whatever existing/legacy path handles
+/// it; this function never refuses those, and never falls through to the
+/// legacy horn-torus path for a request it does refuse.
+///
+/// Three rules, `tol` = [`TOL`], all measured as real 3D chord length
+/// between the actual source vertices (exact for the straight edges this
+/// scope covers, and invariant under rigid placement and uniform scale):
+///
+/// - a selected contour of length `L` with `m` mitered ends (1 or 2, per
+///   the amendment; a contour with 0 qualifying ends is out of scope here):
+///   `L - m*r > tol`;
+/// - the retained (unselected) third edge at each qualifying corner, length
+///   `H`: `H - r > tol`;
+/// - the unselected edge(s) at a runout terminal — the far, non-mitered end
+///   of a contour whose *other* end is a qualifying corner — each length
+///   `L`: `L - r > tol`. This checks every `unselected_sharp_edges` entry at
+///   that terminal (this scope's box/extrusion fixtures have exactly one),
+///   which is never more permissive than checking only the one edge the
+///   runout construction ultimately consumes (the amendment's `k`, always 1
+///   in this scope).
+///
+/// # Errors
+/// [`BlendError::RadiusTooLarge`] naming the first violating edge, in
+/// deterministic order (junctions and contours in `plan`'s own order,
+/// never float-sorted or request-order-dependent) — never a generic
+/// planning failure, so a caller can recover `max_radius`. A length at or
+/// below `tol` is refused; an exact tie never produces a zero-length edge.
+pub fn check_equal_two_edge_admissibility(
+    topo: &Topology,
+    plan: &FilletPlan,
+    requested: &std::collections::HashSet<EdgeId>,
+) -> Result<(), BlendError> {
+    let miters = find_equal_two_edge_miter_junctions(topo, plan);
+
+    let vertex_length = |a: VertexId, b: VertexId| -> Result<f64, BlendError> {
+        Ok((topo.vertex(b)?.point() - topo.vertex(a)?.point()).length())
+    };
+
+    // Rule 1: selected-edge remaining length, m mitered ends.
+    let mut by_contour_m = vec![0usize; plan.contours.len()];
+    let mut by_contour_r = vec![0.0_f64; plan.contours.len()];
+    for miter in &miters {
+        for &ci in &miter.contours {
+            by_contour_m[ci] += 1;
+            by_contour_r[ci] = miter.radius;
+        }
+    }
+    for (ci, contour) in plan.contours.iter().enumerate() {
+        let m = by_contour_m[ci];
+        if m == 0 {
+            continue;
+        }
+        let r = by_contour_r[ci];
+        let length = contour.spine.length();
+        if length - (m as f64) * r <= TOL {
+            return Err(BlendError::RadiusTooLarge {
+                edge: contour.edges[0],
+                max_radius: (length / (m as f64)).max(0.0),
+            });
+        }
+    }
+
+    // Rule 3: retained third edge at each qualifying corner.
+    for miter in &miters {
+        let junction = plan
+            .junctions
+            .iter()
+            .find(|j| j.vertex == miter.vertex)
+            .ok_or(BlendError::CornerFailure {
+                vertex: miter.vertex,
+            })?;
+        let Some(&retained) = junction.unselected_sharp_edges.first() else {
+            continue;
+        };
+        let edge = topo.edge(retained)?;
+        let h = vertex_length(edge.start(), edge.end())?;
+        if h - miter.radius <= TOL {
+            return Err(BlendError::RadiusTooLarge {
+                edge: retained,
+                max_radius: h.max(0.0),
+            });
+        }
+    }
+
+    // Rule 2: unselected edge(s) at a runout terminal (the far end of a
+    // contour whose other end is a qualifying miter corner).
+    let miter_radius_at = |v: VertexId| -> Option<f64> {
+        miters
+            .iter()
+            .find(|candidate| candidate.vertex == v)
+            .map(|candidate| candidate.radius)
+    };
+    for junction in &plan.junctions {
+        if junction.classification != CornerClassification::Terminal
+            || junction.incident_contours.len() != 1
+        {
+            continue;
+        }
+        let contour = &plan.contours[junction.incident_contours[0]];
+        let Some(&other_end) = contour
+            .terminal_junctions
+            .iter()
+            .find(|&&v| v != junction.vertex)
+        else {
+            continue;
+        };
+        let Some(r) = miter_radius_at(other_end) else {
+            continue;
+        };
+        for &edge_id in &junction.unselected_sharp_edges {
+            let edge = topo.edge(edge_id)?;
+            let length = vertex_length(edge.start(), edge.end())?;
+            // Finding C (N418): a seam into another selected contour is not
+            // a hard wall, but it is not free material either. N417 skipped
+            // the stub entirely, which let a genuinely oversized request
+            // through this pre-mutation check and fail later at mutation
+            // time; N414's own version measured the stub alone, which
+            // refused an admissible request. The honest measure is the
+            // combined run: the stub plus the collinear continuation it
+            // seams into, less the radius the runout consumes. An edge with
+            // no such continuation keeps its own unchanged length.
+            let run = match unselected_edge_seam_continuation(
+                topo,
+                plan,
+                requested,
+                junction.vertex,
+                edge_id,
+            )? {
+                Some(continuation) => length + continuation,
+                None => length,
+            };
+            if run - r <= TOL {
+                return Err(BlendError::RadiusTooLarge {
+                    edge: edge_id,
+                    max_radius: run.max(0.0),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Shorten the three analytic stripes at a convex trihedral junction to
 /// their common rolling-ball center.
 ///
@@ -397,10 +847,21 @@ fn interpolate_section(start: &CircSection, end: &CircSection, fraction: f64) ->
 /// construction. Treating those as a convex setback removes valid material;
 /// a setback is therefore applied only when the three support-plane offsets
 /// intersect on every incident stripe centerline.
+///
+/// `solid_faces` scopes the "clean trihedral corner" checks
+/// (`incident_face_count`) to the faces of the solid this build actually
+/// operates on. `topo` is a single shared arena across an entire session;
+/// once any earlier command has built a result solid alongside an untouched
+/// source, that result's faces coexist in the same arena and an unscoped
+/// scan over every face in `topo` can find faces from an unrelated,
+/// previously-built solid that happen to reference the same `VertexId`
+/// (source vertices survive their own solid unmutated; nothing here should
+/// count a different solid's faces as "incident" to it).
 pub fn set_back_convex_trihedral_stripes(
     topo: &Topology,
     plan: &FilletPlan,
     stripe_results: &mut [StripeResult],
+    solid_faces: &[FaceId],
 ) -> Result<std::collections::HashSet<EdgeId>, BlendError> {
     let original_stripes: Vec<Stripe> = stripe_results
         .iter()
@@ -447,8 +908,13 @@ pub fn set_back_convex_trihedral_stripes(
             continue;
         }
 
-        let Some(fractions) =
-            convex_trihedral_setback(topo, junction.vertex, &indices, &original_stripes)?
+        let Some(fractions) = convex_trihedral_setback(
+            topo,
+            junction.vertex,
+            &indices,
+            &original_stripes,
+            solid_faces,
+        )?
         else {
             continue;
         };
@@ -487,9 +953,27 @@ pub fn set_back_convex_trihedral_stripes(
     Ok(setback_edges)
 }
 
-fn incident_face_count(topo: &Topology, vertex: VertexId) -> usize {
+/// Count the faces of `scope` (the solid this build actually operates on)
+/// that are incident to `vertex`.
+///
+/// `topo` is one arena shared across an entire session: once an earlier
+/// command has built a result solid alongside its untouched source, both
+/// solids' faces coexist in `topo`, and a source vertex is by design still
+/// referenced by the (unmutated) source solid's own faces. Scanning every
+/// face in `topo` — rather than only this solid's own `scope` — can then
+/// count faces belonging to a *different*, unrelated solid that happens to
+/// share the same `VertexId`, silently inflating a corner's apparent
+/// valence and making a genuine trihedral corner look non-trihedral on a
+/// later, independent operation against the same source. Restricting the
+/// scan to `scope` (the caller's `topo.shell(..).faces()` snapshot, taken
+/// before this build's own mutations) is the correct notion of "incident to
+/// this corner" and is invariant to unrelated history in the same arena.
+fn incident_face_count(topo: &Topology, vertex: VertexId, scope: &[FaceId]) -> usize {
     let mut faces = std::collections::HashSet::new();
-    for (face_id, face) in topo.faces().iter() {
+    for &face_id in scope {
+        let Ok(face) = topo.face(face_id) else {
+            continue;
+        };
         let mut wires = vec![face.outer_wire()];
         wires.extend_from_slice(face.inner_wires());
         for wire_id in wires {
@@ -514,13 +998,14 @@ fn convex_trihedral_setback(
     vertex: VertexId,
     indices: &[usize],
     stripes: &[Stripe],
+    solid_faces: &[FaceId],
 ) -> Result<Option<Vec<f64>>, BlendError> {
     // A setback ball only exists when the junction is a clean trihedral
     // corner (three support faces). Junctions where extra faces pass
     // through (e.g. a rib wall meeting a box corner) are not convex
     // trihedral even when three stripes meet: solving the three-plane
     // offset there cuts through the extra face.
-    if incident_face_count(topo, vertex) != 3 {
+    if incident_face_count(topo, vertex, solid_faces) != 3 {
         return Ok(None);
     }
     let radius = stripes[indices[0]].sections[0].radius;
@@ -590,6 +1075,51 @@ fn convex_trihedral_setback(
         fractions.push(fraction);
     }
     Ok(Some(fractions))
+}
+
+/// Environment-gated trace for the rebuilt N421 sharp-miter construction,
+/// matching this file's existing `BK_CORNER_TRACE` convention.
+fn miter_trace() -> bool {
+    std::env::var("BK_MITER_TRACE").is_ok()
+}
+
+/// Dump one face's outer wire under [`miter_trace`] (diagnostic only).
+fn miter_trace_face(topo: &Topology, face_id: FaceId, label: &str) {
+    if !miter_trace() {
+        return;
+    }
+    let Ok(face) = topo.face(face_id) else {
+        log::debug!("MITER dump {label}: face={face_id:?} MISSING");
+        return;
+    };
+    log::debug!(
+        "MITER dump {label}: face={face_id:?} rev={}",
+        face.is_reversed()
+    );
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return;
+    };
+    for (i, oe) in wire.edges().iter().enumerate() {
+        let Ok(e) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let (Ok(sp), Ok(ep)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+            continue;
+        };
+        log::debug!(
+            "MITER dump {label}:   [{i}] {:?} fwd={} {:?}({:.4},{:.4},{:.4}) -> {:?}({:.4},{:.4},{:.4})",
+            oe.edge(),
+            oe.is_forward(),
+            e.start(),
+            sp.point().x(),
+            sp.point().y(),
+            sp.point().z(),
+            e.end(),
+            ep.point().x(),
+            ep.point().y(),
+            ep.point().z()
+        );
+    }
 }
 
 fn inverse_3x3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
@@ -1503,8 +2033,23 @@ fn collect_terminal_boundaries(
                     vertex: junction_vertex,
                 });
             }
-            cross_vertices.insert(start);
-            cross_vertices.insert(end);
+            // Only THIS terminal's own cross-section arc supplies the
+            // reference vertices for the runout walk. A runout patch closes
+            // one stripe's end: its support edges are the ones meeting that
+            // end's arc. Every other stripe's arc endpoints are other
+            // terminals' boundaries (their own runouts or their caps' notch
+            // arcs), and an edge merely joining two of *those* — e.g. a
+            // support boundary piece between two neighbouring terminals — is
+            // not part of this closure. Collecting them all registered such a
+            // piece here and then left it with an owner-1 slot the built
+            // patch never claims, so the post-assembly audit rejected the
+            // seam prism's result (`ordered terminal support` / `ordered
+            // terminal runout` mismatch on the bottom-face piece between the
+            // P4 and P5 terminals).
+            if current_handles.contains(&handle) {
+                cross_vertices.insert(start);
+                cross_vertices.insert(end);
+            }
             if entry.owners[1].face.is_some() {
                 continue;
             }
@@ -1799,10 +2344,17 @@ fn collect_junction_fan_boundaries(
                     && (cross_vertices.contains(&end) || end == junction_vertex))
                     || (cross_vertices.contains(&end)
                         && (cross_vertices.contains(&start) || start == junction_vertex));
-                if !joins_fan {
+                let existing_handle = registry.handle_for_edge(edge);
+                let planned_side =
+                    existing_handle
+                        .and_then(|h| registry.entry(h))
+                        .is_some_and(|e| {
+                            e.key.kind == BoundaryKind::Corner
+                                && e.key.contour == junction_vertex.index()
+                        });
+                if !joins_fan && !planned_side {
                     continue;
                 }
-                let existing_handle = registry.handle_for_edge(edge);
                 if let Some(handle) = existing_handle {
                     let entry =
                         registry
@@ -2017,6 +2569,646 @@ fn orient_corner_cycle_against_existing_owner(
     Ok(())
 }
 
+/// A qualifying N413/N414 amendment sharp-mitered n=2 corner: an
+/// equal-radius, orthogonal, convex, planar junction of exactly two
+/// selected-edge stripes. See
+/// `docs/N413-twoedge-construction-diagnosis.md`, "Amendment".
+struct MiterCorner {
+    vertex: VertexId,
+    /// Index into `stripes` (and `cross_boundaries`) for the `ex`-direction
+    /// stripe.
+    stripe_a: usize,
+    /// Index into `stripes` (and `cross_boundaries`) for the `ey`-direction
+    /// stripe.
+    stripe_b: usize,
+    radius: f64,
+    /// Direction of stripe `indices[0]`'s selected edge, away from `vertex`.
+    ex: Vec3,
+    /// Direction of stripe `indices[1]`'s selected edge, away from `vertex`.
+    ey: Vec3,
+    /// Shared top face's outward normal. `ex.cross(ey) == n`.
+    n: Vec3,
+    /// The shared face both stripes contact (already support-trimmed id).
+    top_face: FaceId,
+    /// Stripe `indices[0]`'s own (non-shared) side support face.
+    side_a: FaceId,
+    /// Stripe `indices[1]`'s own (non-shared) side support face.
+    side_b: FaceId,
+    /// The retained-edge top vertex `vertex - n*r`.
+    p00: Point3,
+    /// The top-contact meeting vertex `vertex + ex*r + ey*r`.
+    vtop: Point3,
+}
+
+/// Detect whether `junction` (already known to have exactly two incident
+/// stripes, `indices`) qualifies for the amendment's sharp-mitered n=2
+/// construction: both stripes constant-radius with equal radius, a
+/// trihedral (three-plane) orthogonal corner, both selected edges' stripes
+/// sharing exactly one common (top) face. Mirrors
+/// `check_equal_two_edge_admissibility`'s own qualifying test so detection
+/// is consistent with what was already refused or admitted before any
+/// mutation; this function performs no refusal itself; a caller must not
+/// have reached here for an inadmissible request.
+fn detect_equal_two_edge_miter(
+    topo: &Topology,
+    junction: &VertexJunction,
+    stripes: &[Stripe],
+    indices: &[usize],
+    support_faces: &[(FaceId, FaceId)],
+) -> Result<Option<MiterCorner>, BlendError> {
+    let [ia, ib] = indices else {
+        return Ok(None);
+    };
+    let a = &stripes[*ia];
+    let b = &stripes[*ib];
+    let (Some(sa), Some(sb)) = (
+        contact_section_at_vertex(junction.vertex, a, topo),
+        contact_section_at_vertex(junction.vertex, b, topo),
+    ) else {
+        return Ok(None);
+    };
+    let radius = sa.radius;
+    if radius <= TOL || (sa.radius - sb.radius).abs() > TOL {
+        return Ok(None);
+    }
+    if junction.face_fan.len() != 3 {
+        return Ok(None);
+    }
+    let mut faces = vec![a.face1, a.face2, b.face1, b.face2];
+    faces.sort_unstable_by_key(|face| face.index());
+    faces.dedup();
+    if faces.len() != 3
+        || faces
+            .iter()
+            .any(|&f| !topo.face(f).is_ok_and(|face| face.surface().is_planar()))
+    {
+        return Ok(None);
+    }
+    let normals: Vec<Vec3> = faces
+        .iter()
+        .filter_map(|&face| match topo.face(face).ok()?.surface() {
+            FaceSurface::Plane { normal, .. } => Some(*normal),
+            _ => None,
+        })
+        .collect();
+    if normals.len() != 3
+        || normals
+            .iter()
+            .enumerate()
+            .any(|(i, n)| normals.iter().skip(i + 1).any(|m| n.dot(*m).abs() > 1e-10))
+    {
+        return Ok(None);
+    }
+    // The shared top face is whichever of a's two faces also appears among
+    // b's two faces.
+    let Some(top_face) = [a.face1, a.face2]
+        .into_iter()
+        .find(|face| *face == b.face1 || *face == b.face2)
+    else {
+        return Ok(None);
+    };
+    let side_a = if a.face1 == top_face {
+        a.face2
+    } else {
+        a.face1
+    };
+    let side_b = if b.face1 == top_face {
+        b.face2
+    } else {
+        b.face1
+    };
+    if side_a == side_b {
+        return Ok(None);
+    }
+    // `Stripe.face1`/`face2` are *source* face ids, fixed at plan time. By
+    // the time this runs, the earlier support-face batch trim
+    // (`fillet_builder.rs`) has already replaced each with a new `FaceId`
+    // carrying the same surface but a rebuilt wire; `support_faces[idx]`
+    // (passed straight through from that trim, one `(replaced-face1,
+    // replaced-face2)` pair per stripe) is the current id. Resolve
+    // `top_face`/`side_a`/`side_b` to those current ids — the geometry
+    // checks above are surface-only and give identical answers on either
+    // id, but every later mutation must operate on the actual current face.
+    let Some(&(sf1, sf2)) = support_faces.get(*ia) else {
+        return Ok(None);
+    };
+    let top_face = if top_face == a.face1 { sf1 } else { sf2 };
+    let side_a = if side_a == a.face1 { sf1 } else { sf2 };
+    let Some(&(sf1b, sf2b)) = support_faces.get(*ib) else {
+        return Ok(None);
+    };
+    let side_b = if side_b == b.face1 { sf1b } else { sf2b };
+    let (Some((a_start, a_end)), Some((b_start, b_end))) = (
+        source_spine_endpoints(topo, a)?,
+        source_spine_endpoints(topo, b)?,
+    ) else {
+        return Ok(None);
+    };
+    let far_a = if a_start == junction.vertex {
+        a_end
+    } else if a_end == junction.vertex {
+        a_start
+    } else {
+        return Ok(None);
+    };
+    let far_b = if b_start == junction.vertex {
+        b_end
+    } else if b_end == junction.vertex {
+        b_start
+    } else {
+        return Ok(None);
+    };
+    let vertex_point = topo.vertex(junction.vertex)?.point();
+    let ex = (topo.vertex(far_a)?.point() - vertex_point)
+        .normalize()
+        .map_err(BlendError::Math)?;
+    let ey = (topo.vertex(far_b)?.point() - vertex_point)
+        .normalize()
+        .map_err(BlendError::Math)?;
+    if ex.dot(ey).abs() > 1e-10 {
+        return Ok(None);
+    }
+    let top = topo.face(top_face)?;
+    let FaceSurface::Plane { normal, .. } = top.surface() else {
+        return Ok(None);
+    };
+    let n = if top.is_reversed() { -*normal } else { *normal };
+    // `ex`/`ey` stay paired with stripe `a`/`b` (`side_a`/`side_b`,
+    // `far_a`/`far_b`) regardless of `ex x ey`'s sign relative to `n` — the
+    // crease formula below (`u = normalize(-(ex+ey))`,
+    // `ellipse_normal = u.cross(n)`) is symmetric in `ex`/`ey`, `u` is
+    // always exactly perpendicular to `n` because both `ex` and `ey` lie in
+    // the top face's plane, and the `(u x n) x u = n` identity then holds
+    // for any unit `u ⟂ n` — independent of `ex x ey`'s sign (proved in
+    // `n414_miter_crease_ellipse_frame_matches_analytic_reference`).
+    // Swapping here to force a convention would instead desynchronize
+    // `ex`/`ey` from `side_a`/`side_b`/`far_a`/`far_b`.
+    let p00 = vertex_point - n * radius;
+    let vtop = vertex_point + ex * radius + ey * radius;
+    Ok(Some(MiterCorner {
+        vertex: junction.vertex,
+        stripe_a: *ia,
+        stripe_b: *ib,
+        radius,
+        ex,
+        ey,
+        n,
+        top_face,
+        side_a,
+        side_b,
+        p00,
+        vtop,
+    }))
+}
+
+/// Adopt the retained vertical edge at one side support of a sharp-mitered
+/// n=2 corner.
+///
+/// On this base the trimmer already delivers exactly the wire the miter
+/// needs: `BoundarySplitPolicy::Selective` plus #1650's ungated doubled-back
+/// tail drop extend each side support to its own contact and leave the
+/// retained vertical edge (incident to `vertex`, direction `-n`) shortened to
+/// `p00 = vertex - n*radius`, with no small connector stub between the two.
+/// N414's original step had to *create* that shape by consuming the stub
+/// (on `ddee7945` the trimmer kept the doubled-back tail, and that stub is
+/// what the miter's step 1 shortened and dropped); the rebuild adopts the
+/// post-trim shape it is actually handed, instead of racing the trimmer for
+/// it.
+///
+/// `reuse`, when `Some`, supplies the vertical edge, `p00` vertex and bottom
+/// vertex already adopted from the *other* side support sharing this same
+/// source edge. Both side supports then use the exact same edge/vertex
+/// instances (the amendment's "shared by both side supports"). When the
+/// second face arrives with its own coincident copy, that copy is replaced in
+/// place and this face's own local `p00`-position vertex is retargeted to the
+/// canonical one on whichever other wire edge still references it. That
+/// other edge is this build's own side contact, freshly created by the same
+/// command's earlier support-face batch trim — never original source
+/// topology — so moving its one endpoint in place (same `EdgeId`, same curve)
+/// keeps it valid everywhere else it is shared without minting a new edge id
+/// the registry's `postassembly_audit` could not account for.
+fn adopt_side_face_vertical_edge(
+    topo: &mut Topology,
+    face_id: FaceId,
+    vertex: VertexId,
+    n: Vec3,
+    radius: f64,
+    reuse: Option<(EdgeId, VertexId, VertexId)>,
+) -> Result<(EdgeId, VertexId, VertexId), BlendError> {
+    let fail = || BlendError::CornerFailure { vertex };
+    let vertex_point = topo.vertex(vertex)?.point();
+    let p00_point = vertex_point - n * radius;
+    let wire_id = topo.face(face_id)?.outer_wire();
+    let edges = topo.wire(wire_id)?.edges().to_vec();
+
+    let mut found: Option<(usize, EdgeId, VertexId, VertexId)> = None;
+    for (i, oe) in edges.iter().enumerate() {
+        let e = topo.edge(oe.edge())?;
+        if !matches!(e.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let start_point = topo.vertex(e.start())?.point();
+        let end_point = topo.vertex(e.end())?.point();
+        let (near_vertex, near_point, far_vertex, far_point) =
+            if (start_point - p00_point).length() <= TOL {
+                (e.start(), start_point, e.end(), end_point)
+            } else if (end_point - p00_point).length() <= TOL {
+                (e.end(), end_point, e.start(), start_point)
+            } else {
+                continue;
+            };
+        let delta = far_point - near_point;
+        // Direction, not length, identifies the retained vertical edge: its
+        // free end runs away from `p00` along `-n` by construction, while
+        // the side contact that also ends at `p00` runs along the contact
+        // instead. A length test would be ambiguous at `r >= S/2`, where the
+        // retained edge (`S - r`) is no longer longer than the radius the
+        // old stub was `r` long.
+        if !delta
+            .normalize()
+            .is_ok_and(|dir| (dir - (-n)).length() <= 1e-6)
+        {
+            continue;
+        }
+        if found.is_some() {
+            return Err(fail());
+        }
+        found = Some((i, oe.edge(), near_vertex, far_vertex));
+    }
+    let Some((position, own_edge, local_p00, bottom)) = found else {
+        if miter_trace() {
+            log::debug!("MITER adopt: face={face_id:?} vertex={vertex:?} p00={p00_point:?} MISS");
+            miter_trace_face(topo, face_id, "adopt-miss");
+        }
+        return Err(fail());
+    };
+    let Some((shared_edge, p00_vertex, shared_bottom)) = reuse else {
+        if miter_trace() {
+            log::debug!(
+                "MITER adopt: face={face_id:?} vertical={own_edge:?} p00={local_p00:?} bottom={bottom:?} (first)"
+            );
+        }
+        return Ok((own_edge, local_p00, bottom));
+    };
+    if own_edge == shared_edge || local_p00 == p00_vertex {
+        if miter_trace() {
+            log::debug!("MITER adopt: face={face_id:?} already shares vertical={shared_edge:?}");
+        }
+        return Ok((shared_edge, p00_vertex, shared_bottom));
+    }
+
+    let mut new_edges = edges.clone();
+    new_edges[position] = OrientedEdge::new(shared_edge, edges[position].is_forward());
+    for oe in &new_edges {
+        let e = topo.edge(oe.edge())?;
+        if e.start() != local_p00 && e.end() != local_p00 {
+            continue;
+        }
+        let edge_mut = topo.edge_mut(oe.edge())?;
+        if edge_mut.start() == local_p00 {
+            edge_mut.set_start(p00_vertex);
+        }
+        if edge_mut.end() == local_p00 {
+            edge_mut.set_end(p00_vertex);
+        }
+    }
+    let new_wire = topo.add_wire(Wire::new(new_edges, true)?);
+    topo.face_mut(face_id)?.set_outer_wire(new_wire);
+    if miter_trace() {
+        log::debug!(
+            "MITER adopt: face={face_id:?} unified onto vertical={shared_edge:?} from {own_edge:?}"
+        );
+    }
+    Ok((shared_edge, p00_vertex, shared_bottom))
+}
+/// Shorten each stripe's shared-face (top) contact to end at the
+/// top-contact meeting vertex, splicing the top face's two shortened
+/// contacts together directly with no edge between them — removing the
+/// rounded corner-fill arc `mapped_planar_corner_geometry` placed there for
+/// the (now-superseded) unrestricted construction (see
+/// `docs/N414-evidence/miter-construction-design.md`). Mutates
+/// `miter.top_face` in place.
+///
+/// Returns `(contact_a, contact_b, vtop_vertex)`: stripe `a`'s (`ex`-aligned)
+/// and stripe `b`'s (`ey`-aligned) top-contact edge ids (shortened in
+/// place — same identity before and after, see below) and the new shared
+/// top-contact meeting vertex.
+fn shorten_top_contacts_and_splice_top_face(
+    topo: &mut Topology,
+    miter: &MiterCorner,
+) -> Result<(EdgeId, EdgeId, VertexId), BlendError> {
+    let fail = || BlendError::CornerFailure {
+        vertex: miter.vertex,
+    };
+    let vertex_point = topo.vertex(miter.vertex)?.point();
+    let wire_id = topo.face(miter.top_face)?.outer_wire();
+    let edges = topo.wire(wire_id)?.edges().to_vec();
+
+    let mut arc_pos = None;
+    for (i, oe) in edges.iter().enumerate() {
+        let e = topo.edge(oe.edge())?;
+        let EdgeCurve::Circle(_) = e.curve() else {
+            continue;
+        };
+        let sp = topo.vertex(e.start())?.point();
+        let ep = topo.vertex(e.end())?.point();
+        if (sp - vertex_point).length() <= miter.radius + TOL
+            && (ep - vertex_point).length() <= miter.radius + TOL
+        {
+            arc_pos = Some(i);
+            break;
+        }
+    }
+    let arc_pos = arc_pos.ok_or_else(fail)?;
+    let count = edges.len();
+    let before_pos = (arc_pos + count - 1) % count;
+    let after_pos = (arc_pos + 1) % count;
+
+    // Both top contacts (and the top face itself) are non-source entities
+    // already freshly created by this same command's earlier support-face
+    // batch trim — never part of the original source solid — so shortening
+    // them *in place* (same `EdgeId`, only its curve/one endpoint change)
+    // is safe, and keeps every registry entry already recorded for them
+    // (owners: the top face and this stripe's own face) exactly valid: no
+    // new edge is minted that the registry's `postassembly_audit` would
+    // then need — and be unable — to account for (see
+    // docs/N414-evidence/miter-construction-design.md).
+    let vtop_vertex = topo.add_vertex(Vertex::new(miter.vtop, TOL));
+    let shorten = |topo: &mut Topology, pos: usize| -> Result<(), BlendError> {
+        let oe = edges[pos];
+        let e = topo.edge(oe.edge())?.clone();
+        let EdgeCurve::NurbsCurve(curve) = e.curve() else {
+            return Err(fail());
+        };
+        let sp = topo.vertex(e.start())?.point();
+        let ep = topo.vertex(e.end())?.point();
+        // The contact's corner-side endpoint is not at `vertex` itself: an
+        // (unrestricted, full-length) shared-face contact is offset inward
+        // by `radius` from the original edge, so its near end sits at
+        // exactly `radius` from `vertex`, perpendicular to its own run
+        // direction. Pick whichever endpoint is nearer; the far endpoint
+        // is expected to be much further away (checked below).
+        let (near_is_start, near_point) =
+            if (sp - vertex_point).length() <= (ep - vertex_point).length() {
+                (true, sp)
+            } else {
+                (false, ep)
+            };
+        let far_point = if near_is_start { ep } else { sp };
+        let length = (far_point - near_point).length();
+        if length - miter.radius <= TOL {
+            return Err(BlendError::RadiusTooLarge {
+                edge: oe.edge(),
+                max_radius: length.max(0.0),
+            });
+        }
+        let fraction = miter.radius / length;
+        let trimmed = if near_is_start {
+            trim_nurbs_curve(curve, fraction, 1.0)?
+        } else {
+            trim_nurbs_curve(curve, 0.0, 1.0 - fraction)?
+        };
+        let edge_mut = topo.edge_mut(oe.edge())?;
+        if near_is_start {
+            edge_mut.set_start(vtop_vertex);
+        } else {
+            edge_mut.set_end(vtop_vertex);
+        }
+        edge_mut.set_curve(EdgeCurve::NurbsCurve(trimmed));
+        Ok(())
+    };
+    shorten(topo, before_pos)?;
+    shorten(topo, after_pos)?;
+
+    let mut new_edges = Vec::with_capacity(count - 1);
+    for (i, oe) in edges.iter().enumerate() {
+        if i != arc_pos {
+            new_edges.push(*oe);
+        }
+    }
+    let new_wire = topo.add_wire(Wire::new(new_edges, true)?);
+    topo.face_mut(miter.top_face)?.set_outer_wire(new_wire);
+
+    // Disambiguate by direction: the far endpoint of stripe a's own contact
+    // lies along `ex`, stripe b's along `ey` (both exact by construction:
+    // these are the straight top-contact lines parallel to their own
+    // selected edge).
+    let far_point_of = |topo: &Topology, edge: EdgeId| -> Result<Point3, BlendError> {
+        let e = topo.edge(edge)?;
+        let sp = topo.vertex(e.start())?.point();
+        let ep = topo.vertex(e.end())?.point();
+        let vtop_point = topo.vertex(vtop_vertex)?.point();
+        Ok(if (sp - vtop_point).length() <= TOL {
+            ep
+        } else {
+            sp
+        })
+    };
+    let before_edge = edges[before_pos].edge();
+    let after_edge = edges[after_pos].edge();
+    let before_far = far_point_of(topo, before_edge)?;
+    let vtop_point = topo.vertex(vtop_vertex)?.point();
+    let before_dir = (before_far - vtop_point)
+        .normalize()
+        .map_err(BlendError::Math)?;
+    let (contact_a, contact_b) = if before_dir.dot(miter.ex) > before_dir.dot(miter.ey) {
+        (before_edge, after_edge)
+    } else {
+        (after_edge, before_edge)
+    };
+    Ok((contact_a, contact_b, vtop_vertex))
+}
+
+/// Splice the crease edge into one stripe's own face: replace its old
+/// (full-length) shared-face contact edge with the shortened one, and
+/// replace its deferred cross-section placeholder arc (located via
+/// `cross_boundaries`, never by position or geometric guess) with the
+/// crease. Mutates `face_id` in place.
+///
+/// Close this stripe's own face wire at one miter-corner end by inserting
+/// the crease edge into the gap that end's *never-registered*
+/// cross-section boundary would otherwise have filled (`fillet_builder.rs`
+/// deliberately skips registering a placeholder there for a miter vertex —
+/// see `docs/N414-evidence/miter-construction-design.md` — so there is no
+/// old arc here to find or replace; the wire is genuinely open at that one
+/// position). `contact` (the shared-face contact, already shortened *in
+/// place* by `shorten_top_contacts_and_splice_top_face`, so its `EdgeId`
+/// is unchanged) is assumed already present in `face_id`'s wire.
+///
+/// The insertion side and the crease's forward sense are both derived from
+/// real wire connectivity — which raw endpoint of `contact` actually
+/// matches one of the crease's two endpoints, combined with the wire
+/// slot's own forward flag — never assumed from the stripe's
+/// spine-start/spine-end convention. That convention interacts
+/// unpredictably with each contact edge's own (independently chosen,
+/// positionally arbitrary) forward flag: the corner-adjacent point can
+/// land on a contact's wire-effective start *or* end depending on that
+/// flag, not on which cross-section slot it historically filled.
+fn insert_miter_crease_into_stripe_face(
+    topo: &mut Topology,
+    face_id: FaceId,
+    contact: EdgeId,
+    crease_edge: EdgeId,
+) -> Result<(), BlendError> {
+    let fail = || BlendError::TrimmingFailure { face: face_id };
+    let wire_id = topo.face(face_id)?.outer_wire();
+    let mut edges = topo.wire(wire_id)?.edges().to_vec();
+
+    let contact_pos = edges
+        .iter()
+        .position(|oe| oe.edge() == contact)
+        .ok_or_else(fail)?;
+    let contact_forward = edges[contact_pos].is_forward();
+
+    let contact_edge = topo.edge(contact)?;
+    let effective_start = if contact_forward {
+        contact_edge.start()
+    } else {
+        contact_edge.end()
+    };
+    let effective_end = if contact_forward {
+        contact_edge.end()
+    } else {
+        contact_edge.start()
+    };
+    let crease = topo.edge(crease_edge)?;
+    let matches_crease = |v: VertexId| v == crease.start() || v == crease.end();
+    let (insert_pos, forward) = if matches_crease(effective_start) {
+        // The gap is immediately before this contact in the wire: the
+        // crease's own effective end must land on this contact's
+        // effective start.
+        (contact_pos, crease.end() == effective_start)
+    } else if matches_crease(effective_end) {
+        // The gap is immediately after: the crease's effective start must
+        // land on this contact's effective end.
+        (contact_pos + 1, crease.start() == effective_end)
+    } else {
+        return Err(fail());
+    };
+
+    edges.insert(insert_pos, OrientedEdge::new(crease_edge, forward));
+    let new_wire = topo.add_wire(Wire::new(edges, true)?);
+    topo.face_mut(face_id)?.set_outer_wire(new_wire);
+    Ok(())
+}
+
+/// Build the N413/N414 amendment's sharp mitered n=2 corner in full: the
+/// retained vertical edge restricted to `[0,h]` and shared by both side
+/// supports, each stripe's shared-face contact shortened to the
+/// top-contact meeting vertex with the top face's rounded corner-fill arc
+/// removed, and one exact `Ellipse3D` crease edge shared by both stripe
+/// faces installed in place of their deferred cross-section placeholder.
+/// No corner face is created — this is the amendment's entire per-corner
+/// obligation.
+fn apply_equal_two_edge_miter_corner(
+    topo: &mut Topology,
+    miter: &MiterCorner,
+    stripe_faces: &[Option<FaceId>],
+) -> Result<(), BlendError> {
+    let fail = || BlendError::CornerFailure {
+        vertex: miter.vertex,
+    };
+
+    let face_a = stripe_faces
+        .get(miter.stripe_a)
+        .copied()
+        .flatten()
+        .ok_or_else(fail)?;
+    let face_b = stripe_faces
+        .get(miter.stripe_b)
+        .copied()
+        .flatten()
+        .ok_or_else(fail)?;
+    if miter_trace() {
+        log::debug!(
+            "MITER corner vertex={:?} stripe_a={} stripe_b={} side_a={:?} side_b={:?} top={:?} p00={:?} vtop={:?}",
+            miter.vertex,
+            miter.stripe_a,
+            miter.stripe_b,
+            miter.side_a,
+            miter.side_b,
+            miter.top_face,
+            miter.p00,
+            miter.vtop
+        );
+        miter_trace_face(topo, miter.top_face, "top");
+        miter_trace_face(topo, miter.side_a, "side_a");
+        miter_trace_face(topo, miter.side_b, "side_b");
+        miter_trace_face(topo, face_a, "stripe_a");
+        miter_trace_face(topo, face_b, "stripe_b");
+    }
+
+    // Step 1: the shared retained vertical edge. The trimmer has already
+    // shortened each side support's copy to `p00` (see
+    // `adopt_side_face_vertical_edge`); the miter only adopts it and makes
+    // both side supports use the one shared edge/vertex pair.
+    let (vertical_edge, p00_vertex, bottom) = adopt_side_face_vertical_edge(
+        topo,
+        miter.side_a,
+        miter.vertex,
+        miter.n,
+        miter.radius,
+        None,
+    )?;
+    if miter_trace() {
+        log::debug!(
+            "MITER step1a: side_a={:?} vertical={vertical_edge:?} p00={p00_vertex:?} bottom={bottom:?}",
+            miter.side_a
+        );
+    }
+    adopt_side_face_vertical_edge(
+        topo,
+        miter.side_b,
+        miter.vertex,
+        miter.n,
+        miter.radius,
+        Some((vertical_edge, p00_vertex, bottom)),
+    )?;
+    if miter_trace() {
+        log::debug!("MITER step1b: side_b={:?}", miter.side_b);
+    }
+
+    // Step 2: shorten both stripes' shared-face contacts (in place — same
+    // identity before and after) and splice the top face directly at the
+    // new top-contact meeting vertex.
+    let (contact_a, contact_b, vtop_vertex) =
+        shorten_top_contacts_and_splice_top_face(topo, miter)?;
+    if miter_trace() {
+        log::debug!(
+            "MITER step2: top_face={:?} contact_a={contact_a:?} contact_b={contact_b:?} vtop={vtop_vertex:?}",
+            miter.top_face
+        );
+    }
+
+    // Step 3: the exact crease edge (verified frame/formula:
+    // `n414_miter_crease_ellipse_frame_matches_analytic_reference`).
+    let center = miter.p00 + miter.ex * miter.radius + miter.ey * miter.radius;
+    let u = (-(miter.ex + miter.ey))
+        .normalize()
+        .map_err(BlendError::Math)?;
+    let ellipse_normal = u.cross(miter.n);
+    let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+        center,
+        ellipse_normal,
+        miter.radius * std::f64::consts::SQRT_2,
+        miter.radius,
+        u,
+    )
+    .map_err(BlendError::Math)?;
+    let crease_edge = topo.add_edge(Edge::new(
+        p00_vertex,
+        vtop_vertex,
+        EdgeCurve::Ellipse(ellipse),
+    ));
+
+    // Step 4: close the gap in each stripe's own face wire with the
+    // crease edge.
+    insert_miter_crease_into_stripe_face(topo, face_a, contact_a, crease_edge)?;
+    insert_miter_crease_into_stripe_face(topo, face_b, contact_b, crease_edge)?;
+
+    Ok(())
+}
+
 fn build_junction_fan(
     topo: &mut Topology,
     stripes: &[Stripe],
@@ -2167,6 +3359,7 @@ fn build_junction_fan(
     }
     Ok(results)
 }
+
 /// Build a fan of ruled-triangle faces closing a 4-stripe junction.
 ///
 /// Valence-4 junctions (mixed radii, e.g. the fused-outline scoop) do not
@@ -2366,6 +3559,7 @@ fn ruled_surface_to_apex_sampled(
 /// support-side closure. Junctions dispatch to the ordered fan, preserving
 /// analytic two-edge and spherical three-edge surfaces. Higher valence and
 /// singular geometry fail before publication.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_ordered_corners(
     topo: &mut Topology,
     stripes: &[Stripe],
@@ -2373,10 +3567,38 @@ pub fn compute_ordered_corners(
     contour_to_stripe: &[Option<usize>],
     cross_boundaries: &[TerminalBoundary],
     support_faces: &[(FaceId, FaceId)],
+    stripe_faces: &[Option<FaceId>],
     registry: &mut BoundaryRegistry,
 ) -> Result<Vec<CornerResult>, BlendError> {
+    // N413/N414 amendment: the sharp mitered n=2 corner. No corner face is
+    // built for a qualifying junction — the crease edge and the two new
+    // vertices are its entire contribution — so these vertices are tracked
+    // here and skipped entirely by the ordinary junction-fan pass below.
+    let mut miter_handled = std::collections::HashSet::new();
+    for junction in junctions {
+        if junction.classification != CornerClassification::Junction {
+            continue;
+        }
+        let indices: Vec<_> = junction
+            .incident_contours
+            .iter()
+            .filter_map(|contour| contour_to_stripe.get(*contour).copied().flatten())
+            .collect();
+        if indices.len() != 2 {
+            continue;
+        }
+        if let Some(miter) =
+            detect_equal_two_edge_miter(topo, junction, stripes, &indices, support_faces)?
+        {
+            apply_equal_two_edge_miter_corner(topo, &miter, stripe_faces)?;
+            miter_handled.insert(junction.vertex);
+        }
+    }
     let mut results = Vec::new();
     for junction in junctions {
+        if miter_handled.contains(&junction.vertex) {
+            continue;
+        }
         let indices: Vec<usize> = junction
             .incident_contours
             .iter()
@@ -2484,6 +3706,14 @@ mod tests {
                 .set_surface(FaceSurface::Plane { normal, d });
         }
         solid
+    }
+
+    /// The faces of `solid`'s outer shell, for scoping
+    /// `set_back_convex_trihedral_stripes`'s `solid_faces` argument in tests
+    /// that call it directly rather than through the full `FilletBuilder`.
+    fn solid_shell_faces(topo: &Topology, solid: brepkit_topology::solid::SolidId) -> Vec<FaceId> {
+        let shell = topo.solid(solid).unwrap().outer_shell();
+        topo.shell(shell).unwrap().faces().to_vec()
     }
 
     fn box_edges_at_origin(
@@ -3116,6 +4346,7 @@ mod tests {
             &[Some(0), Some(1), Some(2), Some(3), Some(4)],
             &[],
             &[],
+            &[],
             &mut BoundaryRegistry::new(),
         ) {
             Ok(_) => panic!("valence-5 junction must fail explicitly"),
@@ -3198,6 +4429,7 @@ mod tests {
             &[Some(0)],
             &[],
             &[],
+            &[],
             &mut BoundaryRegistry::new(),
         )
         .expect("periodic contour bypasses endpoint solving");
@@ -3237,9 +4469,15 @@ mod tests {
                     });
                 let expected_center = topo.vertex(vertex).unwrap().point() + inward_sum * radius;
                 let mut stripe_results = analytic_box_stripes(&topo, &plan, radius);
+                let solid_faces = solid_shell_faces(&topo, solid);
 
-                let setback_edges =
-                    set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results).unwrap();
+                let setback_edges = set_back_convex_trihedral_stripes(
+                    &topo,
+                    &plan,
+                    &mut stripe_results,
+                    &solid_faces,
+                )
+                .unwrap();
                 assert_eq!(
                     setback_edges.len(),
                     3,
@@ -3312,8 +4550,10 @@ mod tests {
             })
             .collect();
 
+        let solid_faces = solid_shell_faces(&topo, solid);
         let setback_edges =
-            set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results).unwrap();
+            set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &solid_faces)
+                .unwrap();
 
         assert!(
             setback_edges.is_empty(),
@@ -3323,5 +4563,306 @@ mod tests {
             assert_eq!(result.stripe.sections[0].center, before[0]);
             assert_eq!(result.stripe.sections[1].center, before[1]);
         }
+    }
+
+    /// N414 evidence (design/verification step, ahead of the full
+    /// construction): proves the exact `Ellipse3D` frame that will carry the
+    /// sharp mitered n=2 crease specified by the 2026-09-14 amendment to
+    /// `docs/N413-twoedge-construction-diagnosis.md`.
+    ///
+    /// `Ellipse3D::evaluate(t)` is `center + u_axis*semi_major*cos(t) +
+    /// v_axis*semi_minor*sin(t)` (see `brepkit_math::curves::Ellipse3D`), and
+    /// `Frame3::from_normal_and_ref` fixes `y_axis = normal.cross(x_axis)`
+    /// (see `brepkit_math::frame::Frame3`). Naively passing the plane
+    /// normal `(ey-ex)` or `(ex-ey)` is a 50/50 guess at which one lands
+    /// `v_axis` on `+n` (the correct sense) versus `-n` (a crease that dips
+    /// the wrong way and fails tangency). This test fixes that choice by
+    /// deriving the ellipse's own plane normal as `u.cross(n)`, which the
+    /// vector triple product `(u x n) x u = n` (since `u` and `n` are
+    /// orthonormal) guarantees lands `v_axis` on exactly `n` — verified here
+    /// numerically, not just algebraically, and under a non-axis-aligned
+    /// rigid placement so the check does not depend on world-axis alignment.
+    ///
+    /// Three independent checks: (1) the ellipse's `t=0`/`t=pi/2` endpoints
+    /// are the retained-edge top vertex `(0,0,h)` and the top-contact
+    /// meeting vertex `(r,r,S)`; (2) every sampled point matches the
+    /// closed-form crease `C(t)=(r(1-cos t), r(1-cos t), h+r sin t)` from
+    /// N413's amendment; (3) every sampled point lies at exact perpendicular
+    /// distance `r` from both stripe cylinder axes (the two full-cylinder
+    /// implicit equations), independently of the closed-form match.
+    #[test]
+    fn n414_miter_crease_ellipse_frame_matches_analytic_reference() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::mat::Mat4;
+
+        let r = 3.25_f64;
+        let s = 11.0_f64;
+        let h = s - r;
+
+        // A non-axis-aligned rigid placement, matching N413's documented
+        // matrix transform convention (rotate about Z, then Y, then
+        // translate).
+        let transform =
+            Mat4::translation(4.5, -2.25, 9.0) * Mat4::rotation_y(0.47) * Mat4::rotation_z(0.31);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let to_point = |local: Vec3| -> Point3 {
+            transform.mul_point(Point3::new(local.x(), local.y(), local.z()))
+        };
+        let to_dir = |local: Vec3| -> Vec3 {
+            let moved = to_point(local);
+            let base = transform.mul_point(origin);
+            Vec3::new(
+                moved.x() - base.x(),
+                moved.y() - base.y(),
+                moved.z() - base.z(),
+            )
+        };
+
+        // The corner's local frame: ex, ey the two selected-edge directions
+        // (away from the corner), n the shared top face's outward normal.
+        let ex = to_dir(Vec3::new(1.0, 0.0, 0.0));
+        let ey = to_dir(Vec3::new(0.0, 1.0, 0.0));
+        let n = to_dir(Vec3::new(0.0, 0.0, 1.0));
+
+        let p00 = to_point(Vec3::new(0.0, 0.0, h));
+        let vtop = to_point(Vec3::new(r, r, s));
+        let center = to_point(Vec3::new(r, r, h));
+
+        // The construction under test.
+        let u = (-(ex + ey)).normalize().unwrap();
+        let ellipse_normal = u.cross(n);
+        let ellipse =
+            Ellipse3D::new_with_ref(center, ellipse_normal, r * std::f64::consts::SQRT_2, r, u)
+                .unwrap();
+
+        let at_start = ellipse.evaluate(0.0);
+        let at_end = ellipse.evaluate(std::f64::consts::FRAC_PI_2);
+        assert!(
+            (at_start - p00).length() < 1e-9,
+            "t=0 must be the retained-edge top vertex: {at_start:?} vs {p00:?}"
+        );
+        assert!(
+            (at_end - vtop).length() < 1e-9,
+            "t=pi/2 must be the top-contact meeting vertex: {at_end:?} vs {vtop:?}"
+        );
+
+        // Cylinder A: axis through local (0,r,h) along ex. Cylinder B: axis
+        // through local (r,0,h) along ey. Both have exact radius r.
+        let axis_a = to_point(Vec3::new(0.0, r, h));
+        let axis_b = to_point(Vec3::new(r, 0.0, h));
+        let perpendicular_distance = |p: Point3, axis_point: Point3, axis_dir: Vec3| -> f64 {
+            let delta = Vec3::new(
+                p.x() - axis_point.x(),
+                p.y() - axis_point.y(),
+                p.z() - axis_point.z(),
+            );
+            let along = delta.dot(axis_dir);
+            (delta - axis_dir * along).length()
+        };
+
+        let steps = 97;
+        for i in 0..=steps {
+            let t = std::f64::consts::FRAC_PI_2 * f64::from(i) / f64::from(steps);
+            let local = Vec3::new(r * (1.0 - t.cos()), r * (1.0 - t.cos()), h + r * t.sin());
+            let analytic = to_point(local);
+            let sampled = ellipse.evaluate(t);
+            assert!(
+                (sampled - analytic).length() < 1e-9,
+                "t={t}: ellipse {sampled:?} vs closed-form crease {analytic:?}"
+            );
+            let da = perpendicular_distance(sampled, axis_a, ex);
+            let db = perpendicular_distance(sampled, axis_b, ey);
+            assert!(
+                (da - r).abs() < 1e-9,
+                "t={t}: distance to cylinder-A axis {da} != r={r}"
+            );
+            assert!(
+                (db - r).abs() < 1e-9,
+                "t={t}: distance to cylinder-B axis {db} != r={r}"
+            );
+
+            // Signed outward-normal dot from the amendment: sin^2(t), in
+            // [0,1). Outward normals (-cos t, 0, sin t) along ex/ey/n and
+            // (0,-cos t, sin t) in the local frame.
+            let normal_a = ex * (-t.cos()) + n * t.sin();
+            let normal_b = ey * (-t.cos()) + n * t.sin();
+            let dot = normal_a.dot(normal_b);
+            let expected = t.sin() * t.sin();
+            assert!(
+                (dot - expected).abs() < 1e-9,
+                "t={t}: signed normal dot {dot} != sin^2(t)={expected}"
+            );
+        }
+    }
+}
+
+/// N418 findings A and D regressions: the seam predicate that decides how
+/// much real material continues past an unselected sharp edge.
+#[cfg(test)]
+mod n421_seam_predicate_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use crate::fillet_plan::{CornerClassification, FilletContour, FilletPlan, RadiusLawPlan};
+    use crate::spine::Spine;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+
+    fn vertex(topo: &mut Topology, x: f64, y: f64, z: f64) -> VertexId {
+        topo.add_vertex(Vertex::new(Point3::new(x, y, z), TOL))
+    }
+
+    fn plane_face(topo: &mut Topology) -> FaceId {
+        let v0 = vertex(topo, 0.0, 0.0, 0.0);
+        let v1 = vertex(topo, 1.0, 0.0, 0.0);
+        let v2 = vertex(topo, 1.0, 1.0, 0.0);
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(e0, true),
+                    OrientedEdge::new(e1, true),
+                    OrientedEdge::new(e2, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        topo.add_face(Face::new(
+            wire,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    /// `plan` with one selected contour running `spine_edges`, its named
+    /// `terminals`, and a single junction at `far` carrying that contour.
+    fn plan_with_contour(
+        topo: &Topology,
+        far: VertexId,
+        seam: EdgeId,
+        spine_edges: Vec<EdgeId>,
+        terminals: Vec<VertexId>,
+        face: FaceId,
+    ) -> FilletPlan {
+        let spine = Spine::from_chain(topo, spine_edges).unwrap();
+        FilletPlan {
+            contours: vec![FilletContour {
+                edges: Vec::new(),
+                spine,
+                side1: face,
+                side2: face,
+                radius_law: RadiusLawPlan::Constant(2.0),
+                periodic: false,
+                terminal_junctions: terminals,
+            }],
+            restrictions: Vec::new(),
+            junctions: vec![crate::fillet_plan::VertexJunction {
+                vertex: far,
+                incident_contours: vec![0],
+                unselected_sharp_edges: vec![seam],
+                face_fan: vec![face],
+                classification: CornerClassification::Terminal,
+            }],
+            selected_edges: Vec::new(),
+        }
+    }
+
+    /// Finding A: an unselected edge whose far vertex is an *interior* vertex
+    /// of another selected contour must be measured to the contour terminal
+    /// that actually lies along the seam direction, and a non-collinear
+    /// interior continuation must not be a seam at all. Before the fix the
+    /// interior branch returned `true` with no collinearity check and no
+    /// measure of any kind.
+    #[test]
+    fn n421_seam_interior_vertex_branch_is_measured_not_assumed() {
+        let none = std::collections::HashSet::new();
+        let mut topo = Topology::new();
+        let start = vertex(&mut topo, 0.0, 0.0, 0.0);
+        let far = vertex(&mut topo, 1.0, 0.0, 0.0);
+        let mid = vertex(&mut topo, 3.0, 0.0, 0.0);
+        let collinear_terminal = vertex(&mut topo, 4.0, 0.0, 0.0);
+        let angled_terminal = vertex(&mut topo, 1.0, 3.0, 0.0);
+        let seam = topo.add_edge(Edge::new(start, far, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(far, mid, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(mid, collinear_terminal, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(far, angled_terminal, EdgeCurve::Line));
+        let face = plane_face(&mut topo);
+
+        // Interior collinear continuation: `far` is NOT one of the contour's
+        // own terminals, so the material available along the seam is the
+        // contour's own run out to `collinear_terminal` — 3.0 here, never
+        // the 4.0 the full spine's chord would suggest and never unbounded.
+        let plan = plan_with_contour(
+            &topo,
+            far,
+            seam,
+            vec![e0, e1],
+            vec![collinear_terminal],
+            face,
+        );
+        let measured = unselected_edge_seam_continuation(&topo, &plan, &none, start, seam).unwrap();
+        assert!(
+            (measured.unwrap() - 3.0).abs() < 1e-9,
+            "interior continuation must measure to the terminal along the seam direction"
+        );
+
+        // Interior continuation leaving the shared vertex at an angle: the
+        // seam test must reject it. (This is exactly what the unchecked
+        // interior branch used to accept.)
+        let angled_plan =
+            plan_with_contour(&topo, far, seam, vec![e2], vec![angled_terminal], face);
+        assert_eq!(
+            unselected_edge_seam_continuation(&topo, &angled_plan, &none, start, seam).unwrap(),
+            None,
+            "a non-collinear interior continuation is a genuine corner, not a seam"
+        );
+    }
+
+    /// Finding D: the collinearity test must use the continuation contour's
+    /// tangent at the shared vertex. This circle arc leaves `far` exactly
+    /// along the seam edge's own direction and then curves away, so its
+    /// end-to-end chord is *not* collinear with the seam edge while its
+    /// tangent is. Judged by the chord (the old test) the seam is missed and
+    /// the short edge is measured alone; judged by the tangent it is found.
+    #[test]
+    fn n421_seam_collinearity_uses_the_continuation_tangent() {
+        let mut topo = Topology::new();
+        let start = vertex(&mut topo, 0.0, 0.0, 0.0);
+        let far = vertex(&mut topo, 1.0, 0.0, 0.0);
+        // Arc centred (1, 1, 0), radius 1: through `far`, tangent +x there,
+        // running counter-clockwise to (1 + sqrt(2)/2, 1 - sqrt(2)/2, 0).
+        let quarter = std::f64::consts::FRAC_1_SQRT_2;
+        let arc_end = vertex(&mut topo, 1.0 + quarter, 1.0 - quarter, 0.0);
+        let seam = topo.add_edge(Edge::new(start, far, EdgeCurve::Line));
+        let circle =
+            Circle3D::new(Point3::new(1.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let arc = topo.add_edge(Edge::new(far, arc_end, EdgeCurve::Circle(circle)));
+        let face = plane_face(&mut topo);
+        let plan = plan_with_contour(&topo, far, seam, vec![arc], vec![far, arc_end], face);
+
+        // The chord from `far` to `arc_end` is ≈ (0.924, -0.383, 0), ~22.5°
+        // off the seam direction: chord-based collinearity would reject it.
+        let chord = (topo.vertex(arc_end).unwrap().point() - topo.vertex(far).unwrap().point())
+            .normalize()
+            .unwrap();
+        assert!(
+            chord.dot(Vec3::new(1.0, 0.0, 0.0)) < 0.99,
+            "fixture must not be chord-collinear, or it does not pin the tangent rule"
+        );
+        let none = std::collections::HashSet::new();
+        let continuation =
+            unselected_edge_seam_continuation(&topo, &plan, &none, start, seam).unwrap();
+        assert!(
+            continuation.is_some(),
+            "an arc leaving the shared vertex along the seam direction is a seam"
+        );
     }
 }

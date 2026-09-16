@@ -1603,7 +1603,21 @@ fn rebuild_mapped_parametric_face(
                             best_t = tt;
                         }
                     }
-                    if best_d > (d1 - d0).abs() {
+                    // The coarse minimum is only a basin finder; the exact
+                    // acceptance test is the post-refinement tolerance below.
+                    // Its rejection bound must be a length comparable to the
+                    // edge's own extent: the carrier parameter is an angle for
+                    // circles/ellipses and is 1 for every line, so comparing
+                    // `best_d` against the parametric span alone reads
+                    // "not this edge" on a long edge whose coarse samples are
+                    // spaced further apart than 1.0 model unit — measured at
+                    // S=254/r=25.4 (N421 matrix row A 254 mm 0.1): the
+                    // terminal spokes were never split, so the notch silently
+                    // never fired and the support faces kept their doubled-back
+                    // tails. The chord is a lower bound on the true extent, so
+                    // taking the max with the parametric span keeps every
+                    // on-carrier point inside the filter at any scale.
+                    if best_d > (d1 - d0).abs().max((tp - sp).length()) {
                         continue;
                     }
                     let step = (d1 - d0) / 64.0;

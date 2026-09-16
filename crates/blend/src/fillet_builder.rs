@@ -149,6 +149,23 @@ impl<'a> FilletBuilder<'a> {
             Err(error) => return Err(error),
         };
 
+        // N413/N414 amendment (rebuilt, N421): refuse an inadmissible
+        // equal-radius n=2 miter request on its real source-edge lengths
+        // before any mutation below — stripe computation is the first thing
+        // that allocates. This must never fall through to the legacy
+        // horn-torus path; see `corner::check_equal_two_edge_admissibility`.
+        if let Some(fillet_plan) = plan.as_ref() {
+            // The *requested* selection, not the plan's post-drop contour
+            // list: the plan drops tangent-continuous selected edges, and a
+            // seam's continuation may be exactly such an edge.
+            let requested: HashSet<EdgeId> = self
+                .edge_sets
+                .iter()
+                .flat_map(|(edges, _)| edges.iter().copied())
+                .collect();
+            corner::check_equal_two_edge_admissibility(self.topo, fillet_plan, &requested)?;
+        }
+
         // Keep actual RadiusLaw values only for the recoverable invalid-edge
         // fallback. Valid geometry always consumes the immutable plan's law.
         let mut all_edges: Vec<(EdgeId, usize)> = Vec::new();
@@ -243,7 +260,17 @@ impl<'a> FilletBuilder<'a> {
             });
         }
         let setback_edges = if let Some(plan) = plan.as_ref() {
-            corner::set_back_convex_trihedral_stripes(topo, plan, &mut stripe_results)?
+            // `original_faces` is this build's own solid's shell, captured
+            // before any mutation — the correct scope for "incident to this
+            // corner" even when `topo`'s arena also holds an unrelated,
+            // previously-built result solid from an earlier command against
+            // the same source (see `incident_face_count`'s doc comment).
+            corner::set_back_convex_trihedral_stripes(
+                topo,
+                plan,
+                &mut stripe_results,
+                &original_faces,
+            )?
         } else {
             HashSet::new()
         };
@@ -575,6 +602,41 @@ impl<'a> FilletBuilder<'a> {
             vec![(None, None); regular_results.len()];
         let mut blend_cross_handles: Vec<BlendCrossHandlePair> =
             vec![(None, None); regular_results.len()];
+        // N413/N414 amendment (rebuilt, N421): a sharp-mitered n=2 corner
+        // installs one exact crease edge shared by both stripe faces in place
+        // of what the ordinary cross-section placeholder arc would otherwise
+        // be. Two independently registered placeholder arcs (one per stripe,
+        // at two different vertex identities) can never be merged into one
+        // true shared crease afterwards without orphaning a registry entry,
+        // so a miter end's cross-section boundary is not registered at all
+        // here: that stripe face is built with an intentionally open wire at
+        // this one end (`Wire::new` does not itself validate closure), and
+        // `corner.rs`'s miter builder closes it by inserting the crease edge
+        // once both stripe faces and their shared p00/vtop vertices exist.
+        //
+        // Terminal ends are deliberately NOT special-cased: #1654's own
+        // notch/`Selective` machinery owns every terminal cap on this base
+        // (`terminal_cap_is_notchable` + `notch_face_corner_with_arc`), and
+        // for a mitered stripe's far terminal that machinery produces the
+        // same "cap adopts the registered cross-section arc" outcome the
+        // pre-#1654 construction had to build by hand. See
+        // `docs/N421-evidence/rebuild-design.md`.
+        let miter_vertices: HashSet<VertexId> = plan
+            .as_ref()
+            .map(|fillet_plan| {
+                corner::find_equal_two_edge_miter_junctions(topo, fillet_plan)
+                    .into_iter()
+                    .map(|m| m.vertex)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // The miter corner builder needs each stripe's own generated face id
+        // directly: for fixture B every stripe has a miter junction at *both*
+        // ends, so `blend_cross_handles` (which the ordinary junction/runout
+        // stage otherwise uses to recover a stripe's face via its
+        // cross-section boundary's owner) carries `(None, None)` for such a
+        // stripe and cannot be used for this lookup.
+        let mut stripe_faces: Vec<Option<FaceId>> = vec![None; regular_results.len()];
         for (si, sr) in regular_results.iter().enumerate() {
             let stripe = &sr.stripe;
 
@@ -763,10 +825,23 @@ impl<'a> FilletBuilder<'a> {
                     boundary_registry.set_owner_face(contact1, 1, info.face)?;
                     boundary_registry.set_owner_face(contact2, 1, info.face)?;
                     blend_cross_handles[si] = (None, None);
+                    stripe_faces[si] = Some(info.face);
                     info
                 } else {
-                    let cross_start = section_curve(stripe.sections.first(), p2_end, p1_start)?;
-                    let cross_end = section_curve(stripe.sections.last(), p1_end, p2_start)?;
+                    let (spine_start_v, spine_end_v) =
+                        terminals.ok_or_else(|| BlendError::PlanningFailure {
+                            reason: "open stripe spine missing terminals".to_owned(),
+                        })?;
+                    let cross_start = if miter_vertices.contains(&spine_start_v) {
+                        None
+                    } else {
+                        section_curve(stripe.sections.first(), p2_end, p1_start)?
+                    };
+                    let cross_end = if miter_vertices.contains(&spine_end_v) {
+                        None
+                    } else {
+                        section_curve(stripe.sections.last(), p1_end, p2_start)?
+                    };
                     let info = crate::builder_utils::create_blend_face_from_registry(
                         topo,
                         stripe,
@@ -785,6 +860,7 @@ impl<'a> FilletBuilder<'a> {
                         cross_end.map(|(handle, _)| handle),
                         cross_start.map(|(handle, _)| handle),
                     );
+                    stripe_faces[si] = Some(info.face);
                     info
                 }
             } else {
@@ -1019,6 +1095,7 @@ impl<'a> FilletBuilder<'a> {
                 &contour_to_stripe,
                 &blend_cross_handles,
                 &stripe_support_faces,
+                &stripe_faces,
                 &mut boundary_registry,
             )?;
             corner_face_ids.extend(corner_results.iter().map(|result| result.face_id));

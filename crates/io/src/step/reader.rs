@@ -445,12 +445,24 @@ impl<'a> StepBuilder<'a> {
                         reason: format!("ELLIPSE #{curve_ref} needs semi_major and semi_minor"),
                     });
                 }
-                let (center, normal, _u_axis) = self.build_axis2_placement(axis_ref)?;
-                let ellipse =
-                    brepkit_math::curves::Ellipse3D::new(center, normal, floats[0], floats[1])
-                        .map_err(|e| IoError::ParseError {
-                            reason: format!("ELLIPSE #{curve_ref}: {e}"),
-                        })?;
+                let (center, normal, u_axis) = self.build_axis2_placement(axis_ref)?;
+                // An ellipse (unlike a circle) is not rotationally symmetric
+                // about its own normal: which direction carries the
+                // semi-major extent is part of its actual shape, not just a
+                // parametrization label. Discarding the placement's own
+                // reference direction here (as the analogous CIRCLE branch
+                // above harmlessly does, since a circle has no preferred
+                // direction) silently reconstructs a *different*,
+                // arbitrarily-rotated ellipse — proven by
+                // `crates/io/tests/regress_twoedge_miter_step.rs`, whose
+                // re-imported crease samples land off both owning
+                // cylinders by up to `r*(1-1/sqrt(2))` before this fix.
+                let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+                    center, normal, floats[0], floats[1], u_axis,
+                )
+                .map_err(|e| IoError::ParseError {
+                    reason: format!("ELLIPSE #{curve_ref}: {e}"),
+                })?;
                 Ok(EdgeCurve::Ellipse(ellipse))
             }
             "B_SPLINE_CURVE_WITH_KNOTS" => self.build_bspline_curve(curve_ref, &attrs, false),
