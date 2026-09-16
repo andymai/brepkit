@@ -2471,7 +2471,23 @@ pub(super) fn build(
     // rounds a closed rim correctly. The guard is keyed on actual face area,
     // not edge topology, so a valid fillet (every face has real area) is never
     // rejected.
+    //
+    // At an exact geometric limit, however, a *valid* fillet does leave a
+    // zero-area face: the blend consumes a whole source face, and its remnant
+    // is planar and measures exactly zero. That is not the rim collapse this
+    // guard exists to catch, and the face's own supporting surface separates
+    // the two classes — measured side by side, no wire-level property does
+    // (both classes' failing wires are ordinary straight-edge wires with
+    // distinct vertices, whose chord lengths are a magnitude, not a class). A
+    // zero-area planar remnant is excluded from the returned shell and the
+    // remainder must still close; a zero-area non-planar face — the engine's
+    // own generated blend strip or cap collapsing — keeps the original refusal
+    // byte-identically. A limit whose construction cannot stitch the faces
+    // where the remnant vanished (the two-edge `r = S` and four-edge `r = S/2`
+    // routes) leaves free edges after the exclusion; that is refused with its
+    // own honest vanishing-remnant reason rather than returned as a solid.
     let area_floor = (radius * radius) * 1e-6;
+    let mut vanished_planar: Vec<(FaceId, f64)> = Vec::new();
     for fid in faces {
         // Fast accept first. `face_area` tessellates NURBS faces, and the
         // corner patch's degenerate column subdivides far past what its
@@ -2487,6 +2503,10 @@ pub(super) fn build(
         }
         let area = crate::measure::face_area(topo, fid, radius * 0.1)?;
         if area <= area_floor {
+            if matches!(topo.face(fid)?.surface(), FaceSurface::Plane { .. }) {
+                vanished_planar.push((fid, area));
+                continue;
+            }
             return Err(crate::OperationsError::InvalidInput {
                 reason: format!(
                     "fillet produced a degenerate face (area {area:.3e} <= {area_floor:.3e}); \
@@ -2495,8 +2515,61 @@ pub(super) fn build(
             });
         }
     }
+    if !vanished_planar.is_empty() {
+        exclude_vanished_planar_remnants(topo, solid_id, &vanished_planar, area_floor)?;
+    }
 
     Ok(solid_id)
+}
+
+/// Excludes the zero-area *planar* remnants a blend consumed exactly at a
+/// geometric limit, and requires what remains of the shell to still be a
+/// closed manifold before returning it.
+///
+/// The caller has already established that every face in `vanished_planar` is
+/// planar and measures no more than `area_floor`; a zero-area non-planar
+/// (generated blend strip or cap) face keeps the degenerate-face refusal
+/// instead. What can still fail here is the exclusion itself: where the
+/// construction does not stitch the faces around the vanishing remnant,
+/// dropping it leaves free edges, and an open boundary is refused with its own
+/// honest reason rather than returned as a solid.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::InvalidInput`] when the remaining shell
+/// is empty or not closed.
+fn exclude_vanished_planar_remnants(
+    topo: &mut Topology,
+    solid_id: SolidId,
+    vanished_planar: &[(FaceId, f64)],
+    area_floor: f64,
+) -> Result<(), crate::OperationsError> {
+    let (_, remnant_area) = vanished_planar[0];
+    let refusal = |detail: &str| crate::OperationsError::InvalidInput {
+        reason: format!(
+            "fillet produced a vanishing planar remnant (area {remnant_area:.3e} <= {area_floor:.3e}); \
+             excluding it leaves an open shell ({detail}), so the rolling-ball engine cannot \
+             build this radius"
+        ),
+    };
+    let shell_id = topo.solid(solid_id)?.outer_shell();
+    let kept: Vec<FaceId> = topo
+        .shell(shell_id)?
+        .faces()
+        .iter()
+        .copied()
+        .filter(|fid| {
+            !vanished_planar
+                .iter()
+                .any(|&(vanished, _)| vanished == *fid)
+        })
+        .collect();
+    let shell =
+        brepkit_topology::shell::Shell::new(kept).map_err(|_| refusal("every face vanished"))?;
+    brepkit_topology::validation::validate_shell_closed(&shell, topo)
+        .map_err(|error| refusal(&error.to_string()))?;
+    *topo.shell_mut(shell_id)? = shell;
+    Ok(())
 }
 
 /// Whether a corner vertex is concave (rolling-ball sphere centre on the
@@ -2673,4 +2746,164 @@ fn boundary_polygon_area(topo: &Topology, face_id: FaceId) -> Result<f64, crate:
         );
     }
     Ok(n.length() * 0.5)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, deprecated)]
+
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_topology::builder::make_polygon_wire;
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::explorer::{solid_edges, solid_faces};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::validation::validate_shell_closed;
+
+    use super::*;
+
+    /// 1 inch in millimetres: the side the exact-limit refusals were reported
+    /// on, so `r = S` is exactly the single-edge limit and `r = S/2` exactly
+    /// the four-edge (pillow) limit.
+    const S: f64 = 25.4;
+
+    /// The reported fixture: a 1 inch cube extruded from a square wire.
+    fn inch_cube(topo: &mut Topology) -> SolidId {
+        let wire = make_polygon_wire(
+            topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(S, 0.0, 0.0),
+                Point3::new(S, S, 0.0),
+                Point3::new(0.0, S, 0.0),
+            ],
+            Tolerance::new().linear,
+        )
+        .unwrap();
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), S).unwrap()
+    }
+
+    /// The unique source edge with these endpoints, in either direction.
+    fn edge_between(topo: &Topology, solid: SolidId, a: Point3, b: Point3) -> EdgeId {
+        let tolerance = Tolerance::new().linear;
+        let matches: Vec<EdgeId> = solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .filter(|&id| {
+                let edge = topo.edge(id).unwrap();
+                let start = topo.vertex(edge.start()).unwrap().point();
+                let end = topo.vertex(edge.end()).unwrap().point();
+                ((start - a).length() < tolerance && (end - b).length() < tolerance)
+                    || ((start - b).length() < tolerance && (end - a).length() < tolerance)
+            })
+            .collect();
+        assert_eq!(matches.len(), 1, "expected one edge {a:?}-{b:?}");
+        matches[0]
+    }
+
+    /// The discriminator's positive branch: at `r = S` the blend consumes the
+    /// whole cube face opposite the edge, and the two zero-area *planar*
+    /// remnants it leaves must be excluded from the returned shell instead of
+    /// tripping the rim guard — the exact request stock refused outright.
+    #[test]
+    fn planar_remnants_at_the_single_edge_limit_are_excluded_and_shell_stays_closed() {
+        let mut topo = Topology::new();
+        let solid = inch_cube(&mut topo);
+        let edge = edge_between(
+            &topo,
+            solid,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, S),
+        );
+        let result = crate::fillet::fillet_rolling_ball(&mut topo, solid, &[edge], S)
+            .expect("the single-edge exact limit must build");
+
+        // Two of the seven assembled faces are the vanished planar remnants;
+        // excluding them leaves the blend strip plus four faces.
+        let faces = solid_faces(&topo, result).unwrap();
+        assert_eq!(faces.len(), 5, "vanished remnants must not be returned");
+        let cylinders = faces
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert_eq!(cylinders, 1, "one blend strip");
+        assert_eq!(faces.len() - cylinders, 4, "four remaining source faces");
+
+        let shell = topo.solid(result).unwrap().outer_shell();
+        validate_shell_closed(topo.shell(shell).unwrap(), &topo)
+            .expect("the excluded shell must still be closed");
+        let report = crate::validate::validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "exact-limit result must validate");
+
+        // Outward orientation and the exact limit's analytic volume
+        // (`pi/4 * S^3`: the extrusion of the region inside the fillet arc).
+        let volume = crate::measure::oriented_solid_volume(&topo, result, 0.005).unwrap();
+        let exact = std::f64::consts::PI / 4.0 * S * S * S;
+        assert!(
+            (volume - exact).abs() < 5.0,
+            "volume {volume} is not the exact-limit volume {exact}"
+        );
+    }
+
+    /// The discriminator's refusal branch: two adjacent top edges at `r = S`
+    /// also consume the top face, but the strips terminate where it vanished,
+    /// so excluding the planar remnants leaves free edges. The guard must
+    /// refuse that honestly — never with the closed-rim wording, which was
+    /// never true of this case.
+    #[test]
+    fn unstitchable_planar_remnants_are_refused_honestly() {
+        let mut topo = Topology::new();
+        let solid = inch_cube(&mut topo);
+        let corners = [
+            Point3::new(0.0, 0.0, S),
+            Point3::new(S, 0.0, S),
+            Point3::new(S, S, S),
+            Point3::new(0.0, S, S),
+        ];
+        let edges = [
+            edge_between(&topo, solid, corners[0], corners[1]),
+            edge_between(&topo, solid, corners[1], corners[2]),
+        ];
+        let error = crate::fillet::fillet_rolling_ball(&mut topo, solid, &edges, S)
+            .expect_err("the two-edge exact limit is not constructible and must refuse");
+        let message = error.to_string();
+        assert!(message.contains("vanishing planar remnant"), "{message}");
+        assert!(message.contains("open shell"), "{message}");
+        assert!(!message.contains("closed circular edges"), "{message}");
+        assert!(!message.contains("combined setback"), "{message}");
+    }
+
+    /// The guard's original purpose must survive the discriminator: a fillet
+    /// of a cylinder's closed circular rim collapses the engine's own
+    /// generated blend strip to a zero-area *non-planar* face, and that keeps
+    /// the refusal byte-identically.
+    #[test]
+    fn non_planar_collapse_keeps_the_byte_identical_refusal() {
+        let mut topo = Topology::new();
+        let cylinder = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+        let rim = solid_edges(&topo, cylinder)
+            .unwrap()
+            .into_iter()
+            .find(|&id| {
+                let edge = topo.edge(id).unwrap();
+                matches!(edge.curve(), EdgeCurve::Circle(_)) && edge.start() == edge.end()
+            })
+            .expect("a cylinder has a closed circular rim");
+        let error = crate::fillet::fillet_rolling_ball(&mut topo, cylinder, &[rim], 0.5)
+            .expect_err("a collapsing closed rim must still be refused");
+        let message = error.to_string();
+        assert!(message.contains("degenerate face"), "{message}");
+        assert!(
+            message.contains("closed circular edges are not supported by the rolling-ball engine"),
+            "{message}"
+        );
+        assert!(!message.contains("vanishing planar remnant"), "{message}");
+    }
 }
