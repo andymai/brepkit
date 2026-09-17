@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.18](https://github.com/andymai/brepkit/compare/v3.4.17...v3.4.18) (2026-09-17)
+
+
+### Bug Fixes
+
+* **blend:** build the sharp-mitered corner for equal-radius adjacent fillets ([#1687](https://github.com/andymai/brepkit/issues/1687)) ([b2e3eae](https://github.com/andymai/brepkit/commit/b2e3eaeec1dcb09ec97c682976bda95caba6a172))
+
 ## [3.4.17](https://github.com/andymai/brepkit/compare/v3.4.16...v3.4.17) (2026-09-17)
 
 
