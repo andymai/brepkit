@@ -313,16 +313,12 @@ impl<'a> StepBuilder<'a> {
                 Ok(FaceSurface::Torus(torus))
             }
             "B_SPLINE_SURFACE_WITH_KNOTS" | "BOUNDED_SURFACE" | "B_SPLINE_SURFACE" => {
-                let is_rational = attrs.contains("RATIONAL");
-                self.build_bspline_surface(surface_ref, &attrs, is_rational)
+                self.build_bspline_surface(surface_ref, &attrs, None)
             }
             _ if entity_type.is_empty() || attrs.contains("B_SPLINE_SURFACE_WITH_KNOTS") => {
-                let is_rational = attrs.contains("RATIONAL");
-                let bspline_attrs = find_composite_bspline_attrs(&attrs, "B_SPLINE_SURFACE")
-                    .ok_or_else(|| IoError::UnsupportedEntity {
-                        entity: format!("composite surface #{surface_ref}"),
-                    })?;
-                self.build_bspline_surface(surface_ref, bspline_attrs, is_rational)
+                let (combined, rational) =
+                    composite_bspline_parts(&attrs, "B_SPLINE_SURFACE", surface_ref)?;
+                self.build_bspline_surface(surface_ref, &combined, rational)
             }
             _ => Err(IoError::UnsupportedEntity {
                 entity: entity_type,
@@ -427,22 +423,26 @@ impl<'a> StepBuilder<'a> {
                         reason: format!("ELLIPSE #{curve_ref} needs semi_major and semi_minor"),
                     });
                 }
-                let (center, normal, _u_axis) = self.build_axis2_placement(axis_ref)?;
-                let ellipse =
-                    brepkit_math::curves::Ellipse3D::new(center, normal, floats[0], floats[1])
-                        .map_err(|e| IoError::ParseError {
-                            reason: format!("ELLIPSE #{curve_ref}: {e}"),
-                        })?;
+                let (center, normal, u_axis) = self.build_axis2_placement(axis_ref)?;
+                // An ellipse is not rotationally symmetric about its normal:
+                // which direction carries the semi-major extent is part of its
+                // shape, not just a parametrization label, so the placement's
+                // reference direction has to be honoured. The CIRCLE branch
+                // above can discard it because a circle has no preferred
+                // direction.
+                let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+                    center, normal, floats[0], floats[1], u_axis,
+                )
+                .map_err(|e| IoError::ParseError {
+                    reason: format!("ELLIPSE #{curve_ref}: {e}"),
+                })?;
                 Ok(EdgeCurve::Ellipse(ellipse))
             }
-            "B_SPLINE_CURVE_WITH_KNOTS" => self.build_bspline_curve(curve_ref, &attrs, false),
+            "B_SPLINE_CURVE_WITH_KNOTS" => self.build_bspline_curve(curve_ref, &attrs, None),
             _ if entity_type.is_empty() || attrs.contains("B_SPLINE_CURVE_WITH_KNOTS") => {
-                let is_rational = attrs.contains("RATIONAL");
-                let bspline_attrs = find_composite_bspline_attrs(&attrs, "B_SPLINE_CURVE")
-                    .ok_or_else(|| IoError::UnsupportedEntity {
-                        entity: format!("composite curve #{curve_ref}"),
-                    })?;
-                self.build_bspline_curve(curve_ref, bspline_attrs, is_rational)
+                let (combined, rational) =
+                    composite_bspline_parts(&attrs, "B_SPLINE_CURVE", curve_ref)?;
+                self.build_bspline_curve(curve_ref, &combined, rational)
             }
             _ => Err(IoError::UnsupportedEntity {
                 entity: format!("{entity_type} (curve #{curve_ref})"),
@@ -451,13 +451,14 @@ impl<'a> StepBuilder<'a> {
     }
 
     /// Build a B-spline curve from parsed attributes.
-    /// If `is_rational` is true, attempts to extract weights from a
-    /// RATIONAL_B_SPLINE_CURVE section in the attrs.
+    ///
+    /// `rational_attrs` holds the attributes of the RATIONAL_B_SPLINE_CURVE
+    /// component when the record is a complex entity.
     fn build_bspline_curve(
         &self,
         curve_ref: u64,
         attrs: &str,
-        is_rational: bool,
+        rational_attrs: Option<&str>,
     ) -> Result<EdgeCurve, IoError> {
         let parsed = parse_bspline_curve_attrs(attrs).ok_or_else(|| IoError::ParseError {
             reason: format!("B_SPLINE_CURVE #{curve_ref} could not parse attributes"),
@@ -471,11 +472,16 @@ impl<'a> StepBuilder<'a> {
 
         let knots = expand_knots(&mults, &knot_vals);
 
-        // Extract weights from RATIONAL_B_SPLINE section if present.
-        let weights = if is_rational {
-            extract_rational_weights(attrs, control_points.len())
+        let n_cps = control_points.len();
+        let weights = if let Some(weights) = rational_attrs {
+            parse_rational_weight_list(weights, n_cps).ok_or_else(|| IoError::ParseError {
+                reason: format!(
+                    "RATIONAL_B_SPLINE_CURVE #{curve_ref}: invalid weight list; \
+                     expected {n_cps} positive finite weights"
+                ),
+            })?
         } else {
-            vec![1.0; control_points.len()]
+            vec![1.0; n_cps]
         };
 
         let nurbs = brepkit_math::nurbs::NurbsCurve::new(degree, knots, control_points, weights)
@@ -490,7 +496,7 @@ impl<'a> StepBuilder<'a> {
         &self,
         surface_ref: u64,
         attrs: &str,
-        is_rational: bool,
+        rational_attrs: Option<&str>,
     ) -> Result<FaceSurface, IoError> {
         let parsed = parse_bspline_surface_attrs(attrs).ok_or_else(|| IoError::ParseError {
             reason: format!("B_SPLINE_SURFACE #{surface_ref} could not parse attributes"),
@@ -512,8 +518,15 @@ impl<'a> StepBuilder<'a> {
         let n_rows = cp_grid.len();
         let n_cols = cp_grid.first().map_or(0, Vec::len);
 
-        let weights = if is_rational {
-            extract_rational_weight_grid(attrs, n_rows, n_cols)
+        let weights = if let Some(weights) = rational_attrs {
+            parse_rational_weight_grid(weights, n_rows, n_cols).ok_or_else(|| {
+                IoError::ParseError {
+                    reason: format!(
+                        "RATIONAL_B_SPLINE_SURFACE #{surface_ref}: invalid weight grid; \
+                     expected {n_rows} by {n_cols} positive finite weights"
+                    ),
+                }
+            })?
         } else {
             vec![vec![1.0; n_cols]; n_rows]
         };
@@ -666,24 +679,6 @@ fn parse_floats(attrs: &str) -> Vec<f64> {
     result
 }
 
-/// Find the B-spline attribute substring within a composite STEP entity.
-///
-/// Searches for `"{base_name}_WITH_KNOTS"` first, then falls back to `base_name`.
-/// Returns the portion of `attrs` after the matched marker.
-fn find_composite_bspline_attrs<'a>(attrs: &'a str, base_name: &str) -> Option<&'a str> {
-    let with_knots = format!("{base_name}_WITH_KNOTS");
-    if let Some(pos) = attrs.find(&with_knots) {
-        return Some(&attrs[pos + with_knots.len()..]);
-    }
-    // Anchor on base_name followed by '(' to avoid matching inside
-    // "RATIONAL_B_SPLINE_CURVE" when searching for "B_SPLINE_CURVE".
-    let anchored = format!("{base_name}(");
-    if let Some(pos) = attrs.find(&anchored) {
-        return Some(&attrs[pos + base_name.len()..]);
-    }
-    None
-}
-
 /// Parse integers from a parenthesized list like `(4, 4)`.
 fn parse_ints_in_parens(s: &str) -> Vec<u32> {
     let mut result = Vec::new();
@@ -696,96 +691,127 @@ fn parse_ints_in_parens(s: &str) -> Vec<u32> {
     result
 }
 
-/// Extract weights from a RATIONAL_B_SPLINE section in composite entity attrs.
-///
-/// Looks for `RATIONAL_B_SPLINE_CURVE((...weights...))` or
-/// `RATIONAL_B_SPLINE_SURFACE((...weights...))` and parses the weight list.
-/// Falls back to uniform weights if parsing fails.
-fn extract_rational_weights(attrs: &str, expected_count: usize) -> Vec<f64> {
-    let marker = if attrs.contains("RATIONAL_B_SPLINE_SURFACE") {
-        "RATIONAL_B_SPLINE_SURFACE"
-    } else {
-        "RATIONAL_B_SPLINE_CURVE"
+/// Recombine the B-spline components of a complex entity record into the flat
+/// `{base_name}_WITH_KNOTS` attribute layout, paired with the attributes of the
+/// `RATIONAL_{base_name}` component when the record has one.
+fn composite_bspline_parts<'a>(
+    attrs: &'a str,
+    base_name: &str,
+    entity_ref: u64,
+) -> Result<(String, Option<&'a str>), IoError> {
+    let components = composite_components(attrs).ok_or_else(|| IoError::ParseError {
+        reason: format!("malformed composite entity #{entity_ref}"),
+    })?;
+    let component = |name: &str| {
+        components
+            .iter()
+            .find(|(kind, _)| *kind == name)
+            .map(|(_, body)| *body)
     };
-
-    if let Some(pos) = attrs.find(marker) {
-        let after = &attrs[pos + marker.len()..];
-        if let Some(paren_start) = after.find('(') {
-            let rest = &after[paren_start + 1..];
-            let weights = parse_weight_list(rest);
-            if weights.len() >= expected_count {
-                return weights[..expected_count].to_vec();
-            }
-            // Partial parse (fewer than expected): fall back to uniform
-            // weights rather than propagating a dimension-mismatch error.
+    let base = component(base_name).ok_or_else(|| IoError::UnsupportedEntity {
+        entity: format!("composite {base_name} #{entity_ref}"),
+    })?;
+    let knots = component(&format!("{base_name}_WITH_KNOTS")).ok_or_else(|| {
+        IoError::UnsupportedEntity {
+            entity: format!("composite {base_name} #{entity_ref} without explicit knots"),
         }
-    }
-
-    vec![1.0; expected_count]
+    })?;
+    Ok((
+        format!("'', {base}, {knots}"),
+        component(&format!("RATIONAL_{base_name}")),
+    ))
 }
 
-/// Parse a (possibly nested) list of weights from RATIONAL_B_SPLINE attrs.
-/// Handles both flat `(w1, w2, w3)` and nested `((w1, w2), (w3, w4))` forms,
-/// as well as no-paren format `w1, w2, w3)`.
-fn parse_weight_list(s: &str) -> Vec<f64> {
-    let mut weights = Vec::new();
-    let mut depth = 0i32;
-    let mut current = String::new();
+/// Split complex entity components at their own balanced parentheses, not at
+/// substrings of other component names or strings in REPRESENTATION_ITEM.
+fn composite_components(attrs: &str) -> Option<Vec<(&str, &str)>> {
+    let mut rest = attrs.trim();
+    let mut components = Vec::new();
+    while rest != ")" && !rest.is_empty() {
+        let open = rest.find('(')?;
+        let name = rest[..open].trim();
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|c| c.is_ascii_uppercase() || c == b'_' || c.is_ascii_digit())
+        {
+            return None;
+        }
+        let (body, tail) = take_parenthesized(&rest[open..])?;
+        if components.iter().any(|(kind, _)| *kind == name) {
+            return None;
+        }
+        components.push((name, body));
+        rest = tail.trim();
+    }
+    Some(components)
+}
 
-    for ch in s.chars() {
+/// Return the body of the first parenthesized expression and its unconsumed tail.
+fn take_parenthesized(s: &str) -> Option<(&str, &str)> {
+    let rest = s.strip_prefix('(')?;
+    let mut depth = 1_usize;
+    let mut quoted = false;
+    for (i, ch) in rest.char_indices() {
+        if ch == '\'' {
+            quoted = !quoted;
+        }
+        if quoted {
+            continue;
+        }
         match ch {
-            '(' => {
-                depth += 1;
-            }
+            '(' => depth += 1,
             ')' => {
                 depth -= 1;
-                if depth < 0 {
-                    // Closing paren of the outer RATIONAL section.
-                    let trimmed = current.trim();
-                    if let Ok(v) = trimmed.parse::<f64>() {
-                        weights.push(v);
-                    }
-                    break;
+                if depth == 0 {
+                    return Some((&rest[..i], &rest[i + 1..]));
                 }
-            }
-            ',' if depth <= 1 => {
-                let trimmed = current.trim();
-                if let Ok(v) = trimmed.parse::<f64>() {
-                    weights.push(v);
-                }
-                current.clear();
-                continue;
-            }
-            ',' => {
-                // Comma inside a nested sub-list (depth > 1) — flush token
-                // without accumulating the comma character.
-                let trimmed = current.trim();
-                if let Ok(v) = trimmed.parse::<f64>() {
-                    weights.push(v);
-                }
-                current.clear();
-                continue;
             }
             _ => {}
         }
-        if depth >= 0 && ch != '(' && ch != ')' {
-            current.push(ch);
-        }
     }
-
-    weights
+    None
 }
 
-/// Extract a 2D weight grid from RATIONAL_B_SPLINE_SURFACE attrs.
-/// Returns uniform weights if parsing fails.
-fn extract_rational_weight_grid(attrs: &str, n_rows: usize, n_cols: usize) -> Vec<Vec<f64>> {
-    let flat = extract_rational_weights(attrs, n_rows * n_cols);
-    let tol = brepkit_math::tolerance::Tolerance::new();
-    if flat.len() == n_rows * n_cols && flat.iter().any(|&w| !tol.approx_eq(w, 1.0)) {
-        flat.chunks(n_cols).map(<[f64]>::to_vec).collect()
-    } else {
-        vec![vec![1.0; n_cols]; n_rows]
+/// Parse exactly `count` weights from one comma-separated run.
+fn parse_weight_run(run: &str, count: usize) -> Option<Vec<f64>> {
+    let weights: Vec<f64> = run
+        .split(',')
+        .map(|w| w.trim().parse().ok())
+        .collect::<Option<_>>()?;
+    if weights.len() != count || weights.iter().any(|w| !w.is_finite() || *w <= 0.0) {
+        return None;
     }
+    Some(weights)
+}
+
+/// Parse exactly the declared weight list; never replace invalid/missing weights
+/// with ones or round near-unit weights to polynomial geometry.
+fn parse_rational_weight_list(attrs: &str, count: usize) -> Option<Vec<f64>> {
+    let (body, tail) = take_parenthesized(attrs.trim())?;
+    if !tail.trim().is_empty() || count == 0 {
+        return None;
+    }
+    parse_weight_run(body, count)
+}
+
+/// Parse exactly the declared weight grid, with the same strictness as
+/// [`parse_rational_weight_list`].
+fn parse_rational_weight_grid(attrs: &str, n_rows: usize, n_cols: usize) -> Option<Vec<Vec<f64>>> {
+    let (mut rest, tail) = take_parenthesized(attrs.trim())?;
+    if !tail.trim().is_empty() || n_rows == 0 || n_cols == 0 {
+        return None;
+    }
+    let mut rows = Vec::new();
+    loop {
+        let (row, tail) = take_parenthesized(rest.trim())?;
+        rows.push(parse_weight_run(row, n_cols)?);
+        if tail.trim().is_empty() {
+            break;
+        }
+        rest = tail.trim().strip_prefix(',')?;
+    }
+    (rows.len() == n_rows).then_some(rows)
 }
 
 /// Parse a B_SPLINE_SURFACE_WITH_KNOTS attribute string into its components.
@@ -1029,6 +1055,230 @@ mod tests {
 
     use super::*;
     use crate::step::writer;
+
+    #[test]
+    fn rational_surface_roundtrip_preserves_rectangular_weight_grid() {
+        use brepkit_math::nurbs::NurbsSurface;
+        // The patch is a serialization carrier, not the real geometric support
+        // of the cube's boundary wire.
+        for weights in [
+            vec![vec![1.0, 0.7, 1.3], vec![0.8, 1.2, 0.6]],
+            vec![vec![1.0; 3]; 2],
+            vec![vec![1.0, 1.0 + 1e-8, 1.0]; 2],
+        ] {
+            let source = NurbsSurface::new(
+                1,
+                2,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![
+                    vec![
+                        Point3::new(0.0, 0.0, 0.0),
+                        Point3::new(0.0, 1.0, 2.0),
+                        Point3::new(0.0, 2.0, 0.0),
+                    ],
+                    vec![
+                        Point3::new(1.0, 0.0, 1.0),
+                        Point3::new(1.0, 1.0, 0.0),
+                        Point3::new(1.0, 2.0, 3.0),
+                    ],
+                ],
+                weights.clone(),
+            )
+            .unwrap();
+            let mut topo = Topology::new();
+            let cube = make_unit_cube_non_manifold(&mut topo);
+            let fid = brepkit_topology::explorer::solid_faces(&topo, cube).unwrap()[0];
+            topo.face_mut(fid)
+                .unwrap()
+                .set_surface(FaceSurface::Nurbs(source.clone()));
+            let step = writer::write_step(&topo, &[cube]).unwrap();
+            assert_eq!(
+                step.contains("RATIONAL_B_SPLINE_SURFACE("),
+                source.is_rational()
+            );
+            let entities = parse_step_entities(&step).unwrap();
+            let (&sid, _) = entities
+                .iter()
+                .find(|(_, e)| {
+                    e.entity_type == "B_SPLINE_SURFACE_WITH_KNOTS"
+                        || (e.entity_type.is_empty() && e.attrs.contains("B_SPLINE_SURFACE("))
+                })
+                .unwrap();
+            let mut imported = Topology::new();
+            let surface = StepBuilder::new(&mut imported, &entities)
+                .build_surface(sid)
+                .unwrap();
+            let FaceSurface::Nurbs(actual) = surface else {
+                unreachable!()
+            };
+            assert_eq!(actual.weights().len(), weights.len());
+            for (actual_row, expected_row) in actual.weights().iter().zip(&weights) {
+                assert_eq!(actual_row.len(), expected_row.len());
+                for (a, e) in actual_row.iter().zip(expected_row) {
+                    assert!((a - e).abs() <= 1e-12 * e.abs(), "weight {a} vs {e}");
+                }
+            }
+            assert_eq!(actual.degree_u(), source.degree_u());
+            assert_eq!(actual.degree_v(), source.degree_v());
+            assert_eq!(actual.knots_u(), source.knots_u());
+            assert_eq!(actual.knots_v(), source.knots_v());
+            for i in 0..=20 {
+                for j in 0..=20 {
+                    let (u, v) = (f64::from(i) / 20.0, f64::from(j) / 20.0);
+                    assert!(
+                        (actual.evaluate(u, v) - source.evaluate(u, v)).length()
+                            < brepkit_math::tolerance::Tolerance::new().linear
+                    );
+                }
+            }
+        }
+    }
+
+    fn step_with_edge_curve(curve: &brepkit_math::nurbs::NurbsCurve) -> String {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_non_manifold(&mut topo);
+        let eid = brepkit_topology::explorer::solid_edges(&topo, cube).unwrap()[0];
+        topo.edge_mut(eid)
+            .unwrap()
+            .set_curve(EdgeCurve::NurbsCurve(curve.clone()));
+        writer::write_step(&topo, &[cube]).unwrap()
+    }
+
+    fn read_back_nurbs_curve(step: &str) -> brepkit_math::nurbs::NurbsCurve {
+        let entities = parse_step_entities(step).unwrap();
+        let (&cid, _) = entities
+            .iter()
+            .find(|(_, e)| {
+                e.entity_type == "B_SPLINE_CURVE_WITH_KNOTS"
+                    || (e.entity_type.is_empty() && e.attrs.contains("B_SPLINE_CURVE("))
+            })
+            .unwrap();
+        let mut imported = Topology::new();
+        let curve = StepBuilder::new(&mut imported, &entities)
+            .build_curve_geometry(cid)
+            .unwrap();
+        let EdgeCurve::NurbsCurve(nurbs) = curve else {
+            unreachable!()
+        };
+        nurbs
+    }
+
+    #[test]
+    fn rational_curve_roundtrip_preserves_arc_weights() {
+        use std::f64::consts::FRAC_PI_2;
+
+        use brepkit_geometry::convert::circle_to_nurbs;
+        use brepkit_math::curves::Circle3D;
+
+        let circle =
+            Circle3D::new(Point3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let arc = circle_to_nurbs(&circle, 0.0, FRAC_PI_2).unwrap();
+        assert!(arc.is_rational());
+
+        let step = step_with_edge_curve(&arc);
+        assert!(step.contains("RATIONAL_B_SPLINE_CURVE("));
+
+        let actual = read_back_nurbs_curve(&step);
+        assert_eq!(actual.degree(), arc.degree());
+        assert_eq!(actual.weights().len(), arc.weights().len());
+        for (a, e) in actual.weights().iter().zip(arc.weights()) {
+            assert!((a - e).abs() <= 1e-12 * e.abs(), "weight {a} vs {e}");
+        }
+        let (u0, u1) = arc.domain();
+        for i in 0..=20 {
+            let u = u0 + (u1 - u0) * f64::from(i) / 20.0;
+            assert!(
+                (actual.evaluate(u) - arc.evaluate(u)).length() < 1e-9,
+                "sample at {u} moved"
+            );
+        }
+    }
+
+    #[test]
+    fn polynomial_curve_roundtrip_stays_polynomial() {
+        let curve = brepkit_math::nurbs::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(2.0, 0.0, 1.0),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+
+        let step = step_with_edge_curve(&curve);
+        assert!(!step.contains("RATIONAL_B_SPLINE_CURVE("));
+
+        let actual = read_back_nurbs_curve(&step);
+        assert!(!actual.is_rational());
+        assert_eq!(actual.degree(), curve.degree());
+        let (u0, u1) = curve.domain();
+        for i in 0..=20 {
+            let u = u0 + (u1 - u0) * f64::from(i) / 20.0;
+            assert!(
+                (actual.evaluate(u) - curve.evaluate(u)).length() < 1e-9,
+                "sample at {u} moved"
+            );
+        }
+    }
+
+    #[test]
+    fn complex_surface_components_are_not_substrings_or_quoted_names() {
+        let components = composite_components(
+            "REPRESENTATION_ITEM('B_SPLINE_SURFACE(99), don''t parse') \
+            RATIONAL_B_SPLINE_SURFACE (((1.,2.),(3.,4.))) \
+            B_SPLINE_SURFACE (1,1,((#1,#2),(#3,#4)),.UNSPECIFIED.,.F.,.F.,.F.))",
+        )
+        .unwrap();
+        assert_eq!(components.len(), 3);
+        assert_eq!(components[2].0, "B_SPLINE_SURFACE");
+        assert_eq!(
+            parse_rational_weight_grid(components[1].1, 2, 2).unwrap(),
+            vec![vec![1.0, 2.0], vec![3.0, 4.0]]
+        );
+        assert!(composite_components("B_SPLINE_SURFACE() B_SPLINE_SURFACE())").is_none());
+        assert!(composite_components("B_SPLINE_SURFACE((1,2)").is_none());
+    }
+
+    #[test]
+    fn malformed_rational_surface_weights_are_refused() {
+        // All examples must fail, not flatten/reshape or silently become ones.
+        for attrs in [
+            "",
+            "((1.,2.),(3.))",
+            "((1.),(2.,3.,4.))",
+            "((1.,2.),(3.,4.),(5.,6.))",
+            "((1.,2.),(3.,4.,5.))",
+            "((1.,2.),(3.,4.)),42",
+            "((1.,2.),(3.,4.),)",
+            "((1.,2.),(3.,NaN))",
+            "((1.,2.),(3.,inf))",
+            "((1.,2.),(3.,0.))",
+            "((1.,2.),(3.,-1.))",
+            "((1.,2.),(3.,bad))",
+            "((1.,2.),(3.,4.,bad))",
+        ] {
+            assert!(parse_rational_weight_grid(attrs, 2, 2).is_none(), "{attrs}");
+        }
+        // Verify the production surface builder propagates the refusal.
+        let data = "DATA; #1=CARTESIAN_POINT('',(0.,0.,0.));
+            #2=(BOUNDED_SURFACE() B_SPLINE_SURFACE(1,1,((#1,#1),(#1,#1)),.UNSPECIFIED.,.F.,.F.,.F.)
+            B_SPLINE_SURFACE_WITH_KNOTS((2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.)
+            GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE(((1.,1.),(1.)))
+            REPRESENTATION_ITEM('') SURFACE()); ENDSEC;";
+        let entities = parse_step_entities(data).unwrap();
+        let mut topo = Topology::new();
+        let result = StepBuilder::new(&mut topo, &entities).build_surface(2);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid weight grid")
+        );
+    }
 
     #[test]
     fn roundtrip_unit_cube() {
@@ -1404,52 +1654,60 @@ mod tests {
     }
 
     #[test]
-    fn parse_weight_list_nested() {
-        // Nested format: ((w1, w2, w3))
-        let weights = parse_weight_list("(1.0, 0.707, 1.0))");
-        assert_eq!(weights.len(), 3);
+    fn rational_curve_weights_parse_from_a_composite_record() {
+        let (combined, rational) = composite_bspline_parts(
+            "BOUNDED_CURVE() B_SPLINE_CURVE(2, (#1, #2, #3), .UNSPECIFIED., .F., .F.) \
+             B_SPLINE_CURVE_WITH_KNOTS((3, 3), (0., 1.), .UNSPECIFIED.) \
+             CURVE() GEOMETRIC_REPRESENTATION_ITEM() \
+             RATIONAL_B_SPLINE_CURVE((1.000000E+00, 7.071068E-01, 1.000000E+00)) \
+             REPRESENTATION_ITEM(''))",
+            "B_SPLINE_CURVE",
+            7,
+        )
+        .unwrap();
+        let (degree, cp_refs, mults, knots) = parse_bspline_curve_attrs(&combined).unwrap();
+        assert_eq!(degree, 2);
+        assert_eq!(cp_refs, vec![1, 2, 3]);
+        assert_eq!(mults, vec![3, 3]);
+        assert_eq!(knots, vec![0.0, 1.0]);
+        let weights = parse_rational_weight_list(rational.unwrap(), 3).unwrap();
         assert!((weights[0] - 1.0).abs() < 1e-10);
-        assert!((weights[1] - 0.707).abs() < 1e-10);
+        assert!((weights[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-6);
         assert!((weights[2] - 1.0).abs() < 1e-10);
     }
 
     #[test]
-    fn parse_weight_list_flat() {
-        // Flat format: (w1, w2, w3) — no inner parens
-        let weights = parse_weight_list("1.0, 0.707, 1.0)");
-        assert_eq!(weights.len(), 3);
-        assert!((weights[0] - 1.0).abs() < 1e-10);
-        assert!((weights[1] - 0.707).abs() < 1e-10);
-        assert!((weights[2] - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn parse_weight_list_scientific() {
-        // Scientific notation
-        let weights = parse_weight_list("(1.000000E+00, 7.071068E-01))");
-        assert_eq!(weights.len(), 2);
-        assert!((weights[0] - 1.0).abs() < 1e-5);
-        assert!((weights[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-5);
-    }
-
-    #[test]
-    fn parse_weight_list_2d_nested() {
-        // 2D nested format: ((w1, w2), (w3, w4)) — real STEP has double nesting
-        let weights = parse_weight_list("((1.0, 0.5), (0.5, 1.0)))");
-        assert_eq!(weights.len(), 4);
-        assert!((weights[0] - 1.0).abs() < 1e-10);
-        assert!((weights[1] - 0.5).abs() < 1e-10);
-        assert!((weights[2] - 0.5).abs() < 1e-10);
-        assert!((weights[3] - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn extract_rational_weights_from_composite() {
-        let attrs = "BOUNDED_CURVE() B_SPLINE_CURVE(2, (#1, #2, #3)) \
-                     B_SPLINE_CURVE_WITH_KNOTS((3,3), (0.0, 1.0)) \
-                     RATIONAL_B_SPLINE_CURVE((1.0, 0.707, 1.0))";
-        let weights = extract_rational_weights(attrs, 3);
-        assert_eq!(weights.len(), 3);
-        assert!((weights[1] - 0.707).abs() < 1e-10);
+    fn malformed_rational_curve_weights_are_refused() {
+        // All examples must fail, not pad/truncate or silently become ones.
+        for attrs in [
+            "",
+            "1.,2.",
+            "((1.,2.))",
+            "(1.,2.),42",
+            "(1.,2.,)",
+            "(1.,NaN)",
+            "(1.,inf)",
+            "(1.,0.)",
+            "(1.,-1.)",
+            "(1.,bad)",
+            "(1.)",
+            "(1.,2.,3.)",
+        ] {
+            assert!(parse_rational_weight_list(attrs, 2).is_none(), "{attrs}");
+        }
+        let data = "DATA; #1=CARTESIAN_POINT('',(0.,0.,0.));
+            #2=(BOUNDED_CURVE() B_SPLINE_CURVE(1, (#1, #1), .UNSPECIFIED., .F., .F.)
+            B_SPLINE_CURVE_WITH_KNOTS((2, 2), (0., 1.), .UNSPECIFIED.)
+            CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE((1.))
+            REPRESENTATION_ITEM('')); ENDSEC;";
+        let entities = parse_step_entities(data).unwrap();
+        let mut topo = Topology::new();
+        let result = StepBuilder::new(&mut topo, &entities).build_curve_geometry(2);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid weight list")
+        );
     }
 }
