@@ -1,0 +1,57 @@
+crates/wasm/src/bindings/assembly_probe_tests.rs
+  s_40e9202d2d81d3::t_913ad94b9ff827 327-330,332
+crates/operations/src/tessellate/nonplanar.rs
+  s_40e9202d2d81d3::t_827e0511161957 2330-2331,2334
+  s_40e9202d2d81d3::t_6ae54ac6b784eb 1599-1604
+  s_40e9202d2d81d3::t_c01d5ca8f8b54e 2037-2044,2055-2075,2077-2081,2093-2098,2114
+  s_40e9202d2d81d3::t_bbed4b8c627cf3 2035-2036,2045-2050,2053,2084-2089,2091,2101-2113,2115-2117
+  s_40e9202d2d81d3::t_6bd328b951a12f 1595,2296-2321,2332,2335
+  s_40e9202d2d81d3::t_07b55d040412ad 1955
+  s_40e9202d2d81d3::t_09eaf174e025ac 1908-1937,1939-1950,1952-1954,1957-1960,2100
+  s_40e9202d2d81d3::t_dd6457f02d7eda 2325-2329
+  s_40e9202d2d81d3::t_5a73612c0bde5a 1951
+  s_40e9202d2d81d3::t_eebe00f2d3bc56 1956,2119
+  s_40e9202d2d81d3::t_13dbb6ef7c2af4 2054,2083,2092,2099
+  s_40e9202d2d81d3::t_7bdd84faa9d47b 1605-1607
+  s_40e9202d2d81d3::t_5085f9f5c4f6c6 1588
+  s_40e9202d2d81d3::t_56469874d57b17 1594
+  s_40e9202d2d81d3::t_c014b7feb505c8 1596-1598
+  s_40e9202d2d81d3::t_80be65cac9bcf1 2051-2052
+  s_40e9202d2d81d3::t_2200bf9809a709 2076
+  s_40e9202d2d81d3::t_44cf68070d5685 2082
+  s_40e9202d2d81d3::t_19224847cb3971 2090
+  s_40e9202d2d81d3::t_e08559d7414218 2118
+  s_40e9202d2d81d3::t_0e2020b3ab99d5 2120
+  s_40e9202d2d81d3::t_7e248a951aeeae 2322-2324
+  s_40e9202d2d81d3::t_36770911ba0750 2333
+  s_40e9202d2d81d3::t_5ca6351aafd0e8 2336
+crates/operations/tests/regress_fillet_stripe_tessellation_deflection.rs
+  s_40e9202d2d81d3::t_d744fc315008d6 1-413,427
+  s_40e9202d2d81d3::t_e2722e519d3015 414-416,424-426
+  s_40e9202d2d81d3::t_85c23a688b23ad 428-430
+  s_d3d73d5ff73d5f::t_e72384a7940f64 417-423,431-434
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "84919679dbdca9f372ca32d4ef4da7257f672f45",
+  "prompts": {},
+  "sessions": {
+    "s_40e9202d2d81d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63fcd870-f259-41c2-987b-61d8c7639dd9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_d3d73d5ff73d5f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a9d2bdb3fa086db7b",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
