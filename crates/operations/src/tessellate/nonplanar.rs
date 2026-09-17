@@ -1584,18 +1584,27 @@ fn stitch_rings(
     }
 }
 
-/// CDT-based tessellation for non-planar faces with exact boundary constraints.
-///
-/// Projects shared edge points into (u,v) parameter space, generates interior
-/// sample points, then runs Constrained Delaunay Triangulation. Boundary
-/// vertices use their pre-existing global IDs (watertight by construction).
 /// `BK_CDT_TRACE` (any value): log CDT boundary sourcing and UV mapping.
-/// Resolved ONCE per process — the checks sit in per-edge loops.
+/// Resolved ONCE per process: the checks sit in per-edge loops.
 fn cdt_trace() -> bool {
     static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *TRACE.get_or_init(|| std::env::var("BK_CDT_TRACE").is_ok())
 }
 
+/// CDT-based tessellation for non-planar faces with exact boundary constraints.
+///
+/// Projects shared edge points into (u,v) parameter space, generates interior
+/// sample points, then runs Constrained Delaunay Triangulation. Boundary
+/// vertices use their pre-existing global IDs (watertight by construction).
+///
+/// # Errors
+///
+/// Returns an error when the boundary has fewer than three vertices, when the
+/// CDT itself fails, or when a developable fillet stripe cannot be brought
+/// inside `deflection`. Every caller in `solid.rs` answers an error by
+/// re-meshing the face with `tessellate_nonplanar_snap`, which is watertight
+/// but honours no deflection bound, so the stripe case logs a warning first
+/// and the sag leaves a trace.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn tessellate_nonplanar_cdt(
     topo: &Topology,
@@ -1896,11 +1905,63 @@ pub(super) fn tessellate_nonplanar_cdt(
         // Recompute UV bounding box after seam fix.
         uv_bounds(&boundary_uv)
     };
+    // A fillet stripe is a trimmed developable patch: two marched contacts
+    // along the rulings and two transverse cross-section arcs, or, where a
+    // mitered end consumed one contact, one contact and two arcs of which at
+    // least one is the miter's elliptic crease. The class stays narrow because
+    // every other curved trim feeds boolean volume and classification paths
+    // whose triangulation is qualified separately.
+    let mut nurbs_boundaries = 0;
+    let mut transverse_boundaries = 0;
+    let mut ellipse_boundaries = 0;
+    for oriented in wire.edges() {
+        match topo.edge(oriented.edge())?.curve() {
+            EdgeCurve::NurbsCurve(_) => nurbs_boundaries += 1,
+            EdgeCurve::Circle(_) => transverse_boundaries += 1,
+            EdgeCurve::Ellipse(_) => {
+                transverse_boundaries += 1;
+                ellipse_boundaries += 1;
+            }
+            EdgeCurve::Line => {}
+        }
+    }
+    let is_fillet_stripe = match wire.edges().len() {
+        4 => nurbs_boundaries == 2 && transverse_boundaries == 2,
+        3 => nurbs_boundaries == 1 && transverse_boundaries == 2 && ellipse_boundaries >= 1,
+        _ => false,
+    };
+    let stripe_radius = if circle_floor || !is_fillet_stripe {
+        None
+    } else {
+        developable_stripe_radius(face_data.surface(), v_min, v_max)
+    };
 
+    let du = u_max - u_min;
+    let dv = v_max - v_min;
+    // The CDT picks its diagonals by Euclidean distance, and raw cylindrical
+    // UV mixes radians with model units: a long stripe reads as arbitrarily
+    // narrow, so the triangulation joins its opposite angular ends across the
+    // curved interior and sags by the full sector. Scaling u by the radius
+    // turns the angular coordinate into a length; scaling the rulings down to
+    // one chord cell keeps the CDT from subdividing a direction the surface is
+    // already exact along, which lands the stripe on two triangles per angular
+    // division. Only the metric moves: boundary identity, the trimmed-domain
+    // tests and every surface evaluation stay in the face's parameterization.
+    let (cdt_u_scale, cdt_v_scale) = match stripe_radius {
+        Some(radius) if du > 1e-15 && dv > 1e-15 => {
+            let divisions =
+                segments_for_chord_deviation_a(radius, du, deflection, angular_tol, false);
+            let cell = radius * du / divisions as f64;
+            (radius, cell / dv)
+        }
+        _ => (1.0, 1.0),
+    };
+    let to_cdt = |point: Point2| Point2::new(point.x() * cdt_u_scale, point.y() * cdt_v_scale);
+    let from_cdt = |point: Point2| Point2::new(point.x() / cdt_u_scale, point.y() / cdt_v_scale);
     let margin = 0.01;
     let bounds = (
-        Point2::new(u_min - margin, v_min - margin),
-        Point2::new(u_max + margin, v_max + margin),
+        to_cdt(Point2::new(u_min - margin, v_min - margin)),
+        to_cdt(Point2::new(u_max + margin, v_max + margin)),
     );
     let mut cdt = Cdt::with_capacity(bounds, n_boundary);
 
@@ -1908,7 +1969,7 @@ pub(super) fn tessellate_nonplanar_cdt(
 
     let boundary_pts: Vec<Point2> = boundary_uv
         .iter()
-        .map(|&(u, v)| Point2::new(u, v))
+        .map(|&(u, v)| to_cdt(Point2::new(u, v)))
         .collect();
     let boundary_cdt_ids = cdt
         .insert_points_hilbert(&boundary_pts)
@@ -1937,9 +1998,8 @@ pub(super) fn tessellate_nonplanar_cdt(
         cdt.insert_constraint(v0, v1)
             .map_err(crate::OperationsError::Math)?;
     }
+    let constraints_added_steiner_vertices = cdt.vertices().len() > cdt_to_global.len();
 
-    let du = u_max - u_min;
-    let dv = v_max - v_min;
     if du > 1e-15 && dv > 1e-15 {
         let (n_u, n_v) = interior_grid_resolution(
             face_data.surface(),
@@ -1956,8 +2016,8 @@ pub(super) fn tessellate_nonplanar_cdt(
                 (1..n_v).filter_map(move |iv| {
                     let u = u_min + du * (iu as f64 / n_u as f64);
                     let v = v_min + dv * (iv as f64 / n_v as f64);
-                    let pt2 = Point2::new(u, v);
-                    point_in_polygon_2d(boundary_uv_ref, pt2).then_some(pt2)
+                    let parameter = Point2::new(u, v);
+                    point_in_polygon_2d(boundary_uv_ref, parameter).then_some(to_cdt(parameter))
                 })
             })
             .collect();
@@ -1972,6 +2032,92 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
 
+    // The metric leaves the diagonals well conditioned but does not by itself
+    // certify the requested tolerances, so every retained triangle is measured
+    // and any that overshoots has its widest angular edge split at the middle,
+    // halving the overshoot. Halving reaches the required extent in
+    // `log2(span / extent)` passes; the pass cap only bounds a boundary
+    // pathological enough to defeat that, and the caller's contract for the
+    // resulting error is in this function's doc comment. A crossing constraint
+    // mints an untracked Steiner vertex, which means the parameter boundary
+    // self-intersects: there is no unambiguous trimmed interior left to
+    // measure, so that class keeps the pre-existing recovery.
+    if let Some(radius) = stripe_radius.filter(|_| !constraints_added_steiner_vertices) {
+        const MAX_HALVING_PASSES: usize = 16;
+        let mut converged = false;
+        for _ in 0..MAX_HALVING_PASSES {
+            let vertices = cdt.vertices();
+            let mut splits = Vec::new();
+            for (i0, i1, i2) in cdt.triangles() {
+                if i0 < 3 || i1 < 3 || i2 < 3 {
+                    continue;
+                }
+                let ids = [i0, i1, i2];
+                let corners = ids.map(|id| from_cdt(vertices[id]));
+                let (mut lo, mut hi) = (0, 0);
+                for corner in 1..3 {
+                    if corners[corner].x() < corners[lo].x() {
+                        lo = corner;
+                    }
+                    if corners[corner].x() > corners[hi].x() {
+                        hi = corner;
+                    }
+                }
+                if stripe_span_within_tolerance(
+                    radius,
+                    corners[hi].x() - corners[lo].x(),
+                    deflection,
+                    angular_tol,
+                ) {
+                    continue;
+                }
+                // A constrained edge is a shared boundary sampled once for the
+                // whole solid; splitting it would leave the neighbouring face
+                // welded to a vertex it does not have, so such an extent is as
+                // fine as this face can weld to.
+                if cdt
+                    .constraint_edges()
+                    .contains(&(ids[lo].min(ids[hi]), ids[lo].max(ids[hi])))
+                {
+                    continue;
+                }
+                let centroid = Point2::new(
+                    (corners[0].x() + corners[1].x() + corners[2].x()) / 3.0,
+                    (corners[0].y() + corners[1].y() + corners[2].y()) / 3.0,
+                );
+                // Triangles outside the trimmed boundary are dropped by
+                // `remove_exterior` below, so their sag never ships.
+                if !point_in_polygon_2d(&boundary_uv, centroid) {
+                    continue;
+                }
+                let split = Point2::new(
+                    0.5 * (corners[lo].x() + corners[hi].x()),
+                    0.5 * (corners[lo].y() + corners[hi].y()),
+                );
+                if point_in_polygon_2d(&boundary_uv, split) {
+                    splits.push(to_cdt(split));
+                }
+            }
+            if splits.is_empty() {
+                converged = true;
+                break;
+            }
+            let before = cdt.vertices().len();
+            cdt.insert_points_hilbert(&splits)
+                .map_err(crate::OperationsError::Math)?;
+            if cdt.vertices().len() == before {
+                break;
+            }
+        }
+        if !converged {
+            log::warn!(
+                "{face_id:?}: developable stripe CDT stayed outside deflection {deflection} after {MAX_HALVING_PASSES} passes; the face falls back to the snap mesher"
+            );
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "developable stripe CDT did not reach the requested deflection".to_string(),
+            });
+        }
+    }
     let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
         .collect();
@@ -1993,7 +2139,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         if let Some(gid) = cdt_to_global[i] {
             final_global_ids[i] = gid;
         } else if i >= 3 {
-            let pt2 = cdt_verts[i];
+            let pt2 = from_cdt(cdt_verts[i]);
             let surface = face_data.surface();
             let pt3 = eval_surface_point(surface, pt2.x(), pt2.y());
             let nrm = surface.normal(pt2.x(), pt2.y());
@@ -2029,7 +2175,11 @@ pub(super) fn tessellate_nonplanar_cdt(
             merged.positions[final_global_ids[i2] as usize],
         );
         let geo = (p1 - p0).cross(p2 - p0);
-        let (uv0, uv1, uv2) = (cdt_verts[i0], cdt_verts[i1], cdt_verts[i2]);
+        let (uv0, uv1, uv2) = (
+            from_cdt(cdt_verts[i0]),
+            from_cdt(cdt_verts[i1]),
+            from_cdt(cdt_verts[i2]),
+        );
         let uc = (uv0.x() + uv1.x() + uv2.x()) / 3.0;
         let vc = (uv0.y() + uv1.y() + uv2.y()) / 3.0;
         let outward = face_data.surface().normal(uc, vc);
@@ -2141,6 +2291,47 @@ fn estimate_surface_radius(surface: &FaceSurface) -> f64 {
         FaceSurface::Torus(torus) => torus.major_radius() + torus.minor_radius(),
         FaceSurface::Nurbs(_) | FaceSurface::Plane { .. } => 1.0,
     }
+}
+
+/// The circular radius a developable stripe's angular coordinate spans, or
+/// `None` for a surface that is not a cylinder or a cone.
+fn developable_stripe_radius(surface: &FaceSurface, v_min: f64, v_max: f64) -> Option<f64> {
+    let radius = match surface {
+        FaceSurface::Cylinder(cylinder) => cylinder.radius().abs(),
+        // A cone's rulings change radius; its widest end drives both the
+        // metric and the chord bound.
+        FaceSurface::Cone(cone) => cone.radius_at(v_min).abs().max(cone.radius_at(v_max).abs()),
+        FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => return None,
+    };
+    (radius > 0.0).then_some(radius)
+}
+
+/// Whether a triangle spanning `u_span` radians of a developable stripe of
+/// radius `radius` stays inside both requested tolerances.
+///
+/// The surface is straight along its rulings, so the deviation only depends on
+/// the angular extent: a chord across `u_span` radians departs the circle by
+/// `radius * (1 - cos(u_span / 2))` at its midpoint, and the normal turns by
+/// exactly `u_span` across the triangle.
+fn stripe_span_within_tolerance(
+    radius: f64,
+    u_span: f64,
+    deflection: f64,
+    angular_tol: f64,
+) -> bool {
+    // The transverse arcs are sampled at exactly whichever tolerance binds, so
+    // a triangle one division wide sits on the limit and the rounding of
+    // parameters recovered by projection decides the comparison. The slack
+    // keeps that rounding from demanding a subdivision the shared boundary
+    // itself does not carry.
+    const SLACK: f64 = 1.0 + 1e-9;
+    if angular_tol > 0.0 && u_span > angular_tol * SLACK {
+        return false;
+    }
+    radius * (1.0 - (u_span / 2.0).cos()) <= deflection * SLACK
 }
 
 /// Compute interior grid resolution for `tessellate_nonplanar_cdt`.

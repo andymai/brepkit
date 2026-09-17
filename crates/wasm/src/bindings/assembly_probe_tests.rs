@@ -324,8 +324,12 @@ fn prism_vertical_corner_fillets_are_watertight() {
     );
     let volume = solid_volume(&topo, eased, 0.01).unwrap();
     let oriented = oriented_solid_volume(&topo, eased, 0.01).unwrap();
+    // `solid_volume` integrates the faces exactly while `oriented_solid_volume`
+    // integrates an inscribed mesh, so the mesh route can only under-count; an
+    // inverted face would move a whole face's flux the other way.
+    let residue = volume - oriented;
     assert!(
-        (volume - oriented).abs() < 1.0,
+        residue >= 0.0 && residue < 1e-4 * volume,
         "volume {volume} vs oriented {oriented}: a face is inverted"
     );
 }
