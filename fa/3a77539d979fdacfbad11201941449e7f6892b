@@ -1,0 +1,23 @@
+crates/blend/src/corner.rs
+  s_40e9202d2d81d3::t_7daa8c2b7c10e2 327-331,358,555-558,573-576,611-718,2557,2561-2750,2971-2973,2977,3030-3032,3036,3089-3091,3095,3304-3600
+crates/blend/src/spherical_triangle.rs
+  s_40e9202d2d81d3::t_fad0a83ef01b65 35-46,104-121,464-465,481-483,563-660
+crates/operations/tests/regress_fillet_unset_back_trihedral_corner.rs
+  s_40e9202d2d81d3::t_02ae7867b5f340 1-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fa3a77539d979fdacfbad11201941449e7f6892b",
+  "prompts": {},
+  "sessions": {
+    "s_40e9202d2d81d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63fcd870-f259-41c2-987b-61d8c7639dd9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
