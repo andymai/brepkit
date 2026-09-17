@@ -1595,15 +1595,28 @@ fn rebuild_mapped_parametric_face(
                     };
                     let mut best_t = d0;
                     let mut best_d = dist_at(d0);
+                    let mut prev = curve.evaluate_with_endpoints(d0, sp, tp);
+                    let mut max_step_len: f64 = 0.0;
                     for i in 0..=64 {
                         let tt = d0 + (d1 - d0) * (i as f64 / 64.0);
-                        let d = dist_at(tt);
+                        let q = curve.evaluate_with_endpoints(tt, sp, tp);
+                        max_step_len = max_step_len.max((q - prev).length());
+                        prev = q;
+                        let d = (q - point).length();
                         if d < best_d {
                             best_d = d;
                             best_t = tt;
                         }
                     }
-                    if best_d > (d1 - d0).abs() {
+                    // The coarse scan only finds the basin; the exact
+                    // acceptance test is the post-refinement tolerance below.
+                    // An on-carrier point sits within one sample step of its
+                    // nearest sample, so that step's model-space length is the
+                    // bound. The parametric span is not a length (1 for every
+                    // line, an angle for arcs) and rejected on-carrier points
+                    // once the samples were further apart than 1.0 model unit,
+                    // which silently skipped terminal splits on large solids.
+                    if best_d > max_step_len {
                         continue;
                     }
                     let step = (d1 - d0) / 64.0;
