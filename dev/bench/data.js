@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789502369476,
+  "lastUpdate": 1789667930029,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35369,6 +35369,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 34769129,
             "range": "± 692497",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "luciray@gmail.com",
+            "name": "ceeray",
+            "username": "ceeray"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6db7629b525ec25bc1ce3145698c160b13fcca5d",
+          "message": "fix(blend): bound the trimmer's split guard by the coarse scan's step length (#1680)\n\nThe split-location filter in rebuild_mapped_parametric_face compared the coarse scan's minimum sample distance (a model-space length) against the carrier's parametric span (1 for every line, an angle for arcs). Past roughly 128 model units of edge length the filter rejected points that lie exactly on the carrier, so terminal spokes were never split and the pre-solver terminal notch from #1654 silently never fired: a 254 mm prism with its four vertical corners filleted at r = 25.4 mm passed every id-level check but tessellated with 32 open mesh edges.\n\nThe scan can miss an on-carrier point by at most one sample step, so the guard is now bounded by the longest step's model-space length. This also covers closed circular carriers, whose endpoint chord is zero.\n\nRegression fixture: crates/operations/tests/regress_blend_split_guard_scale.rs fillets the prism at 25.4 mm and 254 mm and requires four successful corners, a valid shell and a watertight tessellation.\n\nCo-authored-by: Cee Ray <luciray@gmail.com>",
+          "timestamp": "2026-09-17T17:55:33Z",
+          "tree_id": "6bf047444e7c06a80b57dc059827135281aa1297",
+          "url": "https://github.com/andymai/brepkit/commit/6db7629b525ec25bc1ce3145698c160b13fcca5d"
+        },
+        "date": 1789667926384,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 997637,
+            "range": "± 80869",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1077913,
+            "range": "± 3504",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12460,
+            "range": "± 130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 746081,
+            "range": "± 1108",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42039865,
+            "range": "± 102730",
             "unit": "ns/iter"
           }
         ]
