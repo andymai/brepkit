@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.4.16](https://github.com/andymai/brepkit/compare/v3.4.15...v3.4.16) (2026-09-17)
+
+
+### Bug Fixes
+
+* **blend:** classify trihedral junctions before asserting the setback radius ([#1682](https://github.com/andymai/brepkit/issues/1682)) ([839a9e6](https://github.com/andymai/brepkit/commit/839a9e6af3eb355465047435e281fee3bddba7c7))
+* **io:** preserve rational B-spline weights in STEP and read ELLIPSE placement axes ([#1683](https://github.com/andymai/brepkit/issues/1683)) ([be55b71](https://github.com/andymai/brepkit/commit/be55b711169e967b44d0d912349ce1c60aebfb21))
+
 ## [3.4.15](https://github.com/andymai/brepkit/compare/v3.4.14...v3.4.15) (2026-09-17)
 
 
