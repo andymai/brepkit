@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789671839601,
+  "lastUpdate": 1789673184488,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35639,6 +35639,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41898174,
             "range": "± 99529",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2b6cff683c84e580d60447f53648d1bbdeba30fe",
+          "message": "fix(operations): honour the requested chord deflection on trimmed fillet stripes (#1685)\n\nA trimmed fillet stripe is triangulated in the face's own parameter space,\nwhere the angular coordinate is radians and the rulings are millimetres. The\nCDT picks its diagonals by Euclidean distance in that space, so a long stripe\nreads as arbitrarily narrow and the triangulation joins the stripe's opposite\nangular ends across the curved interior. A quarter-round stripe then sagged by\nthe full sector, 0.73 mm at r = 2.5 where 0.01 mm was requested, on every\nexport, preview and render mesh and on the wasm fillet validity gate.\n\nThe CDT's angular coordinate is now scaled by the stripe radius so that it\nmeasures a length, and the rulings are scaled down to one chord cell so the\nmetric stops subdividing a direction the surface is exact along. The\ntriangulation lands on two triangles per angular division spanning the whole\nruling: the same triangle count as before, with the connectivity the tolerance\nasks for.\n\nEvery retained triangle is then measured, since both the deflection and the\nangular cap reduce to a triangle's angular extent on a developable surface, and\nany triangle that overshoots has its widest angular edge split at the middle.\nHalving bounds the pass count. A constrained edge is left alone: it is a shared\nboundary sampled once for the whole solid, so splitting it would leave the\nneighbouring face welded to a vertex it does not have.\n\nA stripe that stays outside the bound logs a warning, and the doc comment now\nstates the caller contract: `solid.rs` answers the error by re-meshing the face\nwith the snap mesher, which is watertight but honours no deflection bound.\n\nCo-authored-by: Cee Ray <luciray@gmail.com>",
+          "timestamp": "2026-09-17T19:24:09Z",
+          "tree_id": "ee56c5d8e62c075dc5ead835f55ed3380b83fc57",
+          "url": "https://github.com/andymai/brepkit/commit/2b6cff683c84e580d60447f53648d1bbdeba30fe"
+        },
+        "date": 1789673181255,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 665440,
+            "range": "± 1380",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 729561,
+            "range": "± 23057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8354,
+            "range": "± 454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 486228,
+            "range": "± 854",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30896804,
+            "range": "± 1595359",
             "unit": "ns/iter"
           }
         ]
