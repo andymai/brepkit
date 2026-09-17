@@ -149,6 +149,23 @@ impl<'a> FilletBuilder<'a> {
             Err(error) => return Err(error),
         };
 
+        // Refuse an inadmissible equal-radius two-edge miter request on its
+        // real source-edge lengths before any mutation below, since stripe
+        // computation is the first thing that allocates. A refusal must not
+        // fall through to the horn-torus path (see
+        // `corner::check_equal_two_edge_admissibility`).
+        if let Some(fillet_plan) = plan.as_ref() {
+            // The *requested* selection, not the plan's post-drop contour
+            // list: the plan drops tangent-continuous selected edges, and a
+            // seam's continuation may be exactly such an edge.
+            let requested: HashSet<EdgeId> = self
+                .edge_sets
+                .iter()
+                .flat_map(|(edges, _)| edges.iter().copied())
+                .collect();
+            corner::check_equal_two_edge_admissibility(self.topo, fillet_plan, &requested)?;
+        }
+
         // Keep actual RadiusLaw values only for the recoverable invalid-edge
         // fallback. Valid geometry always consumes the immutable plan's law.
         let mut all_edges: Vec<(EdgeId, usize)> = Vec::new();
@@ -243,7 +260,17 @@ impl<'a> FilletBuilder<'a> {
             });
         }
         let setback_edges = if let Some(plan) = plan.as_ref() {
-            corner::set_back_convex_trihedral_stripes(topo, plan, &mut stripe_results)?
+            // `original_faces` is this build's own solid's shell, captured
+            // before any mutation: the correct scope for "incident to this
+            // corner" even when `topo`'s arena also holds an unrelated,
+            // previously-built result solid from an earlier command against
+            // the same source (see `incident_face_count`'s doc comment).
+            corner::set_back_convex_trihedral_stripes(
+                topo,
+                plan,
+                &mut stripe_results,
+                &original_faces,
+            )?
         } else {
             HashSet::new()
         };
@@ -575,6 +602,39 @@ impl<'a> FilletBuilder<'a> {
             vec![(None, None); regular_results.len()];
         let mut blend_cross_handles: Vec<BlendCrossHandlePair> =
             vec![(None, None); regular_results.len()];
+        // A sharp-mitered two-edge corner installs one exact crease edge
+        // shared by both stripe faces in place of what the ordinary
+        // cross-section placeholder arc would otherwise be. Two
+        // independently registered placeholder arcs (one per stripe, at two
+        // different vertex identities) can never be merged into one true
+        // shared crease afterwards without orphaning a registry entry, so a
+        // miter end's cross-section boundary is not registered at all here:
+        // that stripe face is built with an intentionally open wire at this
+        // one end (`Wire::new` does not itself validate closure), and
+        // `corner.rs`'s miter builder closes it by inserting the crease edge
+        // once both stripe faces and their shared p00/vtop vertices exist.
+        //
+        // Terminal ends are deliberately NOT special-cased: the
+        // notch/`Selective` machinery owns every terminal cap
+        // (`terminal_cap_is_notchable` + `notch_face_corner_with_arc`), and
+        // for a mitered stripe's far terminal it already produces the same
+        // "cap adopts the registered cross-section arc" outcome.
+        let miter_vertices: HashSet<VertexId> = plan
+            .as_ref()
+            .map(|fillet_plan| {
+                corner::find_equal_two_edge_miter_junctions(topo, fillet_plan)
+                    .into_iter()
+                    .map(|m| m.vertex)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // The miter corner builder needs each stripe's own generated face id
+        // directly: when a stripe has a miter junction at *both* ends,
+        // `blend_cross_handles` (which the ordinary junction/runout stage
+        // otherwise uses to recover a stripe's face via its cross-section
+        // boundary's owner) carries `(None, None)` and cannot serve this
+        // lookup.
+        let mut stripe_faces: Vec<Option<FaceId>> = vec![None; regular_results.len()];
         for (si, sr) in regular_results.iter().enumerate() {
             let stripe = &sr.stripe;
 
@@ -763,10 +823,23 @@ impl<'a> FilletBuilder<'a> {
                     boundary_registry.set_owner_face(contact1, 1, info.face)?;
                     boundary_registry.set_owner_face(contact2, 1, info.face)?;
                     blend_cross_handles[si] = (None, None);
+                    stripe_faces[si] = Some(info.face);
                     info
                 } else {
-                    let cross_start = section_curve(stripe.sections.first(), p2_end, p1_start)?;
-                    let cross_end = section_curve(stripe.sections.last(), p1_end, p2_start)?;
+                    let (spine_start_v, spine_end_v) =
+                        terminals.ok_or_else(|| BlendError::PlanningFailure {
+                            reason: "open stripe spine missing terminals".to_owned(),
+                        })?;
+                    let cross_start = if miter_vertices.contains(&spine_start_v) {
+                        None
+                    } else {
+                        section_curve(stripe.sections.first(), p2_end, p1_start)?
+                    };
+                    let cross_end = if miter_vertices.contains(&spine_end_v) {
+                        None
+                    } else {
+                        section_curve(stripe.sections.last(), p1_end, p2_start)?
+                    };
                     let info = crate::builder_utils::create_blend_face_from_registry(
                         topo,
                         stripe,
@@ -785,6 +858,7 @@ impl<'a> FilletBuilder<'a> {
                         cross_end.map(|(handle, _)| handle),
                         cross_start.map(|(handle, _)| handle),
                     );
+                    stripe_faces[si] = Some(info.face);
                     info
                 }
             } else {
@@ -1019,6 +1093,7 @@ impl<'a> FilletBuilder<'a> {
                 &contour_to_stripe,
                 &blend_cross_handles,
                 &stripe_support_faces,
+                &stripe_faces,
                 &mut boundary_registry,
             )?;
             corner_face_ids.extend(corner_results.iter().map(|result| result.face_id));
@@ -1304,6 +1379,44 @@ impl<'a> FilletBuilder<'a> {
 
         result_faces.extend(&blend_face_ids);
         result_faces.extend(&corner_face_ids);
+
+        // A face whose *entire* boundary has collapsed to a single point
+        // encloses no surface and cannot close a shell: it can only make the
+        // assembly non-manifold. The exact-limit miter corner produces one,
+        // because at `r = S` the shared face's retained remnant is consumed
+        // down to the top-contact meeting vertex where the two stripes'
+        // creases and cross-section arcs already meet
+        // (`corner::close_collapsed_miter_corner` restricts the two collapsed
+        // contacts onto that vertex), so its two edges become zero-length and
+        // the face contributes no boundary anywhere. The test is extent, not
+        // vertex count: every edge of the wire must be a point (its endpoints
+        // coincide), and a wire with fewer than two edges is left alone,
+        // because a disc bounded by one closed circle also has a single
+        // vertex but a real boundary. A two-vertex face whose edges are
+        // anti-parallel (a zero-area planar remnant) fails the extent test
+        // and keeps closing the shell.
+        result_faces.retain(|&face_id| {
+            let Ok(face) = topo.face(face_id) else {
+                return true;
+            };
+            let Ok(wire) = topo.wire(face.outer_wire()) else {
+                return true;
+            };
+            let edges = wire.edges();
+            if edges.len() < 2 {
+                return true;
+            }
+            edges.iter().any(|oriented| {
+                let Ok(edge) = topo.edge(oriented.edge()) else {
+                    return true;
+                };
+                let (Ok(start), Ok(end)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                else {
+                    return true;
+                };
+                (start.point() - end.point()).length() > 1e-7
+            })
+        });
 
         // Faces carried over from the input solid keep their (correct)
         // orientation: they seed the sense propagation and calibrate the
