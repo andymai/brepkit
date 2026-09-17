@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789670847710,
+  "lastUpdate": 1789671298555,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35531,6 +35531,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42269159,
             "range": "± 105073",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "be55b711169e967b44d0d912349ce1c60aebfb21",
+          "message": "fix(io): preserve rational B-spline weights in STEP and read ELLIPSE placement axes (#1683)\n\nRational NURBS geometry lost its weights on export. The writer emitted the\nsingle-type B_SPLINE_SURFACE_WITH_KNOTS and B_SPLINE_CURVE_WITH_KNOTS forms,\nwhich have nowhere to carry weights, so rational geometry came back as\npolynomial: the midpoint of a 90 degree arc from circle_to_nurbs re-imported\n6% off the circle. Import was equally lossy, taking any complex entity record\nthat mentioned RATIONAL as uniformly weighted whenever its weight list failed\nto parse.\n\nBoth directions now use the complex entity form, which keeps the weights in\ntheir own RATIONAL_B_SPLINE_CURVE or RATIONAL_B_SPLINE_SURFACE component. The\nreader splits a complex record at its own balanced parentheses, so a component\nname inside a quoted REPRESENTATION_ITEM string is not mistaken for a\ncomponent, and it parses the declared weight list or grid exactly: a missing,\nmis-shaped, non-finite or non-positive weight is a parse error rather than a\nsilent downgrade to polynomial geometry.\n\nThe writer refuses non-finite and non-positive weights at export time, along\nwith magnitudes it would have to flush to `0.`, so it cannot emit a file its\nown reader rejects. `NurbsSurface::is_rational` joins the existing curve\nmethod and drives both writer paths.\n\nELLIPSE import honours the placement's reference direction. An ellipse is not\nrotationally symmetric about its normal, so discarding that direction\nreconstructed a different, arbitrarily rotated ellipse.\n\nCo-authored-by: Cee Ray <luciray@gmail.com>",
+          "timestamp": "2026-09-17T18:52:08Z",
+          "tree_id": "4d3d016847912d0813c31ae707663bbafded970a",
+          "url": "https://github.com/andymai/brepkit/commit/be55b711169e967b44d0d912349ce1c60aebfb21"
+        },
+        "date": 1789671294807,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 999498,
+            "range": "± 11164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1079564,
+            "range": "± 1855",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12408,
+            "range": "± 1157",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 742517,
+            "range": "± 1821",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41948338,
+            "range": "± 114174",
             "unit": "ns/iter"
           }
         ]
