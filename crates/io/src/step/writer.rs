@@ -2,6 +2,10 @@
 //!
 //! Exports B-Rep solids to ISO 10303-21 (STEP Part 21) format.
 //! Supports planar faces with line edges and NURBS curves/surfaces.
+//!
+//! Rational NURBS geometry is written as a complex entity record: the schema
+//! keeps the weights in a separate `RATIONAL_B_SPLINE_*` subtype, so there is
+//! no single-type form that can carry them.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -297,7 +301,7 @@ impl StepWriteContext {
                 self.write_entity(line, "LINE", &format!("'', #{line_origin}, #{vector})"));
                 line
             }
-            EdgeCurve::NurbsCurve(nurbs) => self.write_nurbs_curve(nurbs),
+            EdgeCurve::NurbsCurve(nurbs) => self.write_nurbs_curve(nurbs)?,
             EdgeCurve::Circle(circle) => {
                 let placement =
                     self.write_axis2_placement(circle.center(), circle.normal(), circle.u_axis());
@@ -340,7 +344,12 @@ impl StepWriteContext {
         Ok(edge_curve)
     }
 
-    fn write_nurbs_curve(&mut self, nurbs: &brepkit_math::nurbs::NurbsCurve) -> u64 {
+    fn write_nurbs_curve(
+        &mut self,
+        nurbs: &brepkit_math::nurbs::NurbsCurve,
+    ) -> Result<u64, IoError> {
+        check_exportable_weights(nurbs.weights().iter().copied())?;
+
         let cp_ids: Vec<u64> = nurbs
             .control_points()
             .iter()
@@ -356,6 +365,23 @@ impl StepWriteContext {
         let vals_str: Vec<String> = knot_vals.iter().map(|v| fmt_f64(*v)).collect();
 
         let id = self.next_id();
+        if nurbs.is_rational() {
+            let weights_str: Vec<String> = nurbs.weights().iter().map(|w| fmt_f64(*w)).collect();
+            let _ = writeln!(
+                self.entities,
+                "#{id} = (BOUNDED_CURVE() \
+                 B_SPLINE_CURVE({}, ({}), .UNSPECIFIED., .F., .F.) \
+                 B_SPLINE_CURVE_WITH_KNOTS(({}), ({}), .UNSPECIFIED.) \
+                 CURVE() GEOMETRIC_REPRESENTATION_ITEM() \
+                 RATIONAL_B_SPLINE_CURVE(({})) REPRESENTATION_ITEM(''));",
+                nurbs.degree(),
+                cp_refs.join(", "),
+                mults_str.join(", "),
+                vals_str.join(", "),
+                weights_str.join(", "),
+            );
+            return Ok(id);
+        }
         let _ = writeln!(
             self.entities,
             "#{id} = B_SPLINE_CURVE_WITH_KNOTS('', {}, ({}), \
@@ -366,7 +392,7 @@ impl StepWriteContext {
             vals_str.join(", "),
         );
 
-        id
+        Ok(id)
     }
 
     fn write_edge_loop(&mut self, topo: &Topology, wire_id: WireId) -> Result<u64, IoError> {
@@ -507,6 +533,7 @@ impl StepWriteContext {
                 reason: "NURBS surface has no control points".to_string(),
             });
         }
+        check_exportable_weights(nurbs.weights().iter().flatten().copied())?;
 
         let mut cp_grid_refs = Vec::new();
         for row in cps {
@@ -524,6 +551,33 @@ impl StepWriteContext {
         let v_vals_str: Vec<String> = v_vals.iter().map(|v| fmt_f64(*v)).collect();
 
         let id = self.next_id();
+        if nurbs.is_rational() {
+            let weight_rows: Vec<String> = nurbs
+                .weights()
+                .iter()
+                .map(|row| {
+                    let values: Vec<String> = row.iter().map(|w| fmt_f64(*w)).collect();
+                    format!("({})", values.join(", "))
+                })
+                .collect();
+            let _ = writeln!(
+                self.entities,
+                "#{id} = (BOUNDED_SURFACE() \
+                 B_SPLINE_SURFACE({}, {}, ({}), .UNSPECIFIED., .F., .F., .F.) \
+                 B_SPLINE_SURFACE_WITH_KNOTS(({}), ({}), ({}), ({}), .UNSPECIFIED.) \
+                 GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE(({})) \
+                 REPRESENTATION_ITEM('') SURFACE());",
+                nurbs.degree_u(),
+                nurbs.degree_v(),
+                cp_grid_refs.join(", "),
+                u_mults_str.join(", "),
+                v_mults_str.join(", "),
+                u_vals_str.join(", "),
+                v_vals_str.join(", "),
+                weight_rows.join(", "),
+            );
+            return Ok(id);
+        }
         let _ = writeln!(
             self.entities,
             "#{id} = B_SPLINE_SURFACE_WITH_KNOTS('', {}, {}, ({}), \
@@ -593,13 +647,33 @@ impl StepWriteContext {
     }
 }
 
+/// Magnitudes below this are written as a plain `0.`.
+const ZERO_MAGNITUDE: f64 = 1e-15;
+
 /// Format a float for STEP output with sufficient precision.
 fn fmt_f64(v: f64) -> String {
-    if v.abs() < 1e-15 {
+    if v.abs() < ZERO_MAGNITUDE {
         "0.".to_string()
     } else {
         format!("{v:.15E}")
     }
+}
+
+/// Reject weights that cannot survive the round trip: a non-positive or
+/// non-finite weight makes the rational basis singular, and anything under
+/// [`ZERO_MAGNITUDE`] would be written as `0.`, which readers refuse.
+fn check_exportable_weights(weights: impl IntoIterator<Item = f64>) -> Result<(), IoError> {
+    for w in weights {
+        if !w.is_finite() || w < ZERO_MAGNITUDE {
+            return Err(IoError::InvalidTopology {
+                reason: format!(
+                    "NURBS weight {w} is not exportable to STEP: \
+                     weights must be finite and at least {ZERO_MAGNITUDE:E}"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Compute a reference direction perpendicular to the given normal.
@@ -684,6 +758,51 @@ mod tests {
         assert!(step_str.contains("VERTEX_POINT"));
         assert!(step_str.contains("CARTESIAN_POINT"));
         assert!(step_str.contains("PLANE"));
+    }
+
+    #[test]
+    fn curve_weight_that_cannot_round_trip_is_refused() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_non_manifold(&mut topo);
+        let eid = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap()[0];
+        let curve = brepkit_math::nurbs::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            vec![1.0, 0.0],
+        )
+        .unwrap();
+        topo.edge_mut(eid)
+            .unwrap()
+            .set_curve(EdgeCurve::NurbsCurve(curve));
+
+        let err = write_step(&topo, &[solid]).unwrap_err().to_string();
+        assert!(err.contains("not exportable"), "{err}");
+    }
+
+    #[test]
+    fn surface_weight_that_cannot_round_trip_is_refused() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_non_manifold(&mut topo);
+        let fid = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap()[0];
+        let surface = brepkit_math::nurbs::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, f64::NAN]],
+        )
+        .unwrap();
+        topo.face_mut(fid)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(surface));
+
+        let err = write_step(&topo, &[solid]).unwrap_err().to_string();
+        assert!(err.contains("not exportable"), "{err}");
     }
 
     #[test]

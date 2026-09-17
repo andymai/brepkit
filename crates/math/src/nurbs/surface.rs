@@ -117,6 +117,13 @@ impl NurbsSurface {
         self.degree_v
     }
 
+    /// Whether the surface is rational (any weight differs from 1.0).
+    #[must_use]
+    #[allow(clippy::float_cmp)]
+    pub fn is_rational(&self) -> bool {
+        self.weights.iter().flatten().any(|&w| w != 1.0)
+    }
+
     /// Return the valid parameter domain in u: `[u_min, u_max]`.
     #[must_use]
     pub fn domain_u(&self) -> (f64, f64) {
