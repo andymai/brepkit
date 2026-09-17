@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789673691528,
+  "lastUpdate": 1789673837254,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35747,6 +35747,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26370335,
             "range": "± 64347",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b2e3eaeec1dcb09ec97c682976bda95caba6a172",
+          "message": "fix(blend): build the sharp-mitered corner for equal-radius adjacent fillets (#1687)\n\nTwo equal-radius fillets meeting at a convex trihedral orthogonal corner\nwere closed by the junction fan: a torus or NURBS corner patch plus a\ncorner-fill arc on the shared face, where the true result is a single sharp\ncrease. The two cylindrical stripes now meet along the exact crease, an\nellipse with semi-axes r*sqrt(2) and r centred at the offset corner, with\nno corner face. The shared face is spliced at the crease's top vertex and\neach side face adopts its retained vertical edge shortened to the crease's\nbottom vertex.\n\nThe recognizer requires a convex corner (every edge leaving the vertex\npoints into the material of every fan face), registry-built faces on both\nstripes, and agreement on the shared face; anything else keeps the\njunction fan, so concave pocket corners and saddle corners build as\nbefore. Admissibility is checked before any mutation: m mitered ends\nconsume m*r of a contour, the retained third edge must be at least r, and\nthe cap edges in a runout terminal's own support faces must be at least r,\ncounting a collinear requested continuation as material.\n\nAt the exact limits the corner closes by construction: two adjacent top\nedges at r = S collapse the shared-face contact onto the crease's\nendpoints, and four top edges at r = S/2 collapse the top face entirely.\nTerminal boundaries are registered only against the current stripe's own\ncross arc, and the terminal notch owns the cap corner outright.\n\nCo-authored-by: Cee Ray <luciray@gmail.com>",
+          "timestamp": "2026-09-17T19:34:29Z",
+          "tree_id": "c01e9435d93f212e6de43aee878e58ee9f632ad5",
+          "url": "https://github.com/andymai/brepkit/commit/b2e3eaeec1dcb09ec97c682976bda95caba6a172"
+        },
+        "date": 1789673832644,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 999718,
+            "range": "± 1805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1085952,
+            "range": "± 24918",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12373,
+            "range": "± 90",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 744987,
+            "range": "± 6801",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41761172,
+            "range": "± 461470",
             "unit": "ns/iter"
           }
         ]
