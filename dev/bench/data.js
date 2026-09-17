@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789668528753,
+  "lastUpdate": 1789670847710,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35477,6 +35477,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41884291,
             "range": "± 185791",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "839a9e6af3eb355465047435e281fee3bddba7c7",
+          "message": "fix(blend): classify trihedral junctions before asserting the setback radius (#1682)\n\nThe spherical-corner solver asserted that every contact lies on the\nrequested-radius ball. That is a theorem of the set-back construction only:\na junction the near-equal-stripe guard leaves untrimmed builds its cap\nthrough the vertex-plane section endpoints at radius sqrt(2), and the check\nrefused it, failing the cross-one-row fixture at its first corner. The\njunction is now classified as set-back, un-set-back or unclassified by\ncomparing its terminal section centres with the solved trihedral ball\ncentre, and the radius check runs only where it holds. A mixed junction is\nrefused as inconsistent.\n\nThe setback's end-decile limit is gone: its purpose, keeping short-spine\nrib-top corners untrimmed, is already served by the near-equal-stripe\nguard, and the limit caused a discontinuity in corner construction at\nr/L = 0.1 on plain boxes.\n\nRegression coverage: the 90 x 60 x 10 box with all twelve edges filleted\nbuilds with the un-set-back contact convention, cubes keep the set-back\none, and the classification and cap-radius rules are unit-tested in\ncorner.rs and spherical_triangle.rs.\n\nCo-authored-by: Cee Ray <luciray@gmail.com>",
+          "timestamp": "2026-09-17T18:44:20Z",
+          "tree_id": "96149ce0e316a4960a7749644bd3e8ce4cdb5467",
+          "url": "https://github.com/andymai/brepkit/commit/839a9e6af3eb355465047435e281fee3bddba7c7"
+        },
+        "date": 1789670844347,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 998875,
+            "range": "± 2054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1077858,
+            "range": "± 3034",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12568,
+            "range": "± 78",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 751093,
+            "range": "± 17292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42269159,
+            "range": "± 105073",
             "unit": "ns/iter"
           }
         ]
