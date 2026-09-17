@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789671298555,
+  "lastUpdate": 1789671839601,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35585,6 +35585,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41948338,
             "range": "± 114174",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "44bdaff9318684a4fe3ed7f6972f7800ac436a21",
+          "message": "chore(main): release 3.4.16 (#1684)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.4.16](https://github.com/andymai/brepkit/compare/v3.4.15...v3.4.16)\n(2026-09-17)\n\n\n### Bug Fixes\n\n* **blend:** classify trihedral junctions before asserting the setback\nradius ([#1682](https://github.com/andymai/brepkit/issues/1682))\n([839a9e6](https://github.com/andymai/brepkit/commit/839a9e6af3eb355465047435e281fee3bddba7c7))\n* **io:** preserve rational B-spline weights in STEP and read ELLIPSE\nplacement axes ([#1683](https://github.com/andymai/brepkit/issues/1683))\n([be55b71](https://github.com/andymai/brepkit/commit/be55b711169e967b44d0d912349ce1c60aebfb21))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-17T19:01:29Z",
+          "tree_id": "0911b31fbc5303d9a037e8bebd9a327f8f4b1b8f",
+          "url": "https://github.com/andymai/brepkit/commit/44bdaff9318684a4fe3ed7f6972f7800ac436a21"
+        },
+        "date": 1789671836101,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 992552,
+            "range": "± 2717",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1073473,
+            "range": "± 2118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12346,
+            "range": "± 417",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 742769,
+            "range": "± 1213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41898174,
+            "range": "± 99529",
             "unit": "ns/iter"
           }
         ]
