@@ -2,27 +2,14 @@
 //! scan's minimum by a model-space length, not by the carrier's parametric
 //! span.
 //!
-//! `rebuild_mapped_parametric_face` decides whether a boundary vertex lies on
-//! a candidate edge's carrier by scanning 65 samples across the carrier's
-//! parameter domain and comparing the smallest sample distance (`best_d`, a
-//! model-space length) against a rejection bound. A line's carrier parameter
-//! runs over `[0, 1]` whatever the line's model length, so bounding `best_d`
-//! by the parametric span alone pins the bound at 1.0 model unit while the
-//! coarse samples spread out as the edge grows: an on-carrier point can sit
-//! up to half a sample step (`edge_length / 128`) from the nearest sample.
-//! The bound must therefore be the larger of the parametric span and the
-//! endpoint chord (a lower bound on the edge's true extent).
-//!
-//! The consequence is visible on the prism corner-fillet terminal split
-//! (#1654's notch). On a 254 mm prism at r = 25.4 mm — the same relative
-//! geometry as a 25.4 mm prism at r = 2.54 mm — the coarse samples are
-//! 3.97 mm apart, so the terminal contact, which lands r along the cap edge,
-//! sits 1.59 mm from the nearest sample: past the 1.0 bound, so the terminal
-//! spokes were never split, the notch silently never fired, and each support
-//! face kept its doubled-back runout tail (closed by edge id, but 8 planar
-//! faces overlaying the caps and 32 open mesh edges). At 25.4 mm the samples
-//! are 0.40 mm apart and the same point sits 0.16 mm from its nearest sample,
-//! which is why the pre-existing fixtures never caught this.
+//! A line's carrier parameter runs over `[0, 1]` whatever its model length,
+//! so the old bound was pinned at 1.0 model unit while the coarse samples
+//! spread out with the edge. On a 254 mm prism filleted at r = 25.4 mm the
+//! terminal contact sat 1.59 mm from its nearest sample and was rejected: the
+//! terminal spokes were never split, the caps were never notched, and the
+//! result passed every id-level check but tessellated with 32 open edges. The
+//! same relative geometry at 25.4 mm sits 0.16 mm from its nearest sample and
+//! always passed, which is why the existing fixtures never caught this.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

@@ -1595,29 +1595,28 @@ fn rebuild_mapped_parametric_face(
                     };
                     let mut best_t = d0;
                     let mut best_d = dist_at(d0);
+                    let mut prev = curve.evaluate_with_endpoints(d0, sp, tp);
+                    let mut max_step_len: f64 = 0.0;
                     for i in 0..=64 {
                         let tt = d0 + (d1 - d0) * (i as f64 / 64.0);
-                        let d = dist_at(tt);
+                        let q = curve.evaluate_with_endpoints(tt, sp, tp);
+                        max_step_len = max_step_len.max((q - prev).length());
+                        prev = q;
+                        let d = (q - point).length();
                         if d < best_d {
                             best_d = d;
                             best_t = tt;
                         }
                     }
-                    // The coarse minimum is only a basin finder; the exact
+                    // The coarse scan only finds the basin; the exact
                     // acceptance test is the post-refinement tolerance below.
-                    // Its rejection bound must be a length comparable to the
-                    // edge's own extent: the carrier parameter is an angle for
-                    // circles/ellipses and is 1 for every line, so comparing
-                    // `best_d` against the parametric span alone reads
-                    // "not this edge" on a long edge whose coarse samples are
-                    // spaced further apart than 1.0 model unit — measured at
-                    // S=254/r=25.4 (N421 matrix row A 254 mm 0.1): the
-                    // terminal spokes were never split, so the notch silently
-                    // never fired and the support faces kept their doubled-back
-                    // tails. The chord is a lower bound on the true extent, so
-                    // taking the max with the parametric span keeps every
-                    // on-carrier point inside the filter at any scale.
-                    if best_d > (d1 - d0).abs().max((tp - sp).length()) {
+                    // An on-carrier point sits within one sample step of its
+                    // nearest sample, so that step's model-space length is the
+                    // bound. The parametric span is not a length (1 for every
+                    // line, an angle for arcs) and rejected on-carrier points
+                    // once the samples were further apart than 1.0 model unit,
+                    // which silently skipped terminal splits on large solids.
+                    if best_d > max_step_len {
                         continue;
                     }
                     let step = (d1 - d0) / 64.0;
