@@ -1,0 +1,21 @@
+crates/operations/tests/regress_blend_split_guard_scale.rs
+  s_40e9202d2d81d3::t_0fc859a304652d 5-12
+crates/blend/src/trimmer.rs
+  s_40e9202d2d81d3::t_80d4f0e07c0fda 1598-1599,1602-1605,1611,1613-1619
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0b0cbe7514a35646d04f64c64ce9399b410374e5",
+  "prompts": {},
+  "sessions": {
+    "s_40e9202d2d81d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "63fcd870-f259-41c2-987b-61d8c7639dd9",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
