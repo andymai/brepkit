@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.17](https://github.com/andymai/brepkit/compare/v3.4.16...v3.4.17) (2026-09-17)
+
+
+### Bug Fixes
+
+* **operations:** honour the requested chord deflection on trimmed fillet stripes ([#1685](https://github.com/andymai/brepkit/issues/1685)) ([2b6cff6](https://github.com/andymai/brepkit/commit/2b6cff683c84e580d60447f53648d1bbdeba30fe))
+
 ## [3.4.16](https://github.com/andymai/brepkit/compare/v3.4.15...v3.4.16) (2026-09-17)
 
 
