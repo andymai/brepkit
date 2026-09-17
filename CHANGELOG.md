@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.15](https://github.com/andymai/brepkit/compare/v3.4.14...v3.4.15) (2026-09-17)
+
+
+### Bug Fixes
+
+* **blend:** bound the trimmer's split guard by the coarse scan's step length ([#1680](https://github.com/andymai/brepkit/issues/1680)) ([6db7629](https://github.com/andymai/brepkit/commit/6db7629b525ec25bc1ce3145698c160b13fcca5d))
+
 ## [3.4.14](https://github.com/andymai/brepkit/compare/v3.4.13...v3.4.14) (2026-09-15)
 
 
