@@ -1,7 +1,8 @@
 name: OSV Scan
 
 # Complements the Dependabot cooldown: cooldown blocks fresh-but-untrusted,
-# OSV blocks old-but-known-bad. Covers both Cargo and npm lockfiles.
+# OSV blocks old-but-known-bad. Scans the npm lockfile only: Cargo.lock is
+# gitignored, and Rust deps are covered by cargo-deny + rustsec in ci.yml.
 # PRs are report-only; main + weekly schedule fail closed.
 
 on:
@@ -24,9 +25,7 @@ jobs:
     if: github.event_name == 'pull_request'
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
     with:
-      scan-args: |-
-        --lockfile=Cargo.lock
-        --lockfile=package-lock.json
+      scan-args: --lockfile=package-lock.json
     permissions:
       actions: read
       contents: read
@@ -37,9 +36,7 @@ jobs:
     if: github.event_name != 'pull_request'
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
     with:
-      scan-args: |-
-        --lockfile=Cargo.lock
-        --lockfile=package-lock.json
+      scan-args: --lockfile=package-lock.json
     permissions:
       actions: read
       contents: read
