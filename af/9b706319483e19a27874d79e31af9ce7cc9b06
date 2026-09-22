@@ -1,0 +1,19 @@
+crates/math/src/lib.rs
+  s_ac14bd3a2395f1::t_854b96414a0423 86-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "af9b706319483e19a27874d79e31af9ce7cc9b06",
+  "prompts": {},
+  "sessions": {
+    "s_ac14bd3a2395f1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ddcac819-70f5-4af5-a808-c252d51b6f3b",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
