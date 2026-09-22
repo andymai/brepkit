@@ -83,11 +83,11 @@
 //! Two situations account for most tolerance trouble:
 //!
 //! - **Geometry far from the origin.** Doubles carry roughly 15 significant
-//!   digits. At a coordinate of `1e7` the spacing between representable
-//!   values is already near `1e-9`, so a `1e-7` linear tolerance is only two
-//!   orders of magnitude above the noise floor. Booleans on far-flung parts
-//!   lose precision well before they lose correctness. Translate the part
-//!   near the origin, operate, and translate back.
+//!   digits. At a coordinate of `1e7` the gap between representable values is
+//!   already about `2e-9`, so a `1e-7` linear tolerance sits only 45 times
+//!   above the noise floor. Booleans on far-flung parts lose precision well
+//!   before they lose correctness. Translate the part near the origin,
+//!   operate, and translate back.
 //! - **Units much smaller than a millimetre.** The defaults assume millimetre
 //!   scale. Modelling in micrometres makes `1e-7` of your unit a distance
 //!   the kernel cannot resolve, and distinct points start merging. Model in
