@@ -6,10 +6,13 @@ homepage.workspace = true
 keywords.workspace = true
 license.workspace = true
 name = "brepkit-operations"
-readme = "../../README.md"
+readme = "README.md"
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 # Pass-through to brepkit-algo's deterministic work counters, enabled by the

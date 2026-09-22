@@ -12,7 +12,7 @@ Solid modeling kernel for Rust and WebAssembly.
 [![License: AGPL-3.0-only or commercial](https://img.shields.io/badge/License-AGPL--3.0%20%2F%20Commercial-blue.svg)](#license)
 [![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/) [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](#why-a-cad-kernel)
 
-**[Architecture](#architecture)** · **[Performance](#performance)** · **[Getting Started](#getting-started)** · **[Known Limitations](#known-limitations)** · **[Stability](./STABILITY.md)** · **[Contributing](./CONTRIBUTING.md)**
+**[Architecture](#architecture)** · **[Performance](#performance)** · **[Getting Started](#getting-started)** · **[Documentation](#documentation)** · **[Known Limitations](#known-limitations)** · **[Stability](./STABILITY.md)** · **[Contributing](./CONTRIBUTING.md)**
 
 </div>
 
@@ -248,6 +248,26 @@ cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release --no-defau
 cargo doc --workspace --no-deps --open
 ```
 
+## Documentation
+
+| Where | What |
+| ----- | ---- |
+| [docs.rs](https://docs.rs/brepkit-operations) | Rust API reference, one page per crate. Start at `brepkit-operations`. |
+| [brepjs.dev](https://brepjs.dev) | Concepts, task recipes, and the TypeScript API built on this kernel. |
+| [STABILITY.md](./STABILITY.md) | Which crates are meant to be depended on, and what the shared version promises. |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Development setup, hooks, and conventions. |
+
+Every crate carries its own overview and a compiled example on its docs.rs
+landing page, so the reference stays next to the code it describes and the
+examples cannot drift from it.
+
+Conceptual background, what a B-Rep is and why it beats a mesh for CAD, lives
+on [brepjs.dev](https://brepjs.dev/concepts/brep-vs-mesh). The kernel-side
+contracts live with the crate that owns them: the tolerance model in
+[`brepkit-math`](https://docs.rs/brepkit-math), the arena and the surface enums
+in [`brepkit-topology`](https://docs.rs/brepkit-topology), and the exact-path
+fallback rules in [`brepkit-operations`](https://docs.rs/brepkit-operations).
+
 ## Roadmap
 
 Broad directions, no dates.
@@ -257,7 +277,7 @@ Broad directions, no dates.
 - **Parallel tessellation in WASM.** Native builds already parallelize per-face meshing. Bring it to the WASM target via threads.
 - **Assembly metadata.** Colors, layers, materials, and PMI for richer data exchange.
 - **Lossless IGES.** Real B-Rep import and analytic-surface export.
-- **Documentation.** API reference, tutorials, and architectural guides.
+- **Documentation.** Worked examples and guides for the Rust API, beyond the per-crate reference.
 
 ## Projects Using brepkit
 

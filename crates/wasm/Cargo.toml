@@ -6,10 +6,13 @@ homepage.workspace = true
 keywords = ["cad", "brep", "wasm", "geometry", "solid-modeling"]
 license.workspace = true
 name = "brepkit-wasm"
-readme = "../../README.md"
+readme = "README.md"
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
