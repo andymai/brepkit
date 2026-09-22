@@ -78,8 +78,9 @@
 //! left by a hollowing operation or a boolean cut that opened a void. Code
 //! that reaches through `outer_shell()` and iterates its faces compiles, runs,
 //! and gives the right answer on every model without a cavity. On a hollow
-//! part it silently skips the interior and reports a volume, a face count, or
-//! a bounding box that is quietly wrong.
+//! part it silently skips the interior and reports a volume or a face count
+//! that is quietly wrong. (A bounding box survives, because a cavity sits
+//! inside the outer shell and cannot extend it.)
 //!
 //! Use [`explorer::solid_faces`], which flattens outer and inner shells into
 //! one list:

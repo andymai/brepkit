@@ -21,7 +21,12 @@
 //! Analytic surfaces (plane, cylinder, cone, sphere, torus) are written as
 //! native STEP surface entities rather than tessellated, and read back as the
 //! same surface types. NURBS surfaces are preserved, as are line, circle,
-//! ellipse, and NURBS edges. Nothing is approximated on the way out.
+//! ellipse, and NURBS edges. No surface is tessellated on the way out.
+//!
+//! Exact refers to the geometry, not to the bits. The writer emits 15
+//! significant digits, flushes magnitudes below `1e-15` to zero, and merges
+//! knots that agree to within `1e-10`. A round-tripped solid is the same
+//! shape, not the same floating-point values.
 //!
 //! One limitation bounds that guarantee: the writer serializes a solid's
 //! outer shell only. A solid carrying inner shells, which are the cavity
@@ -29,8 +34,12 @@
 //! loses those voids on export and reads back solid. Check
 //! `Solid::inner_shells` before treating a round trip as lossless.
 //!
-//! Mesh formats export tessellated triangles and are a one-way trip for exact
-//! geometry: what comes back is a mesh, not a B-Rep.
+//! Mesh formats export tessellated triangles, which is a one-way trip for
+//! exact geometry. The `read_*_solid` helpers (`read_stl_solid`,
+//! `read_obj_solid`, `read_ply_solid`, `read_threemf_solid`,
+//! `read_glb_solid`) do rebuild a B-Rep solid from the triangles, but every
+//! face comes back planar. A cylinder exported to STL returns as a fan of
+//! flat facets, not as a cylinder.
 //!
 //! IGES is experimental. Export skips analytic surfaces and approximates
 //! circular and elliptical edges as polylines; import reconstructs planar

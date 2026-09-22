@@ -24,8 +24,10 @@ engine crates it needs and presents them as operations:
 | Analysis | measure, distance, classify, validate, query, feature recognition |
 | Output | tessellation to triangle meshes |
 
-Every operation takes `&mut Topology` and returns a typed handle. Nothing
-panics: each returns a `Result`.
+Modeling operations take `&mut Topology` and return a typed handle.
+Interrogation (measure, distance, classify, validate, query, tessellate)
+borrows it as `&` and returns a value. Fallible work returns a `Result`
+rather than panicking.
 
 ## Example
 

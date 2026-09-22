@@ -6,7 +6,10 @@ WebAssembly bindings for brepkit: browser-native B-Rep solid modeling.
 
 Part of [brepkit](https://github.com/andymai/brepkit), a solid modeling kernel for Rust and WebAssembly.
 
-**Layer L4.** Depends on every other crate in the workspace.
+**Layer L4.** Depends on `brepkit-operations`, `brepkit-io` (optional),
+`brepkit-algo`, `brepkit-check`, `brepkit-geometry`, `brepkit-heal`,
+`brepkit-math`, and `brepkit-topology`. It does not depend on
+`brepkit-render`, which is a separate L4 leaf.
 
 Full API reference on [docs.rs](https://docs.rs/brepkit-wasm).
 

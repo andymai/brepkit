@@ -4,7 +4,9 @@
 //!
 //! Provides a production-grade GCS (Geometric Constraint System) with:
 //! - **Entities**: Points, Lines, Circles with generational arena handles
-//! - **Constraints**: 10 constraint types with analytic Jacobians
+//! - **Constraints**: coincidence, distance, angle, tangency, concentricity,
+//!   equal radius, and the horizontal/vertical/parallel/perpendicular family,
+//!   each with an analytic Jacobian
 //! - **Solver**: DogLeg trust-region (globally convergent)
 //! - **DOF analysis**: QR-based rank detection
 //!

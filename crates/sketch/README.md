@@ -10,8 +10,10 @@ Part of [brepkit](https://github.com/andymai/brepkit), a solid modeling kernel f
 
 Full API reference on [docs.rs](https://docs.rs/brepkit-sketch), including degrees of freedom and why the solver uses DogLeg.
 
-A constraint system over points, lines, circles, and arcs, with ten
-constraint types carrying analytic Jacobians. Solved with a DogLeg
+A constraint system over points, lines, circles, and arcs. Coincidence,
+distance, angle, tangency, concentricity, equal radius, and the
+horizontal/vertical/parallel/perpendicular family, each carrying an analytic
+Jacobian. Solved with a DogLeg
 trust-region method, which is globally convergent rather than dependent on a
 good initial guess. QR factorization gives rank detection, so the system can
 report degrees of freedom and identify redundant or conflicting constraints.

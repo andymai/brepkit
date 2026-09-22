@@ -29,9 +29,10 @@
 //!
 //! Floating-point coordinates never compare equal in the way geometry needs.
 //! A wire that closes to within a billionth of a millimetre has closed, and a
-//! kernel that insists on bit equality will reject every real model. So every
-//! comparison in brepkit goes through [`Tolerance`](tolerance::Tolerance),
-//! which bundles three thresholds:
+//! kernel that insists on bit equality will reject every real model. So
+//! measured comparisons, distances, angles, and coordinates go through
+//! [`Tolerance`](tolerance::Tolerance), which bundles three thresholds.
+//! Orientation decisions are the deliberate exception, covered below.
 //!
 //! | Field | Default | Meaning |
 //! |-------|---------|---------|
@@ -83,8 +84,8 @@
 //! Two situations account for most tolerance trouble:
 //!
 //! - **Geometry far from the origin.** Doubles carry roughly 15 significant
-//!   digits. At a coordinate of `1e7` the gap between representable values is
-//!   already about `2e-9`, so a `1e-7` linear tolerance sits only 45 times
+//!   digits. Near a coordinate of `1e7` the gap between representable values
+//!   is about `1.9e-9`, so a `1e-7` linear tolerance sits only some 50 times
 //!   above the noise floor. Booleans on far-flung parts lose precision well
 //!   before they lose correctness. Translate the part near the origin,
 //!   operate, and translate back.

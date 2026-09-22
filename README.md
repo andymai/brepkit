@@ -257,9 +257,10 @@ cargo doc --workspace --no-deps --open
 | [STABILITY.md](./STABILITY.md) | Which crates are meant to be depended on, and what the shared version promises. |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Development setup, hooks, and conventions. |
 
-Every crate carries its own overview and a compiled example on its docs.rs
-landing page, so the reference stays next to the code it describes and the
-examples cannot drift from it.
+Every crate carries its own overview on its docs.rs landing page. The crates
+meant to be depended on directly (`brepkit-math`, `brepkit-topology`,
+`brepkit-geometry`, `brepkit-operations`, `brepkit-io`, `brepkit-sketch`) also
+carry a compiled example, so those cannot drift from the API.
 
 Conceptual background, what a B-Rep is and why it beats a mesh for CAD, lives
 on [brepjs.dev](https://brepjs.dev/concepts/brep-vs-mesh). The kernel-side
