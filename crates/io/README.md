@@ -20,10 +20,13 @@ Full API reference on [docs.rs](https://docs.rs/brepkit-io), including healing o
 | glTF (`.glb`) | Mesh | yes | yes |
 | IGES | B-Rep | preview | lossy |
 
-STEP is the lossless path. Analytic surfaces (plane, cylinder, cone, sphere,
-torus) are written as native STEP surface entities rather than tessellated, and
-read back as the same surface types. NURBS surfaces and line, circle, ellipse,
-and NURBS edges are preserved too.
+STEP preserves exact geometry. Analytic surfaces (plane, cylinder, cone,
+sphere, torus) are written as native STEP surface entities rather than
+tessellated, and read back as the same surface types. NURBS surfaces and line,
+circle, ellipse, and NURBS edges are preserved too.
+
+The writer serializes a solid's outer shell only, so a solid with inner shells
+(cavity walls) loses those voids on export.
 
 Mesh formats export tessellated triangles. IGES is experimental: export skips
 analytic surfaces and approximates circular edges as polylines, and import

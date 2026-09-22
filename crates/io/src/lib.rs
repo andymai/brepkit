@@ -16,13 +16,18 @@
 //! | glTF (`.glb`) | Mesh | yes | yes | [`gltf`] |
 //! | IGES | B-Rep | preview | lossy | [`iges`] |
 //!
-//! # STEP is the lossless path
+//! # STEP preserves exact geometry
 //!
 //! Analytic surfaces (plane, cylinder, cone, sphere, torus) are written as
 //! native STEP surface entities rather than tessellated, and read back as the
 //! same surface types. NURBS surfaces are preserved, as are line, circle,
-//! ellipse, and NURBS edges. A solid that goes out and comes back is the same
-//! solid, not an approximation of one.
+//! ellipse, and NURBS edges. Nothing is approximated on the way out.
+//!
+//! One limitation bounds that guarantee: the writer serializes a solid's
+//! outer shell only. A solid carrying inner shells, which are the cavity
+//! walls left by a hollowing operation or a boolean cut that opened a void,
+//! loses those voids on export and reads back solid. Check
+//! `Solid::inner_shells` before treating a round trip as lossless.
 //!
 //! Mesh formats export tessellated triangles and are a one-way trip for exact
 //! geometry: what comes back is a mesh, not a B-Rep.

@@ -30,11 +30,14 @@
 //!
 //! # Conventions
 //!
-//! Every operation takes the [`Topology`](brepkit_topology::Topology) arena as
-//! `&mut` and returns a typed handle into it, so results compose without
-//! copying geometry. Nothing panics: every public operation returns a
-//! [`Result`], and `unwrap`, `expect`, and `panic!` are denied by lint across
-//! the workspace.
+//! Modeling operations take the [`Topology`](brepkit_topology::Topology) arena
+//! as `&mut` and return a typed handle into it, so results compose without
+//! copying geometry. Interrogation does not: measurement, classification,
+//! validation, distance, and query borrow the arena as `&` and return a value,
+//! whether a number, a report, or a collection.
+//!
+//! Fallible work returns a [`Result`] rather than panicking. `unwrap`,
+//! `expect`, and `panic!` are denied by lint across the workspace.
 //!
 //! Primitives are anchored at the origin. Place them with
 //! [`transform`] rather than expecting a position argument.

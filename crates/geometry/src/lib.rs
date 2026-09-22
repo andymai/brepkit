@@ -22,8 +22,14 @@
 //!
 //! # Example
 //!
-//! Adaptive sampling refines only where the curve bends, so a chord never
-//! deviates from the true curve by more than the requested deflection.
+//! Adaptive sampling refines only where the curve bends. The deflection
+//! sampler splits an interval while the curve at its midpoint sits further
+//! than the requested deflection from the chord, which concentrates points in
+//! the tight regions and leaves the flat ones alone.
+//!
+//! It is a midpoint test rather than a proven bound. A curve whose largest
+//! excursion falls away from the midpoint, or an interval that reaches the
+//! recursion limit, can still exceed the requested deflection.
 //!
 //! ```
 //! use brepkit_geometry::sampling::deflection::sample_deflection;
@@ -49,7 +55,7 @@
 //! | Sampler | Spaces points by | Use when |
 //! |---------|------------------|----------|
 //! | [`sampling::uniform`] | parameter | You need a fixed count, or the curve is a line |
-//! | [`sampling::deflection`] | chord error | You are tessellating, and want a geometric accuracy guarantee |
+//! | [`sampling::deflection`] | midpoint chord error | You are tessellating, and want points placed by geometric error rather than by parameter |
 //! | [`sampling::arc_length`] | distance along the curve | Points must be evenly spaced in space, as for a sweep or a dashed line |
 //! | [`sampling::curvature`] | local curvature | A NURBS curve has tight and flat regions and you want detail only where it bends |
 //!
