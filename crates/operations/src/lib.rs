@@ -76,8 +76,8 @@
 //! // rounded wall is still a real cylinder.
 //! assert_eq!(mesh_fallback_count(), before);
 //!
-//! // Topological checks: wire closure, shell watertightness, Euler
-//! // characteristic, face orientation, and duplicate faces.
+//! // Topological checks: wire closure, manifold and boundary edges,
+//! // Euler characteristic, degenerate faces, and duplicate faces.
 //! assert!(validate_solid(&topo, notched)?.is_valid());
 //! # Ok::<(), brepkit_operations::OperationsError>(())
 //! ```
@@ -87,8 +87,8 @@
 //! Three checks, in increasing cost, and they catch different things:
 //!
 //! 1. [`validate::validate_solid`] reports topological defects: an unclosed
-//!    wire, a shell with a free edge, a wrong Euler characteristic, an
-//!    inconsistently oriented face. Cheap, and the right default.
+//!    wire, a shell with a free edge, a non-manifold edge, a wrong Euler
+//!    characteristic, a degenerate face. Cheap, and the right default.
 //! 2. [`measure::solid_volume`] against a closed-form expectation catches
 //!    geometric errors that leave the topology intact, which is the failure
 //!    mode a boolean is most likely to produce. Pass a tight deflection:
