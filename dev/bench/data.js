@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790012653295,
+  "lastUpdate": 1790122106200,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35909,6 +35909,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26174788,
             "range": "± 68295",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f7ca96016abdba93523c30b1b2feca41534fb024",
+          "message": "docs: give every crate its own landing page and README (#1690)\n\nThis docs-only change gives every published crate an accurate crates.io\npage, expands the primary rustdoc landing pages, and makes feature-gated\nAPIs visible on docs.rs. No executable code paths changed.\n\n## Per-crate documentation\n\nAll 13 published crates now use a local `README.md`. Previously, every\nmanifest pointed to the same 20 KB workspace README, so each crates.io\npage presented workspace roadmap, WASM installation, and licensing\nmaterial instead of crate-specific guidance.\n\nEach README identifies the crate as consumer surface, internal, or\nexperimental, following `STABILITY.md`. The consumer surface is\n`brepkit-operations`, `brepkit-io`, `brepkit-topology`, `brepkit-math`,\n`brepkit-sketch`, and `brepkit-wasm`. Other L1 and L2 crates identify\nthemselves as internal and direct callers to `brepkit-operations`.\n`brepkit-render` is identified as experimental.\n\nThe `math`, `topology`, `geometry`, `operations`, `io`, and `sketch`\nrustdoc landing pages were rewritten. Their `//!` documentation grew\nfrom 6, 11, 10, 20, 6, and 21 lines to 140, 116, 65, 126, 108, and 74\nlines respectively.\n\nThe new material covers tolerance and coordinate scale, arena borrowing,\ninner shells, operation exactness and mesh-fallback detection, import\nhealing, sampler selection, degrees of freedom, and the DogLeg\nrationale. Topology now directs whole-solid traversal to\n`explorer::solid_faces`, which includes the outer shell and cavity\nwalls. Iterating only `outer_shell()` silently produces incorrect face\ncounts and volumes for hollow parts.\n\nCompile-checked examples live in `lib.rs`, while crate READMEs stay\nillustrative. Rustdoc compiles the landing-page examples so they cannot\ndrift from the API.\n\n## docs.rs configuration\n\nAll published crates now set `[package.metadata.docs.rs] all-features =\ntrue`. This exposes `brepkit-io` format modules and the `brepkit-render`\ninteractive `window` feature in published documentation.\n\n## Book removal\n\nThe unbuilt four-page mdBook was deleted. Its content belongs next to\nthe code it describes, and an unbuilt stub implies a documentation site\nthat does not exist.\n\nThe workspace README retains the layer table and getting-started\nmaterial. The tolerance model moved to `brepkit-math`.\nTopology-versus-geometry and the surface enum rationale moved to\n`brepkit-topology`. Introductory B-Rep material now links to brepjs.dev.\nThe workspace README also links to docs.rs, brepjs.dev, `STABILITY.md`,\nand `CONTRIBUTING.md`.\n\n## Verification\n\n- `cargo test --doc` passed for all six rewritten landing pages.\n- `cargo doc --no-deps --all-features` passed with `RUSTDOCFLAGS=\"-D\nwarnings\"` and zero warnings.\n- `cargo publish --workspace --dry-run` built every crate from its\npackaged tarball.\n- Clippy, rustfmt, Taplo, boundary, documentation-path, and version\nchecks passed.\n- `cargo nextest run` passed on the four touched leaf crates.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nThis docs-only change gives every published crate its own crates.io\npresence and expands the rustdoc landing pages for the consumer-facing\ncrates, with compile-checked examples. The unbuilt mdBook is removed,\nand feature-gated APIs are now visible on docs.rs.\n\n**Documentation per crate**\n\n- Each of the 13 crates now has a local `README.md` stating what it\ndoes, its layer, and its stability (consumer surface, internal, or\nexperimental) instead of all sharing the workspace README.\n- The `math`, `topology`, `geometry`, `operations`, `io`, and `sketch`\nrustdoc landing pages were rewritten, adding coverage of the tolerance\nmodel, arena borrow pattern, inner shells, boolean exactness and\nfallback detection, the exact checks `validate_solid` runs, import\nhealing, sampler selection, and degrees of freedom.\n- Topology now directs whole-solid traversal to `explorer::solid_faces`,\nwhich includes cavity walls; iterating only `outer_shell()` silently\ngives wrong face counts and volumes on hollow parts.\n- New docs bound their claims: STEP export is exact in geometry but not\nbits (outer shell only, so cavity walls are lost on round-trip; 15\nsignificant digits, values below `1e-15` flushed to zero, knots within\n`1e-10` merged), the deflection sampler is a midpoint test rather than a\nproven error bound, and `&mut Topology` covers modeling operations only,\nwhile interrogation borrows the arena shared and returns values.\n- A review pass trimmed further over-claims: mesh readers rebuild B-Rep\nsolids but every face returns planar, tolerance covers measured\ncomparisons while orientation uses exact predicates, sketch constraints\nare named by family rather than an outdated count, `brepkit-wasm` does\nnot depend on `brepkit-render`, and the workspace README makes clear\n`brepkit-geometry` is not consumer surface.\n- Landing-page examples live in `lib.rs` so rustdoc compiles them;\nREADMEs stay illustrative.\n\n**docs.rs and book removal**\n\n- All published crates set `[package.metadata.docs.rs] all-features =\ntrue`, exposing `brepkit-io` format modules and the `brepkit-render`\ninteractive window feature.\n- The unbuilt four-page mdBook was deleted; its content moved next to\nthe code it describes, with the B-Rep introduction linking to\nbrepjs.dev.\n\n<sup>Written for commit cf522716f9efca4ea75e30dd0bfa621700a9793b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1690?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-22T17:05:31-07:00",
+          "tree_id": "2b4ecade3c198ad9837ed83d8eec71bf1c305ce8",
+          "url": "https://github.com/andymai/brepkit/commit/f7ca96016abdba93523c30b1b2feca41534fb024"
+        },
+        "date": 1790122102990,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 995523,
+            "range": "± 2228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1076522,
+            "range": "± 11794",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12173,
+            "range": "± 153",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 744736,
+            "range": "± 1091",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41919583,
+            "range": "± 106539",
             "unit": "ns/iter"
           }
         ]
