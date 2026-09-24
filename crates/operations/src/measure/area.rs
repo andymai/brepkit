@@ -170,16 +170,6 @@ fn sphere_hole_area(
     })
 }
 
-/// Angular sweep of a cylindrical face derived from its boundary arc edges.
-///
-/// `face_polygon` only contributes endpoint vertices for partial arcs, so a
-/// point-based angular range misreads spans that cross the atan2 branch cut
-/// (e.g. a 90-degree corner arc straddling u=pi reads as 270 degrees). The
-/// stored `Circle` arcs carry the true span (CCW start→end around their own
-/// axis): sum the spans per axial level and take the widest level.
-///
-/// Returns `None` when the boundary has no circle arcs (chord-polygon faces),
-/// letting the caller fall back to point-based estimation.
 /// The area of a cylinder face whose boundary is not a rectangle in
 /// `(u, v)` (a wall trimmed by an oblique plane's ellipse, say): `r` times
 /// the region's area in `(u, v)`, by Green's theorem `A = ∮ u dv` along
@@ -304,6 +294,16 @@ fn wire_uv_area_on_cylinder(
     })
 }
 
+/// Angular sweep of a cylindrical face derived from its boundary arc edges.
+///
+/// `face_polygon` only contributes endpoint vertices for partial arcs, so a
+/// point-based angular range misreads spans that cross the atan2 branch cut
+/// (e.g. a 90-degree corner arc straddling u=pi reads as 270 degrees). The
+/// stored `Circle` arcs carry the true span (CCW start→end around their own
+/// axis): sum the spans per axial level and take the widest level.
+///
+/// Returns `None` when the boundary has no circle arcs (chord-polygon faces),
+/// letting the caller fall back to point-based estimation.
 fn cylinder_arc_sweep(
     topo: &Topology,
     face_id: FaceId,
