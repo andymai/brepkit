@@ -1,0 +1,43 @@
+crates/topology/src/pcurve.rs
+  s_ba2f7b5c6902b6::t_e94156dcf463fa 124-130
+crates/math/src/nurbs/projection.rs
+  s_ba2f7b5c6902b6::t_fdca9d75e6c4dc 324-336,410-411,414
+crates/math/src/surfaces.rs
+  s_ba2f7b5c6902b6::t_3ddd8590e452cc 449
+  s_ba2f7b5c6902b6::t_e94156dcf463fa 441-448,450-472
+crates/operations/src/transform.rs
+  s_ba2f7b5c6902b6::t_f1ac43a5b1d4e3 15,276-278,304-307,327-332,346-347,355-359,389-392,546-550,597-598
+  s_ba2f7b5c6902b6::t_0df4ee9be977bf 292,294-295
+  s_ba2f7b5c6902b6::t_a9bf7324be10d1 509-520,529-545,551-566,578,608,610-617
+  s_ba2f7b5c6902b6::t_f868fc2e042933 211-230,233-263,265-268,274-275,279-286,288-291,293,296-302,309-326,333,336-345,348-351,363-370,372-374,378-384,386,388,395-400,402-403
+  s_ba2f7b5c6902b6::t_e197b4583e0b73 21-33,43-49,56-57,59-76,81-87,89-95,97-104,158,178
+crates/operations/src/transform/tests.rs
+  s_ba2f7b5c6902b6::t_162a761fbb0331 1
+  s_ba2f7b5c6902b6::t_2d2f6671e0a46e 545,551-569,571-595,601-613,619-629,631-644,648-649,654-657,663-685,691-705,711-717,719-725,727,735-757,762-773,782-816,825-836,847-857,860-862
+  s_ba2f7b5c6902b6::t_ad0e7c593bbef8 546-550,630,645-647,650-653,718,726,728-729,774-777,779,837-840,858-859
+  s_ba2f7b5c6902b6::t_9522bbcd0ad3c3 570,596-600,614-618,658-662,686-690,706-710,730-734,758-761,778,780-781,817-824,841-846
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_afb7a13a3c2fc7 161-183
+  s_ba2f7b5c6902b6::t_96c8bbe9957372 188-201,835-840
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_9ac6abf1bbb2af 1646-1647,1654-1657,2304-2378
+  s_ba2f7b5c6902b6::t_5f43d6f7711d39 1748-1751,1786-1787,1793,1795,1810-1812,1817-1818,2167-2168,2208,2379,2383,2387-2422
+  s_ba2f7b5c6902b6::t_6155befb5d59e9 465-484
+  s_ba2f7b5c6902b6::t_e504b4e73f67fc 2380,2423
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ea471f0c1531d0739f837e68645afa0c60b5e66b",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
