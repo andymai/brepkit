@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790276410961,
+  "lastUpdate": 1790276750805,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38393,6 +38393,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35146870,
             "range": "± 265932",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1c1bae874a853c8b728fdee965696085f094c7de",
+          "message": "test(operations): chamfer the rim of an enclosed cavity (#1738)\n\nThis PR adds regression coverage for chamfering the top rim of an\nenclosed cylindrical cavity.\n\n## What this adds\n\n- Adds `enclosed_cavity_rim` to\n`crates/operations/tests/chamfer_round_rims.rs`, with no source changes.\nThe test cuts a radius 2 cavity from z = 3 to z = 7 out of the middle of\na 10 mm cube, then applies a 0.5 chamfer at z = 7 that fills the cavity\ncorner.\n- Verifies one inner shell before and after chamfering, successful\nvalidation, and a face inventory of 1 cone, 1 cylinder, and 8 planes. It\nalso checks two inside and two outside point classifications.\n- Checks `solid_volume` within 1e-7 relative tolerance of the analytic\nresult, 1000 minus 16 pi plus the chamfer ring volume, yielding\n951.1744. The resulting mesh is watertight, with mesh volume within\n2e-3. All 9 `chamfer_round_rims` tests pass.\n\n## Why now\n\nThe chamfer was already exact, but cavity solids could not pass\n`validate_solid` until #1726, and cavity points were classified as\ninside the solid until #1732. Both fixes have merged.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds regression coverage for chamfering the top rim of an enclosed\ncylindrical cavity, an operation that previously failed validation but\nis now supported.\n\nThe test cuts a radius-2 cavity out of the middle of a 10 mm cube,\nchamfers the top rim by 0.5, and verifies validation, face inventory,\npoint classification, volume, and a watertight mesh. No source changes\nare included.\n\n<sup>Written for commit 4d50b87db17a72bf18be5d04c5ea1852a25dec0e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1738?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T12:02:52-07:00",
+          "tree_id": "bfc086d10f0b860af01ad31c59e8d6e00155f95e",
+          "url": "https://github.com/andymai/brepkit/commit/1c1bae874a853c8b728fdee965696085f094c7de"
+        },
+        "date": 1790276746532,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 982118,
+            "range": "± 9259",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1069605,
+            "range": "± 1996",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12513,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 726845,
+            "range": "± 4042",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43030685,
+            "range": "± 168943",
             "unit": "ns/iter"
           }
         ]
