@@ -670,6 +670,22 @@ mod tests {
         edges.iter().filter(|(c, _)| *c == kind).count()
     }
 
+    /// A cavity lives on an inner shell; its faces must reach the graph.
+    #[test]
+    fn hollow_solid_graph_includes_the_cavity() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 6.0, 6.0, 6.0).unwrap();
+        let void = placed_box(&mut topo, [2.0, 2.0, 2.0], [2.0, 2.0, 2.0]);
+        let hollow = boolean(&mut topo, BooleanOp::Cut, block, void).unwrap();
+        assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, hollow).unwrap();
+        let fag = build_face_adjacency_graph(&topo, &faces, 0.1).unwrap();
+        assert_eq!(fag.nodes.len(), 12);
+        let edges = edge_concavities(&topo, hollow);
+        assert_eq!(count(&edges, ConcavityType::Concave), 12);
+        assert_eq!(count(&edges, ConcavityType::Convex), 12);
+    }
+
     #[test]
     fn box_edges_are_convex_right_angles() {
         let mut topo = Topology::new();
