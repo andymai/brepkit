@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790269626275,
+  "lastUpdate": 1790269809213,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37799,6 +37799,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35454255,
             "range": "± 107837",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d3a23a21f417f4d3f4fee91d15499d701d896c37",
+          "message": "fix(operations): validate solids with cavities, one Euler term and one connected check per shell (#1726)\n\n## What was wrong\n\n`validate_solid` rejected valid solids with cavities because it checked\n`V - E + F` against `2(1 - g) + L`, which assumes a single shell. A 10 x\n10 x 10 block less an enclosed `r=2, h=4` cylinder has `V=10`, `E=15`,\nand `F=9`, producing 4 and the error `Euler characteristic V-E+F = 4 is\ninvalid`.\n\nThe connectivity check also walked every face as one component when the\ncomputed genus was 0. A cavity's inner and outer shells share no edge,\nso counting shells in the Euler term alone would make these faces appear\ndisconnected. This surfaced while adding a chamfer test on a cavity's\nrim.\n\n## What this does\n\n- Changes the expected Euler characteristic to `2(S - g) + L`, where `S`\nis 1 plus the number of inner shells. The validation message now names\n`S`.\n- Runs connectivity checks separately for each shell. Every face in a\nshell must be reachable from that shell's first face.\n- Keeps the existing genus 0 gate for connectivity checks.\n- Adds a Closed roadmap entry.\n\n## Verification\n\n- Added `solids_with_cavities_validate`, which cuts one and then two\nenclosed cylinders from a block, checks for 1 and 2 inner shells\nrespectively, and verifies that both solids validate.\n- The operations, io, and wasm suites pass, covering 1709 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `validate_solid` rejecting valid solids with cavities: the\nEuler–Poincaré check now counts shells as `V − E + F = 2(S − g) + L`, so\na block with a closed cavity (V−E+F=4) validates instead of erroring.\nThe validation message now states the full expected condition with the\nshell count `S` and inner-loop count `L`.\n\n- Runs face connectivity per shell, since cavity and outer shells share\nno edges.\n- Adds `solids_with_cavities_validate`, which cuts one then two\ncylinders from a block and asserts 1 and 2 inner shells, plus a roadmap\nentry.\n\n<sup>Written for commit f7dc1ab6b0d56c20042c9196a348842d48929a26.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1726?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T17:06:10Z",
+          "tree_id": "a7bd65ec17d8e84abd93b61d8677bde78858dec0",
+          "url": "https://github.com/andymai/brepkit/commit/d3a23a21f417f4d3f4fee91d15499d701d896c37"
+        },
+        "date": 1790269804679,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 985869,
+            "range": "± 2571",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1068103,
+            "range": "± 1356",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12407,
+            "range": "± 126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 729293,
+            "range": "± 18617",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44426669,
+            "range": "± 342803",
             "unit": "ns/iter"
           }
         ]
