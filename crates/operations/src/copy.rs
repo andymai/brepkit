@@ -32,6 +32,7 @@ struct WireSnap {
     old_index: usize,
     edges: Vec<(usize, bool)>, // (edge_old_index, forward)
     closed: bool,
+    reverse: bool,
 }
 
 struct FaceSnap {
@@ -135,6 +136,7 @@ pub fn copy_solid(
                     old_index: wire_id_val.index(),
                     edges: edge_refs,
                     closed: wire.is_closed(),
+                    reverse: false,
                 });
             }
 
@@ -327,6 +329,7 @@ pub fn copy_and_transform_solid(
                     old_index: wire_id_val.index(),
                     edges: edge_refs,
                     closed: wire.is_closed(),
+                    reverse: mirrored && !image.flips_face,
                 });
             }
 
@@ -374,16 +377,17 @@ pub fn copy_and_transform_solid(
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
-    // A mirror reverses every wire so each still winds counter-clockwise
-    // around its face's outward normal.
+    // Under a mirror, a face whose normal stays outward reverses its wires
+    // so they still wind counter-clockwise around it; a NURBS face flips its
+    // flag instead (see `transform_solid`).
     let mut wire_map: HashMap<usize, WireId> = HashMap::new();
     for wsnap in &wire_snaps {
         let mut new_edges: Vec<OrientedEdge> = wsnap
             .edges
             .iter()
-            .map(|&(edge_idx, fwd)| OrientedEdge::new(edge_map[&edge_idx], fwd != mirrored))
+            .map(|&(edge_idx, fwd)| OrientedEdge::new(edge_map[&edge_idx], fwd != wsnap.reverse))
             .collect();
-        if mirrored {
+        if wsnap.reverse {
             new_edges.reverse();
         }
         let new_wire =
@@ -574,6 +578,7 @@ pub fn copy_face(topo: &mut Topology, face_id: FaceId) -> Result<FaceId, crate::
             old_index: wire_id_val.index(),
             edges: edge_refs,
             closed: wire.is_closed(),
+            reverse: false,
         });
     }
 

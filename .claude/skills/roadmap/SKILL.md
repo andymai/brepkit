@@ -186,6 +186,13 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Mirrors broke solids that mix NURBS and analytic faces (CLOSED 2026-09-23; pin `crates/operations/tests/mirror_mixed_faces.rs`)**:
+  `transform_solid` and `copy_and_transform_solid` reversed every wire and
+  also flipped each NURBS face's flag, so a NURBS face's boundary ran the
+  wrong way against its planar neighbours (4 inconsistent edges on a box
+  with a NURBS lid). A NURBS image's Su × Sv already turns inward, so it
+  flips its flag only; faces with explicit normals reverse their wires.
+
 - **Windows through cylinder and cone walls, and holes in reversed faces (CLOSED 2026-09-23; pins `crates/operations/tests/cylinder_wall_windows.rs`, `reversed_face_holes.rs`)**:
   a box cut through a tube wall (upright, tilted, through the u origin, blind)
   left the wall's hole wound the same way as the cutter walls, the mesh

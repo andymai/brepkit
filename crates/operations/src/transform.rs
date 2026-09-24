@@ -68,9 +68,15 @@ fn transform_topology(
     // Surfaces go first: the NURBS fallbacks read a face's parameter range
     // off its boundary vertices, which must still lie on the source surface.
     let mut stale_pcurves = HashSet::new();
+    let mut flipped = HashSet::new();
     for &fid in face_ids {
-        if !transform_face_surface(topo, fid, matrix, inverse)? {
+        let (keeps_parameterization, flips_face) =
+            transform_face_surface(topo, fid, matrix, inverse)?;
+        if !keeps_parameterization {
             stale_pcurves.insert(fid);
+        }
+        if flips_face {
+            flipped.insert(fid);
         }
     }
     for &vid in vertex_ids {
@@ -79,8 +85,14 @@ fn transform_topology(
         vertex.set_point(new_point);
     }
     let moved_origins = transform_edges(topo, edge_ids, matrix)?;
+    // A mirror turns every face's boundary clockwise about its outward
+    // normal. A face with an explicit normal (plane, quadric) keeps that
+    // normal outward, so its wires reverse. A NURBS image's Su × Sv turns
+    // inward instead, which already leaves its wires counter-clockwise about
+    // the surface normal: only its flag flips.
     if matrix.determinant() < 0.0 {
-        reverse_face_wires(topo, face_ids)?;
+        let kept: HashSet<FaceId> = face_ids.difference(&flipped).copied().collect();
+        reverse_face_wires(topo, &kept)?;
     }
     topo.pcurves_mut().remove_faces(&stale_pcurves);
     topo.pcurves_mut().remove_edges(&moved_origins);
@@ -382,13 +394,14 @@ pub(crate) fn surface_image(
 }
 
 /// Transform a single face's surface to its exact image under `matrix`.
-/// Returns whether the face's stored pcurves remain valid.
+/// Returns whether the face's stored pcurves remain valid, and whether its
+/// flag flipped with the image's normal.
 fn transform_face_surface(
     topo: &mut Topology,
     fid: FaceId,
     matrix: &Mat4,
     inverse: &Mat4,
-) -> Result<bool, crate::OperationsError> {
+) -> Result<(bool, bool), crate::OperationsError> {
     let image = surface_image(topo, fid, matrix, inverse)?;
     let face = topo.face_mut(fid)?;
     if image.flips_face {
@@ -396,7 +409,7 @@ fn transform_face_surface(
         face.set_reversed(!reversed);
     }
     face.set_surface(image.surface);
-    Ok(image.keeps_parameterization)
+    Ok((image.keeps_parameterization, image.flips_face))
 }
 
 /// The v-parameter range a face's boundary covers, sampled along every edge

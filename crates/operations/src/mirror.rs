@@ -21,7 +21,8 @@ use crate::transform::transform_solid;
 /// with appropriate translation for a plane not passing through the origin.
 ///
 /// A mirror flips handedness; `transform_solid` keeps the copy outward by
-/// reversing its wires and flipping the flags of its NURBS faces.
+/// reversing the wires of faces with explicit normals (planes, quadrics) and
+/// flipping the flags of its NURBS faces, whose own normal turns inward.
 ///
 /// # Errors
 ///
