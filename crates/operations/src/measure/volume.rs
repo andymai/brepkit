@@ -1666,6 +1666,35 @@ fn planar_face_flux(
         }
         Ok(sum)
     };
+    // The fast path reads x·n as the plane offset everywhere on the face, so
+    // a boundary off its stored plane (a skewed miter-sweep quad) keeps the
+    // mesh; so does a NURBS edge whose weights leave its control hull.
+    let d_unit = d / len;
+    let normal_unit = normal * (1.0 / len);
+    let planar_eps = 1e-6 * (1.0 + d_unit.abs());
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            if let EdgeCurve::NurbsCurve(n) = edge.curve()
+                && n.weights().iter().any(|&w| w <= 0.0)
+            {
+                return Ok(None);
+            }
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            for (t0, t1) in traversal_spans(edge, true, sp, ep) {
+                for k in 0..=4 {
+                    let t = t0 + (t1 - t0) * f64::from(k) / 4.0;
+                    let p = edge.curve().evaluate_with_endpoints(t, sp, ep) - origin;
+                    if (p.dot(normal_unit) - d_unit).abs() > planar_eps {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+    }
     let mut area2 = wire_area2(face.outer_wire())?.abs();
     // Holes subtract only while no two can nest: an island inside a hole is
     // material again, which the mesher's odd-depth rule handles.
@@ -1690,62 +1719,83 @@ fn planar_face_flux(
     if area2 < 0.0 || len <= 0.0 {
         return Ok(None);
     }
-    let d_out = (if face.is_reversed() { -d } else { d }) / len;
+    let d_out = if face.is_reversed() { -d_unit } else { d_unit };
     Ok(Some(d_out * area2 / 6.0))
 }
 
 /// A `(min x, min y, max x, max y)` box of a wire in a plane's frame that
-/// never falls inside the wire: line endpoints, a conic's whole extent, and a
-/// NURBS curve's control points (the curve stays in their hull).
+/// never falls inside the wire: line endpoints, a conic arc's endpoints and
+/// every axis extreme inside its span, and a NURBS curve's control points
+/// (the curve stays in their hull while its weights are positive).
 fn wire_box(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
     flat: &dyn Fn(Vec3) -> (f64, f64),
 ) -> Result<(f64, f64, f64, f64), crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
-    use std::f64::consts::FRAC_PI_2;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
     let origin = Point3::new(0.0, 0.0, 0.0);
     let mut b = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-    let mut span = |(x0, y0): (f64, f64), (hx, hy): (f64, f64)| {
-        b = (
-            b.0.min(x0 - hx),
-            b.1.min(y0 - hy),
-            b.2.max(x0 + hx),
-            b.3.max(y0 + hy),
-        );
-    };
-    let conic = |c: Point3, a: Vec3, bb: Vec3| {
-        let ((ax, ay), (bx, by)) = (flat(a), flat(bb));
-        (flat(c - origin), (ax.hypot(bx), ay.hypot(by)))
+    let mut include = |(x, y): (f64, f64)| {
+        b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
     };
     for oe in topo.wire(wire_id)?.edges() {
         let edge = topo.edge(oe.edge())?;
-        match edge.curve() {
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let frame = match edge.curve() {
             EdgeCurve::Line => {
-                for vid in [edge.start(), edge.end()] {
-                    span(flat(topo.vertex(vid)?.point() - origin), (0.0, 0.0));
-                }
-            }
-            EdgeCurve::Circle(c) => {
-                let (at, half) = conic(
-                    c.center(),
-                    c.evaluate(0.0) - c.center(),
-                    c.evaluate(FRAC_PI_2) - c.center(),
-                );
-                span(at, half);
-            }
-            EdgeCurve::Ellipse(e) => {
-                let (at, half) = conic(
-                    e.center(),
-                    e.evaluate(0.0) - e.center(),
-                    e.evaluate(FRAC_PI_2) - e.center(),
-                );
-                span(at, half);
+                include(flat(sp - origin));
+                include(flat(ep - origin));
+                continue;
             }
             EdgeCurve::NurbsCurve(n) => {
                 for &p in n.control_points() {
-                    span(flat(p - origin), (0.0, 0.0));
+                    include(flat(p - origin));
+                }
+                continue;
+            }
+            EdgeCurve::Circle(c) => (
+                c.center(),
+                c.evaluate(0.0) - c.center(),
+                c.evaluate(FRAC_PI_2) - c.center(),
+            ),
+            EdgeCurve::Ellipse(e) => (
+                e.center(),
+                e.evaluate(0.0) - e.center(),
+                e.evaluate(FRAC_PI_2) - e.center(),
+            ),
+        };
+        // `P(t) = c + A cos t + B sin t`: along x it peaks at
+        // `atan2(Bx, Ax)` and bottoms out half a turn later; likewise y.
+        let ((cx, cy), (ax, ay), (bx, by)) = (flat(frame.0 - origin), flat(frame.1), flat(frame.2));
+        let at = |t: f64| {
+            (
+                cx + ax * t.cos() + bx * t.sin(),
+                cy + ay * t.cos() + by * t.sin(),
+            )
+        };
+        for (t0, t1) in traversal_spans(edge, true, sp, ep) {
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            include(at(lo));
+            include(at(hi));
+            for extreme in [
+                bx.atan2(ax),
+                bx.atan2(ax) + PI,
+                by.atan2(ay),
+                by.atan2(ay) + PI,
+            ] {
+                #[allow(clippy::cast_possible_truncation)]
+                let (first, last) = (
+                    ((lo - extreme) / TAU).ceil() as i64,
+                    ((hi - extreme) / TAU).floor() as i64,
+                );
+                for turn in first..=last {
+                    #[allow(clippy::cast_precision_loss)]
+                    include(at(extreme + turn as f64 * TAU));
                 }
             }
         }
@@ -3528,6 +3578,108 @@ mod tests {
             })
             .to_vec();
         let face = planar_face(&mut topo, wires, 2.0);
+        assert!(planar_face_flux(&topo, face).unwrap().is_none());
+    }
+
+    fn polygon_wire(topo: &mut Topology, points: &[Point3]) -> Vec<OrientedEdge> {
+        let vs: Vec<_> = points
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        (0..vs.len())
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(vs[k], vs[(k + 1) % vs.len()], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect()
+    }
+
+    /// A half disc: the arc of `circle` from angle `from` through a half turn,
+    /// closed by its diameter.
+    fn half_disc(topo: &mut Topology, circle: &Circle3D, from: f64) -> Vec<OrientedEdge> {
+        let to = from + std::f64::consts::PI;
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(circle.evaluate(from), 1e-7)),
+            topo.add_vertex(Vertex::new(circle.evaluate(to), 1e-7)),
+        );
+        let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle.clone())));
+        let chord = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+        vec![OrientedEdge::new(arc, true), OrientedEdge::new(chord, true)]
+    }
+
+    /// Two half-disc holes whose full circles overlap but whose arcs do not:
+    /// the nesting guard must bound the arcs, not the circles, and keep the
+    /// exact flux.
+    #[test]
+    fn planar_flux_bounds_arcs_by_their_span() {
+        let mut topo = Topology::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let outer = polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 3.0),
+                Point3::new(10.0, 0.0, 3.0),
+                Point3::new(10.0, 10.0, 3.0),
+                Point3::new(0.0, 10.0, 3.0),
+            ],
+        );
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let left = Circle3D::new_with_ref(Point3::new(3.0, 5.0, 3.0), z, 2.0, x).unwrap();
+        let right = Circle3D::new_with_ref(Point3::new(4.0, 5.0, 3.0), z, 2.0, x).unwrap();
+        let hole_left = half_disc(&mut topo, &left, std::f64::consts::FRAC_PI_2);
+        let hole_right = half_disc(&mut topo, &right, -std::f64::consts::FRAC_PI_2);
+        let face = planar_face(&mut topo, vec![outer, hole_left, hole_right], 3.0);
+        let want = 3.0 * (100.0 - 4.0 * std::f64::consts::PI) / 3.0;
+        let got = planar_face_flux(&topo, face).unwrap().unwrap();
+        assert!((got - want).abs() < 1e-12 * want, "flux {got}, want {want}");
+    }
+
+    /// A quad stored as a plane with one corner off it (a miter-sweep elbow)
+    /// keeps the mesh: x·n is not the plane offset across it.
+    #[test]
+    fn planar_flux_leaves_skewed_faces_to_the_mesh() {
+        let mut topo = Topology::new();
+        let quad = polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 1.0),
+                Point3::new(4.0, 0.0, 1.0),
+                Point3::new(4.0, 4.0, 1.3),
+                Point3::new(0.0, 4.0, 1.0),
+            ],
+        );
+        let face = planar_face(&mut topo, vec![quad], 1.0);
+        assert!(planar_face_flux(&topo, face).unwrap().is_none());
+    }
+
+    /// A rational edge with a negative weight can leave its control hull, so
+    /// the nesting boxes cannot bound it.
+    #[test]
+    fn planar_flux_leaves_negative_weights_to_the_mesh() {
+        let mut topo = Topology::new();
+        let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0));
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![a, Point3::new(2.0, 3.0, 0.0), b],
+            vec![1.0, -0.5, 1.0],
+        )
+        .unwrap();
+
+        let (va, vb) = (
+            topo.add_vertex(Vertex::new(a, 1e-7)),
+            topo.add_vertex(Vertex::new(b, 1e-7)),
+        );
+        let arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(curve)));
+        let chord = topo.add_edge(Edge::new(vb, va, EdgeCurve::Line));
+        let face = planar_face(
+            &mut topo,
+            vec![vec![
+                OrientedEdge::new(arc, true),
+                OrientedEdge::new(chord, true),
+            ]],
+            0.0,
+        );
         assert!(planar_face_flux(&topo, face).unwrap().is_none());
     }
 
