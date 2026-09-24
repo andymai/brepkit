@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790280770551,
+  "lastUpdate": 1790281876674,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38717,6 +38717,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30604330,
             "range": "± 1327371",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4ad473b090071004313448bdad98f7153ab1a653",
+          "message": "fix(algo): cut a tube with an oblique plane, carving both ellipses from the plane face (#1740)\n\nAn oblique plane cut now carves both nested ellipses from a bored tube’s\nplane face, giving a valid 4-face solid whose volume and face areas\nmatch closed forms.\n\n## What was wrong\n\nA `make_cylinder(3, 6)` tube bored by a radius 1.5 cylinder, then cut by\nthe half-space above a plane through `(0, 0, 3)`, fell back to a 62-face\nplanar mesh. At slopes 0.2 and 0.5, its `solid_volume` was 63.38 instead\nof `20.25 * pi = 63.62`, at every rotation tested. The level cut was\nexact.\n\nThe raw boolean had 3 faces and 2 free edges. Both walls were split into\nbands, but the tilted plane face remained whole because it carried two\nnested closed ellipses. Plane faces with multiple closed sections use\nthe wire builder, which ignores closed curves. The face splitter’s\nsalvage pass handled nested closed circles, but not ellipses.\n\n## What this does\n\n- Extends the salvage pass in\n`crates/algo/src/builder/face_splitter/mod.rs` to accept closed\nellipses.\n- Tests that each ellipse clears the face outline by its semi-major\naxis, since an ellipse lies within that distance of its centre.\n- Adds a Closed entry to the roadmap.\n- Stacks on #1736, whose base is #1734. The base branch is #1736’s\nbranch and will be retargeted after those merge.\n\n## Verification\n\n- `tube_cut_by_an_oblique_plane` covers slopes 0.1, 0.3, 0.5, and 0.8,\neach rotated 0, 60, 90, and 200 degrees, for 16 cuts.\n- Each cut checks a valid 4-face solid, analytic volume, wall areas,\ncombined plane-face area, inside and outside classification around the\nplane and bore, and a watertight mesh. Analytic tolerances are `1e-9`\nrelative. Mesh volume tolerance is `5e-3` at deflection `0.01`.\n- The topology, algo, operations, io, and wasm suites pass, totaling\n2023 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes oblique cuts through bored tubes, which previously fell back to a\nlarge planar mesh with inaccurate volume. The cut now carves both nested\nelliptical sections from the plane face, producing a valid four-face\nsolid with correct analytic volume and face areas.\n\n**Bug Fixes**\n\n- Extends the cap salvage pass to accept closed ellipses, checking each\nellipse's clearance from the face outline by its semi-major axis.\n- Adds regression coverage across multiple slopes and rotations,\nchecking topology, classification, analytic areas and volume, and\nwatertight meshing held to an inscribed bound.\n- Sets the completed tube-cut case to CLOSED in the roadmap.\n\n<sup>Written for commit 699c47144223af0f6cea5c681e0029b4d8016039.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1740?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T20:28:44Z",
+          "tree_id": "c3268a042792a478be636460594cc13f9f7d6357",
+          "url": "https://github.com/andymai/brepkit/commit/4ad473b090071004313448bdad98f7153ab1a653"
+        },
+        "date": 1790281873425,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1005141,
+            "range": "± 2098",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1084794,
+            "range": "± 2454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13558,
+            "range": "± 182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 751154,
+            "range": "± 3069",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42024293,
+            "range": "± 42278",
             "unit": "ns/iter"
           }
         ]
