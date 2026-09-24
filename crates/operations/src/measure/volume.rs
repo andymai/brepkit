@@ -1411,34 +1411,34 @@ fn volume_from_per_face_tessellation(
     Ok(signed_volume.abs())
 }
 
-/// Exact signed volume contribution of a cylindrical face via the
-/// divergence theorem: `V = (1/3) integral P.n dA`.
-///
-/// For a cylinder parameterised as
-///   `P(u,v) = O + r*(cos u * ex + sin u * ey) + v * a`
-/// the outward normal is `n = cos u * ex + sin u * ey`, dA = r du dv.
-///
-/// Integrating analytically over `u in [u1,u2], v in [v1,v2]`:
-///   `V = (r/3) * h * [ ox*(sin u2 - sin u1) + oy*(-cos u2 + cos u1) + r*(u2 - u1) ]`
-/// where `ox = O.ex`, `oy = O.ey`, `h = v2 - v1`.
-///
-/// For a reversed face the contribution is negated.
 /// Divergence-theorem flux `(1/3) ∫ P·N dA` of a cylinder or cone face over
-/// its trimmed domain, holes included.
+/// its trimmed domain, holes included, or `None` when a wire winds around the
+/// axis (a seamless band), which Green's theorem in the unwrapped `(u, v)`
+/// plane cannot close.
 ///
 /// On both surfaces the flux density `g(u, v)` in the face's own `(u, v)` has
 /// a closed-form u-antiderivative `G`, so Green's theorem turns the area
-/// integral into `∮ G dv` along every wire. Wires run counter-clockwise in
-/// `(u, v)` about the surface normal (holes clockwise); a reversed face's
-/// flux is negated. `u` is unwrapped continuously along each wire, which is
-/// what makes a full band come out right: its seam is walked up at `u + 2π`
-/// and down at `u`.
+/// integral into `∮ G dv` along every wire. `u` is unwrapped continuously
+/// along each wire, which is what makes a full band come out right: its seam
+/// is walked up at `u + 2π` and down at `u`. Each wire is oriented by its own
+/// signed `(u, v)` area rather than trusted to be stored counter-clockwise:
+/// cavity walls flipped by a cut keep their wires, so a hole cut into one
+/// later can run the same way as its outer wire.
+///
+/// A pointed cone's apex has no `u`. A wire through it is walked from the
+/// apex and the unwrap restarts at every apex visit: each run between
+/// visits starts and ends at `v = 0`, where `G` vanishes, so its flux does
+/// not depend on which `2π` branch it lands on.
 ///
 /// - Cylinder `O + r·n(u) + v·a`: `g = r (r + O·n(u)) / 3`, independent of v.
 /// - Cone `A + v (cos α n(u) + sin α a)`:
 ///   `g = v cos α (sin α A·n(u) − cos α A·a) / 3`.
-fn developable_face_flux(topo: &Topology, face_id: FaceId) -> Result<f64, crate::OperationsError> {
-    use std::f64::consts::TAU;
+#[allow(clippy::too_many_lines)]
+fn developable_face_flux(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use std::f64::consts::{PI, TAU};
 
     let face = topo.face(face_id)?;
     let origin = Point3::new(0.0, 0.0, 0.0);
@@ -1463,18 +1463,54 @@ fn developable_face_flux(topo: &Topology, face_id: FaceId) -> Result<f64, crate:
             });
         }
     };
+    let apex = match &surface {
+        FaceSurface::Cone(c) => Some(c.apex()),
+        _ => None,
+    };
+    let tol = brepkit_math::tolerance::Tolerance::new().linear;
+    let at_apex = |p: Point3| apex.is_some_and(|a| (p - a).length() <= tol);
     let project = |p: Point3| -> (f64, f64) { surface.project_point(p).unwrap_or((0.0, 0.0)) };
+    // Unwrap `u` against the previous sample; an apex sample has no `u` and
+    // leaves the anchor unset, so the next sample picks its own branch.
+    let unwrap = |prev: &mut Option<f64>, p: Point3, u: f64| -> f64 {
+        if at_apex(p) {
+            *prev = None;
+            return u;
+        }
+        let u = prev.map_or(u, |pu| u - ((u - pu) / TAU).round() * TAU);
+        *prev = Some(u);
+        u
+    };
 
     let mut flux = 0.0;
-    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+    for (wire_index, wire_id) in std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .enumerate()
+    {
         let wire = topo.wire(wire_id)?;
-        let mut prev_u: Option<f64> = None;
-        let unwrap = |prev: &mut Option<f64>, u: f64| -> f64 {
-            let u = prev.map_or(u, |pu| u - ((u - pu) / TAU).round() * TAU);
-            *prev = Some(u);
-            u
+        let mut edges = wire.edges().to_vec();
+        let traversal_start = |oe: &brepkit_topology::wire::OrientedEdge| {
+            topo.edge(oe.edge()).and_then(|e| {
+                let vid = if oe.is_forward() { e.start() } else { e.end() };
+                topo.vertex(vid)
+                    .map(brepkit_topology::vertex::Vertex::point)
+            })
         };
-        for oe in wire.edges() {
+        let mut through_apex = false;
+        if apex.is_some() {
+            for k in 0..edges.len() {
+                if at_apex(traversal_start(&edges[k])?) {
+                    edges.rotate_left(k);
+                    through_apex = true;
+                    break;
+                }
+            }
+        }
+
+        let (mut wire_flux, mut wire_area) = (0.0, 0.0);
+        let mut prev_u: Option<f64> = None;
+        let mut first_u: Option<f64> = None;
+        for oe in &edges {
             let edge = topo.edge(oe.edge())?;
             let (sp, ep) = (
                 topo.vertex(edge.start())?.point(),
@@ -1483,40 +1519,75 @@ fn developable_face_flux(topo: &Topology, face_id: FaceId) -> Result<f64, crate:
             let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
             let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
             let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep);
-            // Midpoint Stieltjes sum of G against dv at `n` steps. A straight
-            // edge on either surface is a ruling (constant u), so one step is
-            // exact; curved edges take two resolutions and a Richardson step.
-            let stieltjes = |n: usize, prev: &mut Option<f64>| -> f64 {
-                let mut sum = 0.0;
+            // Midpoint Stieltjes sums of G and of u against dv at `n` steps.
+            // A straight edge on either surface is a ruling (constant u), so
+            // one step is exact; curved edges take two resolutions and a
+            // Richardson step.
+            let stieltjes = |n: usize, prev: &mut Option<f64>| -> (f64, f64) {
+                let (mut g_sum, mut u_sum) = (0.0, 0.0);
                 #[allow(clippy::cast_precision_loss)]
                 let step = (to - from) / n as f64;
-                let (u0, mut v_prev) = project(at(from));
-                unwrap(prev, u0);
+                let p0 = at(from);
+                let (u0, mut v_prev) = project(p0);
+                unwrap(prev, p0, u0);
                 for k in 0..n {
                     #[allow(clippy::cast_precision_loss)]
                     let tk = from + step * k as f64;
-                    let (um, vm) = project(at(tk + 0.5 * step));
-                    let um = unwrap(prev, um);
-                    let (un, vn) = project(at(tk + step));
-                    unwrap(prev, un);
-                    sum += antiderivative(um, vm) * (vn - v_prev);
+                    let pm = at(tk + 0.5 * step);
+                    let (um, vm) = project(pm);
+                    let um = unwrap(prev, pm, um);
+                    let pn = at(tk + step);
+                    let (un, vn) = project(pn);
+                    unwrap(prev, pn, un);
+                    g_sum += antiderivative(um, vm) * (vn - v_prev);
+                    u_sum += um * (vn - v_prev);
                     v_prev = vn;
                 }
-                sum
+                (g_sum, u_sum)
             };
-            if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                flux += stieltjes(1, &mut prev_u);
+            if first_u.is_none() && !through_apex {
+                let p0 = at(from);
+                first_u = Some(unwrap(&mut prev_u, p0, project(p0).0));
+            }
+            let (g, a) = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                stieltjes(1, &mut prev_u)
             } else {
                 let mut coarse_prev = prev_u;
-                let coarse = stieltjes(128, &mut coarse_prev);
-                let fine = stieltjes(256, &mut prev_u);
-                flux += (4.0 * fine - coarse) / 3.0;
-            }
+                let (gc, ac) = stieltjes(128, &mut coarse_prev);
+                let (gf, af) = stieltjes(256, &mut prev_u);
+                ((4.0 * gf - gc) / 3.0, (4.0 * af - ac) / 3.0)
+            };
+            wire_flux += g;
+            wire_area += a;
         }
+        if let (Some(start), Some(end)) = (first_u, prev_u)
+            && (end - start).abs() > PI
+        {
+            return Ok(None);
+        }
+        // `wire_area` is `∮ u dv`: positive for a counter-clockwise loop.
+        let region = if wire_area < 0.0 {
+            -wire_flux
+        } else {
+            wire_flux
+        };
+        flux += if wire_index == 0 { region } else { -region };
     }
-    Ok(if face.is_reversed() { -flux } else { flux })
+    Ok(Some(if face.is_reversed() { -flux } else { flux }))
 }
 
+/// Exact signed volume contribution of a cylindrical face via the
+/// divergence theorem: `V = (1/3) integral P.n dA`.
+///
+/// For a cylinder parameterised as
+///   `P(u,v) = O + r*(cos u * ex + sin u * ey) + v * a`
+/// the outward normal is `n = cos u * ex + sin u * ey`, dA = r du dv.
+///
+/// Integrating analytically over `u in [u1,u2], v in [v1,v2]`:
+///   `V = (r/3) * h * [ ox*(sin u2 - sin u1) + oy*(-cos u2 + cos u1) + r*(u2 - u1) ]`
+/// where `ox = O.ex`, `oy = O.ey`, `h = v2 - v1`.
+///
+/// For a reversed face the contribution is negated.
 fn analytic_cylinder_signed_volume(
     topo: &Topology,
     face_id: FaceId,
@@ -2262,15 +2333,19 @@ pub fn volume_from_direct_face_tessellation(
         let face = topo.face(fid)?;
 
         // Use exact analytical volume for analytic surface faces.
-        match face.surface() {
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) if !face.inner_wires().is_empty() => {
-                let v = developable_face_flux(topo, fid)? * 6.0;
-                if vol_trace_enabled() {
-                    log::debug!("VOL_TRACE holed developable face {:?} -> {}", fid, v / 6.0);
-                }
-                total += v;
-                continue;
+        if matches!(
+            face.surface(),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+        ) && !face.inner_wires().is_empty()
+            && let Some(flux) = developable_face_flux(topo, fid)?
+        {
+            if vol_trace_enabled() {
+                log::debug!("VOL_TRACE holed developable face {fid:?} -> {flux}");
             }
+            total += flux * 6.0;
+            continue;
+        }
+        match face.surface() {
             FaceSurface::Cylinder(_) => {
                 let v = analytic_cylinder_signed_volume(topo, fid)? * 6.0;
                 if vol_trace_enabled() {
@@ -3068,6 +3143,50 @@ mod regression_tests {
             "annular cap contribution should subtract the inner segment: \
              expected {expected}, got {cap_v} (inflated would be {})",
             h * PI * (r_out * r_out + r_in * r_in) / 3.0
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::primitives::{make_cone, make_cylinder};
+
+    fn wall_flux(topo: &Topology, solid: SolidId) -> f64 {
+        let wall = brepkit_topology::explorer::solid_faces(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&f| !topo.face(f).unwrap().surface().is_planar())
+            .unwrap();
+        developable_face_flux(topo, wall).unwrap().unwrap()
+    }
+
+    /// The base disc sits at z = 0 and adds no flux, so the wall carries the
+    /// whole volume. The seam is walked through the apex, which has no `u`.
+    #[test]
+    fn pointed_cone_wall_flux_is_its_volume() {
+        let mut topo = Topology::new();
+        let cone = make_cone(&mut topo, 3.0, 0.0, 6.0).unwrap();
+        let flux = wall_flux(&topo, cone);
+        let truth = std::f64::consts::PI * 9.0 * 6.0 / 3.0;
+        assert!(
+            (flux - truth).abs() < 1e-6 * truth,
+            "flux {flux}, truth {truth}"
+        );
+    }
+
+    /// The top cap at z = h carries a third of the volume; the wall the rest.
+    #[test]
+    fn cylinder_wall_flux_is_two_thirds_of_its_volume() {
+        let mut topo = Topology::new();
+        let cyl = make_cylinder(&mut topo, 1.5, 4.0).unwrap();
+        let flux = wall_flux(&topo, cyl);
+        let truth = 2.0 / 3.0 * std::f64::consts::PI * 1.5 * 1.5 * 4.0;
+        assert!(
+            (flux - truth).abs() < 1e-9 * truth,
+            "flux {flux}, truth {truth}"
         );
     }
 }

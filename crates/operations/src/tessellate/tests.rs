@@ -718,6 +718,15 @@ fn bored_sphere_band_area_and_watertight() {
         (area - analytic).abs() < 5.0,
         "default-deflection bored-sphere area {area} should be ~{analytic} (band), not ~648 (cap-filled)"
     );
+
+    // The per-face mesher behind the exports must keep every band too.
+    for fid in brepkit_topology::explorer::solid_faces(&topo, result).unwrap() {
+        let face_mesh = tessellate(&topo, fid, 0.1).unwrap();
+        assert!(
+            !face_mesh.indices.is_empty(),
+            "face {fid:?} meshes to nothing"
+        );
+    }
 }
 
 /// A box ∩ centered-sphere produces two annular sphere "collar" patches whose

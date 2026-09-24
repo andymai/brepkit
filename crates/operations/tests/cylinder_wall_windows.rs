@@ -10,7 +10,9 @@ use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::{make_box, make_cylinder};
-use brepkit_operations::tessellate::{boundary_edge_count, tessellate, tessellate_solid};
+use brepkit_operations::tessellate::{
+    boundary_edge_count, tessellate, tessellate_solid, tessellate_with_uvs,
+};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -213,4 +215,26 @@ fn holed_wall_meshes_on_its_own() {
         (area - expected).abs() < 1e-3 * expected,
         "wall mesh area {area}, expected {expected}"
     );
+}
+
+/// Seam vertices are welded in the curved CDT; the per-face UV mesh must
+/// still give every triangle continuous texture coordinates.
+#[test]
+fn holed_wall_uvs_do_not_jump_across_the_seam() {
+    let case = &cases()[1];
+    let mut topo = Topology::new();
+    let result = cut(&mut topo, case);
+    let wall = solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .unwrap();
+    let mesh = tessellate_with_uvs(&topo, wall, 0.01).unwrap();
+    assert!(!mesh.mesh.indices.is_empty());
+    for tri in mesh.mesh.indices.chunks_exact(3) {
+        let us = [tri[0], tri[1], tri[2]].map(|i| mesh.uvs[i as usize][0]);
+        let span = us.iter().copied().fold(f64::MIN, f64::max)
+            - us.iter().copied().fold(f64::MAX, f64::min);
+        assert!(span < 1.0, "triangle spans {span} in u");
+    }
 }

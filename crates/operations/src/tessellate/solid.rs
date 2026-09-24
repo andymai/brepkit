@@ -1097,10 +1097,10 @@ pub(super) fn tessellate_face_with_shared_edges(
         if band_handled {
             // done — watertight structured band emitted
         } else if is_standard_rect {
-            // Partial (non-full-revolution) hole-free bands have a genuine
-            // simple polygon UV boundary, so CDT over the shared pool ids
-            // is watertight by construction. The snap path re-samples the
-            // rim independently and cracks at fine deflections when its
+            // Partial bands and holed full bands have a simple polygon
+            // outer boundary in unwrapped UV, so CDT over the shared pool
+            // ids is watertight by construction. The snap path re-samples
+            // the rim independently and cracks at fine deflections when its
             // segment count diverges from the pool's (the #696 class, seen
             // on gridfinity socket cone/cylinder corner rings). Inner wires
             // are constrained and flood-removed as holes.

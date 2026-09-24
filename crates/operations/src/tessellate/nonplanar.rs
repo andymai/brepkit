@@ -2217,10 +2217,10 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
         if !converged {
             log::warn!(
-                "{face_id:?}: developable stripe CDT stayed outside deflection {deflection} after {MAX_HALVING_PASSES} passes; the face falls back to the snap mesher"
+                "{face_id:?}: developable CDT stayed outside deflection {deflection} after {MAX_HALVING_PASSES} passes; the face falls back to the snap mesher"
             );
             return Err(crate::OperationsError::InvalidInput {
-                reason: "developable stripe CDT did not reach the requested deflection".to_string(),
+                reason: "developable CDT did not reach the requested deflection".to_string(),
             });
         }
     }
@@ -2530,7 +2530,40 @@ pub(super) fn tessellate_holed_face_local(
         merged.normals[i] = surface.normal(u, v);
         uvs.push([u, v]);
     }
+    if let (Some((_, period)), _) = surface_periods(surface) {
+        split_uv_seam(&mut merged, &mut uvs, period);
+    }
     Ok(super::TriangleMeshUV { mesh: merged, uvs })
+}
+
+/// Give every triangle continuous `u`. A vertex welded on the seam carries
+/// one principal `u`, so a triangle beside it can span nearly a period;
+/// such a triangle takes copies of its low-side vertices one period on.
+fn split_uv_seam(mesh: &mut TriangleMesh, uvs: &mut Vec<[f64; 2]>, period: f64) {
+    let mut copies: DetHashMap<u32, u32> = DetHashMap::default();
+    for t in 0..mesh.indices.len() / 3 {
+        let tri = [0, 1, 2].map(|k| mesh.indices[3 * t + k]);
+        let us = tri.map(|i| uvs[i as usize][0]);
+        let high = us.iter().copied().fold(f64::MIN, f64::max);
+        if high - us.iter().copied().fold(f64::MAX, f64::min) <= period / 2.0 {
+            continue;
+        }
+        for (k, &i) in tri.iter().enumerate() {
+            if high - us[k] <= period / 2.0 {
+                continue;
+            }
+            let copy = *copies.entry(i).or_insert_with(|| {
+                #[allow(clippy::cast_possible_truncation)]
+                let j = mesh.positions.len() as u32;
+                let [u, v] = uvs[i as usize];
+                mesh.positions.push(mesh.positions[i as usize]);
+                mesh.normals.push(mesh.normals[i as usize]);
+                uvs.push([u + period, v]);
+                j
+            });
+            mesh.indices[3 * t + k] = copy;
+        }
+    }
 }
 
 /// A closed `(u, v, global id)` sample loop.
