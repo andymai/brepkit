@@ -7,13 +7,14 @@
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
-use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
+use brepkit_operations::measure::{oriented_solid_volume, solid_volume, solid_volume_from_faces};
 use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::face::{Face, FaceSurface};
-use brepkit_topology::solid::SolidId;
+use brepkit_topology::shell::Shell;
+use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
@@ -104,4 +105,34 @@ fn bored_sphere_far_away_keeps_its_volume() {
     transform_solid(&mut topo, solid, &far()).unwrap();
     let away = solid_volume(&topo, solid, 0.001).unwrap();
     assert!((away - near).abs() < 1e-6 * near, "near {near}, far {away}");
+}
+
+/// An open shell has no volume of its own: its reading depends on the point
+/// it is summed about, and near the origin that point stays the origin.
+#[test]
+fn open_triangle_near_the_origin_reads_about_the_origin() {
+    let mut topo = Topology::new();
+    let vs: Vec<_> = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+        .iter()
+        .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 1.0), 1e-7)))
+        .collect();
+    let edges = (0..3)
+        .map(|k| {
+            let e = topo.add_edge(Edge::new(vs[k], vs[(k + 1) % 3], EdgeCurve::Line));
+            OrientedEdge::new(e, true)
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 1.0,
+        },
+    ));
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let volume = solid_volume_from_faces(&topo, solid, 0.01).unwrap();
+    assert!((volume - 1.0 / 6.0).abs() < 1e-12, "volume {volume}");
 }

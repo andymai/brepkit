@@ -194,11 +194,6 @@ fn vertex_box(topo: &Topology, solid: SolidId) -> Option<(Point3, Point3)> {
     })
 }
 
-/// The centre of the box around a solid's vertices.
-fn solid_anchor(topo: &Topology, solid: SolidId) -> Point3 {
-    vertex_box(topo, solid).map_or(Point3::new(0.0, 0.0, 0.0), |(lo, hi)| lo + (hi - lo) * 0.5)
-}
-
 /// The point the volume paths sum each face's flux about. A closed surface's
 /// total does not depend on it, but a meshed face can leave slivers open
 /// against its exact neighbours and a faulty solid's faces need not close, so
@@ -2780,7 +2775,7 @@ pub fn solid_volume_from_faces(
     use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::face::FaceSurface;
 
-    let mut anchor: Option<Point3> = None;
+    let p0 = sum_anchor(topo, solid);
     let mut total = 0.0;
     let mut all_planar_triangles = true;
 
@@ -2818,7 +2813,6 @@ pub fn solid_volume_from_faces(
             break;
         }
 
-        let p0 = *anchor.get_or_insert(pts[0]);
         let (a, b, c) = (pts[0] - p0, pts[1] - p0, pts[2] - p0);
 
         total += a.dot((b - a).cross(c - a));
@@ -2910,7 +2904,7 @@ fn center_of_mass_from_faces(
     use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::face::FaceSurface;
 
-    let p0 = solid_anchor(topo, solid);
+    let p0 = sum_anchor(topo, solid);
     let mut total_vol = 0.0;
     let mut cx = 0.0;
     let mut cy = 0.0;
