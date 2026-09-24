@@ -1,7 +1,7 @@
 //! A rod cut by an oblique plane that crosses its whole wall: the wall is
 //! then bounded by its bottom rim and an ellipse, and the solid holds
 //! pi r^2 times the plane's height at the axis, whatever the tilt.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::f64::consts::PI;
 
@@ -112,6 +112,119 @@ fn rod_cut_by_an_oblique_plane() {
                 })
                 .sum();
             // Inscribed: short of the solid by the rims' chords only.
+            assert!(
+                meshed <= truth && truth - meshed < 5e-3 * truth,
+                "{label}: mesh volume {meshed}, truth {truth}"
+            );
+        }
+    }
+}
+
+/// A tube cut by an oblique plane across both walls: the plane face is an
+/// elliptic annulus, and each wall keeps pi r^2 of the plane's height at
+/// the axis.
+#[test]
+fn tube_cut_by_an_oblique_plane() {
+    let (outer, inner, height_at_axis) = (3.0_f64, 1.5_f64, 3.0_f64);
+    for slope in [0.1_f64, 0.3, 0.5, 0.8] {
+        for turn_deg in [0.0_f64, 60.0, 90.0, 200.0] {
+            let label = format!("slope {slope}, turned {turn_deg} degrees");
+            let turn = turn_deg.to_radians();
+            let mut topo = Topology::new();
+            let rod = make_cylinder(&mut topo, outer, 6.0).unwrap();
+            let bore = make_cylinder(&mut topo, inner, 8.0).unwrap();
+            transform_solid(&mut topo, bore, &Mat4::translation(0.0, 0.0, -1.0)).unwrap();
+            let tube = boolean(&mut topo, BooleanOp::Cut, rod, bore).unwrap();
+            let lid = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+            let place = Mat4::rotation_z(turn)
+                * Mat4::translation(0.0, 0.0, height_at_axis)
+                * Mat4::rotation_y(-slope.atan())
+                * Mat4::translation(-10.0, -10.0, 0.0);
+            transform_solid(&mut topo, lid, &place).unwrap();
+            let cut = boolean(&mut topo, BooleanOp::Cut, tube, lid).unwrap();
+
+            let report = validate_solid(&topo, cut).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let faces = solid_faces(&topo, cut).unwrap();
+            assert_eq!(faces.len(), 4, "{label}: faces");
+
+            let ring = PI * (outer * outer - inner * inner);
+            let truth = ring * height_at_axis;
+            let volume = solid_volume(&topo, cut, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-9 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+            let mut walls = Vec::new();
+            let mut caps = 0.0;
+            for &f in &faces {
+                let area = face_area(&topo, f, 0.01).unwrap();
+                match topo.face(f).unwrap().surface() {
+                    FaceSurface::Cylinder(c) => walls.push((c.radius(), area)),
+                    FaceSurface::Plane { .. } => caps += area,
+                    other => panic!("{label}: unexpected {}", other.type_tag()),
+                }
+            }
+            for (r, area) in walls {
+                let wall_truth = 2.0 * PI * r * height_at_axis;
+                assert!(
+                    (area - wall_truth).abs() < 1e-9 * wall_truth,
+                    "{label}: r = {r} wall area {area}, truth {wall_truth}"
+                );
+            }
+            // The base annulus and the elliptic one, leaning off it by the tilt.
+            let caps_truth = ring * (1.0 + slope.hypot(1.0));
+            assert!(
+                (caps - caps_truth).abs() < 1e-9 * caps_truth,
+                "{label}: cap area {caps}, truth {caps_truth}"
+            );
+
+            let (s, c) = turn.sin_cos();
+            let plane_z = |x: f64, y: f64| height_at_axis + slope * (x * c + y * s);
+            let classify = |x: f64, y: f64, z: f64| {
+                classify_point(
+                    &topo,
+                    cut,
+                    Point3::new(x, y, z),
+                    &ClassifyOptions::default(),
+                )
+                .unwrap()
+            };
+            for (x, y) in [
+                (2.25 * c, 2.25 * s),
+                (-2.25 * c, -2.25 * s),
+                (-2.25 * s, 2.25 * c),
+            ] {
+                let z = plane_z(x, y);
+                assert_eq!(
+                    classify(x, y, z - 0.05),
+                    PointClassification::Inside,
+                    "{label}: below at ({x}, {y})"
+                );
+                assert_eq!(
+                    classify(x, y, z + 0.05),
+                    PointClassification::Outside,
+                    "{label}: above at ({x}, {y})"
+                );
+            }
+            assert_eq!(
+                classify(0.5 * c, 0.5 * s, 1.0),
+                PointClassification::Outside,
+                "{label}: in the bore"
+            );
+
+            let mesh = tessellate_solid(&topo, cut, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let meshed: f64 = mesh
+                .indices
+                .chunks_exact(3)
+                .map(|t| {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    (a - Point3::new(0.0, 0.0, 0.0)).dot((b - a).cross(c - a)) / 6.0
+                })
+                .sum();
+            // Inscribed: the outer wall's chords take more than the bore's
+            // give back.
             assert!(
                 meshed <= truth && truth - meshed < 5e-3 * truth,
                 "{label}: mesh volume {meshed}, truth {truth}"

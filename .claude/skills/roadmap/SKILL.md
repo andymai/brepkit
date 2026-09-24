@@ -187,6 +187,16 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A tube cut by an oblique plane (CLOSED 2026-09-24; pin `tube_cut_by_an_oblique_plane` in `crates/operations/tests/oblique_rod_cut.rs`)**:
+  a tube (radius 3 bored to 1.5) less the half-space above a tilted plane
+  fell back to a 62-face mesh reading 63.38 against 20.25 pi = 63.62 at
+  every tilt tried, where the level cut was exact. The plane face carries
+  two nested closed ellipses, and a plane face with more than one closed
+  section reaches the wire builder, which ignores closed curves; the salvage
+  pass that peels interior closed circles off first and carves them as
+  nested loops skipped ellipses (it now takes them, clearing the outline by
+  the semi-major axis).
+
 - **A rod halved through its seam (CLOSED 2026-09-24; pin `crates/operations/tests/rod_halved_at_every_angle.rs`)**:
   `make_cylinder(3, 4)` less the half-space y < 0 (a plane through the
   axis and the seam) came out exact-looking at 87.39 against 18 pi, and the
