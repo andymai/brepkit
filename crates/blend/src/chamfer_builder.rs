@@ -6,11 +6,14 @@
 
 use std::collections::HashSet;
 
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
-use brepkit_topology::face::FaceId;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::vertex::VertexId;
+use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::analytic;
 use crate::builder_utils::sample_nurbs_endpoints;
@@ -270,6 +273,7 @@ impl<'a> ChamferBuilder<'a> {
         }
 
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
+        let mut cross_edges: Vec<(EdgeId, VertexId, VertexId)> = Vec::new();
 
         for (si, sr) in stripe_results.iter().enumerate() {
             // Reuse the trimmed neighbours' contact edges (mirrors the fillet
@@ -279,10 +283,12 @@ impl<'a> ChamferBuilder<'a> {
                 .get(si)
                 .copied()
                 .unwrap_or((None, None));
-            let blend_face_id =
-                crate::builder_utils::create_blend_face_with_contacts(topo, &sr.stripe, c1, c2)?
-                    .face;
-            blend_face_ids.push(blend_face_id);
+            let info =
+                crate::builder_utils::create_blend_face_with_contacts(topo, &sr.stripe, c1, c2)?;
+            orient_chamfer_face(topo, info.face, &sr.stripe)?;
+            cross_edges.extend(info.cross_end);
+            cross_edges.extend(info.cross_start);
+            blend_face_ids.push(info.face);
         }
 
         let mut result_faces: Vec<FaceId> = Vec::new();
@@ -298,6 +304,7 @@ impl<'a> ChamferBuilder<'a> {
             result_faces.push(replacement.unwrap_or(fid));
         }
 
+        close_chamfer_ends(topo, &result_faces, &cross_edges)?;
         result_faces.extend(&blend_face_ids);
 
         let new_shell = Shell::new(result_faces)?;
@@ -313,6 +320,95 @@ impl<'a> ChamferBuilder<'a> {
             is_partial,
         })
     }
+}
+
+/// A chamfer surface's normal follows the spine tangent and the order of the
+/// contacts, not the material, so on a concave edge it points into the
+/// solid. On either kind of edge the face's outward side leans the way its
+/// two neighbours face, which sets the face's flag.
+fn orient_chamfer_face(
+    topo: &mut Topology,
+    face: FaceId,
+    stripe: &crate::stripe::Stripe,
+) -> Result<(), BlendError> {
+    let normal_at = |surface: &FaceSurface, p: Point3| {
+        surface
+            .project_point(p)
+            .map_or_else(|| surface.normal(0.0, 0.0), |(u, v)| surface.normal(u, v))
+    };
+    let middle = |c: &brepkit_math::nurbs::curve::NurbsCurve| {
+        let (t0, t1) = c.domain();
+        c.evaluate(f64::midpoint(t0, t1))
+    };
+    let (p1, p2) = (middle(&stripe.contact1), middle(&stripe.contact2));
+    let outward = |fid: FaceId, p: Point3| -> Result<Vec3, BlendError> {
+        let f = topo.face(fid)?;
+        let n = normal_at(f.surface(), p);
+        Ok(if f.is_reversed() { -n } else { n })
+    };
+    let lean = outward(stripe.face1, p1)? + outward(stripe.face2, p2)?;
+    let own = normal_at(topo.face(face)?.surface(), p1 + (p2 - p1) * 0.5);
+    if own.dot(lean) < 0.0 {
+        topo.face_mut(face)?.set_reversed(true);
+    }
+    Ok(())
+}
+
+/// A chamfer's end faces still run through the corner it cut off (or
+/// filled): their wires step from one contact point to the old vertex and on
+/// to the other contact point. Each such detour is replaced by the chamfer's
+/// cross edge between the two points, which the end face then shares with
+/// the chamfer face. That drops the corner triangle from the end face at a
+/// convex edge and adds it at a concave one.
+fn close_chamfer_ends(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    cross_edges: &[(EdgeId, VertexId, VertexId)],
+) -> Result<(), BlendError> {
+    let ends = |topo: &Topology, oe: &OrientedEdge| -> Result<(VertexId, VertexId), BlendError> {
+        let e = topo.edge(oe.edge())?;
+        Ok(if oe.is_forward() {
+            (e.start(), e.end())
+        } else {
+            (e.end(), e.start())
+        })
+    };
+    for &(cross, from, to) in cross_edges {
+        'faces: for &fid in faces {
+            let face = topo.face(fid)?;
+            let wires: Vec<WireId> = std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .collect();
+            for wid in wires {
+                let edges = topo.wire(wid)?.edges().to_vec();
+                let n = edges.len();
+                if n < 3 {
+                    continue;
+                }
+                for i in 0..n {
+                    let (a, corner) = ends(topo, &edges[i])?;
+                    let (corner2, b) = ends(topo, &edges[(i + 1) % n])?;
+                    if corner != corner2 || !((a == from && b == to) || (a == to && b == from)) {
+                        continue;
+                    }
+                    let mut spliced: Vec<OrientedEdge> =
+                        (0..n).map(|k| edges[(i + 2 + k) % n]).take(n - 2).collect();
+                    spliced.push(OrientedEdge::new(cross, a == from));
+                    let new_wire = topo.add_wire(Wire::new(spliced, true)?);
+                    let face = topo.face_mut(fid)?;
+                    if face.outer_wire() == wid {
+                        face.set_outer_wire(new_wire);
+                    } else if let Some(slot) =
+                        face.inner_wires_mut().iter_mut().find(|w| **w == wid)
+                    {
+                        *slot = new_wire;
+                    }
+                    break 'faces;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Compute a chamfer stripe for a single edge using the adjacency index.

@@ -178,6 +178,10 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 | **Stable row defect: heal `convert_to_bspline` on a cylinder or a bored sphere** | Cylinder: 7 open mesh edges at the seam vertex, the band skips the rim's vertex sample while the cap keeps it. Bored sphere (`make_sphere(6, 24)` less an r=3 bore along z): 9141 open mesh edges at 0.01, the tunnel mouths filled, `solid_volume` 1533.7 against 587.6 before the conversion |
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
+| **Stable row defect: walking-engine chamfer at a closed rim or a shared vertex** | `chamfer_v2` on a cylinder's or cone's circular rim builds its cone face but returns a shell whose edges are not all shared by two faces (the endpoint-sampled trims cannot take a closed contact; the corrected fillet builder's periodic-contour machinery is the model). Two chamfered edges meeting at a box corner leave 9 edges open: each stripe's end detour lies in the other chamfer's removed region, so the two chamfer planes need a mitre along their intersection line (three at a corner need a corner patch). brepjs calls the planar `chamfer` in `chamfer.rs`, not this builder; the wasm `chamferV2` and `chamferDistanceAngle` bindings reach it |
+
+| **Stable row defect: volumes far from the origin** | `solid_volume` and `oriented_solid_volume` sum divergence terms about the world origin (`d · A`, `a · (b × c)`), so a solid far from it cancels away its own volume: a 4 x 3 x 2 box with one side drafted 5 degrees, translated by 1e6 on each axis, reads 57.43 and 68.91 against 23.475 (its geometry is right to 1e-10; the untranslated box's fast path still reads 24). Every path needs a reference point near the solid (its first vertex or bounding-box centre) |
+
 | **Stable row defect: `chamfer_v2` on a concave edge stores its face reversed** | `regress_chamfer_obtuse_ridge.rs`: the 0.02 chamfer of the notch's 90 degree reflex edge lands at y = -0.98586 with outward normal (0, -1, 0), into the material. Its flux flips, so the volume reads 232.1498 about the origin and 231.9235 about the box centre against the true 232.0016; the test's `0 < added < 2%` bound passes both |
 
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
@@ -185,6 +189,18 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **The walking-engine chamfer left every chamfered edge open (CLOSED 2026-09-24; pins `chamfer_v2_closes_on_every_box_edge`, `chamfer_v2_closes_two_parallel_edges`, `chamfer_v2_concave_notch_adds_only_the_chamfer_sliver` in `crates/operations/tests/regress_chamfer_obtuse_ridge.rs`)**:
+  `ChamferBuilder` trimmed the two chamfered faces but not the end faces,
+  which still ran through the old corner (a 4 x 3 x 2 box's edge chamfer:
+  6 edges used once, volume 23.667 against 23.5). The end faces now take the
+  chamfer's cross edges in place of the corner detour. On a concave edge the
+  chamfer plane's normal (spine tangent x contact span) pointed into the
+  material, so the face is flagged reversed when it disagrees with its two
+  neighbours' outward normals. A cross edge between a chamfer's contacts
+  came out a semicircle whenever roundoff left the chord's cross product
+  with its midpoint "centre" nonzero (the (0.3, 0.6) chamfer read 23.6499
+  against 23.64); a chord through the centre is now a line.
 
 - **Volumes far from the origin (CLOSED 2026-09-24; pins: `crates/operations/tests/far_from_origin_volume.rs`)**:
   every divergence sum ran about the world origin, so a solid a million

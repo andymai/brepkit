@@ -29,7 +29,16 @@ pub fn cross_section_curve(
     a: Point3,
     b: Point3,
 ) -> Option<EdgeCurve> {
-    let normal = (a - sec.center).cross(b - sec.center).normalize().ok()?;
+    // A chord through the centre (a chamfer's section, whose centre is its
+    // midpoint) spans no arc: roundoff leaves a tiny cross product that
+    // `normalize` would accept, turning the straight cross edge into a
+    // semicircle.
+    let (ra, rb) = (a - sec.center, b - sec.center);
+    let span = ra.cross(rb);
+    if span.length() <= 1e-9 * ra.length() * rb.length() {
+        return None;
+    }
+    let normal = span.normalize().ok()?;
     let circle = brepkit_math::curves::Circle3D::new(sec.center, normal, sec.radius).ok()?;
     Some(EdgeCurve::Circle(circle))
 }
