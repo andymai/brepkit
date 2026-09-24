@@ -1,0 +1,28 @@
+crates/operations/tests/regress_chamfer_obtuse_ridge.rs
+  s_ba2f7b5c6902b6::t_46245d97d1cfac 211-232
+crates/blend/src/chamfer_builder.rs
+  s_ba2f7b5c6902b6::t_6dd58220d171a3 289-293,366
+  s_ba2f7b5c6902b6::t_46245d97d1cfac 367-369
+  s_ba2f7b5c6902b6::t_bb4b7b57254c14 276,287,294,373,383-384,414,419-420
+  s_ba2f7b5c6902b6::t_4e3b2dc1fe7649 421
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_613f85919c6b67 181
+crates/blend/src/builder_utils.rs
+  s_ba2f7b5c6902b6::t_55b6d844967f53 32,125-147,245,261
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1cdeac30ad3d9d3d801ec09aa6f4935ef7d0a625",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
