@@ -221,15 +221,21 @@ where
     // A pointed cone's wire runs up its seam to the apex and straight back,
     // which bounds nothing in (u, v): its region is the rim's run closed
     // along the apex row, as a pole closes a sphere cap.
+    // The wire may start anywhere on it, so the samples are turned to end at
+    // the apex first.
     if let Some(apex) = apex
         && let Some(turn) = verts
             .iter()
             .position(|v| (*v - apex).length_squared() < COINCIDENT_SQ)
-        && turn >= 2
+        && verts.len() >= 4
     {
+        let mut rim = verts.clone();
+        rim.rotate_left(turn + 1);
+        rim.pop();
+        uv_boundary = build_uv_boundary(&rim, &project, v_periodic);
         let (_, v_apex) = project(apex);
-        let (first_u, last_u) = (uv_boundary[0].0, uv_boundary[turn - 1].0);
-        uv_boundary.truncate(turn);
+        let first_u = uv_boundary[0].0;
+        let last_u = uv_boundary[uv_boundary.len() - 1].0;
         uv_boundary.push((last_u, v_apex));
         uv_boundary.push((first_u, v_apex));
     }

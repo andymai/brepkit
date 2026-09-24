@@ -1964,10 +1964,15 @@ pub(super) fn tessellate_nonplanar_cdt(
                         .position(|&i| (boundary_3d[i].0 - apex).length() < 1e-9)
                 });
                 if let Some(turn) = at_apex {
-                    let u_other = if (u_assign - u_min_bnd).abs() < (u_assign - u_max_bnd).abs() {
-                        u_max_bnd
+                    // The seam's other copy is one period on, whichever rim
+                    // sample the wire happened to start at.
+                    let period = surface_periods(face_data.surface())
+                        .0
+                        .map_or(TAU, |(_, p)| p);
+                    let u_other = if u_assign <= f64::midpoint(u_min_bnd, u_max_bnd) {
+                        u_assign + period
                     } else {
-                        u_min_bnd
+                        u_assign - period
                     };
                     for (k, &i) in run.indices.iter().enumerate() {
                         boundary_uv[i].0 = if k <= turn { u_assign } else { u_other };
@@ -2024,7 +2029,9 @@ pub(super) fn tessellate_nonplanar_cdt(
             }
 
             apex_rows.sort_by_key(|row| std::cmp::Reverse(row.0));
-            let rim_spacing = {
+            let rim_spacing = if apex_rows.is_empty() {
+                1.0
+            } else {
                 let mut gaps: Vec<f64> = boundary_3d
                     .windows(2)
                     .map(|w| (w[1].0 - w[0].0).length())
@@ -2040,7 +2047,7 @@ pub(super) fn tessellate_nonplanar_cdt(
                 // A lone apex sample leaves each side of the seam one ruling
                 // long; sampled like the rim, the ruling's triangles stay
                 // local instead of fanning round the cone.
-                let side: Vec<(f64, Point3, u32)> = if boundary_3d.len() > 2 {
+                let side: Vec<(f64, Point3, u32)> = {
                     let slant = (rim_point - point).length();
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let n = ((slant / rim_spacing).ceil() as usize).max(2);
@@ -2061,8 +2068,6 @@ pub(super) fn tessellate_nonplanar_cdt(
                             (v + (v_rim - v) * f, p, gid)
                         })
                         .collect()
-                } else {
-                    Vec::new()
                 };
                 // Down one side to the apex, along the apex row, and up the
                 // other side back to the rim.

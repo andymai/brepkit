@@ -432,7 +432,7 @@ fn pointed_cone_seam(
             continue;
         }
         for vid in [edge.start(), edge.end()] {
-            if (topo.vertex(vid)?.point() - apex).length() < 1e-9 {
+            if (topo.vertex(vid)?.point() - apex).length() < 1e-7 {
                 return Ok(Some(oe.edge()));
             }
         }
