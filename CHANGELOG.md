@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.17](https://github.com/andymai/brepkit/compare/v4.0.16...v4.0.17) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** cut a torus with a plane across or through its axis, keeping either side ([#1746](https://github.com/andymai/brepkit/issues/1746)) ([bc2b8d7](https://github.com/andymai/brepkit/commit/bc2b8d718bf2806230de5ef32a057f2223b0d4b7))
+
 ## [4.0.16](https://github.com/andymai/brepkit/compare/v4.0.15...v4.0.16) (2026-09-24)
 
 
