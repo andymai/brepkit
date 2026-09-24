@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790257990713,
+  "lastUpdate": 1790259997229,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37367,6 +37367,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30699380,
             "range": "± 492903",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1b917a5ee94424e8d25243732ced22ba80679689",
+          "message": "fix(algo): cut a round bore through a rod's wall, across its seam or clear of it (#1716)\n\n## What was wrong\n\nA perpendicular radius 0.3 cylinder can now cut `make_cylinder(1.5, 4)`\nexactly, validly, and watertightly for through and blind bores along x\nand y. The result keeps 2 cylinder faces and 2 planes for a through\nbore, or 3 planes for a blind bore.\n\nPreviously, `algebraic_cylinder_cylinder` swept the first cylinder's\nrulings. When that was the thicker rod, only a window of rulings met the\nbore. Each root traced an open arc, and forcing it closed made the\nfitted curves overshoot.\n\nEach intersection loop winds the bore once and separates bands on its\nwall. A bore along x can also straddle the rod's seam meridian, leaving\nthe rod's seam line running through the hole.\n\nThe resulting notched wall has no inner wires. Giving it the raw `(u,\nv)` metric made nonplanar CDT triangles chord through the rod. The blind\nx bore turned 45 degrees meshed to 21.17 instead of its exact 28.08.\n\n## What this does\n\n- Sweeps whichever cylinder has rulings that all meet the other,\nproducing the two true closed loops. For partial overlaps, it joins the\ntwo roots from each window of rulings at their branch points.\n\n- Extends `compute_seam_anchors` to reparameterize a closed NURBS loop\nthat winds a cylinder or cone so it starts on that face's seam. The\nwinding-chain band builder accepts any number of chains and measures\nwinding along each piece, so one closed loop counts. Other routing\nchecks retain the endpoint measure.\n\n- Cuts a loop at its crossings with the seam of a face it does not wind,\non every face the loop bounds. A loop left in two pieces is cut again at\ntheir midpoints, preventing the edge merge from welding pieces that\nshare both endpoints.\n\n- Adds `split_periodic_face_around_seam_holes`. Its outer wire climbs\none seam copy, detours around the hole half on that side, and descends\nthe other copy around the other half. The seam segment inside the hole\nbounds both half-discs. Holes clear of the seam remain inner wires.\n\n- Uses the holed wall's developed metric and refinement when an outer\nwire contains two closed circle rims, a seam made of lines, and marched\npieces.\n\n- Integrates cylinder or cone faces trimmed by boundary NURBS or ellipse\nedges in `solid_volume` through `developable_face_flux`.\n\n- Leaves sibling loops unanchored and uncut when they approach within\none tenth of a loop's extent, preserving the existing equal-cylinder\nlens fuse result.\n\n## Verification\n\n- `rod_side_bore.rs` covers through and blind bores along x with the\nbore seam on the rod seam, x turned 45 degrees, and y. All six cases\nfailed before this change through an uncut rod or planar mesh fallback.\n\n- Each case checks `validate_solid`, face census, and `solid_volume`\nwithin `1e-7` of removed-chord quadrature: `27.4303664915` through and\n`28.0785448580` blind. It also checks watertight meshing at `0.01` and\nmesh volume within `2e-3` at `0.001`.\n\n- The algo, operations, io, math, and wasm suites pass: 2409 tests, 0\nfailures.\n\n- The roadmap row closes. Two stale rows already closed by earlier PRs,\nNURBS interior density and volumes far from the origin, are removed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMakes the crossing-cylinder intersection exact for a small bore cutting\na rod's wall: through and blind bores now stay analytic with correct\nvolumes, whether the hole straddles the rod's seam or is clear of it.\nPreviously the intersection swept the thicker rod's rulings so each root\ntraced an open arc forced closed, and a seam-straddling hole left inner\nwires whose triangulation chorded through the solid.\n\n**Key changes**\n- The intersection sweeps whichever cylinder's rulings all meet the\nother; partial overlaps join the two roots at their branch points,\ntaking the loop from the sweep that samples it.\n- Closed NURBS loops winding a periodic face are re-anchored to its\nseam, and the band splitter now handles any number of winding chains.\n- `split_periodic_face_around_seam_holes` notches the wall's outer wire\naround each seam-straddling hole half so the seam never runs through a\nhole.\n- A notched wall is meshed in the developed metric, and `solid_volume`\nintegrates cylinder/cone faces trimmed by NURBS or ellipse boundary\nedges.\n- Sibling loops that nearly meet (equal crossing cylinders) keep their\nold routing, preserving the lens-fuse result.\n\n**Verification**\n- New `rod_side_bore.rs` covers through and blind bores along x and y,\nwith the bore seam on the rod seam and turned 45°; all six cases failed\nbefore.\n- Each case checks solid validity, face census, exact volume within\n`1e-7`, watertight meshing at `0.01`, mesh volume within `2e-3`, and\ncarved/kept point classification.\n\n<sup>Written for commit f794532d9b3f70fbff9999b8f6e9c36bc43ce9ae.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1716?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T07:23:54-07:00",
+          "tree_id": "f1419d4556c5fa26bfcb93924d16dc4148af4cd6",
+          "url": "https://github.com/andymai/brepkit/commit/1b917a5ee94424e8d25243732ced22ba80679689"
+        },
+        "date": 1790259993242,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1038628,
+            "range": "± 10716",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1125452,
+            "range": "± 2375",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14452,
+            "range": "± 548",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 756032,
+            "range": "± 12375",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44886925,
+            "range": "± 524083",
             "unit": "ns/iter"
           }
         ]
