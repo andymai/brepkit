@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.15](https://github.com/andymai/brepkit/compare/v4.0.14...v4.0.15) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** cut a tube with an oblique plane, carving both ellipses from the plane face ([#1740](https://github.com/andymai/brepkit/issues/1740)) ([4ad473b](https://github.com/andymai/brepkit/commit/4ad473b090071004313448bdad98f7153ab1a653))
+
 ## [4.0.14](https://github.com/andymai/brepkit/compare/v4.0.13...v4.0.14) (2026-09-24)
 
 
