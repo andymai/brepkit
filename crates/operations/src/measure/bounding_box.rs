@@ -752,28 +752,77 @@ mod tests {
         use crate::copy::copy_solid;
         use crate::primitives::{make_cylinder, make_sphere, make_torus};
         use crate::transform::transform_solid;
+        type Support<'a> = Option<&'a dyn Fn(Vec3) -> f64>;
 
+        // The first four are similarities; the rest scale non-uniformly,
+        // shear, and mirror.
         let placements = [
             Mat4::translation(3.0, -2.0, 7.5),
             Mat4::translation(1.0, 2.0, 3.0) * Mat4::rotation_z(0.7),
             Mat4::rotation_x(0.9) * Mat4::rotation_y(-0.4) * Mat4::rotation_z(1.3),
             Mat4::translation(-4.0, 0.5, 2.0) * Mat4::rotation_y(2.1) * Mat4::scale(1.5, 1.5, 1.5),
+            Mat4::rotation_x(0.5) * Mat4::scale(2.0, 1.0, 0.5),
+            Mat4([
+                [1.0, 0.4, 0.0, 1.0],
+                [0.0, 1.0, 0.0, -2.0],
+                [0.3, 0.0, 1.0, 0.5],
+                [0.0, 0.0, 0.0, 1.0],
+            ]),
+            Mat4::translation(2.0, 0.0, -1.0) * Mat4::scale(-1.0, 1.0, 1.0) * Mat4::rotation_z(0.3),
         ];
+        let similarities = 4;
+
+        // An affine image's half-extent along world axis k is the source
+        // surface's support in the direction of row k of the linear part.
+        let sphere_support = |d: Vec3| 2.0 * d.length();
+        let torus_support = |d: Vec3| {
+            let perp = d.z().mul_add(-d.z(), d.dot(d)).max(0.0).sqrt();
+            6.0f64.mul_add(perp, 1.5 * d.length())
+        };
+        let supported_box = |m: &Mat4, support: &dyn Fn(Vec3) -> f64| {
+            let c = m.mul_point(Point3::new(0.0, 0.0, 0.0));
+            let h = [0, 1, 2].map(|k| support(Vec3::new(m.0[k][0], m.0[k][1], m.0[k][2])));
+            Aabb3 {
+                min: Point3::new(c.x() - h[0], c.y() - h[1], c.z() - h[2]),
+                max: Point3::new(c.x() + h[0], c.y() + h[1], c.z() + h[2]),
+            }
+        };
+
         let mut topo = Topology::new();
-        let shapes = [
-            ("box", make_box(&mut topo, 2.0, 3.0, 4.0).unwrap()),
-            ("cylinder", make_cylinder(&mut topo, 1.5, 4.0).unwrap()),
-            ("sphere", make_sphere(&mut topo, 2.0, 16).unwrap()),
-            ("torus", make_torus(&mut topo, 6.0, 1.5, 16).unwrap()),
-            ("u-profile", u_profile(&mut topo)),
+        let shapes: [(&str, SolidId, Support<'_>); 5] = [
+            ("box", make_box(&mut topo, 2.0, 3.0, 4.0).unwrap(), None),
+            (
+                "cylinder",
+                make_cylinder(&mut topo, 1.5, 4.0).unwrap(),
+                None,
+            ),
+            (
+                "sphere",
+                make_sphere(&mut topo, 2.0, 16).unwrap(),
+                Some(&sphere_support),
+            ),
+            (
+                "torus",
+                make_torus(&mut topo, 6.0, 1.5, 16).unwrap(),
+                Some(&torus_support),
+            ),
+            ("u-profile", u_profile(&mut topo), None),
         ];
-        for (name, solid) in shapes {
+        for (name, solid, support) in shapes {
             for (i, m) in placements.iter().enumerate() {
                 let placed = solid_bounding_box_transformed(&topo, solid, m).unwrap();
-                let copy = copy_solid(&mut topo, solid).unwrap();
-                transform_solid(&mut topo, copy, m).unwrap();
-                let moved = solid_bounding_box(&topo, copy).unwrap();
-                assert_boxes_match(placed, moved, 1e-9, &format!("{name} placement {i}"));
+                let what = format!("{name} placement {i}");
+                if let Some(support) = support {
+                    assert_boxes_match(placed, supported_box(m, support), 1e-9, &what);
+                }
+                // A non-similarity turns a sphere or torus copy into NURBS,
+                // whose box is only sampled.
+                if support.is_none() || i < similarities {
+                    let copy = copy_solid(&mut topo, solid).unwrap();
+                    transform_solid(&mut topo, copy, m).unwrap();
+                    let moved = solid_bounding_box(&topo, copy).unwrap();
+                    assert_boxes_match(placed, moved, 1e-9, &what);
+                }
             }
         }
     }
