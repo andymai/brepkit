@@ -1,0 +1,21 @@
+crates/operations/tests/oblique_rod_cut.rs
+  s_ba2f7b5c6902b6::t_ce89fea255eb22 226-227,229
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_ce89fea255eb22 4549-4552,4559-4561,4603,4607,4621-4622,4678-4680,4685,4701-4706,4737-4738
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "823eaba3f195fad1f0a1972743cf79271f26b41b",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
