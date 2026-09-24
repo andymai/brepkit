@@ -1,0 +1,21 @@
+crates/check/src/classify/winding.rs
+  s_ba2f7b5c6902b6::t_7c4c29645ecc51 20-25
+crates/operations/tests/classify_cavities.rs
+  s_ba2f7b5c6902b6::t_7c4c29645ecc51 111-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ea064cae10ef38c5a88a71fae149ecfded0b55c2",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
