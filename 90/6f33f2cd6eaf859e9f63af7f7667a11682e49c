@@ -1,0 +1,31 @@
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_b6eefa500018d0 187-192
+  s_ba2f7b5c6902b6::t_8dcdc45e38d69e 193
+crates/operations/src/draft.rs
+  s_ba2f7b5c6902b6::t_0e5a5f44ae61e1 149,212
+  s_ba2f7b5c6902b6::t_5498beeed465a3 180,184,460
+  s_ba2f7b5c6902b6::t_3ae8d022bb713c 87-89,135,152-153,181-183,336-459,461-491
+  s_ba2f7b5c6902b6::t_db67663c9333f3 3-5,7,12,15,19,21-28,33-39,50-52,55,60-64,66-70,72-74,77-83,85-86,90-102,104-116,118-119,121-134,136-146,148,150-151,154-166,168-170,172-179,185-211,213-214,217-219,221-243
+  s_ba2f7b5c6902b6::t_1f713d1fb67bf4 492
+README.md
+  s_ba2f7b5c6902b6::t_b6eefa500018d0 81
+crates/wasm/src/bindings/operations.rs
+  s_ba2f7b5c6902b6::t_24f2c6926089a6 1665,1667-1693
+  s_ba2f7b5c6902b6::t_b6eefa500018d0 1666
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "906f33f2cd6eaf859e9f63af7f7667a11682e49c",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
