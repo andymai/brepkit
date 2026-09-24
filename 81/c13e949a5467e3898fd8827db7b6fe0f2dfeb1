@@ -1,0 +1,23 @@
+crates/heal/src/custom/convert_to_bspline.rs
+  s_ba2f7b5c6902b6::t_861b34de869f81 526-532
+  s_ba2f7b5c6902b6::t_de2b905a3a1853 82,508-525,533-544
+  s_ba2f7b5c6902b6::t_ee12c82cfb45ec 237
+  s_ba2f7b5c6902b6::t_4e388de2a4ab4f 202-204,210-236,238-244,252-272,545
+  s_ba2f7b5c6902b6::t_652bd44f146044 273-274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "81c13e949a5467e3898fd8827db7b6fe0f2dfeb1",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
