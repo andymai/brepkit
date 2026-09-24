@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.10](https://github.com/andymai/brepkit/compare/v4.0.9...v4.0.10) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** measure rods cut along their axis exactly, and planar faces bounded by arcs ([#1727](https://github.com/andymai/brepkit/issues/1727)) ([0b7bed6](https://github.com/andymai/brepkit/commit/0b7bed689b82a1dea8d0a798a168ff134ed5a9bf))
+
 ## [4.0.9](https://github.com/andymai/brepkit/compare/v4.0.8...v4.0.9) (2026-09-24)
 
 
