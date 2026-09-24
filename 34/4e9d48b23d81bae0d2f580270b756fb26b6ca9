@@ -1,0 +1,23 @@
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_21457704379390 175
+README.md
+  s_ba2f7b5c6902b6::t_21457704379390 101,116
+crates/operations/src/feature_recognition.rs
+  s_ba2f7b5c6902b6::t_21457704379390 673-688
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "344e9d48b23d81bae0d2f580270b756fb26b6ca9",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
