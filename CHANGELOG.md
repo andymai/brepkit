@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.1](https://github.com/andymai/brepkit/compare/v4.0.0...v4.0.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** build sweep_smooth's rails as curves shared by its faces ([#1714](https://github.com/andymai/brepkit/issues/1714)) ([97a482e](https://github.com/andymai/brepkit/commit/97a482eecbb551871f6d78706d8b5ca417bfce5f))
+
 ## [4.0.0](https://github.com/andymai/brepkit/compare/v3.6.1...v4.0.0) (2026-09-24)
 
 
