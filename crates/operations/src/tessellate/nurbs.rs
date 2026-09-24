@@ -693,8 +693,14 @@ pub(super) fn tessellate_periodic_nurbs_grid(
 ) -> TriangleMeshUV {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
-    let n_u = iso_divisions(surface, true, deflection, angular_tol);
-    let n_v = iso_divisions(surface, false, deflection, angular_tol);
+    // Fewer than three divisions of a closed direction collapse its seam
+    // copies onto the cells' other side.
+    let (n_u, n_v) = cap_grid(
+        iso_divisions(surface, true, deflection, angular_tol).max(3),
+        iso_divisions(surface, false, deflection, angular_tol).max(3),
+        GRID_MAX_CELLS,
+    );
+    let (n_u, n_v) = (n_u.max(3), n_v.max(3));
     let (um, vm) = (0.5 * (u_lo + u_hi), 0.5 * (v_lo + v_hi));
     let duv = surface.derivatives(um, vm, 1);
     let right_handed = duv[1][0].cross(duv[0][1]).dot(safe_normal(surface, um, vm)) >= 0.0;
@@ -741,6 +747,28 @@ pub(super) fn tessellate_periodic_nurbs_grid(
         },
         uvs,
     }
+}
+
+/// The most cells a structured NURBS grid may hold; past it the deflection
+/// gives way to a bounded mesh.
+pub(super) const GRID_MAX_CELLS: usize = 1 << 16;
+
+/// Shrinks a grid's two division counts together, keeping their ratio, until
+/// it holds at most `max_cells` cells.
+pub(super) fn cap_grid(n_u: usize, n_v: usize, max_cells: usize) -> (usize, usize) {
+    let cells = n_u.saturating_mul(n_v);
+    if cells <= max_cells {
+        return (n_u, n_v);
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let scale = (max_cells as f64 / cells as f64).sqrt();
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let shrink = |n: usize| ((n as f64 * scale).floor() as usize).max(1);
+    (shrink(n_u), shrink(n_v))
 }
 
 /// Divisions of one parameter direction that keep every iso-line chord of a

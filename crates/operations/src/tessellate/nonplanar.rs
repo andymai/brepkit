@@ -3061,7 +3061,6 @@ fn interior_grid_resolution(
         // A NURBS face's parameters are knot values, not angles: size the
         // grid by the chords of its own iso-lines across the face's box.
         FaceSurface::Nurbs(_) => {
-            // Bounds the interior sample count (the CDT inserts them all).
             const INTERIOR_MAX_DIVISIONS: usize = 1024;
             let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
             let normal_at = |u: f64, v: f64| {
@@ -3069,7 +3068,9 @@ fn interior_grid_resolution(
                 surface.normal(u, v)
             };
             let (u_span, v_span) = ((u_min, u_min + du), (v_min, v_min + dv));
-            (
+            // The CDT inserts every interior sample, so the grid is bounded
+            // as a whole, not only per direction.
+            super::nurbs::cap_grid(
                 super::nurbs::iso_divisions_over(
                     &at,
                     &normal_at,
@@ -3088,6 +3089,7 @@ fn interior_grid_resolution(
                     angular_tol,
                     INTERIOR_MAX_DIVISIONS,
                 ),
+                super::nurbs::GRID_MAX_CELLS,
             )
         }
         FaceSurface::Plane { .. } => {
