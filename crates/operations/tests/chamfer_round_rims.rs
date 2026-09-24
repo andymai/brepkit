@@ -241,6 +241,31 @@ fn blind_hole_floor_rim() {
     );
 }
 
+/// A closed cylindrical cavity inside a block: its rims bound an inner
+/// shell, and the chamfer's band joins that shell, filling the corner.
+#[test]
+fn enclosed_cavity_rim() {
+    let mut topo = Topology::new();
+    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let cavity = make_cylinder(&mut topo, 2.0, 4.0).unwrap();
+    transform_solid(&mut topo, cavity, &Mat4::translation(5.0, 5.0, 3.0)).unwrap();
+    let hollow = boolean(&mut topo, BooleanOp::Cut, block, cavity).unwrap();
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    let rims = rims_at(&topo, hollow, 7.0);
+    assert_eq!(rims.len(), 1);
+    let d = 0.5;
+    let result = chamfer(&mut topo, hollow, &rims, d).unwrap();
+    assert_eq!(topo.solid(result).unwrap().inner_shells().len(), 1);
+    check(
+        &topo,
+        result,
+        1000.0 - 16.0 * PI + ring(2.0, -d, (0.0, -d)),
+        &[("cone", 1), ("cylinder", 1), ("plane", 8)],
+        &[Point3::new(6.9, 5.0, 6.95), Point3::new(8.0, 5.0, 5.0)],
+        &[Point3::new(6.6, 5.0, 6.6), Point3::new(5.0, 5.0, 5.0)],
+    );
+}
+
 /// A distance that consumes the cap or the wall is refused, not built.
 #[test]
 fn oversized_distances_are_refused() {
