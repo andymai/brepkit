@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790247245264,
+  "lastUpdate": 1790247982824,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36719,6 +36719,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41470538,
             "range": "± 128649",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59afa9538df77d2153437f78aac5afcdd2a3034c",
+          "message": "feat(operations): draft planar faces by turning their planes (#1703)\n\n## What was wrong\n\nDraft now tapers planar faces exactly and keeps the solid's topology,\nand its README row moves to Stable.\n\nOn main, draft moved each drafted face's vertices radially away from an\naxis through the neutral point, then rebuilt the solid from face\npolygons. Vertices at one height moved by the same distance in different\ndirections, bending the drafted face, while neighbouring faces retained\ntheir old vertex positions.\n\n## What this does\n\n- Draft is now a plane modification that preserves the solid's topology.\nEach drafted face turns about its neutral line, where its plane\nintersects the neutral plane through the neutral point and normal to the\npull direction.\n\n- The plane turns until its outward normal `n` satisfies `n · pull =\nsin(angle)`. With a positive angle, the face leans in above the neutral\nplane and out below it, so the part releases along the pull.\n\n- Every vertex of a drafted face moves to the common meeting point of\nits surrounding planes. The best-conditioned triple fixes the point, and\nevery additional plane must pass through it.\n\n- Other vertices, faces, and topology remain unchanged. The input solid\nis unchanged, and a drafted copy is returned, matched to the source by\ntraversal order.\n\n- Clear errors refuse an angle that is zero, not finite or not below a\nright angle, a zero pull direction, a face outside the solid or a\nnon-planar face, a face parallel to the neutral plane, a vertex meeting\na non-planar face or planes without a common point, and an edge that\nwould turn back on itself.\n\n- An edge at a moved vertex runs between two of its planes, so a\nstraight edge stored as a NURBS curve becomes a line. Every face the\ndraft leaves alone keeps its pcurves. Each vertex's planes are solved\nabout the vertex's old position, so the solid's distance from the origin\nnever multiplies into the solve. A further plane may miss the meeting\npoint by ten times the linear tolerance plus 64 machine epsilons times\nthe sum of the vertex's largest coordinate and the largest local offset\n(the precision a stored plane offset has there), not by an amount that\ngrows with the solid's size.\n\n- The README Modifiers row now reads \"Draft (planar faces meeting planar\nneighbours)\" and moves from Beta to Stable.\n\n## Verification\n\n- Drafting one side of a unit cube by 5 degrees about its base produces\na `validate_solid` clean result and a watertight mesh. Its volume\nmatches `1 - tan(5 degrees)/2` within `1e-9`, and the face normal gains\n`sin(5 degrees)` along the pull. With a mid-height neutral plane, the\nvolume remains 1.\n\n- Drafting all four sides of a `4 x 3 x 2` box by 3 degrees from its\nbase, as built and mirrored, matches `24 - 28t + 32t^2/3`, where `t =\ntan(3 degrees)`, within `1e-9`.\n\n- The top face and a face beside a `fillet_v2` rounded edge are refused.\n\n- Right angles, pi, and NaN are refused. A box translated by 1e6 drafts\nits top edge `2 tan(a)` in from its base. A straight NURBS edge on the\ndrafted face comes out a line, the volume stays exact, and an untouched\nface keeps a pcurve registered on the source.\n\n- `meeting_point` unit tests verify that a corner of three coordinate\nplanes and a slanted fourth meets at the origin, at `(1e6, -2e6, 3e6)`\nand at `(1e12, -2e12, 3e12)`. The same corner with the fourth plane\n`1e-3` off is refused at the origin and at `1e9`.\n\n- `draft_batch_cuts_the_exact_wedge` drafts through `executeBatch`,\nchecks the exact wedge volume, and checks that 1.6 radians is refused.\nThe test also drafts the same face through the public `draft` binding,\nwhich takes degrees and spells out the batch's default pull and neutral\npoint, and checks the same exact volume. The operations, io and wasm\nsuites pass: 1670 tests, 0 failures. The roadmap closes the Draft row\nand records that `solid_volume` sums about the world origin and loses a\ndrafted box's volume at 1e6.",
+          "timestamp": "2026-09-24T04:03:43-07:00",
+          "tree_id": "baddd129fc6c39b13ab8bb60f5f3818f985c45e8",
+          "url": "https://github.com/andymai/brepkit/commit/59afa9538df77d2153437f78aac5afcdd2a3034c"
+        },
+        "date": 1790247979126,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1035389,
+            "range": "± 4439",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1124227,
+            "range": "± 2230",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14359,
+            "range": "± 206",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 751368,
+            "range": "± 10952",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44823171,
+            "range": "± 281760",
             "unit": "ns/iter"
           }
         ]
