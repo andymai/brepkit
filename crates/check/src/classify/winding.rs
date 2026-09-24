@@ -27,9 +27,7 @@ use crate::CheckError;
 /// Returns an error if the solid or its faces contain invalid topology
 /// references.
 pub fn winding_number(topo: &Topology, solid: SolidId, point: Point3) -> Result<f64, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let faces = shell.faces().to_vec();
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
 
     let mut total = 0.0;
     for fid in &faces {

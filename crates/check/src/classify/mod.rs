@@ -61,10 +61,11 @@ pub fn classify_point(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
+    // Every shell: a cavity's faces bound the solid too, and ray parity
+    // across them puts a point inside a cavity outside the solid.
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
 
-    if is_on_boundary(topo, shell.faces(), point, options.tolerance)? {
+    if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
 
@@ -92,7 +93,7 @@ pub fn classify_point(
     let mut outside_votes = 0u32;
 
     for &dir in &base_dirs {
-        let crossings = count_ray_crossings(topo, shell.faces(), point, dir)?;
+        let crossings = count_ray_crossings(topo, &faces, point, dir)?;
         if crossings % 2 == 1 {
             inside_votes += 1;
         } else {
@@ -115,7 +116,7 @@ pub fn classify_point(
         let phi = (seed * std::f64::consts::E).fract() * std::f64::consts::PI;
         let dir = Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos());
 
-        let crossings = count_ray_crossings(topo, shell.faces(), point, dir)?;
+        let crossings = count_ray_crossings(topo, &faces, point, dir)?;
         if crossings % 2 == 1 {
             inside_votes += 1;
         } else {
@@ -215,9 +216,8 @@ pub fn classify_point_winding(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    if is_on_boundary(topo, shell.faces(), point, options.tolerance)? {
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
 
@@ -244,9 +244,8 @@ pub fn classify_point_robust(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    if is_on_boundary(topo, shell.faces(), point, options.tolerance)? {
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
 

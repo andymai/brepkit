@@ -71,10 +71,10 @@ pub fn classify_point(
     deflection: f64,
     tolerance: f64,
 ) -> Result<PointClassification, OperationsError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
+    // Every shell: a cavity's faces bound the solid too.
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
 
-    if is_on_boundary(topo, shell.faces(), point, tolerance)? {
+    if is_on_boundary(topo, &faces, point, tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
 
@@ -94,7 +94,7 @@ pub fn classify_point(
 
     let mut inside_votes = 0u32;
     for &dir in &ray_dirs {
-        let crossings = count_ray_crossings(topo, shell.faces(), point, dir, deflection)?;
+        let crossings = count_ray_crossings(topo, &faces, point, dir, deflection)?;
         if crossings % 2 == 1 {
             inside_votes += 1;
         }
@@ -797,16 +797,15 @@ fn compute_winding_number(
     deflection: f64,
     tolerance: f64,
 ) -> Result<(f64, bool), OperationsError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
 
-    if is_on_boundary(topo, shell.faces(), point, tolerance)? {
+    if is_on_boundary(topo, &faces, point, tolerance)? {
         return Ok((0.0, true));
     }
 
     let direction = Vec3::new(1.0, 0.3, 0.1); // avoid axis-aligned rays
     let mut crossings = 0u32;
-    for &fid in shell.faces() {
+    for &fid in &faces {
         crossings += count_face_ray_crossings(topo, fid, point, direction, deflection)?;
     }
 
