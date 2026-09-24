@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790230601493,
+  "lastUpdate": 1790237287208,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36287,6 +36287,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42127251,
             "range": "± 136530",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cdc0e8bcc2c69344a75fa454ae84c0c99c08ef11",
+          "message": "fix(operations): mirror NURBS faces by their flag alone (#1699)\n\n## What was wrong\n\nMirroring now preserves consistent face orientation in solids that mix\nNURBS and analytic faces.\n\nA face reads its wires through its reversed flag, so each stored outer\nwire runs counter-clockwise about the surface normal. Under a mirror\nwith a negative determinant, both transformation paths reversed every\nface's wires and also flipped each NURBS face's reversed flag.\n\nPlanes and quadrics keep their explicit normals outward, so their\nmirrored boundaries run clockwise and require reversal. A NURBS image's\n`Su x Sv` turns inward, leaving its mirrored boundary counter-clockwise\nabout the surface normal. Flipping its flag is sufficient. Reversing its\nwires as well made them run the same way as neighboring faces.\n\nAn all-NURBS solid hid the problem because every face was wrong in the\nsame way. On main, a mirrored 2 x 3 x 4 box with a bilinear NURBS top\nface reports four shared edges with inconsistent face orientations. The\ncase surfaced while checking `loft_smooth` on mirrored input.\n\n## What this does\n\n- `transform_solid` collects faces whose surface image flipped. Those\nNURBS faces flip their reversed flag and keep their wires.\n- Every other mirrored face reverses its wires.\n- `copy_and_transform_solid` records the same choice for each wire\nsnapshot, keying its wire copies by that choice.\n- A wire shared by a face that reverses and one that flips cannot turn\nboth ways, so `transform_solid` gives the flipping faces their own copy\nfirst.\n- The `transform_solid` documentation states the per-face rule.\n\n## Verification\n\n- `crates/operations/tests/mirror_mixed_faces.rs` mirrors the mixed-face\nbox through both `transform_solid` and `copy_and_transform_solid`.\n- Each path checks `validate_solid`, a mesh with no open or non-manifold\nedges, and volume 24 within `1e-9`. The test fails on main.\n- The operations, io, wasm, and heal suites pass: 1738 tests, 0\nfailures.",
+          "timestamp": "2026-09-24T01:05:37-07:00",
+          "tree_id": "6e837ca16b81f679a6b883ba3fd1cc1a16782129",
+          "url": "https://github.com/andymai/brepkit/commit/cdc0e8bcc2c69344a75fa454ae84c0c99c08ef11"
+        },
+        "date": 1790237284432,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000229,
+            "range": "± 4469",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1082635,
+            "range": "± 56811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13049,
+            "range": "± 132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 740207,
+            "range": "± 2701",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42053305,
+            "range": "± 903743",
             "unit": "ns/iter"
           }
         ]
