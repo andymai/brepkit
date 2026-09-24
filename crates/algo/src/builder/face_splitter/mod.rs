@@ -1306,17 +1306,18 @@ fn split_sections_at_seam_meridian(
 /// seam-anchored section chains that each wind the periodic direction once:
 /// the chain generalization of [`split_periodic_face_into_bands`], whose
 /// separators must be closed circles. Mirrors its structure: same boundary
-/// preconditions (two closed rim circles + seam lines), same per-band wire
+/// preconditions (a `band_stack`: two closed rims, or one and a cone's apex,
+/// plus seam lines), same per-band wire
 /// shape (lower separator, seam up, upper separator, seam down), and an
 /// interior point per band. A bore through a tube's wall crosses the bore's
 /// own wall along two such loops, giving three bands.
 ///
-/// Returns `None` (caller falls through) unless: the boundary is exactly two
-/// closed rims + seam edges; EVERY section belongs to a winding chain; each
-/// chain has a vertex on the seam meridian (the seam-anchoring pre-step
-/// guarantees this for winding chains); every chain sample stays strictly
-/// between the rims; and the chains do not cross (their order along the
-/// seam is their order across the face).
+/// Returns `None` (caller falls through) unless: the boundary reads as a
+/// band stack; EVERY section belongs to a winding chain; each chain has a
+/// vertex on the seam meridian (the seam-anchoring pre-step guarantees this
+/// for winding chains); every chain sample stays strictly between the
+/// stack's ends; and the chains do not cross (their order along the seam is
+/// their order across the face).
 #[allow(clippy::too_many_lines)]
 fn split_periodic_face_by_winding_chain(
     surface: &FaceSurface,
@@ -1356,48 +1357,15 @@ fn split_periodic_face_by_winding_chain(
         return None;
     }
 
-    // Boundary: exactly two closed rim circles plus seam Line edges.
-    let mut boundary_circles: Vec<&OrientedPCurveEdge> = Vec::new();
-    let mut seam_edges: Vec<&OrientedPCurveEdge> = Vec::new();
-    for e in boundary_edges {
-        let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
-        match (&e.curve_3d, is_closed) {
-            (EdgeCurve::Circle(_), true) => boundary_circles.push(e),
-            (EdgeCurve::Line, false) => seam_edges.push(e),
-            _ => return None,
-        }
-    }
-    if boundary_circles.len() != 2 || seam_edges.is_empty() {
-        return None;
-    }
-    let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
+    let special_cases::BandStack {
+        seam_u,
+        v_bot,
+        bot,
+        v_top,
+        top,
+        lower_tan: ref_tan,
+    } = special_cases::band_stack(surface, boundary_edges, close_tol)?;
     let wrap_pi = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
-
-    let circle_v = |e: &OrientedPCurveEdge| -> Option<f64> {
-        let (_, v) = surface.project_point(e.start_3d)?;
-        let on_seam = surface.evaluate(seam_u, v)?;
-        ((on_seam - e.start_3d).length() < close_tol).then_some(v)
-    };
-    let v0 = circle_v(boundary_circles[0])?;
-    let v1 = circle_v(boundary_circles[1])?;
-    let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {
-        (v0, boundary_circles[0], v1, boundary_circles[1])
-    } else {
-        (v1, boundary_circles[1], v0, boundary_circles[0])
-    };
-    if v_top - v_bot < close_tol {
-        return None;
-    }
-
-    // Traversal tangent of the bottom rim at the seam: a chain traversed the
-    // same way plays the LOWER role (the bottom of the band above it).
-    let ref_tan = {
-        let EdgeCurve::Circle(c) = &bot_edge.curve_3d else {
-            return None;
-        };
-        let t = c.tangent(c.project(bot_edge.start_3d));
-        if bot_edge.forward { t } else { -t }
-    };
     let u_opposite = (seam_u + PI).rem_euclid(TAU);
 
     let traversal_start = |&(idx, fwd): &(usize, bool)| -> Point3 {
@@ -1535,7 +1503,7 @@ fn split_periodic_face_by_winding_chain(
     let mut bands = Vec::with_capacity(n + 1);
     for k in 0..=n {
         let (mut wire, v_low, q_low) = if k == 0 {
-            (vec![bot_edge.clone()], v_bot, v_bot)
+            (bot.edges(), v_bot, v_bot)
         } else {
             let below = &separators[k - 1];
             (below.lower.clone(), below.v_seam, below.v_opposite)
@@ -1547,7 +1515,7 @@ fn split_periodic_face_by_winding_chain(
         };
         wire.push(mk_seam(v_low, v_high)?);
         if k == n {
-            wire.push(top_edge.clone());
+            wire.extend(top.edges());
         } else {
             wire.extend(separators[k].upper.iter().cloned());
         }

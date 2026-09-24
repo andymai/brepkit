@@ -1105,10 +1105,23 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
             }
         }
 
-        // If any cap face did not yield a circle, the cone is degenerate or
-        // unsupported -- fall back to tessellation rather than silently wrong answer.
+        // A cap along one closed ellipse is a whole tilted section of the
+        // cone, and the cone between the apex and that plane holds a third of
+        // the section's area times the apex's distance to the plane.
         if cap_circles.len() != plane_face_ids.len() {
-            return None;
+            let tips = plane_face_ids
+                .iter()
+                .zip(&planes)
+                .map(|(&fid, &(n, d))| {
+                    let area = cap_section_area(topo, fid)?;
+                    Some(area * (n.dot(apex_vec) - d).abs() / n.length() / 3.0)
+                })
+                .collect::<Option<Vec<f64>>>()?;
+            return match tips.as_slice() {
+                [tip] => Some(*tip),
+                [a, b] => Some((a - b).abs()),
+                _ => None,
+            };
         }
 
         match cap_circles.as_slice() {
@@ -1305,6 +1318,29 @@ fn find_cap_circle(topo: &Topology, face_id: FaceId) -> Option<(Point3, f64)> {
         }
     }
     None
+}
+
+/// Area of the conic a planar cap runs along, when every edge of its outer
+/// wire is an arc of one circle or ellipse.
+fn cap_section_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
+    use std::f64::consts::PI;
+
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut area: Option<f64> = None;
+    for oe in wire.edges() {
+        let a = match topo.edge(oe.edge()).ok()?.curve() {
+            brepkit_topology::edge::EdgeCurve::Circle(c) => PI * c.radius() * c.radius(),
+            brepkit_topology::edge::EdgeCurve::Ellipse(e) => PI * e.semi_major() * e.semi_minor(),
+            brepkit_topology::edge::EdgeCurve::Line
+            | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => return None,
+        };
+        match area {
+            Some(prev) if (prev - a).abs() > 1e-9 * prev => return None,
+            _ => area = Some(a),
+        }
+    }
+    area
 }
 
 /// Clamp the tessellation deflection used for volume so curved faces are

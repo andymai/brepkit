@@ -111,7 +111,10 @@ pub fn face_area(
                 Ok(4.0 * std::f64::consts::PI * r * r)
             }
         }
-        FaceSurface::Cone(_) => analytic_cone_face_area(topo, face_id),
+        FaceSurface::Cone(cone) => match cone_face_uv_area(topo, face_id, cone)? {
+            Some(area) => Ok(area),
+            None => analytic_cone_face_area(topo, face_id),
+        },
         FaceSurface::Torus(_) => analytic_torus_face_area(topo, face_id),
         FaceSurface::Nurbs(_) => {
             let mesh = tessellate::tessellate(topo, face_id, deflection)?;
@@ -171,44 +174,148 @@ fn sphere_hole_area(
     })
 }
 
+/// A lateral of revolution read in its `(u, v)` parameters, where the area
+/// element is `weight(v) du dv`.
+struct RevolutionMetric<'a> {
+    project: &'a dyn Fn(Point3) -> (f64, f64),
+    /// `∇v` along the surface at a point on it, so a boundary curve's
+    /// `dv/dt` is `grad_v · P'(t)`.
+    grad_v: &'a dyn Fn(Point3) -> Vec3,
+    weight: &'a dyn Fn(f64) -> f64,
+    /// A cone's apex, where the `u` lines collapse: a loop through it may
+    /// jump in `u` there, since the weight vanishes on it.
+    pole: Option<Point3>,
+}
+
 /// The area of a cylinder face whose boundary is not a rectangle in
 /// `(u, v)` (a wall trimmed by an oblique plane's ellipse, say): `r` times
-/// the region's area in `(u, v)`, by Green's theorem `A = ∮ u dv` along
-/// each wire, less its holes. `Ok(None)` for a face bounded only by rulings
-/// and rims, which the rectangle below measures exactly, or when a wire's
-/// unwrapped `u` does not close.
+/// the region's area in `(u, v)`. `Ok(None)` for a face bounded only by
+/// rulings and rims, which the rectangle below measures exactly, or when a
+/// wire's unwrapped `u` does not close.
 fn cylinder_face_uv_area(
     topo: &Topology,
     face_id: FaceId,
     cyl: &brepkit_math::surfaces::CylindricalSurface,
 ) -> Result<Option<f64>, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
+    let axis = cyl.axis();
+    let r = cyl.radius();
+    let rectangular = face_edges_all(topo, face_id, |edge, a, b| {
+        Ok(match edge.curve() {
+            EdgeCurve::Line => (b - a).cross(axis).length() <= 1e-9 * (b - a).length().max(1.0),
+            EdgeCurve::Circle(c) => c.normal().cross(axis).length() <= 1e-9,
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
+        })
+    })?;
+    if rectangular {
+        return Ok(None);
+    }
+    let project = |p: Point3| cyl.project_point(p);
+    let grad_v = |_: Point3| axis;
+    let weight = |_: f64| r;
+    face_uv_area(
+        topo,
+        face_id,
+        &RevolutionMetric {
+            project: &project,
+            grad_v: &grad_v,
+            weight: &weight,
+            pole: None,
+        },
+    )
+}
+
+/// The area of a cone face whose boundary is not a rectangle in `(u, v)`
+/// (a wall trimmed by an oblique plane's ellipse), where the area element
+/// is `v cos(a) du dv`. `Ok(None)` for a face bounded only by rulings and
+/// coaxial rims, which [`analytic_cone_face_area`] measures exactly, or
+/// when a wire's unwrapped `u` does not close.
+fn cone_face_uv_area(
+    topo: &Topology,
+    face_id: FaceId,
+    cone: &brepkit_math::surfaces::ConicalSurface,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let axis = cone.axis();
+    let apex = cone.apex();
+    let rectangular = face_edges_all(topo, face_id, |edge, a, b| {
+        Ok(match edge.curve() {
+            EdgeCurve::Line => {
+                let far = if (a - apex).length() > (b - apex).length() {
+                    a
+                } else {
+                    b
+                };
+                (b - a).cross(far - apex).length()
+                    <= 1e-9 * (b - a).length() * (far - apex).length()
+            }
+            EdgeCurve::Circle(c) => c.normal().cross(axis).length() <= 1e-9,
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
+        })
+    })?;
+    if rectangular {
+        return Ok(None);
+    }
+    let cos_a = cone.half_angle().cos();
+    let project = |p: Point3| cone.project_point(p);
+    // P = apex + v g(u) with a unit generator g normal to g'(u), so v
+    // changes along the surface as g does.
+    let grad_v = |p: Point3| {
+        let (u, _) = cone.project_point(p);
+        cone.evaluate(u, 1.0) - apex
+    };
+    let weight = |v: f64| v * cos_a;
+    face_uv_area(
+        topo,
+        face_id,
+        &RevolutionMetric {
+            project: &project,
+            grad_v: &grad_v,
+            weight: &weight,
+            pole: Some(apex),
+        },
+    )
+}
+
+/// Whether `test` holds for every edge of a face, given the edge and its
+/// start and end points.
+fn face_edges_all(
+    topo: &Topology,
+    face_id: FaceId,
+    mut test: impl FnMut(
+        &brepkit_topology::edge::Edge,
+        Point3,
+        Point3,
+    ) -> Result<bool, crate::OperationsError>,
+) -> Result<bool, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let a = topo.vertex(edge.start())?.point();
+            let b = topo.vertex(edge.end())?.point();
+            if !test(edge, a, b)? {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// A face's area from its `(u, v)` region by Green's theorem,
+/// `A = ∮ u w(v) dv` along each wire, less its holes.
+fn face_uv_area(
+    topo: &Topology,
+    face_id: FaceId,
+    metric: &RevolutionMetric<'_>,
+) -> Result<Option<f64>, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let wires: Vec<_> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
         .collect();
-    let axis = cyl.axis();
-    let mut rectangular = true;
-    for &wid in &wires {
-        for oe in topo.wire(wid)?.edges() {
-            let edge = topo.edge(oe.edge())?;
-            rectangular &= match edge.curve() {
-                EdgeCurve::Line => {
-                    let a = topo.vertex(edge.start())?.point();
-                    let b = topo.vertex(edge.end())?.point();
-                    (b - a).cross(axis).length() <= 1e-9 * (b - a).length().max(1.0)
-                }
-                EdgeCurve::Circle(c) => c.normal().cross(axis).length() <= 1e-9,
-                EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
-            };
-        }
-    }
-    if rectangular {
-        return Ok(None);
-    }
     let mut total = 0.0;
     for (k, &wid) in wires.iter().enumerate() {
-        let Some(signed) = wire_uv_area_on_cylinder(topo, wid, cyl)? else {
+        let Some(signed) = wire_uv_area(topo, wid, metric)? else {
             return Ok(None);
         };
         if k == 0 {
@@ -217,24 +324,31 @@ fn cylinder_face_uv_area(
             total -= signed.abs();
         }
     }
-    Ok(Some(cyl.radius() * total))
+    Ok(Some(total))
 }
 
-/// `∮ u dv` along one wire on a cylinder, with `u` unwrapped continuously,
-/// by Gauss-Legendre quadrature in each edge's own parameter; `None` when
-/// the unwrapped `u` does not return to its start.
-fn wire_uv_area_on_cylinder(
+/// `∮ u w(v) dv` along one wire, with `u` unwrapped continuously, by
+/// Gauss-Legendre quadrature in each edge's own parameter; `None` when the
+/// unwrapped `u` does not return to its start away from a pole.
+fn wire_uv_area(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
-    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    metric: &RevolutionMetric<'_>,
 ) -> Result<Option<f64>, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
     use std::f64::consts::{PI, TAU};
     const SEGMENTS: usize = 16;
     const ORDER: usize = 8;
-    let axis = cyl.axis();
-    let u_near = |p: Point3, near: Option<f64>| {
-        let (u, _) = cyl.project_point(p);
+    let at_pole = |p: Point3| metric.pole.is_some_and(|q| (p - q).length() <= 1e-7);
+    let mut touches_pole = false;
+    let mut u_near = |p: Point3, near: Option<f64>| {
+        if at_pole(p) {
+            touches_pole = true;
+            if let Some(n) = near {
+                return n;
+            }
+        }
+        let (u, _) = (metric.project)(p);
         near.map_or(u, |n| u - ((u - n + PI) / TAU).floor() * TAU)
     };
     let points = brepkit_math::quadrature::gauss_legendre_points(ORDER);
@@ -259,14 +373,17 @@ fn wire_uv_area_on_cylinder(
                 let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
                 for gp in points {
                     let t = mid + half * gp.x;
-                    let u = u_near(at(t), Some(u_prev));
-                    let dv = match curve {
-                        EdgeCurve::Line => axis.dot(end - start),
-                        EdgeCurve::Circle(c) => c.radius() * axis.dot(c.tangent(t)),
-                        EdgeCurve::Ellipse(e) => axis.dot(e.tangent(t)),
-                        EdgeCurve::NurbsCurve(nc) => axis.dot(nc.derivatives(t, 1)[1]),
+                    let p = at(t);
+                    let u = u_near(p, Some(u_prev));
+                    let tangent = match curve {
+                        EdgeCurve::Line => end - start,
+                        EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
+                        EdgeCurve::Ellipse(e) => e.tangent(t),
+                        EdgeCurve::NurbsCurve(nc) => nc.derivatives(t, 1)[1],
                     };
-                    sum += gp.w * half * u * dv;
+                    let (_, v) = (metric.project)(p);
+                    let dv = (metric.grad_v)(p).dot(tangent);
+                    sum += gp.w * half * u * (metric.weight)(v) * dv;
                     u_prev = u;
                 }
             }
@@ -274,7 +391,7 @@ fn wire_uv_area_on_cylinder(
         }
     }
     Ok(match (first_u, last_u) {
-        (Some(a), Some(b)) if (a - b).abs() <= 1e-6 => Some(sum),
+        (Some(a), Some(b)) if touches_pole || (a - b).abs() <= 1e-6 => Some(sum),
         _ => None,
     })
 }
@@ -508,21 +625,21 @@ fn analytic_torus_face_area(
 }
 
 /// The area of a planar face, less its holes: exact by Green's theorem when
-/// every edge is a line or a circle, else by Newell's method over the
-/// sampled boundary.
+/// every edge is a line, a circle or an ellipse, else by Newell's method over
+/// the sampled boundary.
 fn planar_face_area(topo: &Topology, face_id: FaceId) -> Result<f64, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
     let face = topo.face(face_id)?;
-    let mut lines_and_circles = true;
+    let mut lines_and_conics = true;
     for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         for oe in topo.wire(wire)?.edges() {
-            lines_and_circles &= matches!(
+            lines_and_conics &= matches!(
                 topo.edge(oe.edge())?.curve(),
-                EdgeCurve::Line | EdgeCurve::Circle(_)
+                EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
             );
         }
     }
-    if lines_and_circles
+    if lines_and_conics
         && let FaceSurface::Plane { normal, .. } = face.surface()
         && let Ok(frame) =
             brepkit_math::frame::Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), *normal)

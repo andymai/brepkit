@@ -818,6 +818,142 @@ fn sphere_loop_interior(surface: &FaceSurface, edges: &[OrientedPCurveEdge]) -> 
 // connect arbitrary section angles and cut through the surface interior.
 // ---------------------------------------------------------------------------
 
+/// One end of a u-periodic lateral's band stack.
+pub(super) enum BandEnd<'a> {
+    /// A closed rim circle of the face.
+    Rim(&'a OrientedPCurveEdge),
+    /// A pointed cone's apex: the band against it closes on its seam alone.
+    Apex,
+}
+
+/// The band stack of a cylinder or cone lateral cut open along its seam:
+/// two rim circles, or one rim and the apex of a pointed cone.
+pub(super) struct BandStack<'a> {
+    pub(super) seam_u: f64,
+    pub(super) v_bot: f64,
+    pub(super) bot: BandEnd<'a>,
+    pub(super) v_top: f64,
+    pub(super) top: BandEnd<'a>,
+    /// How a separator in the lower role (the bottom of the band above it)
+    /// runs at the seam.
+    pub(super) lower_tan: brepkit_math::vec::Vec3,
+}
+
+impl BandEnd<'_> {
+    pub(super) fn edges(&self) -> Vec<OrientedPCurveEdge> {
+        match self {
+            Self::Rim(e) => vec![(*e).clone()],
+            Self::Apex => Vec::new(),
+        }
+    }
+}
+
+/// Read a lateral's boundary as a band stack: closed rim circles plus seam
+/// lines on one meridian, where a pointed cone's seam runs up to its apex in
+/// place of a second rim. Every rim must start on the seam.
+pub(super) fn band_stack<'a>(
+    surface: &FaceSurface,
+    boundary_edges: &'a [OrientedPCurveEdge],
+    close_tol: f64,
+) -> Option<BandStack<'a>> {
+    use std::f64::consts::{PI, TAU};
+
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let apex = match surface {
+        FaceSurface::Cone(c) => Some(c.apex()),
+        _ => None,
+    };
+    let at_apex = |p: Point3| apex.is_some_and(|a| (p - a).length() < close_tol);
+
+    let mut rims: Vec<&OrientedPCurveEdge> = Vec::new();
+    let mut seam_points: Vec<Point3> = Vec::new();
+    let mut reaches_apex = false;
+    for e in boundary_edges {
+        let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
+        match (&e.curve_3d, is_closed) {
+            (EdgeCurve::Circle(_), true) => rims.push(e),
+            (EdgeCurve::Line, false) => {
+                for p in [e.start_3d, e.end_3d] {
+                    if at_apex(p) {
+                        reaches_apex = true;
+                    } else {
+                        seam_points.push(p);
+                    }
+                }
+            }
+            _ => return None,
+        }
+    }
+    // The apex has no longitude, so the seam's u comes from its other points.
+    let (seam_u, _) = surface.project_point(*seam_points.first()?)?;
+    for &p in &seam_points {
+        let (u, _) = surface.project_point(p)?;
+        if ((u - seam_u + PI).rem_euclid(TAU) - PI).abs() > 1e-6 {
+            return None;
+        }
+    }
+
+    let rim_v = |e: &OrientedPCurveEdge| -> Option<f64> {
+        let (_, v) = surface.project_point(e.start_3d)?;
+        let on_seam = surface.evaluate(seam_u, v)?;
+        ((on_seam - e.start_3d).length() < close_tol).then_some(v)
+    };
+    let traversal_tangent = |e: &OrientedPCurveEdge| -> Option<brepkit_math::vec::Vec3> {
+        let EdgeCurve::Circle(c) = &e.curve_3d else {
+            return None;
+        };
+        let t = c.tangent(c.project(e.start_3d));
+        Some(if e.forward { t } else { -t })
+    };
+
+    let stack = match (rims.as_slice(), reaches_apex) {
+        ([a, b], false) => {
+            let (va, vb) = (rim_v(a)?, rim_v(b)?);
+            let ((v_bot, bot), (v_top, top)) = if va < vb {
+                ((va, *a), (vb, *b))
+            } else {
+                ((vb, *b), (va, *a))
+            };
+            BandStack {
+                seam_u,
+                v_bot,
+                bot: BandEnd::Rim(bot),
+                v_top,
+                top: BandEnd::Rim(top),
+                lower_tan: traversal_tangent(bot)?,
+            }
+        }
+        // A cone's apex sits at v = 0; its rim is on either side of it.
+        ([rim], true) => {
+            let v = rim_v(rim)?;
+            let lower_tan = traversal_tangent(rim)?;
+            if v > 0.0 {
+                BandStack {
+                    seam_u,
+                    v_bot: 0.0,
+                    bot: BandEnd::Apex,
+                    v_top: v,
+                    top: BandEnd::Rim(rim),
+                    lower_tan: -lower_tan,
+                }
+            } else {
+                BandStack {
+                    seam_u,
+                    v_bot: v,
+                    bot: BandEnd::Rim(rim),
+                    v_top: 0.0,
+                    top: BandEnd::Apex,
+                    lower_tan,
+                }
+            }
+        }
+        _ => return None,
+    };
+    (stack.v_top - stack.v_bot >= close_tol).then_some(stack)
+}
+
 /// Split a u-periodic face (cylinder/cone lateral) into stacked bands at
 /// its closed section circles.
 ///
@@ -825,15 +961,15 @@ fn sphere_loop_interior(surface: &FaceSurface, edges: &[OrientedPCurveEdge]) -> 
 /// separates the surface into bands. For N internal circles sorted by v,
 /// emits N+1 band sub-faces, each bounded by:
 /// lower circle + seam segment up + upper circle reversed + seam segment
-/// down. The end bands reuse the face's original boundary circle edges.
+/// down. The end bands reuse the face's original boundary circle edges; a
+/// pointed cone's apex band has no circle at the apex.
 ///
 /// Preconditions (returns `None` so the caller can fall back otherwise):
-/// - surface is a cylinder or cone
-/// - boundary is exactly 2 closed circle edges plus seam Line edges, all
-///   seam endpoints at the same u
+/// - the boundary reads as a [`band_stack`]: 2 closed circle edges, or 1
+///   and a cone's apex, plus seam Line edges at one u
 /// - every section is a full closed circle whose start point sits on the
 ///   seam (guaranteed by the seam-anchor pre-pass) at a v strictly between
-///   the boundary circles, with no two circles at the same v
+///   the stack's ends, with no two circles at the same v
 #[allow(
     clippy::too_many_lines,
     clippy::too_many_arguments,
@@ -852,81 +988,28 @@ pub(super) fn split_periodic_face_into_bands(
     use brepkit_math::vec::{Point2, Vec2};
     use std::f64::consts::{PI, TAU};
 
-    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
-        return None;
-    }
     let close_tol = tol * 100.0;
+    let BandStack {
+        seam_u,
+        v_bot,
+        bot,
+        v_top,
+        top,
+        lower_tan: ref_tan,
+    } = band_stack(surface, boundary_edges, close_tol)?;
 
-    // Partition boundary into closed circle edges and seam Line edges.
-    let mut boundary_circles: Vec<&OrientedPCurveEdge> = Vec::new();
-    let mut seam_edges: Vec<&OrientedPCurveEdge> = Vec::new();
-    for e in boundary_edges {
-        let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
-        match (&e.curve_3d, is_closed) {
-            (EdgeCurve::Circle(_), true) => boundary_circles.push(e),
-            (EdgeCurve::Line, false) => seam_edges.push(e),
-            _ => return None,
-        }
-    }
-    if boundary_circles.len() != 2 || seam_edges.is_empty() {
-        return None;
-    }
-
-    // Seam u — shared by every seam edge endpoint (mod 2π).
-    let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
-    for e in &seam_edges {
-        for p in [e.start_3d, e.end_3d] {
-            let (u, _) = surface.project_point(p)?;
-            let du = (u - seam_u + PI).rem_euclid(TAU) - PI;
-            if du.abs() > 1e-6 {
-                return None;
+    if std::env::var("BK_BAND_TRACE").is_ok() {
+        for e in boundary_edges {
+            if let EdgeCurve::Circle(c) = &e.curve_3d {
+                log::debug!(
+                    "BAND-IN face {face_id:?} circle z={:.1} axis_z={:.0} fwd={}",
+                    e.start_3d.z(),
+                    c.normal().z(),
+                    e.forward
+                );
             }
         }
     }
-
-    // Every circle must start on the seam; collect (v, lower_fwd, edge).
-    let circle_v = |e: &OrientedPCurveEdge| -> Option<f64> {
-        let (_, v) = surface.project_point(e.start_3d)?;
-        let on_seam = surface.evaluate(seam_u, v)?;
-        ((on_seam - e.start_3d).length() < close_tol).then_some(v)
-    };
-
-    if std::env::var("BK_BAND_TRACE").is_ok() {
-        for e in &boundary_circles {
-            let ax = if let EdgeCurve::Circle(c) = &e.curve_3d {
-                c.normal().z()
-            } else {
-                0.0
-            };
-            log::debug!(
-                "BAND-IN face {face_id:?} circle z={:.1} axis_z={ax:.0} fwd={}",
-                e.start_3d.z(),
-                e.forward
-            );
-        }
-    }
-    let v0 = circle_v(boundary_circles[0])?;
-    let v1 = circle_v(boundary_circles[1])?;
-    let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {
-        (v0, boundary_circles[0], v1, boundary_circles[1])
-    } else {
-        (v1, boundary_circles[1], v0, boundary_circles[0])
-    };
-    if v_top - v_bot < close_tol {
-        return None;
-    }
-
-    // Reference traversal tangent: how the original bottom circle is
-    // traversed at the seam. Section circles in the lower role must
-    // traverse the same way; in the upper role, the opposite way.
-    let traversal_tangent = |e: &OrientedPCurveEdge| -> Option<brepkit_math::vec::Vec3> {
-        let EdgeCurve::Circle(c) = &e.curve_3d else {
-            return None;
-        };
-        let t = c.tangent(c.project(e.start_3d));
-        Some(if e.forward { t } else { -t })
-    };
-    let ref_tan = traversal_tangent(bot_edge)?;
 
     // Collect section circles with their v and natural-direction alignment.
     struct BandCircle {
@@ -1009,24 +1092,23 @@ pub(super) fn split_periodic_face_into_bands(
 
     // Assemble bands bottom-to-top. Levels: bot boundary, sections, top
     // boundary. Each band: lower circle, seam up, upper circle, seam down.
-    let mut levels: Vec<(f64, OrientedPCurveEdge, OrientedPCurveEdge)> = Vec::new();
-    levels.push((v_bot, bot_edge.clone(), bot_edge.clone()));
+    // An apex level has no edge: the band against it closes on the seam.
+    let mut levels: Vec<(f64, Vec<OrientedPCurveEdge>, Vec<OrientedPCurveEdge>)> = Vec::new();
+    levels.push((v_bot, bot.edges(), bot.edges()));
     for m in mids {
-        levels.push((m.v, m.lower, m.upper));
+        levels.push((m.v, vec![m.lower], vec![m.upper]));
     }
-    levels.push((v_top, top_edge.clone(), top_edge.clone()));
+    levels.push((v_top, top.edges(), top.edges()));
 
     let mut bands = Vec::with_capacity(levels.len() - 1);
     for w in levels.windows(2) {
         let (va, lower, _) = &w[0];
         let (vb, _, upper) = &w[1];
         let (va, vb) = (*va, *vb);
-        let wire = vec![
-            lower.clone(),
-            mk_seam(va, vb)?,
-            upper.clone(),
-            mk_seam(vb, va)?,
-        ];
+        let mut wire = lower.clone();
+        wire.push(mk_seam(va, vb)?);
+        wire.extend(upper.iter().cloned());
+        wire.push(mk_seam(vb, va)?);
         let interior = surface.evaluate((seam_u + PI).rem_euclid(TAU), f64::midpoint(va, vb))?;
         bands.push(SplitSubFace {
             surface: surface.clone(),

@@ -717,16 +717,15 @@ pub(super) fn validate_boolean_result_lenient(
     let s = topo.solid(solid)?;
     let shell = topo.shell(s.outer_shell())?;
     let face_count = shell.faces().len();
-    // A sphere or torus face closes on itself, so a solid with one needs
-    // fewer faces: a ring drilled through its tube is the ring's face and the
-    // tunnel wall.
+    // A sphere or torus face closes on itself, and a cone face closes at an
+    // apex on its boundary, so a solid with one needs fewer faces: a ring
+    // drilled through its tube is the ring's face and the tunnel wall, and a
+    // cone's tip cut off by a plane is its wall and a disc.
     let closes_on_itself = shell.faces().iter().any(|&fid| {
-        topo.face(fid).is_ok_and(|face| {
-            matches!(
-                face.surface(),
-                brepkit_topology::face::FaceSurface::Sphere(_)
-                    | brepkit_topology::face::FaceSurface::Torus(_)
-            )
+        topo.face(fid).is_ok_and(|face| match face.surface() {
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_) => true,
+            FaceSurface::Cone(cone) => face_touches_point(topo, face, cone.apex()),
+            _ => false,
         })
     });
 
@@ -773,6 +772,23 @@ pub(super) fn validate_boolean_result_lenient(
     }
 
     Ok(())
+}
+
+fn face_touches_point(topo: &Topology, face: &Face, point: Point3) -> bool {
+    let tol = Tolerance::new().linear;
+    std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .filter_map(|wid| topo.wire(wid).ok())
+        .flat_map(|wire| {
+            wire.edges()
+                .iter()
+                .map(OrientedEdge::edge)
+                .collect::<Vec<_>>()
+        })
+        .filter_map(|eid| topo.edge(eid).ok())
+        .flat_map(|edge| [edge.start(), edge.end()])
+        .filter_map(|vid| topo.vertex(vid).ok())
+        .any(|v| (v.point() - point).length() < tol)
 }
 
 /// Split a solid's outer shell into connected face groups.
