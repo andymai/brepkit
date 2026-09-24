@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.7](https://github.com/andymai/brepkit/compare/v4.0.6...v4.0.7) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** validate solids with cavities, one Euler term and one connected check per shell ([#1726](https://github.com/andymai/brepkit/issues/1726)) ([d3a23a2](https://github.com/andymai/brepkit/commit/d3a23a21f417f4d3f4fee91d15499d701d896c37))
+
 ## [4.0.6](https://github.com/andymai/brepkit/compare/v4.0.5...v4.0.6) (2026-09-24)
 
 
