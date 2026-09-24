@@ -163,6 +163,57 @@ fn mesh_boundary_edge_count(mesh: &tessellate::TriangleMesh) -> usize {
     counts.values().filter(|&&c| c != 2).count()
 }
 
+/// The box around a solid's vertices, `None` for a solid without any.
+fn vertex_box(topo: &Topology, solid: SolidId) -> Option<(Point3, Point3)> {
+    let mut lo = [f64::MAX; 3];
+    let mut hi = [f64::MIN; 3];
+    for f in brepkit_topology::explorer::solid_faces(topo, solid).ok()? {
+        let Ok(face) = topo.face(f) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let Ok(v) = topo.vertex(edge.start()) else {
+                    continue;
+                };
+                let p = v.point();
+                for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+                    lo[k] = lo[k].min(c);
+                    hi[k] = hi[k].max(c);
+                }
+            }
+        }
+    }
+    (lo[0] <= hi[0]).then(|| {
+        (
+            Point3::new(lo[0], lo[1], lo[2]),
+            Point3::new(hi[0], hi[1], hi[2]),
+        )
+    })
+}
+
+/// The point the volume paths sum each face's flux about. A closed surface's
+/// total does not depend on it, but a meshed face can leave slivers open
+/// against its exact neighbours and a faulty solid's faces need not close, so
+/// near the origin it stays the origin, as it always has; far from it, the
+/// solid's centre, without which the far-off coordinates cancel the volume
+/// away.
+fn sum_anchor(topo: &Topology, solid: SolidId) -> Point3 {
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let Some((lo, hi)) = vertex_box(topo, solid) else {
+        return origin;
+    };
+    let centre = lo + (hi - lo) * 0.5;
+    let reach = (hi - lo).length() * 0.5;
+    if (centre - origin).length() <= 10.0 * reach.max(1.0) {
+        origin
+    } else {
+        centre
+    }
+}
+
 /// Exact volume for a solid bounded entirely by planar faces with straight
 /// (`Line`) edges — boxes, box booleans, extruded polygons. On a plane the
 /// divergence integrand `x·n` is the constant plane offset, so the integral
@@ -178,6 +229,7 @@ fn all_planar_line_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> 
     if faces.is_empty() {
         return None;
     }
+    let about = sum_anchor(topo, solid) - Point3::new(0.0, 0.0, 0.0);
     let mut vol6 = 0.0;
     for &fid in &faces {
         let face = topo.face(fid).ok()?;
@@ -211,15 +263,14 @@ fn all_planar_line_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> 
                 if (p.dot(n_unit) - d_unit).abs() > planar_eps {
                     return None;
                 }
-                if let Some(q) = prev {
-                    area2 += q.cross(p);
+                // About the ring's first vertex: products of coordinates far
+                // from the origin would cancel away the area.
+                if let (Some(q), Some(f)) = (prev, first) {
+                    area2 += (q - f).cross(p - f);
                 } else {
                     first = Some(p);
                 }
                 prev = Some(p);
-            }
-            if let (Some(last), Some(first)) = (prev, first) {
-                area2 += last.cross(first);
             }
             Some(area2.dot(n_unit).abs())
         };
@@ -230,7 +281,7 @@ fn all_planar_line_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> 
         if face_area2 < 0.0 {
             return None;
         }
-        vol6 += sign * d_unit * face_area2;
+        vol6 += sign * (d_unit - n_unit.dot(about)) * face_area2;
     }
     Some((vol6 / 6.0).abs())
 }
@@ -287,14 +338,10 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         return None;
     }
 
-    let gauss_order = brepkit_check::properties::PropertiesOptions::default().gauss_order;
-    let mut total = 0.0;
-    for &fid in &faces {
-        total += brepkit_check::properties::face_integrator::integrate_face(topo, fid, gauss_order)
-            .ok()?
-            .volume;
-    }
-    Some(total.abs())
+    let opts = brepkit_check::properties::PropertiesOptions::default();
+    brepkit_check::properties::solid_volume(topo, solid, &opts)
+        .ok()
+        .map(f64::abs)
 }
 
 /// Exact volume of a fully-analytic SURFACE-OF-REVOLUTION solid (cone / cylinder
@@ -314,6 +361,8 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
 ///     arc(s) are centred ON that shared axis.
 fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     use brepkit_topology::explorer::solid_faces;
+
+    let about = sum_anchor(topo, solid);
 
     let faces = solid_faces(topo, solid).ok()?;
     if faces.is_empty() {
@@ -408,7 +457,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
                     return None;
                 }
                 // Must be analytically integrable (a circular-arc-bounded cap).
-                let v = planar_cap_signed_volume(topo, fid).ok()??;
+                let v = planar_cap_signed_volume(topo, fid, about).ok()??;
                 cap_volumes.insert(fid, v);
             }
             FaceSurface::Nurbs(_) if !nurbs_band_is_on_axis(topo, fid, axis_o, axis_d) => {
@@ -425,9 +474,9 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     for &fid in &faces {
         let face = topo.face(fid).ok()?;
         let c = match face.surface() {
-            FaceSurface::Cylinder(_) => analytic_cylinder_signed_volume(topo, fid).ok()?,
-            FaceSurface::Cone(_) => analytic_cone_signed_volume(topo, fid).ok()?,
-            FaceSurface::Torus(_) => analytic_torus_signed_volume(topo, fid).ok()?,
+            FaceSurface::Cylinder(_) => analytic_cylinder_signed_volume(topo, fid, about).ok()?,
+            FaceSurface::Cone(_) => analytic_cone_signed_volume(topo, fid, about).ok()?,
+            FaceSurface::Torus(_) => analytic_torus_signed_volume(topo, fid, about).ok()?,
             FaceSurface::Plane { .. } => *cap_volumes.get(&fid)?,
             FaceSurface::Nurbs(_) => 0.0, // degenerate on-axis band
             FaceSurface::Sphere(_) => return None,
@@ -1331,15 +1380,16 @@ pub fn oriented_solid_volume(
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
     let idx = &mesh.indices;
     let pos = &mesh.positions;
+    // A mesh may be open, and an open mesh's sum depends on the point it is
+    // taken about: meshes stay comparable only about one fixed point.
+    let p0 = Point3::new(0.0, 0.0, 0.0);
     let mut total = 0.0;
     for t in 0..idx.len() / 3 {
         let v0 = pos[idx[t * 3] as usize];
         let v1 = pos[idx[t * 3 + 1] as usize];
         let v2 = pos[idx[t * 3 + 2] as usize];
-        let a = Vec3::new(v0.x(), v0.y(), v0.z());
-        let b = Vec3::new(v1.x(), v1.y(), v1.z());
-        let c = Vec3::new(v2.x(), v2.y(), v2.z());
-        total += a.dot(b.cross(c));
+        let (a, b, c) = (v0 - p0, v1 - p0, v2 - p0);
+        total += a.dot((b - a).cross(c - a));
     }
     Ok(total / 6.0)
 }
@@ -1351,17 +1401,18 @@ fn signed_volume_from_mesh(mesh: &tessellate::TriangleMesh) -> f64 {
     let pos = &mesh.positions;
     let tri_count = idx.len() / 3;
 
+    // A mesh may be open, and an open mesh's sum depends on the point it is
+    // taken about: meshes stay comparable only about one fixed point.
+    let p0 = Point3::new(0.0, 0.0, 0.0);
     let mut total = 0.0;
     for t in 0..tri_count {
         let v0 = pos[idx[t * 3] as usize];
         let v1 = pos[idx[t * 3 + 1] as usize];
         let v2 = pos[idx[t * 3 + 2] as usize];
 
-        let a = Vec3::new(v0.x(), v0.y(), v0.z());
-        let b = Vec3::new(v1.x(), v1.y(), v1.z());
-        let c = Vec3::new(v2.x(), v2.y(), v2.z());
+        let (a, b, c) = (v0 - p0, v1 - p0, v2 - p0);
 
-        total += a.dot(b.cross(c));
+        total += a.dot((b - a).cross(c - a));
     }
 
     (total / 6.0).abs()
@@ -1378,6 +1429,8 @@ fn volume_from_per_face_tessellation(
     solid: SolidId,
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
+    // Per-face meshes need not close up; see `oriented_solid_volume`.
+    let p0 = Point3::new(0.0, 0.0, 0.0);
     let mut total: f64 = 0.0;
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let mesh = tessellate::tessellate(topo, fid, deflection)?;
@@ -1393,11 +1446,9 @@ fn volume_from_per_face_tessellation(
             let v1 = pos[idx[t * 3 + 1] as usize];
             let v2 = pos[idx[t * 3 + 2] as usize];
 
-            let a = Vec3::new(v0.x(), v0.y(), v0.z());
-            let b = Vec3::new(v1.x(), v1.y(), v1.z());
-            let c = Vec3::new(v2.x(), v2.y(), v2.z());
+            let (a, b, c) = (v0 - p0, v1 - p0, v2 - p0);
 
-            total += a.dot(b.cross(c));
+            total += a.dot((b - a).cross(c - a));
         }
     }
 
@@ -1437,11 +1488,12 @@ fn volume_from_per_face_tessellation(
 fn developable_face_flux(
     topo: &Topology,
     face_id: FaceId,
+    about: Point3,
 ) -> Result<Option<f64>, crate::OperationsError> {
     use std::f64::consts::{PI, TAU};
 
     let face = topo.face(face_id)?;
-    let origin = Point3::new(0.0, 0.0, 0.0);
+    let origin = about;
     let surface = face.surface().clone();
     let antiderivative: Box<dyn Fn(f64, f64) -> f64> = match &surface {
         FaceSurface::Cylinder(c) => {
@@ -1590,6 +1642,7 @@ fn developable_face_flux(
 fn planar_face_flux(
     topo: &Topology,
     face_id: FaceId,
+    about: Point3,
 ) -> Result<Option<f64>, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
     use std::f64::consts::FRAC_PI_2;
@@ -1598,7 +1651,7 @@ fn planar_face_flux(
     let FaceSurface::Plane { normal, d } = face.surface() else {
         return Ok(None);
     };
-    let (normal, d) = (*normal, *d);
+    let (normal, d) = (*normal, *d - normal.dot(about - Point3::new(0.0, 0.0, 0.0)));
     let len = normal.length();
     let origin = Point3::new(0.0, 0.0, 0.0);
     let Ok(frame) = brepkit_math::frame::Frame3::from_normal(origin, normal) else {
@@ -1607,18 +1660,26 @@ fn planar_face_flux(
     let (ex, ey) = (frame.x, frame.y);
     let flat = |v: Vec3| (v.dot(ex), v.dot(ey));
     let cross = |(ax, ay): (f64, f64), (bx, by): (f64, f64)| ax.mul_add(by, -(ay * bx));
-    // `∫ P × P′ dt` over `[t0, t1]` for `P(t) = c + A cos t + B sin t`.
-    let conic = |c: Point3, a: Vec3, b: Vec3, t0: f64, t1: f64| {
-        let (c, a, b) = (flat(c - origin), flat(a), flat(b));
+    // `∫ (P − Q) × P′ dt` over `[t0, t1]` for `P(t) = c + A cos t + B sin t`.
+    let conic = |c: Point3, a: Vec3, b: Vec3, t0: f64, t1: f64, q: Point3| {
+        let (c, a, b) = (flat(c - q), flat(a), flat(b));
         cross(c, a).mul_add(
             t1.cos() - t0.cos(),
             cross(c, b).mul_add(t1.sin() - t0.sin(), cross(a, b) * (t1 - t0)),
         )
     };
     let gauss = brepkit_math::quadrature::gauss_legendre_points(16);
+    // A closed loop's `∮ (P − Q) × dP` does not depend on Q; taking Q on the
+    // loop keeps products of far-off coordinates from cancelling its area.
     let wire_area2 = |wire_id| -> Result<f64, crate::OperationsError> {
         let mut sum = 0.0;
-        for oe in topo.wire(wire_id)?.edges() {
+        let wire = topo.wire(wire_id)?;
+        let q = match wire.edges().first() {
+            Some(oe) => topo.vertex(topo.edge(oe.edge())?.start())?.point(),
+            None => origin,
+        };
+        let q_vec = q - origin;
+        for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
             let (sp, ep) = (
                 topo.vertex(edge.start())?.point(),
@@ -1627,7 +1688,7 @@ fn planar_face_flux(
             for (t0, t1) in traversal_spans(edge, oe.is_forward(), sp, ep) {
                 sum += match edge.curve() {
                     EdgeCurve::Line => {
-                        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep) - origin;
+                        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep) - q;
                         cross(flat(at(t0)), flat(at(t1)))
                     }
                     EdgeCurve::Circle(c) => conic(
@@ -1636,6 +1697,7 @@ fn planar_face_flux(
                         c.evaluate(FRAC_PI_2) - c.center(),
                         t0,
                         t1,
+                        q,
                     ),
                     EdgeCurve::Ellipse(e) => conic(
                         e.center(),
@@ -1643,6 +1705,7 @@ fn planar_face_flux(
                         e.evaluate(FRAC_PI_2) - e.center(),
                         t0,
                         t1,
+                        q,
                     ),
                     EdgeCurve::NurbsCurve(n) => {
                         let (lo, hi) = (t0.min(t1), t0.max(t1));
@@ -1656,7 +1719,7 @@ fn planar_face_flux(
                             let (mid, half) = (0.5 * (w[0] + w[1]), 0.5 * (w[1] - w[0]));
                             for g in gauss {
                                 let ders = n.derivatives(half.mul_add(g.x, mid), 1);
-                                part += g.w * half * cross(flat(ders[0]), flat(ders[1]));
+                                part += g.w * half * cross(flat(ders[0] - q_vec), flat(ders[1]));
                             }
                         }
                         if t1 < t0 { -part } else { part }
@@ -1689,7 +1752,7 @@ fn planar_face_flux(
             for (t0, t1) in traversal_spans(edge, true, sp, ep) {
                 for k in 0..=4 {
                     let t = t0 + (t1 - t0) * f64::from(k) / 4.0;
-                    let p = edge.curve().evaluate_with_endpoints(t, sp, ep) - origin;
+                    let p = edge.curve().evaluate_with_endpoints(t, sp, ep) - about;
                     if (p.dot(normal_unit) - d_unit).abs() > planar_eps {
                         return Ok(None);
                     }
@@ -1870,6 +1933,7 @@ fn traversal_spans(
 fn analytic_cylinder_signed_volume(
     topo: &Topology,
     face_id: FaceId,
+    about: Point3,
 ) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let cyl = match face.surface() {
@@ -1943,7 +2007,7 @@ fn analytic_cylinder_signed_volume(
     let x_axis = cyl.x_axis();
     let y_axis = cyl.y_axis();
 
-    let o_vec = Vec3::new(cyl.origin().x(), cyl.origin().y(), cyl.origin().z());
+    let o_vec = cyl.origin() - about;
     let ox = o_vec.dot(x_axis);
     let oy = o_vec.dot(y_axis);
 
@@ -1978,13 +2042,14 @@ fn analytic_cylinder_signed_volume(
 fn planar_cap_signed_volume(
     topo: &Topology,
     face_id: FaceId,
+    about: Point3,
 ) -> Result<Option<f64>, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let FaceSurface::Plane { normal, d } = face.surface() else {
         return Ok(None);
     };
     let normal = *normal;
-    let d = *d;
+    let d = *d - normal.dot(about - Point3::new(0.0, 0.0, 0.0));
 
     // Right-handed in-plane frame: ex × ey = normal, so a boundary wound CCW as
     // seen from +normal yields a positive signed area.
@@ -2051,6 +2116,7 @@ fn planar_wire_signed_area2(
     let tol_lin = brepkit_math::tolerance::Tolerance::default().linear;
     let mut area2: f64 = 0.0; // accumulates 2·A (Green's ∮(x dy − y dx))
     let mut arc_edges = 0_usize;
+    let mut anchor: Option<(f64, f64)> = None;
     {
         let wire = topo.wire(wire_id)?;
         for oe in wire.edges() {
@@ -2064,8 +2130,10 @@ fn planar_wire_signed_area2(
             let pb = topo.vertex(ev)?.point();
             let (ax, ay) = to_2d(pa);
             let (bx, by) = to_2d(pb);
-            // Chord term: triangle (origin, a, b) doubled.
-            area2 += ax * by - bx * ay;
+            // Chord term: triangle (anchor, a, b) doubled, about the wire's
+            // first vertex so far-off coordinates do not cancel the area.
+            let (qx, qy) = *anchor.get_or_insert((ax, ay));
+            area2 += (ax - qx) * (by - qy) - (bx - qx) * (ay - qy);
 
             // A degenerate edge collapsed to a point that is NOT a closed circle
             // (e.g. the inner "arc" at the axis where a disc cap reaches r = 0, or
@@ -2164,6 +2232,7 @@ fn planar_wire_signed_area2(
 fn analytic_cone_signed_volume(
     topo: &Topology,
     face_id: FaceId,
+    about: Point3,
 ) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let cone = match face.surface() {
@@ -2239,7 +2308,7 @@ fn analytic_cone_signed_volume(
     let y_axis = cone.y_axis();
     let axis = cone.axis();
     let apex = cone.apex();
-    let a_vec = Vec3::new(apex.x(), apex.y(), apex.z());
+    let a_vec = apex - about;
 
     // Compute the divergence-theorem integral analytically.
     //
@@ -2287,6 +2356,7 @@ fn analytic_cone_signed_volume(
 fn analytic_sphere_signed_volume(
     topo: &Topology,
     face_id: FaceId,
+    about: Point3,
 ) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let sph = match face.surface() {
@@ -2364,7 +2434,7 @@ fn analytic_sphere_signed_volume(
     let y_axis = sph.y_axis();
     let z_axis = sph.z_axis();
     let c = sph.center();
-    let c_vec = Vec3::new(c.x(), c.y(), c.z());
+    let c_vec = c - about;
 
     // P.n = C.(cos_v*cos_u*ex + cos_v*sin_u*ey + sin_v*ez) + r
     // dA = r^2 * cos_v * du * dv
@@ -2415,6 +2485,7 @@ fn analytic_sphere_signed_volume(
 fn analytic_torus_signed_volume(
     topo: &Topology,
     face_id: FaceId,
+    about: Point3,
 ) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let tor = match face.surface() {
@@ -2525,7 +2596,7 @@ fn analytic_torus_signed_volume(
     let y_axis = tor.y_axis();
     let z_axis = tor.z_axis();
     let c = tor.center();
-    let c_vec = Vec3::new(c.x(), c.y(), c.z());
+    let c_vec = c - about;
 
     // P.n = [C + (R+r*cos_v)*radial_u + r*sin_v*ez] . [cos_v*radial_u + sin_v*ez]
     //     = C.(cos_v*radial_u + sin_v*ez) + (R+r*cos_v)*cos_v + r*sin^2_v
@@ -2607,6 +2678,7 @@ pub fn volume_from_direct_face_tessellation(
     solid: SolidId,
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
+    let about = sum_anchor(topo, solid);
     let mut total: f64 = 0.0;
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let face = topo.face(fid)?;
@@ -2616,7 +2688,7 @@ pub fn volume_from_direct_face_tessellation(
             face.surface(),
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
         ) && !face.inner_wires().is_empty()
-            && let Some(flux) = developable_face_flux(topo, fid)?
+            && let Some(flux) = developable_face_flux(topo, fid, about)?
         {
             if vol_trace_enabled() {
                 log::debug!("VOL_TRACE holed developable face {fid:?} -> {flux}");
@@ -2626,7 +2698,7 @@ pub fn volume_from_direct_face_tessellation(
         }
         match face.surface() {
             FaceSurface::Cylinder(_) => {
-                let v = analytic_cylinder_signed_volume(topo, fid)? * 6.0;
+                let v = analytic_cylinder_signed_volume(topo, fid, about)? * 6.0;
                 if vol_trace_enabled() {
                     log::debug!("VOL_TRACE direct cyl face {:?} -> {}", fid, v / 6.0);
                 }
@@ -2634,19 +2706,19 @@ pub fn volume_from_direct_face_tessellation(
                 continue;
             }
             FaceSurface::Cone(_) => {
-                total += analytic_cone_signed_volume(topo, fid)? * 6.0;
+                total += analytic_cone_signed_volume(topo, fid, about)? * 6.0;
                 continue;
             }
             FaceSurface::Sphere(_) => {
-                total += analytic_sphere_signed_volume(topo, fid)? * 6.0;
+                total += analytic_sphere_signed_volume(topo, fid, about)? * 6.0;
                 continue;
             }
             FaceSurface::Torus(_) => {
-                total += analytic_torus_signed_volume(topo, fid)? * 6.0;
+                total += analytic_torus_signed_volume(topo, fid, about)? * 6.0;
                 continue;
             }
             FaceSurface::Plane { .. } => {
-                if let Some(flux) = planar_face_flux(topo, fid)? {
+                if let Some(flux) = planar_face_flux(topo, fid, about)? {
                     total += flux * 6.0;
                     continue;
                 }
@@ -2665,11 +2737,9 @@ pub fn volume_from_direct_face_tessellation(
             let v1 = pos[idx[t * 3 + 1] as usize];
             let v2 = pos[idx[t * 3 + 2] as usize];
 
-            let a = Vec3::new(v0.x(), v0.y(), v0.z());
-            let b = Vec3::new(v1.x(), v1.y(), v1.z());
-            let c = Vec3::new(v2.x(), v2.y(), v2.z());
+            let (a, b, c) = (v0 - about, v1 - about, v2 - about);
 
-            face_total += a.dot(b.cross(c));
+            face_total += a.dot((b - a).cross(c - a));
         }
 
         if vol_trace_enabled() {
@@ -2705,6 +2775,7 @@ pub fn solid_volume_from_faces(
     use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::face::FaceSurface;
 
+    let p0 = sum_anchor(topo, solid);
     let mut total = 0.0;
     let mut all_planar_triangles = true;
 
@@ -2742,11 +2813,9 @@ pub fn solid_volume_from_faces(
             break;
         }
 
-        let a = Vec3::new(pts[0].x(), pts[0].y(), pts[0].z());
-        let b = Vec3::new(pts[1].x(), pts[1].y(), pts[1].z());
-        let c = Vec3::new(pts[2].x(), pts[2].y(), pts[2].z());
+        let (a, b, c) = (pts[0] - p0, pts[1] - p0, pts[2] - p0);
 
-        total += a.dot(b.cross(c));
+        total += a.dot((b - a).cross(c - a));
     }
 
     if all_planar_triangles {
@@ -2781,6 +2850,8 @@ pub fn solid_center_of_mass(
 
     // tessellate() already handles face reversal (flips winding),
     // so signed tetrahedra sum is correct without winding heuristics.
+    // Per-face meshes need not close up; see `oriented_solid_volume`.
+    let p0 = Point3::new(0.0, 0.0, 0.0);
     let mut total_vol: f64 = 0.0;
     let mut cx = 0.0;
     let mut cy = 0.0;
@@ -2797,15 +2868,13 @@ pub fn solid_center_of_mass(
             let v1 = pos[idx[t * 3 + 1] as usize];
             let v2 = pos[idx[t * 3 + 2] as usize];
 
-            let a = Vec3::new(v0.x(), v0.y(), v0.z());
-            let b = Vec3::new(v1.x(), v1.y(), v1.z());
-            let c = Vec3::new(v2.x(), v2.y(), v2.z());
+            let (a, b, c) = (v0 - p0, v1 - p0, v2 - p0);
 
-            let signed_vol = a.dot(b.cross(c));
+            let signed_vol = a.dot((b - a).cross(c - a));
             total_vol += signed_vol;
-            cx += signed_vol * (v0.x() + v1.x() + v2.x());
-            cy += signed_vol * (v0.y() + v1.y() + v2.y());
-            cz += signed_vol * (v0.z() + v1.z() + v2.z());
+            cx += signed_vol * (a.x() + b.x() + c.x());
+            cy += signed_vol * (a.y() + b.y() + c.y());
+            cz += signed_vol * (a.z() + b.z() + c.z());
         }
     }
 
@@ -2823,7 +2892,7 @@ pub fn solid_center_of_mass(
     }
 
     let denom = 4.0 * total_vol;
-    Ok(Point3::new(cx / denom, cy / denom, cz / denom))
+    Ok(p0 + Vec3::new(cx / denom, cy / denom, cz / denom))
 }
 
 /// Compute center of mass directly from face vertex positions for
@@ -2835,6 +2904,7 @@ fn center_of_mass_from_faces(
     use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::face::FaceSurface;
 
+    let p0 = sum_anchor(topo, solid);
     let mut total_vol = 0.0;
     let mut cx = 0.0;
     let mut cy = 0.0;
@@ -2871,15 +2941,13 @@ fn center_of_mass_from_faces(
             pts.push(topo.vertex(vid)?.point());
         }
 
-        let a = Vec3::new(pts[0].x(), pts[0].y(), pts[0].z());
-        let b = Vec3::new(pts[1].x(), pts[1].y(), pts[1].z());
-        let c = Vec3::new(pts[2].x(), pts[2].y(), pts[2].z());
+        let (a, b, c) = (pts[0] - p0, pts[1] - p0, pts[2] - p0);
 
-        let signed_vol = a.dot(b.cross(c));
+        let signed_vol = a.dot((b - a).cross(c - a));
         total_vol += signed_vol;
-        cx += signed_vol * (pts[0].x() + pts[1].x() + pts[2].x());
-        cy += signed_vol * (pts[0].y() + pts[1].y() + pts[2].y());
-        cz += signed_vol * (pts[0].z() + pts[1].z() + pts[2].z());
+        cx += signed_vol * (a.x() + b.x() + c.x());
+        cy += signed_vol * (a.y() + b.y() + c.y());
+        cz += signed_vol * (a.z() + b.z() + c.z());
     }
 
     if total_vol.abs() < 1e-15 {
@@ -2889,7 +2957,7 @@ fn center_of_mass_from_faces(
     }
 
     let denom = 4.0 * total_vol;
-    Ok(Point3::new(cx / denom, cy / denom, cz / denom))
+    Ok(p0 + Vec3::new(cx / denom, cy / denom, cz / denom))
 }
 
 #[cfg(test)]
@@ -3375,7 +3443,9 @@ mod regression_tests {
                     })
             })
             .expect("top disc cap");
-        let cap_v = planar_cap_signed_volume(&topo, top_cap).unwrap().unwrap();
+        let cap_v = planar_cap_signed_volume(&topo, top_cap, Point3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
         assert!(
             (cap_v.abs() - 12.0 * PI * 4.0 / 3.0).abs() < 1e-9,
             "closed-circle disc cap contribution should be (1/3)·12·π·4, got {cap_v}"
@@ -3420,7 +3490,9 @@ mod regression_tests {
             FaceSurface::Plane { normal: axis, d: h },
         ));
 
-        let cap_v = planar_cap_signed_volume(&topo, cap).unwrap().unwrap();
+        let cap_v = planar_cap_signed_volume(&topo, cap, Point3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
         // Exact annulus contribution: (1/3)·h·π·(R²−r²) (outward normal +axis).
         let expected = h * PI * (r_out * r_out - r_in * r_in) / 3.0;
         assert!(
@@ -3450,7 +3522,9 @@ mod tests {
             .into_iter()
             .find(|&f| !topo.face(f).unwrap().surface().is_planar())
             .unwrap();
-        developable_face_flux(topo, wall).unwrap().unwrap()
+        developable_face_flux(topo, wall, Point3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap()
     }
 
     /// The base disc sits at z = 0 and adds no flux, so the wall carries the
@@ -3504,7 +3578,9 @@ mod tests {
         let whole = planar_face(&mut topo, vec![vec![rim]], 3.0);
         // d / 3 = 1, so the flux equals the want.
         let want = std::f64::consts::PI * 6.0;
-        let got = planar_face_flux(&topo, whole).unwrap().unwrap();
+        let got = planar_face_flux(&topo, whole, Point3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
         assert!(
             (got - want).abs() < 1e-12 * want,
             "whole ellipse {got}, want {want}"
@@ -3525,7 +3601,9 @@ mod tests {
             ]],
             3.0,
         );
-        let got = planar_face_flux(&topo, half).unwrap().unwrap();
+        let got = planar_face_flux(&topo, half, Point3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
         assert!(
             (got - want / 2.0).abs() < 1e-12 * want,
             "half ellipse {got}, want {}",
@@ -3559,7 +3637,9 @@ mod tests {
         let hole = closed_edge(&mut topo, EdgeCurve::Ellipse(e.clone()), e.evaluate(0.0));
         let face = planar_face(&mut topo, vec![vec![rim], vec![hole]], -1.0);
         let want = -(std::f64::consts::PI * (16.0 - 1.5)) / 3.0;
-        let got = planar_face_flux(&topo, face).unwrap().unwrap();
+        let got = planar_face_flux(&topo, face, Point3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
         assert!(
             (got - want).abs() < 1e-10 * want.abs(),
             "annulus {got}, want {want}"
@@ -3582,7 +3662,11 @@ mod tests {
             })
             .to_vec();
         let face = planar_face(&mut topo, wires, 2.0);
-        assert!(planar_face_flux(&topo, face).unwrap().is_none());
+        assert!(
+            planar_face_flux(&topo, face, Point3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn polygon_wire(topo: &mut Topology, points: &[Point3]) -> Vec<OrientedEdge> {
@@ -3634,7 +3718,9 @@ mod tests {
         let hole_right = half_disc(&mut topo, &right, -std::f64::consts::FRAC_PI_2);
         let face = planar_face(&mut topo, vec![outer, hole_left, hole_right], 3.0);
         let want = 3.0 * (100.0 - 4.0 * std::f64::consts::PI) / 3.0;
-        let got = planar_face_flux(&topo, face).unwrap().unwrap();
+        let got = planar_face_flux(&topo, face, Point3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
         assert!((got - want).abs() < 1e-12 * want, "flux {got}, want {want}");
     }
 
@@ -3653,7 +3739,11 @@ mod tests {
             ],
         );
         let face = planar_face(&mut topo, vec![quad], 1.0);
-        assert!(planar_face_flux(&topo, face).unwrap().is_none());
+        assert!(
+            planar_face_flux(&topo, face, Point3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// A rational edge with a negative weight keeps the mesh, on the outer
@@ -3695,9 +3785,17 @@ mod tests {
             ],
         );
         let face = planar_face(&mut topo, vec![outer, bulge.clone(), square], 0.0);
-        assert!(planar_face_flux(&topo, face).unwrap().is_none());
+        assert!(
+            planar_face_flux(&topo, face, Point3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
         let alone = planar_face(&mut topo, vec![bulge], 0.0);
-        assert!(planar_face_flux(&topo, alone).unwrap().is_none());
+        assert!(
+            planar_face_flux(&topo, alone, Point3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// The top cap at z = h carries a third of the volume; the wall the rest.

@@ -178,12 +178,26 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 | **Stable row defect: heal `convert_to_bspline` on a cylinder or a bored sphere** | Cylinder: 7 open mesh edges at the seam vertex, the band skips the rim's vertex sample while the cap keeps it. Bored sphere (`make_sphere(6, 24)` less an r=3 bore along z): 9141 open mesh edges at 0.01, the tunnel mouths filled, `solid_volume` 1533.7 against 587.6 before the conversion |
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
-| **Stable row defect: volumes far from the origin** | `solid_volume` and `oriented_solid_volume` sum divergence terms about the world origin (`d · A`, `a · (b × c)`), so a solid far from it cancels away its own volume: a 4 x 3 x 2 box with one side drafted 5 degrees, translated by 1e6 on each axis, reads 57.43 and 68.91 against 23.475 (its geometry is right to 1e-10; the untranslated box's fast path still reads 24). Every path needs a reference point near the solid (its first vertex or bounding-box centre) |
+| **Stable row defect: `chamfer_v2` on a concave edge stores its face reversed** | `regress_chamfer_obtuse_ridge.rs`: the 0.02 chamfer of the notch's 90 degree reflex edge lands at y = -0.98586 with outward normal (0, -1, 0), into the material. Its flux flips, so the volume reads 232.1498 about the origin and 231.9235 about the box centre against the true 232.0016; the test's `0 < added < 2%` bound passes both |
+
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Volumes far from the origin (CLOSED 2026-09-24; pins: `crates/operations/tests/far_from_origin_volume.rs`)**:
+  every divergence sum ran about the world origin, so a solid a million
+  units out multiplied its coordinates into each face's flux (a slanted
+  prism, a windowed tube and a napkin ring all lost their volumes; the ring
+  read 2599 against 587.67). Triple products and shoelace sums now take
+  differences first, and each exact path (all-planar, revolution, direct,
+  and the check crate's face integrator) sums about the origin for a solid
+  near it and about its box centre past ten half-diagonals. Mesh-only
+  paths stay about the origin: an open mesh's volume is comparable only
+  about one fixed point. The near/far rule also keeps a faulty solid's
+  reading where it was; the concave `chamfer_v2` face that surfaced this
+  is its own row.
 
 - **Draft to Stable (CLOSED 2026-09-24; pins in `crates/operations/src/draft.rs` tests and `draft_batch_cuts_the_exact_wedge` in `crates/wasm/src/bindings/operations.rs`)**:
   `draft` pushed a drafted face's vertices radially from an axis, bending the

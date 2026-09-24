@@ -46,11 +46,25 @@ pub struct FaceContribution {
 ///
 /// Returns an error if topology entities are missing or the face has
 /// insufficient geometry for integration.
-#[allow(clippy::too_many_lines)]
 pub fn integrate_face(
     topo: &Topology,
     face_id: FaceId,
     gauss_order: usize,
+) -> Result<FaceContribution, CheckError> {
+    integrate_face_about(topo, face_id, gauss_order, Vec3::new(0.0, 0.0, 0.0))
+}
+
+/// [`integrate_face`] with its volume term `(1/3)∫(P − about)·N dA` taken
+/// about a point other than the origin. A solid's faces summed about the
+/// same point give its volume wherever that point is, but a face whose
+/// coordinates are millions of units out multiplies them into its flux, and
+/// the trimmed quadrature's small closure errors grow with them.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn integrate_face_about(
+    topo: &Topology,
+    face_id: FaceId,
+    gauss_order: usize,
+    about: Vec3,
 ) -> Result<FaceContribution, CheckError> {
     let face = topo.face(face_id)?;
     let reversed = face.is_reversed();
@@ -59,7 +73,7 @@ pub fn integrate_face(
     match face.surface() {
         FaceSurface::Plane { normal, .. } => {
             let effective_normal = if reversed { -*normal } else { *normal };
-            integrate_planar_face(topo, face_id, effective_normal)
+            integrate_planar_face(topo, face_id, effective_normal, about)
         }
         FaceSurface::Cylinder(s) => {
             let full = (
@@ -77,6 +91,7 @@ pub fn integrate_face(
                 &uv_boundary,
                 true,
                 &[],
+                about,
             ))
         }
         FaceSurface::Cone(s) => {
@@ -95,6 +110,7 @@ pub fn integrate_face(
                 &uv_boundary,
                 true,
                 &[],
+                about,
             ))
         }
         FaceSurface::Sphere(s) => {
@@ -114,6 +130,7 @@ pub fn integrate_face(
                 &uv_boundary,
                 true,
                 &hole_vs,
+                about,
             ))
         }
         FaceSurface::Torus(s) => {
@@ -129,6 +146,7 @@ pub fn integrate_face(
                 &uv_boundary,
                 true,
                 &[],
+                about,
             ))
         }
         FaceSurface::Nurbs(s) => {
@@ -148,6 +166,7 @@ pub fn integrate_face(
                 &uv_boundary,
                 periodic_u,
                 &[],
+                about,
             ))
         }
     }
@@ -339,15 +358,16 @@ fn integrate_planar_face(
     topo: &Topology,
     face_id: FaceId,
     normal: Vec3,
+    about: Vec3,
 ) -> Result<FaceContribution, CheckError> {
     let polygon = crate::util::face_polygon(topo, face_id)?;
-    let mut contrib = integrate_planar_polygon(&polygon, normal);
+    let mut contrib = integrate_planar_polygon(&polygon, normal, about);
 
     let face = topo.face(face_id)?;
     let inner: Vec<_> = face.inner_wires().to_vec();
     for wid in inner {
         let hole = crate::util::wire_polygon(topo, wid)?;
-        let h = integrate_planar_polygon(&hole, normal);
+        let h = integrate_planar_polygon(&hole, normal, about);
         contrib.area -= h.area;
         contrib.volume -= h.volume;
         contrib.volume_moment_x -= h.volume_moment_x;
@@ -362,7 +382,7 @@ fn integrate_planar_face(
 }
 
 /// Integrate a planar polygon's contribution via fan triangulation.
-fn integrate_planar_polygon(polygon: &[Point3], normal: Vec3) -> FaceContribution {
+fn integrate_planar_polygon(polygon: &[Point3], normal: Vec3, about: Vec3) -> FaceContribution {
     if polygon.len() < 3 {
         return FaceContribution {
             area: 0.0,
@@ -411,7 +431,7 @@ fn integrate_planar_polygon(polygon: &[Point3], normal: Vec3) -> FaceContributio
             (a.y() + b.y() + c.y()) / 3.0,
             (a.z() + b.z() + c.z()) / 3.0,
         );
-        let pv = Vec3::new(centroid.x(), centroid.y(), centroid.z());
+        let pv = Vec3::new(centroid.x(), centroid.y(), centroid.z()) - about;
         vol += pv.dot(normal) * tri_area / 3.0;
 
         // Volume moments via divergence theorem: (1/2) integral of x^2 * n_x dA
@@ -472,6 +492,7 @@ fn integrate_parametric<S: ParametricSurface>(
     v_range: (f64, f64),
     gauss_order: usize,
     sign: f64,
+    about: Vec3,
 ) -> FaceContribution {
     // Composite quadrature: tile the domain into patches no larger than ~PI/4
     // so one Gauss rule resolves curved and periodic integrands. A single patch
@@ -526,7 +547,7 @@ fn integrate_parametric<S: ParametricSurface>(
                     area += w * n_len;
 
                     // Volume: (1/3) P dot N (unnormalized N includes Jacobian)
-                    let pv = Vec3::new(p.x(), p.y(), p.z());
+                    let pv = Vec3::new(p.x(), p.y(), p.z()) - about;
                     vol += w * pv.dot(n) / 3.0;
 
                     // Volume moments via divergence theorem:
@@ -584,9 +605,10 @@ fn integrate_with_trimming<S: ParametricSurface>(
     uv_boundary: &[(f64, f64)],
     u_periodic: bool,
     hole_vs: &[f64],
+    about: Vec3,
 ) -> FaceContribution {
     if uv_boundary.len() < 3 {
-        return integrate_parametric(surface, u_range, v_range, gauss_order, sign);
+        return integrate_parametric(surface, u_range, v_range, gauss_order, sign, about);
     }
 
     // The dense boundary polygon is the reliable signal for a face's true
@@ -642,7 +664,14 @@ fn integrate_with_trimming<S: ParametricSurface>(
             .min_by(|a, b| (a - v_min).abs().total_cmp(&(b - v_min).abs()))
             .unwrap_or(v_pole);
         let v_dom = (v_min.min(v_far), v_min.max(v_far));
-        integrate_parametric(surface, (u_min, u_min + tau), v_dom, gauss_order, sign)
+        integrate_parametric(
+            surface,
+            (u_min, u_min + tau),
+            v_dom,
+            gauss_order,
+            sign,
+            about,
+        )
     } else if full_revolution {
         // Full-revolution band (cone/cylinder): integrate the whole revolution
         // over the band's v-extent.
@@ -652,11 +681,12 @@ fn integrate_with_trimming<S: ParametricSurface>(
             (v_min, v_max),
             gauss_order,
             sign,
+            about,
         )
     } else if polygon_area(uv_boundary) <= 1e-12 {
         // Collapsed polygon (e.g. a closed torus whose seam projects to a
         // point): trust the analytic full-domain range from `face_uv_bounds`.
-        integrate_parametric(surface, u_range, v_range, gauss_order, sign)
+        integrate_parametric(surface, u_range, v_range, gauss_order, sign, about)
     } else {
         integrate_parametric_trimmed(
             surface,
@@ -666,6 +696,7 @@ fn integrate_with_trimming<S: ParametricSurface>(
             sign,
             uv_boundary,
             u_periodic,
+            about,
         )
     }
 }
@@ -674,7 +705,11 @@ fn integrate_with_trimming<S: ParametricSurface>(
 ///
 /// At each Gauss point, checks if the (u,v) coordinate falls inside the
 /// face's UV boundary polygon. Points outside are skipped (zero contribution).
-#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
 fn integrate_parametric_trimmed<S: ParametricSurface>(
     surface: &S,
     u_range: (f64, f64),
@@ -683,6 +718,7 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     sign: f64,
     uv_boundary: &[(f64, f64)],
     u_periodic: bool,
+    about: Vec3,
 ) -> FaceContribution {
     use brepkit_math::predicates::point_in_polygon;
     use brepkit_math::vec::Point2;
@@ -751,7 +787,7 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
 
             area += w * n_len;
 
-            let pv = Vec3::new(p.x(), p.y(), p.z());
+            let pv = Vec3::new(p.x(), p.y(), p.z()) - about;
             vol += w * pv.dot(n) / 3.0;
 
             mx += w * 0.5 * p.x() * p.x() * n.x();
@@ -826,7 +862,7 @@ mod tests {
             Point3::new(0.0, 10.0, 2.0),
         ];
         let up = Vec3::new(0.0, 0.0, 1.0);
-        let c = integrate_planar_polygon(&poly, up);
+        let c = integrate_planar_polygon(&poly, up, Vec3::new(0.0, 0.0, 0.0));
         assert!((c.area - 75.0).abs() < 1e-9, "area {}", c.area);
         assert!(
             (c.volume - 2.0 * 75.0 / 3.0).abs() < 1e-9,
@@ -837,7 +873,7 @@ mod tests {
         // The same polygon wound CW nets negative and must flip wholesale,
         // preserving the positive-area contract the hole subtraction relies on.
         let rev: Vec<Point3> = poly.iter().rev().copied().collect();
-        let c2 = integrate_planar_polygon(&rev, up);
+        let c2 = integrate_planar_polygon(&rev, up, Vec3::new(0.0, 0.0, 0.0));
         assert!((c2.area - 75.0).abs() < 1e-9, "rev area {}", c2.area);
     }
 }
