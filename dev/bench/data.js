@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790248811952,
+  "lastUpdate": 1790248967355,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36881,6 +36881,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 38610791,
             "range": "± 1172370",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "054735bbc23b6b282a2414c3533a96dbf5951ff1",
+          "message": "chore(main): release 3.6.0 (#1709)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.6.0](https://github.com/andymai/brepkit/compare/v3.5.5...v3.6.0)\n(2026-09-24)\n\n\n### Features\n\n* **operations:** draft planar faces by turning their planes\n([#1703](https://github.com/andymai/brepkit/issues/1703))\n([59afa95](https://github.com/andymai/brepkit/commit/59afa9538df77d2153437f78aac5afcdd2a3034c))\n\n\n### Bug Fixes\n\n* **operations:** sign feature-recognition dihedrals and fix its hole,\npocket and fillet rules\n([#1701](https://github.com/andymai/brepkit/issues/1701))\n([3c9f3d5](https://github.com/andymai/brepkit/commit/3c9f3d50bc1aa0f2eec5ff318d9170eca3a5bdd9))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T11:18:04Z",
+          "tree_id": "77217ef711f36eae9cd766baa00ee88bdc508f87",
+          "url": "https://github.com/andymai/brepkit/commit/054735bbc23b6b282a2414c3533a96dbf5951ff1"
+        },
+        "date": 1790248963944,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 997567,
+            "range": "± 3512",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1081102,
+            "range": "± 4735",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13382,
+            "range": "± 67",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 746025,
+            "range": "± 3588",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42227271,
+            "range": "± 91146",
             "unit": "ns/iter"
           }
         ]
