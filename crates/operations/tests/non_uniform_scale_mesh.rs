@@ -10,6 +10,7 @@ use brepkit_operations::measure::oriented_solid_volume;
 use brepkit_operations::primitives::{make_cone, make_cylinder, make_sphere, make_torus};
 use brepkit_operations::tessellate::{
     boundary_edge_count, non_manifold_edge_count, tessellate, tessellate_solid,
+    tessellate_solid_with_tolerance,
 };
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
@@ -108,9 +109,9 @@ fn mirrored_ellipsoid_meshes_watertight_at_its_volume() {
 
 /// How far a wall triangle's centroid and edge midpoints stray from the
 /// squashed cone `sqrt((x/2)² + y²) = r0 + k·z` (a cylinder at `k = 0`), read
-/// in the frame the solid was squashed in. Triangles with a vertex off the
-/// wall, or lying flat at one height, belong to the caps. Also returns how
-/// many wall triangles were read.
+/// in the frame the solid was squashed in. Triangles lying flat at one
+/// height belong to the caps; every other triangle is the wall's, vertices
+/// included. Also returns how many wall triangles were read.
 fn max_wall_deviation(
     mesh: &brepkit_operations::tessellate::TriangleMesh,
     unrotate: Mat4,
@@ -129,12 +130,12 @@ fn max_wall_deviation(
     for tri in mesh.indices.chunks_exact(3) {
         let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.positions[i as usize]);
         let flat = (a.z() - b.z()).abs() < 1e-9 && (a.z() - c.z()).abs() < 1e-9;
-        if flat || [a, b, c].into_iter().any(|p| distance(p) > 1e-6) {
+        if flat {
             continue;
         }
         read += 1;
         let centroid = a + ((b - a) + (c - a)) * (1.0 / 3.0);
-        for p in [centroid, mid(a, b), mid(b, c), mid(c, a)] {
+        for p in [a, b, c, centroid, mid(a, b), mid(b, c), mid(c, a)] {
             worst = worst.max(distance(p));
         }
     }
@@ -189,4 +190,25 @@ fn squashed_walls_mesh_within_their_deflection() {
             );
         }
     }
+}
+
+/// A small squashed torus meshed with a deflection far coarser than the
+/// torus and a strict angular tolerance: the grid follows the angle, so no
+/// mesh edge joins normals turned by more than a cell's diagonal allows.
+#[test]
+fn small_squashed_torus_follows_its_angular_tolerance() {
+    let mut topo = Topology::new();
+    let torus = make_torus(&mut topo, 1.0, 0.3, 16).unwrap();
+    transform_solid(&mut topo, torus, &Mat4::scale(2.0, 1.0, 1.0)).unwrap();
+    let angular = 0.2;
+    let mesh = tessellate_solid_with_tolerance(&topo, torus, 1.0, angular).unwrap();
+    assert_eq!(boundary_edge_count(&mesh), 0, "open mesh");
+    let mut worst = 0.0_f64;
+    for tri in mesh.indices.chunks_exact(3) {
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            let (na, nb) = (mesh.normals[a as usize], mesh.normals[b as usize]);
+            worst = worst.max(na.dot(nb).clamp(-1.0, 1.0).acos());
+        }
+    }
+    assert!(worst <= 2.0 * angular, "mesh edge turns {worst}");
 }

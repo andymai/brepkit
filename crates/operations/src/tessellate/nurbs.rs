@@ -803,8 +803,8 @@ fn iso_divisions(
 /// [`iso_divisions`] over a parameter box: `ranges` is the span divided and
 /// the span its sampled rows sit across, and `at` / `normal_at` take
 /// `(u, v)` (a caller on a periodic surface wraps them). A straight direction
-/// (a ruling) needs one division. The normals' turn is only weighed across
-/// chords longer than the deflection: at a pole the normal is not defined.
+/// (a ruling) needs one division. The normals' turn is weighed across every
+/// chord but one that ends on a pole.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn iso_divisions_over(
     at: &dyn Fn(f64, f64) -> Point3,
@@ -824,6 +824,19 @@ pub(super) fn iso_divisions_over(
             normal_at(o, t)
         }
     };
+    // An end of the span whose cross iso-line collapses to a point is a
+    // pole: the surface has no normal there, and the one it reports can
+    // point either way.
+    let pole = |t: f64| {
+        let (a, b, c) = (
+            point(t, o_lo),
+            point(t, 0.5 * (o_lo + o_hi)),
+            point(t, o_hi),
+        );
+        let reach = a.x().abs().max(a.y().abs()).max(a.z().abs());
+        (b - a).length().max((c - a).length()) <= 1e3 * f64::EPSILON * (1.0 + reach)
+    };
+    let (pole_lo, pole_hi) = (pole(lo), pole(hi));
     let fits = |n: usize| {
         (0..ROWS).all(|row| {
             #[allow(clippy::cast_precision_loss)]
@@ -841,8 +854,9 @@ pub(super) fn iso_divisions_over(
                     0.5 * (p0.z() + p1.z()),
                 );
                 let sag = (point(0.5 * (t0 + t1), o) - chord_mid).length();
+                let at_pole = (k == 0 && pole_lo) || (k + 1 == n && pole_hi);
                 let turned = angular_tol > 0.0
-                    && (p1 - p0).length() > deflection
+                    && !at_pole
                     && normal(t0, o).dot(normal(t1, o)).clamp(-1.0, 1.0).acos() > angular_tol;
                 sag <= 0.5 * deflection && !turned
             })

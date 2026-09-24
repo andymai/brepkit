@@ -195,7 +195,7 @@ One line each; the fixture/PR carries the story. Newest first.
   formula with radius 1, so a squashed cylinder's wall meshed 6.2e-3 low in
   volume at deflection 0.001. The grid now follows the chords of the face's
   own iso-lines across its (u, v) box (one division along a ruling, the
-  normals' turn weighed only across chords longer than the deflection, at
+  normals' turn weighed on every chord but one ending on a pole, at
   most 1024 per direction and 65,536 cells in all, with a warning when
   that binds): 8.9e-5 at 0.001. The diagnostic volume pin in
   `cross_one_row_fillet_inmem.rs` moved with the meshes.
