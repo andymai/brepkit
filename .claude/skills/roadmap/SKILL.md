@@ -188,6 +188,29 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A torus cut by a plane across or through its axis (CLOSED 2026-09-24; pins in `crates/operations/tests/torus_plane_cut.rs`)**:
+  `make_torus(4, 1.5)` less the half-space above z = 0 or z = 0.5 came
+  back as the whole torus (its volume read 177.65, the full ring), below
+  z = -1 it fell back to a 282-face mesh, and halving it through its axis
+  fell back too. The plane's sections were fitted NURBS loops, and the
+  internal-loops splitter took each for a hole with its centre as the
+  sample. A plane across or through the axis now meets the torus in exact
+  circles; a new splitter cuts the whole torus into bands around the tube
+  (level circles) or sectors around the ring (tube cross-sections), seamed
+  along the reference meridian or equator where phase FF now starts those
+  circles; a point in a plane face's hole no longer reads on the face; and
+  the torus area and flux take a seamed band's side from its seam arc, not
+  from its rims' short way round. A tipped tool's box enclosed the ring and
+  its one vertex sat inside the tool, so the cut read "fully contained"; a
+  whole ring is now probed toward the tool's flat faces, like a ball. That
+  probe also stopped two overlapping coaxial tori (R 3 r 0.5, R 4 r 0.7)
+  from intersecting to the whole first torus (14.80); their marched section
+  then fitted thousands of points in one dense solve and never finished, so
+  coaxial tori now meet in exact circles (their tube cross-sections cross in
+  a half-plane), and the lens between them builds exactly (1.8879). Every
+  torus band's or sector's seam is split at its middle, so the lens's two
+  bands, seamed between the same two vertices, share no edge ends.
+
 - **A ball cut by a plane clear of its equator (CLOSED 2026-09-24; pin `crates/operations/tests/sphere_plane_cut.rs`)**:
   `make_sphere(3, 32)` less the half-space above z = 0.5 fell back to a
   415-face mesh reading 69.65 against 70.55, keeping the cap above it

@@ -2434,19 +2434,24 @@ fn detect_trivial_relation(
                     };
                     clear_outside(p)
                 })
-            }) || ball_of(topo, inner).is_some_and(|(center, radius)| {
-                // A ball's edges run only around its equator, so its reach
-                // along the axes and past the outer solid's flat faces is
-                // probed too: the deepest few planes it crosses, each once.
+            }) || round_of(topo, inner).is_some_and(|round| {
+                // A ball's edges run only around its equator and a whole
+                // ring's are its collapsed seams, so their reach along the
+                // axes and past the outer solid's flat faces is probed too:
+                // the deepest few planes they cross, each once.
                 let axes = [
                     Vec3::new(1.0, 0.0, 0.0),
                     Vec3::new(0.0, 1.0, 0.0),
                     Vec3::new(0.0, 0.0, 1.0),
                 ];
-                let c = Vec3::new(center.x(), center.y(), center.z());
                 let mut planes: Vec<(f64, Vec3)> = outward_planes(topo, outer)
                     .into_iter()
-                    .map(|(n, offset)| (n.dot(c) + radius - offset, n))
+                    .map(|(n, offset)| {
+                        (
+                            n.dot(round.reach(n) - Point3::new(0.0, 0.0, 0.0)) - offset,
+                            n,
+                        )
+                    })
                     .filter(|&(depth, _)| depth > 0.0)
                     .collect();
                 planes.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -2454,7 +2459,7 @@ fn detect_trivial_relation(
                 axes.iter()
                     .flat_map(|&a| [a, -a])
                     .chain(planes.into_iter().take(16).map(|(_, n)| n))
-                    .any(|d| clear_outside(center + d * radius))
+                    .any(|d| clear_outside(round.reach(d)))
             })
         };
 
@@ -2481,24 +2486,61 @@ fn detect_trivial_relation(
     }
 }
 
-/// The centre and radius of a solid bounded only by faces of one sphere.
-fn ball_of(topo: &Topology, solid: SolidId) -> Option<(Point3, f64)> {
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid).ok()?;
-    let mut ball: Option<(Point3, f64)> = None;
-    for fid in faces {
-        let FaceSurface::Sphere(s) = topo.face(fid).ok()?.surface() else {
-            return None;
-        };
-        match ball {
-            None => ball = Some((s.center(), s.radius())),
-            Some((c, r)) => {
-                if (s.center() - c).length() > 1e-9 * r || (s.radius() - r).abs() > 1e-9 * r {
-                    return None;
-                }
+/// A solid bounded only by faces of one sphere (a ball) or of one torus (a
+/// whole ring), which shows little of its extent in its edges.
+enum Round {
+    Ball(Point3, f64),
+    Ring(brepkit_math::surfaces::ToroidalSurface),
+}
+
+impl Round {
+    /// The solid's farthest point along a unit direction: a ring's is out
+    /// along the direction's part across the axis, then a tube radius along
+    /// the direction itself.
+    fn reach(&self, d: Vec3) -> Point3 {
+        match self {
+            Self::Ball(center, radius) => *center + d * *radius,
+            Self::Ring(t) => {
+                let axis = t.z_axis();
+                let across = (d - axis * d.dot(axis))
+                    .normalize()
+                    .unwrap_or_else(|_| t.x_axis());
+                t.center() + across * t.major_radius() + d * t.minor_radius()
             }
         }
     }
-    ball
+}
+
+fn round_of(topo: &Topology, solid: SolidId) -> Option<Round> {
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid).ok()?;
+    let mut round: Option<Round> = None;
+    for fid in faces {
+        let same = match (topo.face(fid).ok()?.surface(), &round) {
+            (FaceSurface::Sphere(s), None) => {
+                round = Some(Round::Ball(s.center(), s.radius()));
+                true
+            }
+            (FaceSurface::Torus(t), None) => {
+                round = Some(Round::Ring(t.clone()));
+                true
+            }
+            (FaceSurface::Sphere(s), Some(Round::Ball(c, r))) => {
+                (s.center() - *c).length() <= 1e-9 * r && (s.radius() - r).abs() <= 1e-9 * r
+            }
+            (FaceSurface::Torus(t), Some(Round::Ring(first))) => {
+                let scale = first.major_radius();
+                (t.center() - first.center()).length() <= 1e-9 * scale
+                    && t.z_axis().cross(first.z_axis()).length() <= 1e-9
+                    && (t.major_radius() - scale).abs() <= 1e-9 * scale
+                    && (t.minor_radius() - first.minor_radius()).abs() <= 1e-9 * scale
+            }
+            _ => false,
+        };
+        if !same {
+            return None;
+        }
+    }
+    round
 }
 
 /// A solid's planar faces as outward unit normals `n` with offsets `d`, the

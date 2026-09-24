@@ -954,6 +954,294 @@ pub(super) fn band_stack<'a>(
     (stack.v_top - stack.v_bot >= close_tol).then_some(stack)
 }
 
+/// Split a whole torus (bounded only by its degenerate seam placeholders)
+/// into bands around the tube at coaxial section circles: `n` circles make
+/// `n` bands, each its lower circle along the ring, the meridian arc up
+/// through the band, its upper circle back, and the arc down. Every circle
+/// must start on one meridian, which becomes the bands' seam.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn split_torus_by_coaxial_circles(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use std::f64::consts::{PI, TAU};
+
+    let FaceSurface::Torus(torus) = surface else {
+        return None;
+    };
+    let close_tol = tol * 100.0;
+    if sections.len() < 2
+        || boundary_edges
+            .iter()
+            .any(|e| (e.start_3d - e.end_3d).length() > close_tol)
+    {
+        return None;
+    }
+    let axis = torus.z_axis();
+    let center = torus.center();
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    if let Some(sectors) =
+        split_torus_by_meridian_circles(torus, sections, rank, reversed, face_id, close_tol)
+    {
+        return Some(sectors);
+    }
+
+    // (v around the tube, the section, whether it runs +u about the axis)
+    let mut rings: Vec<(f64, &SectionEdge, bool)> = Vec::with_capacity(sections.len());
+    let mut seam_u: Option<f64> = None;
+    for s in sections {
+        let EdgeCurve::Circle(c) = &s.curve_3d else {
+            return None;
+        };
+        let off_axis = (c.center() - center).cross(axis).length();
+        if (s.start - s.end).length() > close_tol
+            || c.normal().cross(axis).length() > 1e-9
+            || off_axis > close_tol
+        {
+            return None;
+        }
+        let (u, v) = torus.project_point(s.start);
+        match seam_u {
+            None => seam_u = Some(u),
+            Some(su) if wrap(u - su).abs() > 1e-6 => return None,
+            Some(_) => {}
+        }
+        rings.push((v.rem_euclid(TAU), s, c.normal().dot(axis) > 0.0));
+    }
+    let seam_u = seam_u?;
+    rings.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if rings.windows(2).any(|w| w[1].0 - w[0].0 < 1e-9)
+        || rings[0].0 + TAU - rings[rings.len() - 1].0 < 1e-9
+    {
+        return None;
+    }
+
+    let radial = torus.x_axis() * seam_u.cos() + torus.y_axis() * seam_u.sin();
+    let meridian = Circle3D::with_axes(
+        center + radial * torus.major_radius(),
+        radial.cross(axis),
+        torus.minor_radius(),
+        radial,
+        axis,
+    )
+    .ok()?;
+    let ring_edge = |s: &SectionEdge, forward: bool, v: f64| {
+        let pcurve = match rank {
+            Rank::A => s.pcurve_a.clone(),
+            Rank::B => s.pcurve_b.clone(),
+        };
+        OrientedPCurveEdge {
+            curve_3d: s.curve_3d.clone(),
+            pcurve,
+            start_uv: Point2::new(seam_u, v),
+            end_uv: Point2::new(seam_u, v),
+            start_3d: s.start,
+            end_3d: s.start,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: s.pave_block_id,
+        }
+    };
+    // The meridian runs counterclockwise about its normal as v grows.
+    let arc = |v_lo: f64, v_hi: f64, up: bool| -> Option<OrientedPCurveEdge> {
+        let (lo, hi) = (torus.evaluate(seam_u, v_lo), torus.evaluate(seam_u, v_hi));
+        let pcurve =
+            Curve2D::Line(Line2D::new(Point2::new(seam_u, v_lo), Vec2::new(0.0, 1.0)).ok()?);
+        let (from, to, uv_from, uv_to) = if up {
+            (lo, hi, Point2::new(seam_u, v_lo), Point2::new(seam_u, v_hi))
+        } else {
+            (hi, lo, Point2::new(seam_u, v_hi), Point2::new(seam_u, v_lo))
+        };
+        Some(OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(meridian.clone()),
+            pcurve,
+            start_uv: uv_from,
+            end_uv: uv_to,
+            start_3d: from,
+            end_3d: to,
+            forward: up,
+            source_edge_idx: None,
+            pave_block_id: None,
+        })
+    };
+
+    let n = rings.len();
+    let mut bands = Vec::with_capacity(n);
+    for i in 0..n {
+        let (v_lo, lower, lower_plus_u) = rings[i];
+        let (v_next, upper, upper_plus_u) = rings[(i + 1) % n];
+        let v_hi = if i + 1 == n { v_next + TAU } else { v_next };
+        // Counterclockwise in (u, v): the lower ring along +u, the upper
+        // ring back along -u. The seam is split at its middle, so two bands
+        // on different tori seamed between the same two vertices (a coaxial
+        // lens) never share both ends of one edge.
+        let v_mid = f64::midpoint(v_lo, v_hi);
+        let wire = vec![
+            ring_edge(lower, lower_plus_u, v_lo),
+            arc(v_lo, v_mid, true)?,
+            arc(v_mid, v_hi, true)?,
+            ring_edge(upper, !upper_plus_u, v_hi),
+            arc(v_mid, v_hi, false)?,
+            arc(v_lo, v_mid, false)?,
+        ];
+        bands.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(torus.evaluate(seam_u + PI, f64::midpoint(v_lo, v_hi))),
+        });
+    }
+    Some(bands)
+}
+
+/// Split a whole torus into sectors around the ring at its tube
+/// cross-sections (meridian circles, from planes through the axis): each
+/// sector is the seam arc along the ring on the circles' common latitude, the
+/// next cross-section up the tube, the arc back and the first cross-section
+/// down.
+fn split_torus_by_meridian_circles(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    close_tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use std::f64::consts::{PI, TAU};
+
+    let axis = torus.z_axis();
+    let center = torus.center();
+    let big = torus.major_radius();
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    // (u around the ring, the section, whether it runs +v up the tube)
+    let mut rims: Vec<(f64, &SectionEdge, bool)> = Vec::with_capacity(sections.len());
+    let mut seam_v: Option<f64> = None;
+    for s in sections {
+        let EdgeCurve::Circle(c) = &s.curve_3d else {
+            return None;
+        };
+        let out = c.center() - center;
+        if (s.start - s.end).length() > close_tol
+            || c.normal().dot(axis).abs() > 1e-9
+            || out.dot(axis).abs() > close_tol
+            || (out.length() - big).abs() > close_tol
+        {
+            return None;
+        }
+        let (u, _) = torus.project_point(c.center());
+        let (_, v) = torus.project_point(s.start);
+        match seam_v {
+            None => seam_v = Some(v),
+            Some(sv) if wrap(v - sv).abs() > 1e-6 => return None,
+            Some(_) => {}
+        }
+        let radial = out.normalize().ok()?;
+        rims.push((
+            u.rem_euclid(TAU),
+            s,
+            c.normal().dot(radial.cross(axis)) > 0.0,
+        ));
+    }
+    let seam_v = seam_v?;
+    rims.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if rims.windows(2).any(|w| w[1].0 - w[0].0 < 1e-9)
+        || rims[0].0 + TAU - rims[rims.len() - 1].0 < 1e-9
+    {
+        return None;
+    }
+
+    let (sin_v, cos_v) = seam_v.sin_cos();
+    // The latitude runs counterclockwise about the axis as u grows.
+    let latitude = Circle3D::with_axes(
+        center + axis * (torus.minor_radius() * sin_v),
+        axis,
+        torus.minor_radius().mul_add(cos_v, big),
+        torus.x_axis(),
+        torus.y_axis(),
+    )
+    .ok()?;
+    let rim_edge = |s: &SectionEdge, forward: bool, u: f64| {
+        let pcurve = match rank {
+            Rank::A => s.pcurve_a.clone(),
+            Rank::B => s.pcurve_b.clone(),
+        };
+        OrientedPCurveEdge {
+            curve_3d: s.curve_3d.clone(),
+            pcurve,
+            start_uv: Point2::new(u, seam_v),
+            end_uv: Point2::new(u, seam_v),
+            start_3d: s.start,
+            end_3d: s.start,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: s.pave_block_id,
+        }
+    };
+    let arc = |u_lo: f64, u_hi: f64, along: bool| -> Option<OrientedPCurveEdge> {
+        let (lo, hi) = (torus.evaluate(u_lo, seam_v), torus.evaluate(u_hi, seam_v));
+        let pcurve =
+            Curve2D::Line(Line2D::new(Point2::new(u_lo, seam_v), Vec2::new(1.0, 0.0)).ok()?);
+        let (from, to, uv_from, uv_to) = if along {
+            (lo, hi, Point2::new(u_lo, seam_v), Point2::new(u_hi, seam_v))
+        } else {
+            (hi, lo, Point2::new(u_hi, seam_v), Point2::new(u_lo, seam_v))
+        };
+        Some(OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(latitude.clone()),
+            pcurve,
+            start_uv: uv_from,
+            end_uv: uv_to,
+            start_3d: from,
+            end_3d: to,
+            forward: along,
+            source_edge_idx: None,
+            pave_block_id: None,
+        })
+    };
+
+    let n = rims.len();
+    let mut sectors = Vec::with_capacity(n);
+    for i in 0..n {
+        let (u_lo, first, first_up) = rims[i];
+        let (u_next, next, next_up) = rims[(i + 1) % n];
+        let u_hi = if i + 1 == n { u_next + TAU } else { u_next };
+        // Counterclockwise in (u, v): along the ring, up the next section,
+        // back along the ring, down the first. The seam is split at its
+        // middle, as for bands.
+        let u_mid = f64::midpoint(u_lo, u_hi);
+        let wire = vec![
+            arc(u_lo, u_mid, true)?,
+            arc(u_mid, u_hi, true)?,
+            rim_edge(next, next_up, u_hi),
+            arc(u_mid, u_hi, false)?,
+            arc(u_lo, u_mid, false)?,
+            rim_edge(first, !first_up, u_lo),
+        ];
+        sectors.push(SplitSubFace {
+            surface: FaceSurface::Torus(torus.clone()),
+            outer_wire: wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(torus.evaluate(f64::midpoint(u_lo, u_hi), seam_v + PI)),
+        });
+    }
+    Some(sectors)
+}
+
 /// Split a u-periodic face (cylinder/cone lateral) into stacked bands at
 /// its closed section circles.
 ///

@@ -193,3 +193,51 @@ fn different_major_torus_fuse_does_not_use_shortcut() {
         );
     }
 }
+
+/// Two coaxial tori whose tubes overlap meet in two circles about their axis,
+/// and their common part is the lens between them: each slice at height `z`
+/// is the annulus between the tubes' inner and outer walls there.
+#[test]
+fn coaxial_tori_meet_in_an_exact_lens() {
+    let (big_a, small_a, big_b, small_b) = (3.0_f64, 0.5_f64, 4.0_f64, 0.7_f64);
+    let mut topo = Topology::default();
+    let a = torus_at(&mut topo, 0.0, 0.0, 0.0, big_a, small_a);
+    let b = torus_at(&mut topo, 0.0, 0.0, 0.0, big_b, small_b);
+    let lens = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+
+    let report = brepkit_operations::validate::validate_solid(&topo, lens).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let faces = brepkit_topology::explorer::solid_faces(&topo, lens).unwrap();
+    assert_eq!(faces.len(), 2);
+
+    // Simpson over the height the tubes share.
+    let slice = |z: f64| {
+        let wall = |big: f64, small: f64| {
+            let w = small.mul_add(small, -(z * z)).max(0.0).sqrt();
+            (big - w, big + w)
+        };
+        let (lo_a, hi_a) = wall(big_a, small_a);
+        let (lo_b, hi_b) = wall(big_b, small_b);
+        let (lo, hi) = (lo_a.max(lo_b), hi_a.min(hi_b));
+        if hi > lo {
+            PI * (hi * hi - lo * lo)
+        } else {
+            0.0
+        }
+    };
+    let n = 20_000;
+    let top = small_a.min(small_b);
+    let h = 2.0 * top / f64::from(n);
+    let mut sum = slice(-top) + slice(top);
+    for k in 1..n {
+        sum += if k % 2 == 1 { 4.0 } else { 2.0 } * slice(-top + h * f64::from(k));
+    }
+    let truth = sum * h / 3.0;
+    let volume = solid_volume(&topo, lens, DEFLECTION).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-6 * truth,
+        "volume {volume}, truth {truth}"
+    );
+    let mesh = brepkit_operations::tessellate::tessellate_solid(&topo, lens, 0.01).unwrap();
+    assert!(brepkit_operations::tessellate::is_watertight(&mesh));
+}

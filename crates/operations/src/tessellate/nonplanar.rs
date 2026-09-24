@@ -611,8 +611,8 @@ pub(super) fn tessellate_revolution_band_shared(
     Ok(true)
 }
 
-/// Tessellate a torus band bounded by two closed rim circles and seamed by ONE
-/// doubled open arc edge, in either orientation:
+/// Tessellate a torus band bounded by two closed rim circles and seamed by a
+/// doubled open arc (one edge, or a chain of them), in either orientation:
 ///   * constant-`v` rims (latitude circles wrapping the ring angle `u`) — a
 ///     full analytic revolve of a profile arc, seamed by that arc; interior
 ///     full-`u` rows are swept along the tube angle;
@@ -648,7 +648,8 @@ pub(super) fn tessellate_torus_two_rim_band(
 
     let wire = topo.wire(face_data.outer_wire())?;
     let mut rim_edge_ids: Vec<usize> = Vec::new();
-    let mut seam: Option<(brepkit_topology::edge::EdgeId, usize)> = None;
+    // The seam may be split into several arcs, each run up and back once.
+    let mut seam: Vec<(brepkit_topology::edge::EdgeId, usize)> = Vec::new();
     for oe in wire.edges() {
         let e = topo.edge(oe.edge())?;
         let closed = e.start() == e.end();
@@ -667,10 +668,9 @@ pub(super) fn tessellate_torus_two_rim_band(
             // chord midpoint projects into the covered arc — so any open
             // curve type is safe here.
             EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) | EdgeCurve::Line if !closed => {
-                match &mut seam {
-                    None => seam = Some((oe.edge(), 1)),
-                    Some((eid, uses)) if *eid == oe.edge() => *uses += 1,
-                    Some(_) => return Ok(false),
+                match seam.iter_mut().find(|(eid, _)| *eid == oe.edge()) {
+                    Some((_, uses)) => *uses += 1,
+                    None => seam.push((oe.edge(), 1)),
                 }
             }
             EdgeCurve::Circle(_)
@@ -679,9 +679,12 @@ pub(super) fn tessellate_torus_two_rim_band(
             | EdgeCurve::Ellipse(_) => return Ok(false),
         }
     }
-    let Some((seam_eid, 2)) = seam else {
+    let Some(&(seam_eid, _)) = seam.first() else {
         return Ok(false);
     };
+    if seam.iter().any(|&(_, uses)| uses != 2) {
+        return Ok(false);
+    }
     if rim_edge_ids.len() != 2 {
         return Ok(false);
     }

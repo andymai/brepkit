@@ -190,6 +190,16 @@ fn is_on_boundary(
             if polygon.len() >= 3 {
                 let normal = boundary::polygon_normal(&polygon);
                 if crate::util::point_in_polygon_3d(&point, &polygon, &normal) {
+                    // A point in one of the face's holes is off the face.
+                    let mut in_hole = false;
+                    for &wid in face.inner_wires() {
+                        let hole = crate::util::wire_polygon(topo, wid)?;
+                        in_hole |= hole.len() >= 3
+                            && crate::util::point_in_polygon_3d(&point, &hole, &normal);
+                    }
+                    if in_hole {
+                        continue;
+                    }
                     return Ok(true);
                 }
             } else {
