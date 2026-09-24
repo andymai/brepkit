@@ -1,0 +1,29 @@
+crates/operations/tests/chamfer_round_rims.rs
+  s_ba2f7b5c6902b6::t_cb5c2c5fb0010d 1-66,69-190,214-225,233
+  s_ba2f7b5c6902b6::t_c7eb1704e84470 191-213,226-232
+  s_ba2f7b5c6902b6::t_e8dcaf2be06941 67-68
+crates/operations/src/chamfer.rs
+  s_ba2f7b5c6902b6::t_0b73abab769b65 749
+  s_ba2f7b5c6902b6::t_813b56ce67e14d 837,943,1003,1073
+  s_ba2f7b5c6902b6::t_bc556fa0954310 1045,1079-1093
+  s_ba2f7b5c6902b6::t_ea1f038b51b47b 50-52,675-685,691-723,727-737,818-836,838-914,934-942,944-979,990-997,1004-1037,1043-1044,1046-1058,1064-1072,1074-1078,1094-1114
+  s_ba2f7b5c6902b6::t_e8dcaf2be06941 686-690,980-989,998-1002,1038-1042,1059-1063
+  s_ba2f7b5c6902b6::t_0046571fe022f7 724-726,738-748,750-817,915-933
+  s_ba2f7b5c6902b6::t_3cb2cda7e24127 1115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "594457908970c254bc5ddafbc78c3867a57d573b",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
