@@ -6,7 +6,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 
 use super::AnalyticKind;
 use super::TriangleMeshUV;
-use super::edge_sampling::{plane_axes, segments_for_chord_deviation_a};
+use super::edge_sampling::{edge_sample_count, plane_axes, segments_for_chord_deviation_a};
 use super::nurbs::{
     compute_angular_range, compute_axial_range, compute_sphere_v_range, compute_torus_v_range,
     compute_v_param_range, sphere_analytic_kind, tessellate_nurbs, tessellate_periodic_nurbs_grid,
@@ -82,13 +82,16 @@ fn covers_whole_domain(
 
 /// Whether a NURBS face's boundary runs along its surface's domain edges
 /// (seams and poles included), so the face is the whole patch and its grid
-/// needs no trim.
+/// needs no trim. Each edge is tested at twice the density the trimmed
+/// mesher would sample it, so a trim this passes would give that mesher the
+/// domain's own boundary.
 fn bounded_by_domain(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    deflection: f64,
+    angular_tol: f64,
 ) -> Result<bool, crate::OperationsError> {
-    const SAMPLES: u32 = 8;
     if !face_data.inner_wires().is_empty() {
         return Ok(false);
     }
@@ -101,8 +104,10 @@ fn bounded_by_domain(
             topo.vertex(edge.end())?.point(),
         );
         let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-        for k in 0..=SAMPLES {
-            let t = t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
+        let samples = 2 * edge_sample_count(topo, edge, deflection, angular_tol, false).max(4);
+        for k in 0..=samples {
+            #[allow(clippy::cast_precision_loss)]
+            let t = t0 + (t1 - t0) * (k as f64) / (samples as f64);
             let p = edge.curve().evaluate_with_endpoints(t, start, end);
             let Ok(at) =
                 brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-6)
@@ -153,7 +158,7 @@ pub(super) fn tessellate_with_uvs_floor(
         FaceSurface::Nurbs(n) => {
             let whole =
                 (n.is_periodic_u() && n.is_periodic_v() && covers_whole_domain(topo, face_data)?)
-                    || bounded_by_domain(topo, face_data, n)?;
+                    || bounded_by_domain(topo, face_data, n, deflection, angular_tol)?;
             !whole
         }
         _ => false,
