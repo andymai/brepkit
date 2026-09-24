@@ -728,8 +728,6 @@ fn newell_area(positions: &[Point3]) -> f64 {
     0.5 * sz.mul_add(sz, sx.mul_add(sx, sy * sy)).sqrt()
 }
 
-/// Signed area of a polygon projected onto the XY plane.
-/// Positive = CCW from +Z, negative = CW.
 /// Newell's normal of a closed polygon: twice its vector area.
 fn newell_normal(pts: &[Point3]) -> Vec3 {
     let n = pts.len();
@@ -745,6 +743,8 @@ fn newell_normal(pts: &[Point3]) -> Vec3 {
     normal
 }
 
+/// Signed area of a polygon projected onto the XY plane.
+/// Positive = CCW from +Z, negative = CW.
 fn newell_signed_z_area(pts: &[Point3]) -> f64 {
     let n = pts.len();
     let mut area = 0.0;

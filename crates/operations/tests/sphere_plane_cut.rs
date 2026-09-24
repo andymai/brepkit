@@ -126,3 +126,33 @@ fn ball_cut_by_a_plane_clear_of_its_equator() {
         }
     }
 }
+
+/// Two caps of one ball fused into one solid: every disc is still a full
+/// circle on the sphere, but the caps each removes overlap.
+#[test]
+fn two_caps_of_one_ball_keep_both_volumes() {
+    let r = 3.0_f64;
+    let cap = |topo: &mut Topology, z0: f64, keep_below: bool| {
+        let ball = make_sphere(topo, r, 32).unwrap();
+        let lid = make_box(topo, 20.0, 20.0, 20.0).unwrap();
+        transform_solid(topo, lid, &Mat4::translation(-10.0, -10.0, z0)).unwrap();
+        let op = if keep_below {
+            BooleanOp::Cut
+        } else {
+            BooleanOp::Intersect
+        };
+        boolean(topo, op, ball, lid).unwrap()
+    };
+    let mut topo = Topology::new();
+    let top = cap(&mut topo, 2.0, false);
+    let bottom = cap(&mut topo, -2.5, true);
+    let both = boolean(&mut topo, BooleanOp::Fuse, top, bottom).unwrap();
+
+    // Caps 1 and 0.5 high.
+    let truth = PI * (1.0 * (3.0 * r - 1.0) + 0.25 * (3.0 * r - 0.5)) / 3.0;
+    let volume = solid_volume(&topo, both, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-2 * truth,
+        "volume {volume}, truth {truth}"
+    );
+}

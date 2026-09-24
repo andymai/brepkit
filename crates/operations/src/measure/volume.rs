@@ -914,8 +914,10 @@ fn cylinders_perpendicular_and_intersecting(
     }
 }
 
-/// A ball less caps cut off by planes, each plane face a full disc (so no
-/// two caps meet). About the centre, a sphere face adds `r/3` of its area and
+/// A ball less caps cut off by planes, each plane face a full disc and no two
+/// caps meeting (a shell holding two separate pieces of one ball has full
+/// discs whose caps overlap). About the centre, a sphere face adds `r/3` of
+/// its area and
 /// a disc `d/3` of its own, `d` the centre's distance to the disc's plane
 /// along its outward normal; a cap `r - d` high takes `2 pi r (r - d)` of the
 /// sphere.
@@ -980,13 +982,26 @@ fn ball_less_caps_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         return None;
     }
     let origin = Vec3::new(center.x(), center.y(), center.z());
+    let caps: Vec<(Vec3, f64)> = discs
+        .into_iter()
+        .map(|(n, offset)| (n, offset - n.dot(origin)))
+        .collect();
+    if caps.iter().any(|&(_, d)| d.abs() >= r) {
+        return None;
+    }
+    // Each cap spans `acos(d / r)` about its normal; two are apart when their
+    // normals are further apart than the sum.
+    for (i, &(ni, di)) in caps.iter().enumerate() {
+        for &(nj, dj) in &caps[i + 1..] {
+            let apart = ni.dot(nj).clamp(-1.0, 1.0).acos();
+            if apart < (di / r).acos() + (dj / r).acos() - 1e-9 {
+                return None;
+            }
+        }
+    }
     let mut sphere_area = 4.0 * PI * r * r;
     let mut flux = 0.0;
-    for (n, offset) in discs {
-        let d = offset - n.dot(origin);
-        if d.abs() >= r {
-            return None;
-        }
+    for (_, d) in caps {
         sphere_area -= 2.0 * PI * r * (r - d);
         flux += d * PI * (r * r - d * d);
     }

@@ -2436,15 +2436,24 @@ fn detect_trivial_relation(
                 })
             }) || ball_of(topo, inner).is_some_and(|(center, radius)| {
                 // A ball's edges run only around its equator, so its reach
-                // toward each flat face of the outer solid is probed too.
+                // along the axes and past the outer solid's flat faces is
+                // probed too: the deepest few planes it crosses, each once.
                 let axes = [
                     Vec3::new(1.0, 0.0, 0.0),
                     Vec3::new(0.0, 1.0, 0.0),
                     Vec3::new(0.0, 0.0, 1.0),
                 ];
+                let c = Vec3::new(center.x(), center.y(), center.z());
+                let mut planes: Vec<(f64, Vec3)> = outward_planes(topo, outer)
+                    .into_iter()
+                    .map(|(n, offset)| (n.dot(c) + radius - offset, n))
+                    .filter(|&(depth, _)| depth > 0.0)
+                    .collect();
+                planes.sort_by(|a, b| b.0.total_cmp(&a.0));
+                planes.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).length() < 1e-9);
                 axes.iter()
                     .flat_map(|&a| [a, -a])
-                    .chain(outward_plane_normals(topo, outer))
+                    .chain(planes.into_iter().take(16).map(|(_, n)| n))
                     .any(|d| clear_outside(center + d * radius))
             })
         };
@@ -2492,18 +2501,25 @@ fn ball_of(topo: &Topology, solid: SolidId) -> Option<(Point3, f64)> {
     ball
 }
 
-/// The outward unit normals of a solid's planar faces.
-fn outward_plane_normals(topo: &Topology, solid: SolidId) -> Vec<Vec3> {
+/// A solid's planar faces as outward unit normals `n` with offsets `d`, the
+/// face lying on `n . p = d`.
+fn outward_planes(topo: &Topology, solid: SolidId) -> Vec<(Vec3, f64)> {
     brepkit_topology::explorer::solid_faces(topo, solid)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|fid| {
             let face = topo.face(fid).ok()?;
-            let FaceSurface::Plane { normal, .. } = face.surface() else {
+            let FaceSurface::Plane { normal, d } = face.surface() else {
                 return None;
             };
+            let len = normal.length();
             let n = normal.normalize().ok()?;
-            Some(if face.is_reversed() { -n } else { n })
+            let offset = d / len;
+            Some(if face.is_reversed() {
+                (-n, -offset)
+            } else {
+                (n, offset)
+            })
         })
         .collect()
 }
