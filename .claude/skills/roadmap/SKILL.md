@@ -180,7 +180,6 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
 | **Stable row defect: `chamfer_v2` on a concave edge stores its face reversed** | `regress_chamfer_obtuse_ridge.rs`: the 0.02 chamfer of the notch's 90 degree reflex edge lands at y = -0.98586 with outward normal (0, -1, 0), into the material. Its flux flips, so the volume reads 232.1498 about the origin and 231.9235 about the box centre against the true 232.0016; the test's `0 < added < 2%` bound passes both |
 
-| **Stable row defect: volumes far from the origin** | `solid_volume` and `oriented_solid_volume` sum divergence terms about the world origin (`d · A`, `a · (b × c)`), so a solid far from it cancels away its own volume: a 4 x 3 x 2 box with one side drafted 5 degrees, translated by 1e6 on each axis, reads 57.43 and 68.91 against 23.475 (its geometry is right to 1e-10; the untranslated box's fast path still reads 24). Every path needs a reference point near the solid (its first vertex or bounding-box centre) |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
