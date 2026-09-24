@@ -375,7 +375,16 @@ impl<'a> StepBuilder<'a> {
         let start_vp = self.build_vertex_point(refs[0])?;
         let end_vp = self.build_vertex_point(refs[1])?;
 
-        let curve = self.build_curve_geometry(refs[2])?;
+        let mut curve = self.build_curve_geometry(refs[2])?;
+        // `same_sense = .F.` runs the edge from its start vertex to its end
+        // against the curve's own direction; every consumer reads an edge's
+        // curve as running start to end.
+        let tail = attrs.trim_end_matches(')').trim();
+        if tail.ends_with(".F.") || tail.ends_with(".FALSE.") {
+            curve = curve.reversed().map_err(|e| IoError::ParseError {
+                reason: format!("EDGE_CURVE #{ec_ref}: {e}"),
+            })?;
+        }
 
         let edge_id = self.topo.add_edge(Edge::new(start_vp, end_vp, curve));
 

@@ -154,7 +154,6 @@ that does not exist yet; without it, stop.
 | **Marched FF sections carry `pave_block_id=None`** | Architectural note without a live repro (the snapClip op-cut-3 case replays clean, fixture `snapclip_export_corner_inmem.rs` ACTIVE). If a new leak lands here, the canonical altitude is pave-block attachment at phase-FF/make_blocks — every face-splitter-level attempt broke calibrated chains |
 | **Hinge bin pin cut: the two keyhole pins meeting on the knuckle end face fail as one tool** (tool `hingeSwing` op3029, operands `hinge14cap/op3029_*` in the session scratchpad; replay `TOOLS=<pin0>,<pin1>` for the compound path, `MERGE_TOOLS=1` or `B=fusedpins.bin` for the raw cut) | Pairwise and sequential cuts are exact (117 ms, 245 faces); every batched tool (the two shells concatenated, or their fuse whose 0.075 step ring is pinched along the tails' shared base) leaves the knuckle end face 133 with 23 free and 4 non-manifold edges: it receives 18 sections, the keyhole outline arriving twice (a regular FF piece and a coplanar-phase piece for the same run, `STRACE` with `BK_SPLIT_TRACE=133`), and the splitter emits two pieces that both carry the face's outer boundary. The synthetic full-interior twin closed (Closed entry below); this one differs by the outline crossing the small face's rim. `compound_cut` then SHIPS the batched mesh fallback (the fuse-ladder rung accepts it) instead of falling back to the exact sequential cuts, so the bin becomes a 4078-face blob and every swing intersect after it is a mesh boolean (~85 s each in wasm, 9+ per scenario). Fix the arrangement; the policy rung is the safety net |
 | **Lid knuckle fuse: a stepped barrel (r 2.2 flanges, r 1.8 middle, ramp planes) whose axis lies on the lid plate's bottom plane and overhangs the plate's edge** (tool `hingeSwing` op20865, operands `hinge15cap/op20865_*`; five such fuses op20865..20885 build the lid's knuckle row) | GFA leaves 11 free and 3 non-manifold edges (the r 1.8 wall pieces inside the plate and the plate's bottom-face strip inside the barrel are both KEPT, so both operands' sub-faces in the overlap are classified wrong), the fuse falls back, and each later knuckle fuse grows the blob (181 -> 289 -> 397 planar faces); the swing sweep body (888 planar faces) inherits it. Undug; the bin-side knuckle fuse (closed 2026-09-15) had its axis on the bracket's EDGE, this one has it on the plate's FACE |
-| **STEP reader drops `EDGE_CURVE` `same_sense`** (`crates/io/src/step/reader.rs` `build_edge_curve`) | A third-party `.F.` arc is stored start-to-end against the counter-clockwise convention every boundary reader assumes (pave seeding, `wire_polygon`, the same-domain samplers), so its face traces the complement. brepkit's own writer emits `.T.` only, so round trips are unaffected. Honour the flag by re-minting the circle with a flipped normal on import |
 | **v1 fillet deprecations entangled with the public wasm API** | `try_fillet` still reaches deprecated `fillet`/`fillet_rolling_ball`; migrating changes public behavior — a product decision, not safe cleanup. See `fillet-blend`, `wasm-bindings` |
 | **crates.io / GTM items** | Andy-only. Publishing infrastructure works (see MEMORY.md for the release-please `continue-on-error` masking gotcha) |
 
@@ -185,6 +184,14 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **STEP `EDGE_CURVE` `same_sense` (CLOSED 2026-09-24; pin `crates/io/tests/step_edge_same_sense.rs`)**:
+  the reader dropped the flag, so a `.F.` arc (its circle's axis flipped,
+  as another writer may emit it) ran start to end the wrong way round and
+  its faces traced the complement. `build_edge_curve` now reverses such a
+  curve with `EdgeCurve::reversed` (circle and ellipse: normal and `v_axis`
+  negated; NURBS: net, weights and mirrored knots), which also replaces
+  extrude's private copy.
 
 - **Per-face NURBS meshes ignored the trim (CLOSED 2026-09-24; pins in `crates/operations/tests/bspline_conversion_mesh.rs`)**:
   `tessellate::tessellate` meshed a NURBS face over its whole surface, so
