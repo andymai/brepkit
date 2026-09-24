@@ -190,13 +190,14 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **NURBS faces meshed far outside their deflection (CLOSED 2026-09-24; pin `squashed_cylinder_mesh_follows_its_deflection` in `crates/operations/tests/non_uniform_scale_mesh.rs`)**:
+- **NURBS faces meshed far outside their deflection (CLOSED 2026-09-24; pin `squashed_walls_mesh_within_their_deflection` in `crates/operations/tests/non_uniform_scale_mesh.rs`)**:
   `interior_grid_resolution` fed a NURBS face's knot spans to a circle-chord
   formula with radius 1, so a squashed cylinder's wall meshed 6.2e-3 low in
   volume at deflection 0.001. The grid now follows the chords of the face's
   own iso-lines across its (u, v) box (one division along a ruling, the
   normals' turn weighed only across chords longer than the deflection, at
-  most 1024 per direction): 8.9e-5 at 0.001. The diagnostic volume pin in
+  most 1024 per direction and 65,536 cells in all, with a warning when
+  that binds): 8.9e-5 at 0.001. The diagnostic volume pin in
   `cross_one_row_fillet_inmem.rs` moved with the meshes.
 
 - **The walking-engine chamfer left every chamfered edge open (CLOSED 2026-09-24; pins `chamfer_v2_closes_on_every_box_edge`, `chamfer_v2_closes_two_parallel_edges`, `chamfer_v2_concave_notch_adds_only_the_chamfer_sliver` in `crates/operations/tests/regress_chamfer_obtuse_ridge.rs`)**:
