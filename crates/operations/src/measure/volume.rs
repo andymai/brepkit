@@ -2667,6 +2667,22 @@ fn analytic_torus_signed_volume(
     Ok(if face.is_reversed() { -vol } else { vol })
 }
 
+/// Whether a face's outer wire holds an edge that is neither a line nor a
+/// circle.
+fn has_free_form_boundary(topo: &Topology, fid: FaceId) -> Result<bool, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let face = topo.face(fid)?;
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        if matches!(
+            topo.edge(oe.edge())?.curve(),
+            EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_)
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Compute volume by tessellating each face and summing signed tetrahedra
 /// WITHOUT winding correction. Relies on `tessellate()` already handling
 /// face reversal (via `is_reversed` flag) to produce correctly oriented
@@ -2683,11 +2699,15 @@ pub fn volume_from_direct_face_tessellation(
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let face = topo.face(fid)?;
 
-        // Use exact analytical volume for analytic surface faces.
+        // Use exact analytical volume for analytic surface faces. The
+        // closed forms below take a cylinder or cone face as a band between
+        // two iso-circles; a face with holes, or trimmed by a free-form
+        // curve (a bore's saddle-shaped entry loop), is integrated along its
+        // boundary instead.
         if matches!(
             face.surface(),
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
-        ) && !face.inner_wires().is_empty()
+        ) && (!face.inner_wires().is_empty() || has_free_form_boundary(topo, fid)?)
             && let Some(flux) = developable_face_flux(topo, fid, about)?
         {
             if vol_trace_enabled() {

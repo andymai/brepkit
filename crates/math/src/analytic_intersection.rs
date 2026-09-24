@@ -1903,6 +1903,7 @@ fn algebraic_cylinder_cylinder(
     c1: &CylindricalSurface,
     c2: &CylindricalSurface,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    const SAMPLES: usize = 128;
     let alpha = c1.axis().dot(c2.axis());
     let a_coeff = 1.0 - alpha * alpha;
 
@@ -1917,8 +1918,6 @@ fn algebraic_cylinder_cylinder(
     let o2 = c2.origin();
     let a1 = c1.axis();
     let a2 = c2.axis();
-    let x1 = c1.x_axis();
-    let y1 = c1.y_axis();
 
     // Separation check: distance between axes vs sum of radii.
     // Closest approach of two skew lines:
@@ -1932,66 +1931,124 @@ fn algebraic_cylinder_cylinder(
         }
     }
 
-    // Sample u from 0 to 2π on cylinder 1. Offset by half a step to avoid
-    // landing exactly on crossing points where disc=0 and both curves coincide.
-    // This ensures the two algebraic branches have distinct sample endpoints,
-    // so the face splitter's wire builder doesn't face 4-way junction ambiguity.
-    let n_samples = 128;
-    let mut curve_plus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
-    let mut curve_minus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
-    let u_offset = TAU / (n_samples as f64 * 2.0); // half a step
-
-    // Sample n_samples DISTINCT points (no duplicate at closure).
-    // After the loop, explicitly close each curve by copying the first point.
+    // Solve every ruling of one cylinder against the other: a ruling
+    // `c(u) + v·a` meets the other cylinder where the quadratic in v has real
+    // roots. When EVERY ruling of the swept cylinder meets the other (the
+    // thinner of two crossing tubes), the two roots trace two whole closed
+    // loops, the curve's two components. Swept the other way only a window
+    // of rulings meets, and each root traces an open arc of one loop. The
+    // samples sit half a step off u = 0 so the branches of a self-touching
+    // curve (equal radii) do not share a sample.
+    let lin_tol = Tolerance::new().linear;
+    let ruling = |sweep: &CylindricalSurface, other: &CylindricalSurface, u: f64| {
+        let (o, a, r2) = (other.origin(), other.axis(), other.radius());
+        let alpha = sweep.axis().dot(a);
+        let quad = 1.0 - alpha * alpha;
+        let base = sweep.evaluate(u, 0.0);
+        let q = Vec3::new(base.x() - o.x(), base.y() - o.y(), base.z() - o.z());
+        let (q_a1, q_a2) = (q.dot(sweep.axis()), q.dot(a));
+        let b = 2.0 * (q_a1 - alpha * q_a2);
+        let c = q.dot(q) - q_a2 * q_a2 - r2 * r2;
+        let disc = b * b - 4.0 * quad * c;
+        let root = disc.max(0.0).sqrt();
+        (disc, (-b + root) / (2.0 * quad), (-b - root) / (2.0 * quad))
+    };
     #[allow(clippy::cast_precision_loss)]
-    for i in 0..n_samples {
-        let u = u_offset + TAU * i as f64 / n_samples as f64;
-        let (sin_u, cos_u) = u.sin_cos();
+    let u_at = |i: usize| TAU * (i as f64 + 0.5) / SAMPLES as f64;
+    let sweep_samples = |sweep: &CylindricalSurface, other: &CylindricalSurface| {
+        (0..SAMPLES)
+            .map(|i| {
+                let (disc, vp, vm) = ruling(sweep, other, u_at(i));
+                (disc >= -lin_tol)
+                    .then(|| (sweep.evaluate(u_at(i), vp), sweep.evaluate(u_at(i), vm)))
+            })
+            .collect::<Vec<_>>()
+    };
+    let closed_loops = |samples: &[Option<(Point3, Point3)>]| -> Vec<Vec<Point3>> {
+        let mut plus: Vec<Point3> = samples.iter().flatten().map(|s| s.0).collect();
+        let mut minus: Vec<Point3> = samples.iter().flatten().map(|s| s.1).collect();
+        plus.push(plus[0]);
+        minus.push(minus[0]);
+        vec![plus, minus]
+    };
 
-        // Radial point on c1 at angle u, height v=0:
-        // q = c1.origin + r1*(cos(u)*x1 + sin(u)*y1) - c2.origin
-        let qx = o1.x() + r1 * (cos_u * x1.x() + sin_u * y1.x()) - o2.x();
-        let qy = o1.y() + r1 * (cos_u * x1.y() + sin_u * y1.y()) - o2.y();
-        let qz = o1.z() + r1 * (cos_u * x1.z() + sin_u * y1.z()) - o2.z();
-
-        let q_dot_a1 = qx * a1.x() + qy * a1.y() + qz * a1.z();
-        let q_dot_a2 = qx * a2.x() + qy * a2.y() + qz * a2.z();
-        let q_sq = qx * qx + qy * qy + qz * qz;
-
-        let b_coeff = 2.0 * (q_dot_a1 - alpha * q_dot_a2);
-        let c_coeff = q_sq - q_dot_a2 * q_dot_a2 - r2 * r2;
-
-        let disc = b_coeff * b_coeff - 4.0 * a_coeff * c_coeff;
-        // Clamp tiny negative discriminant (floating-point noise near tangent
-        // crossing points where disc → 0) to avoid gaps in the sample set.
-        if disc < -Tolerance::new().linear {
-            continue;
+    let samples1 = sweep_samples(c1, c2);
+    let loops = if samples1.iter().all(Option::is_some) {
+        closed_loops(&samples1)
+    } else {
+        let samples2 = sweep_samples(c2, c1);
+        if samples2.iter().all(Option::is_some) {
+            closed_loops(&samples2)
+        } else {
+            // Partial overlap: each cyclic window of the swept cylinder's
+            // rulings that meets the other carries one loop, out along one
+            // root and back along the other, the two joined where the
+            // discriminant vanishes. A window the sampling misses on both
+            // sweeps (near tangency) defers to the general marcher.
+            let (sweep, other, samples) = if samples1.iter().any(Option::is_some) {
+                (c1, c2, samples1)
+            } else if samples2.iter().any(Option::is_some) {
+                (c2, c1, samples2)
+            } else {
+                return Ok(None);
+            };
+            let branch_point = |inside: usize, outside: usize| -> Point3 {
+                let (mut lo, mut hi) = (u_at(inside), u_at(outside));
+                if (hi - lo).abs() > std::f64::consts::PI {
+                    hi += if hi < lo { TAU } else { -TAU };
+                }
+                for _ in 0..60 {
+                    let mid = 0.5 * (lo + hi);
+                    if ruling(sweep, other, mid).0 >= 0.0 {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let (_, vp, vm) = ruling(sweep, other, lo);
+                sweep.evaluate(lo, 0.5 * (vp + vm))
+            };
+            let Some(first_gap) = samples.iter().position(Option::is_none) else {
+                return Ok(None);
+            };
+            let mut loops = Vec::new();
+            let mut k = 0;
+            while k < SAMPLES {
+                let i = (first_gap + k) % SAMPLES;
+                if samples[i].is_none() {
+                    k += 1;
+                    continue;
+                }
+                let start = i;
+                let mut run = Vec::new();
+                while k < SAMPLES {
+                    let j = (first_gap + k) % SAMPLES;
+                    let Some(pair) = samples[j] else { break };
+                    run.push(pair);
+                    k += 1;
+                }
+                let end = (start + run.len() - 1) % SAMPLES;
+                let head = branch_point(start, (start + SAMPLES - 1) % SAMPLES);
+                let tail = branch_point(end, (end + 1) % SAMPLES);
+                let mut pts = vec![head];
+                pts.extend(run.iter().map(|p| p.0));
+                pts.push(tail);
+                pts.extend(run.iter().rev().map(|p| p.1));
+                pts.push(head);
+                loops.push(pts);
+            }
+            if loops.is_empty() {
+                return Ok(None);
+            }
+            loops
         }
-
-        let sqrt_disc = disc.max(0.0).sqrt();
-        let v_plus = (-b_coeff + sqrt_disc) / (2.0 * a_coeff);
-        let v_minus = (-b_coeff - sqrt_disc) / (2.0 * a_coeff);
-
-        curve_plus.push(c1.evaluate(u, v_plus));
-        curve_minus.push(c1.evaluate(u, v_minus));
-    }
-
-    // Explicitly close each curve by copying the first point (exact match
-    // avoids near-zero chord length in NURBS interpolation).
-    if !curve_plus.is_empty() {
-        curve_plus.push(curve_plus[0]);
-    }
-    if !curve_minus.is_empty() {
-        curve_minus.push(curve_minus[0]);
-    }
+    };
 
     let mut curves = Vec::new();
-
-    for pts in [&curve_plus, &curve_minus] {
+    for pts in &loops {
         if pts.len() < 4 {
             continue;
         }
-
         let ipts: Vec<IntersectionPoint> = pts
             .iter()
             .map(|&p| {
@@ -2004,7 +2061,6 @@ fn algebraic_cylinder_cylinder(
                 }
             })
             .collect();
-
         let degree = 3.min(pts.len() - 1);
         if let Ok(curve) = interpolate(pts, degree) {
             curves.push(IntersectionCurve {
@@ -3055,6 +3111,51 @@ mod tests {
                 c.points.len()
             );
         }
+    }
+
+    /// Neither cylinder's rulings all meet the other: the curve is one loop
+    /// joined at its two branch points.
+    #[test]
+    fn partially_overlapping_cylinders_meet_in_one_closed_loop() {
+        let cyl_z =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let cyl_x =
+            CylindricalSurface::new(Point3::new(0.0, 1.2, 0.0), Vec3::new(1.0, 0.0, 0.0), 1.0)
+                .unwrap();
+        let curves = algebraic_cylinder_cylinder(&cyl_z, &cyl_x)
+            .unwrap()
+            .unwrap();
+        assert_eq!(curves.len(), 1);
+        let curve = &curves[0].curve;
+        let (t0, t1) = curve.domain();
+        assert!((curve.evaluate(t0) - curve.evaluate(t1)).length() < 1e-9);
+        let off = |p: Point3| {
+            let on_z = (p.x().hypot(p.y()) - 1.0).abs();
+            let on_x = ((p.y() - 1.2).hypot(p.z()) - 1.0).abs();
+            on_z.max(on_x)
+        };
+        let worst = (0..=400)
+            .map(|k| off(curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 400.0)))
+            .fold(0.0, f64::max);
+        assert!(worst < 2e-4, "curve leaves the cylinders by {worst}");
+    }
+
+    /// Near tangency the thick cylinder's window of rulings (0.02 either side
+    /// of a quarter turn) falls between its samples; the thin one's sweep
+    /// finds the loop.
+    #[test]
+    fn near_tangent_cylinders_find_their_loop_on_the_thinner_sweep() {
+        let cyl_z =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let cyl_x =
+            CylindricalSurface::new(Point3::new(0.0, 1.1998, 0.0), Vec3::new(1.0, 0.0, 0.0), 0.2)
+                .unwrap();
+        let curves = algebraic_cylinder_cylinder(&cyl_z, &cyl_x)
+            .unwrap()
+            .expect("the thin cylinder's sweep finds the loop");
+        assert_eq!(curves.len(), 1);
     }
 
     #[test]

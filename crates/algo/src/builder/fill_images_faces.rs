@@ -258,10 +258,13 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // wires and the opposing plane faces' hole wires resolve to the same
     // VertexId, so merge_duplicate_edges can share the circle edge.
     let seam_anchors = compute_seam_anchors(topo, arena);
-    for &anchor in seam_anchors.values() {
-        pb_vertex_registry
-            .entry(qpos(anchor))
-            .or_insert_with(|| topo.add_vertex(Vertex::new(anchor, tol.linear)));
+    for seam in seam_anchors.values() {
+        let cuts = seam.pieces.iter().map(|&(_, _, end)| end);
+        for point in std::iter::once(seam.anchor).chain(cuts) {
+            pb_vertex_registry
+                .entry(qpos(point))
+                .or_insert_with(|| topo.add_vertex(Vertex::new(point, tol.linear)));
+        }
     }
 
     // No boundary edge cache — each face creates its own edges with its own
@@ -1265,16 +1268,50 @@ const SEAM_DEGENERATE_TOL: f64 = 1e-10;
 /// accumulates; tightening it would spuriously reject valid anchors.
 const SEAM_ON_CIRCLE_TOL: f64 = 1e-6;
 
-/// Compute seam-anchored start points for closed circle intersection curves.
+/// A closed section curve's seam point, and for a closed NURBS loop the
+/// curve re-parameterized to start there (a circle is re-anchored in place).
+/// A loop that also crosses the seam of a periodic face it does not wind (a
+/// bore's hole in a tube's wall, straddling the wall's seam) is cut into
+/// `pieces` at those crossings, so every face it bounds shares the vertices
+/// the wall's notched seam needs.
+struct SeamAnchor {
+    anchor: Point3,
+    rotated: Option<brepkit_math::nurbs::curve::NurbsCurve>,
+    pieces: Vec<(brepkit_math::nurbs::curve::NurbsCurve, Point3, Point3)>,
+}
+
+/// Compute seam-anchored start points for closed intersection curves.
 ///
 /// For each full-circle FF curve whose face pair includes a u-periodic
 /// surface (cylinder/cone) with a seam Line edge, returns the point on the
-/// circle at the seam's u parameter. Keyed by the curve's arena index.
-fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Point3> {
+/// circle at the seam's u parameter; for each closed NURBS curve that winds
+/// such a surface's period once, the point where it crosses the seam and the
+/// curve re-parameterized to start there. Keyed by the curve's arena index.
+fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, SeamAnchor> {
     use std::f64::consts::TAU;
 
     let mut anchors = BTreeMap::new();
     for (idx, curve_ds) in arena.curves.iter().enumerate() {
+        if let EdgeCurve::NurbsCurve(nurbs) = &curve_ds.curve {
+            let faces = [curve_ds.face_a, curve_ds.face_b];
+            if loop_nearly_meets_a_sibling(arena, idx, nurbs) {
+                continue;
+            }
+            let winding = faces.iter().find_map(|&fid| {
+                let face = topo.face(fid).ok()?;
+                seam_anchor_on_winding_loop(topo, face, nurbs)
+            });
+            let mut crossings: Vec<f64> = faces
+                .iter()
+                .filter_map(|&fid| topo.face(fid).ok())
+                .flat_map(|face| seam_crossings_of_contractible_loop(topo, face, nurbs))
+                .collect();
+            crossings.sort_by(f64::total_cmp);
+            if let Some(seam) = anchor_and_cut_loop(nurbs, winding, &crossings) {
+                anchors.insert(idx, seam);
+            }
+            continue;
+        }
         let EdgeCurve::Circle(circle) = &curve_ds.curve else {
             continue;
         };
@@ -1291,11 +1328,282 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Po
             let Some(anchor) = seam_anchor_on_circle(topo, face, circle) else {
                 continue;
             };
-            anchors.insert(idx, anchor);
+            anchors.insert(
+                idx,
+                SeamAnchor {
+                    anchor,
+                    rotated: None,
+                    pieces: Vec::new(),
+                },
+            );
             break;
         }
     }
     anchors
+}
+
+/// The u of `face`'s seam: the start of its first non-degenerate Line edge.
+fn face_seam_u(topo: &Topology, face: &Face) -> Option<f64> {
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            let sp = topo.vertex(edge.start()).ok()?.point();
+            let ep = topo.vertex(edge.end()).ok()?.point();
+            if (sp - ep).length() > SEAM_DEGENERATE_TOL {
+                return face.surface().project_point(sp).map(|(u, _)| u);
+            }
+        }
+    }
+    None
+}
+
+/// A closed NURBS section that winds `face`'s periodic u once (a bore's
+/// entry loop on the bore's wall): the point where it crosses the face's
+/// seam, and the curve re-parameterized to start there, so the band splitter
+/// finds its seam vertex on every face the curve bounds.
+fn seam_anchor_on_winding_loop(
+    topo: &Topology,
+    face: &Face,
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+) -> Option<(Point3, f64)> {
+    use std::f64::consts::{PI, TAU};
+    const SAMPLES: u32 = 64;
+    let surface = face.surface();
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let (t0, t1) = nurbs.domain();
+    if (nurbs.evaluate(t0) - nurbs.evaluate(t1)).length() > SEAM_ON_CIRCLE_TOL {
+        return None;
+    }
+    let seam_u = face_seam_u(topo, face)?;
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let delta = |t: f64| {
+        surface
+            .project_point(nurbs.evaluate(t))
+            .map(|(u, _)| wrap(u - seam_u))
+    };
+    let param = |k: u32| t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
+    let mut winding = 0.0;
+    let mut crossing = None;
+    let mut prev = delta(t0)?;
+    for k in 1..=SAMPLES {
+        let d = delta(param(k))?;
+        winding += wrap(d - prev);
+        if crossing.is_none() && prev * d < 0.0 && (prev - d).abs() < PI {
+            crossing = Some((param(k - 1), param(k), prev));
+        }
+        prev = d;
+    }
+    if (winding.abs() - TAU).abs() > 0.5 {
+        return None;
+    }
+    let (mut lo, mut hi, d_lo) = crossing?;
+    for _ in 0..60 {
+        let tm = 0.5 * (lo + hi);
+        if (delta(tm)? > 0.0) == (d_lo > 0.0) {
+            lo = tm;
+        } else {
+            hi = tm;
+        }
+    }
+    let t_seam = 0.5 * (lo + hi);
+    Some((nurbs.evaluate(t_seam), t_seam))
+}
+
+/// Whether another closed NURBS section of the same face pair comes within
+/// a tenth of this closed loop's extent. Equal crossing cylinders meet along
+/// two loops that touch where the rulings are tangent (the lens fuse's
+/// self-touching seam); those stay unanchored and uncut, for the
+/// internal-loops path. A bore's entry and exit loops lie a tube's chord
+/// apart.
+fn loop_nearly_meets_a_sibling(
+    arena: &GfaArena,
+    idx: usize,
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+) -> bool {
+    const SAMPLES: u32 = 64;
+    let samples = |curve: &brepkit_math::nurbs::curve::NurbsCurve| -> Vec<Point3> {
+        let (t0, t1) = curve.domain();
+        (0..SAMPLES)
+            .map(|k| curve.evaluate(t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES)))
+            .collect()
+    };
+    let (t0, t1) = nurbs.domain();
+    if (nurbs.evaluate(t0) - nurbs.evaluate(t1)).length() > SEAM_ON_CIRCLE_TOL {
+        return false;
+    }
+    let own = samples(nurbs);
+    let extent = own
+        .iter()
+        .flat_map(|p| own.iter().map(move |q| (*p - *q).length()))
+        .fold(0.0, f64::max);
+    let this = &arena.curves[idx];
+    arena.curves.iter().enumerate().any(|(other_idx, other)| {
+        let same_pair = (other.face_a == this.face_a && other.face_b == this.face_b)
+            || (other.face_a == this.face_b && other.face_b == this.face_a);
+        let EdgeCurve::NurbsCurve(other_nurbs) = &other.curve else {
+            return false;
+        };
+        if other_idx == idx || !same_pair {
+            return false;
+        }
+        let theirs = samples(other_nurbs);
+        own.iter()
+            .flat_map(|p| theirs.iter().map(move |q| (*p - *q).length()))
+            .any(|gap| gap < 0.1 * extent)
+    })
+}
+
+/// The parameters where a closed NURBS section crosses `face`'s seam
+/// meridian while winding the face's period zero times: a hole in the face
+/// that straddles its seam. Empty for a winding loop or one clear of the
+/// seam.
+fn seam_crossings_of_contractible_loop(
+    topo: &Topology,
+    face: &Face,
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+) -> Vec<f64> {
+    use std::f64::consts::{PI, TAU};
+    const SAMPLES: u32 = 64;
+    let surface = face.surface();
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return Vec::new();
+    }
+    let (t0, t1) = nurbs.domain();
+    if (nurbs.evaluate(t0) - nurbs.evaluate(t1)).length() > SEAM_ON_CIRCLE_TOL {
+        return Vec::new();
+    }
+    let Some(seam_u) = face_seam_u(topo, face) else {
+        return Vec::new();
+    };
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let delta = |t: f64| {
+        surface
+            .project_point(nurbs.evaluate(t))
+            .map(|(u, _)| wrap(u - seam_u))
+    };
+    let param = |k: u32| t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
+    let Some(samples) = (0..=SAMPLES)
+        .map(|k| delta(param(k)))
+        .collect::<Option<Vec<f64>>>()
+    else {
+        return Vec::new();
+    };
+    let winding: f64 = samples.windows(2).map(|w| wrap(w[1] - w[0])).sum();
+    if winding.abs() > 0.5 {
+        return Vec::new();
+    }
+    let mut crossings = Vec::new();
+    for k in 1..=SAMPLES {
+        let (prev, d) = (samples[k as usize - 1], samples[k as usize]);
+        if prev * d >= 0.0 || (prev - d).abs() >= PI {
+            continue;
+        }
+        let (mut lo, mut hi) = (param(k - 1), param(k));
+        for _ in 0..60 {
+            let tm = 0.5 * (lo + hi);
+            match delta(tm) {
+                Some(dm) if (dm > 0.0) == (prev > 0.0) => lo = tm,
+                Some(_) => hi = tm,
+                None => break,
+            }
+        }
+        crossings.push(0.5 * (lo + hi));
+    }
+    crossings
+}
+
+/// A closed NURBS loop started at its winding face's seam point (or, with
+/// none, at its first straddled-seam crossing) and cut at every other
+/// crossing. `None` when the loop needs neither.
+fn anchor_and_cut_loop(
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    winding: Option<(Point3, f64)>,
+    crossings: &[f64],
+) -> Option<SeamAnchor> {
+    let (t0, t1) = nurbs.domain();
+    let (anchor, t_start) = match (winding, crossings.first()) {
+        (Some(w), _) => w,
+        (None, Some(&t)) => (nurbs.evaluate(t), t),
+        (None, None) => return None,
+    };
+    let rotated = start_closed_curve_at(nurbs, t_start)?;
+    let (r0, r1) = rotated.domain();
+    let weld = SEAM_ON_CIRCLE_TOL;
+    let mut cuts: Vec<f64> = crossings
+        .iter()
+        .map(|&t| {
+            let shifted = r0 + (t - t_start).rem_euclid(t1 - t0);
+            shifted.clamp(r0, r1)
+        })
+        .filter(|&t| {
+            let p = rotated.evaluate(t);
+            (p - anchor).length() > weld
+        })
+        .collect();
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup_by(|a, b| (rotated.evaluate(*a) - rotated.evaluate(*b)).length() <= weld);
+    let mut pieces = Vec::with_capacity(cuts.len() + 1);
+    let (mut rest, mut from) = (rotated.clone(), anchor);
+    for &t in &cuts {
+        let (head, tail) = brepkit_math::nurbs::knot_ops::curve_split(&rest, t).ok()?;
+        let to = rotated.evaluate(t);
+        pieces.push((head, from, to));
+        rest = tail;
+        from = to;
+    }
+    if !pieces.is_empty() {
+        pieces.push((rest, from, anchor));
+    }
+    // Two pieces share both endpoints, and the edge merge would weld them
+    // into one edge; a vertex midway along each keeps them apart.
+    if pieces.len() == 2 {
+        let mut halved = Vec::with_capacity(4);
+        for (piece, from, to) in pieces {
+            let (p0, p1) = piece.domain();
+            let mid = 0.5 * (p0 + p1);
+            let (head, tail) = brepkit_math::nurbs::knot_ops::curve_split(&piece, mid).ok()?;
+            let at = piece.evaluate(mid);
+            halved.push((head, from, at));
+            halved.push((tail, at, to));
+        }
+        pieces = halved;
+    }
+    Some(SeamAnchor {
+        anchor,
+        rotated: Some(rotated),
+        pieces,
+    })
+}
+
+/// A closed NURBS curve re-parameterized to start and end at `t`: split
+/// there and joined the other way round. The halves meet at the curve's old
+/// start, whose weight the second half is scaled to match.
+fn start_closed_curve_at(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t: f64,
+) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    let (t0, t1) = curve.domain();
+    if (t - t0).abs() <= 1e-12 * (t1 - t0) || (t1 - t).abs() <= 1e-12 * (t1 - t0) {
+        return Some(curve.clone());
+    }
+    let p = curve.degree();
+    let (head, tail) = brepkit_math::nurbs::knot_ops::curve_split(curve, t).ok()?;
+    let scale = tail.weights().last()? / head.weights().first()?;
+    let shift = t1 - t0;
+    let tail_knots = tail.knots();
+    let mut knots: Vec<f64> = tail_knots[..tail_knots.len() - 1].to_vec();
+    knots.extend(head.knots()[p + 1..].iter().map(|k| k + shift));
+    let mut points = tail.control_points().to_vec();
+    points.extend_from_slice(&head.control_points()[1..]);
+    let mut weights = tail.weights().to_vec();
+    weights.extend(head.weights()[1..].iter().map(|w| w * scale));
+    NurbsCurve::new(p, knots, points, weights).ok()
 }
 
 /// Find the point on `circle` at the seam u of `face`'s periodic surface.
@@ -1493,7 +1801,7 @@ fn build_section_edges(
     arena: &GfaArena,
     face_id: FaceId,
     section_map: &HashMap<FaceId, Vec<SectionSource>>,
-    seam_anchors: &BTreeMap<usize, Point3>,
+    seam_anchors: &BTreeMap<usize, SeamAnchor>,
     tol: f64,
 ) -> Vec<SectionEdge> {
     use brepkit_math::vec::Point3;
@@ -1636,8 +1944,22 @@ fn build_section_edges(
                 // Seam-anchored closed circles: re-parameterize so the
                 // circle starts at the periodic face's seam point. Both
                 // faces of the pair receive the same anchored geometry.
-                let (curve_3d, start, end) = match seam_anchors.get(curve_idx) {
-                    Some(&anchor) => {
+                let spans: Vec<(EdgeCurve, Point3, Point3)> = match seam_anchors.get(curve_idx) {
+                    Some(seam) if !seam.pieces.is_empty() => seam
+                        .pieces
+                        .iter()
+                        .map(|(piece, from, to)| (EdgeCurve::NurbsCurve(piece.clone()), *from, *to))
+                        .collect(),
+                    Some(SeamAnchor {
+                        anchor,
+                        rotated: Some(rotated),
+                        ..
+                    }) => vec![(EdgeCurve::NurbsCurve(rotated.clone()), *anchor, *anchor)],
+                    Some(&SeamAnchor {
+                        anchor,
+                        rotated: None,
+                        ..
+                    }) => {
                         let reanchored = if let EdgeCurve::Circle(c) = &curve_ds.curve {
                             brepkit_math::curves::Circle3D::new_with_ref(
                                 c.center(),
@@ -1650,85 +1972,87 @@ fn build_section_edges(
                         } else {
                             None
                         };
-                        match reanchored {
+                        vec![match reanchored {
                             Some(c) => (c, anchor, anchor),
                             None => (curve_ds.curve.clone(), start, end),
-                        }
+                        }]
                     }
-                    None => (curve_ds.curve.clone(), start, end),
+                    None => vec![(curve_ds.curve.clone(), start, end)],
                 };
 
-                let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
-                    &curve_3d,
-                    start,
-                    end,
-                    face.surface(),
-                    &wire_pts,
-                    None,
-                );
+                for (curve_3d, start, end) in spans {
+                    let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                        &curve_3d,
+                        start,
+                        end,
+                        face.surface(),
+                        &wire_pts,
+                        None,
+                    );
 
-                // For closed curves on periodic surfaces (e.g. circle on cylinder),
-                // the pcurve wraps around and evaluate(0) ≈ evaluate(1). We need
-                // UV endpoints that span the full period so the face splitter
-                // sees the section edge as a full-width cut.
-                let is_closed = (start - end).length() < tol * 100.0;
-                let (u_per, _v_per) = super::pcurve_compute::surface_periods(face.surface());
-                let (start_uv_pt, end_uv_pt) = if is_closed && u_per.is_some() {
-                    let period = u_per.unwrap_or(std::f64::consts::TAU);
-                    // Project the start 3D point to UV.
-                    let start_uv = face.surface().project_point(start);
-                    if let Some((su, sv)) = start_uv {
-                        // Sample the curve at t=0.25 to determine winding direction.
-                        let (t0, t1) = curve_3d.domain_with_endpoints(start, end);
-                        let mid_3d =
-                            curve_3d.evaluate_with_endpoints(t0 + (t1 - t0) * 0.25, start, end);
-                        let mid_uv = face.surface().project_point(mid_3d);
-                        if let Some((mu, _mv)) = mid_uv {
-                            // Determine winding: does the curve go in +u or -u
-                            // direction from start?
-                            let du = mu - su;
-                            // Normalize du to [-period/2, period/2].
-                            let du_norm = du - (du / period).round() * period;
-                            let end_u = if du_norm < 0.0 {
-                                su - period
+                    // For closed curves on periodic surfaces (e.g. circle on cylinder),
+                    // the pcurve wraps around and evaluate(0) ≈ evaluate(1). We need
+                    // UV endpoints that span the full period so the face splitter
+                    // sees the section edge as a full-width cut.
+                    let is_closed = (start - end).length() < tol * 100.0;
+                    let (u_per, _v_per) = super::pcurve_compute::surface_periods(face.surface());
+                    let (start_uv_pt, end_uv_pt) = if is_closed && u_per.is_some() {
+                        let period = u_per.unwrap_or(std::f64::consts::TAU);
+                        // Project the start 3D point to UV.
+                        let start_uv = face.surface().project_point(start);
+                        if let Some((su, sv)) = start_uv {
+                            // Sample the curve at t=0.25 to determine winding direction.
+                            let (t0, t1) = curve_3d.domain_with_endpoints(start, end);
+                            let mid_3d =
+                                curve_3d.evaluate_with_endpoints(t0 + (t1 - t0) * 0.25, start, end);
+                            let mid_uv = face.surface().project_point(mid_3d);
+                            if let Some((mu, _mv)) = mid_uv {
+                                // Determine winding: does the curve go in +u or -u
+                                // direction from start?
+                                let du = mu - su;
+                                // Normalize du to [-period/2, period/2].
+                                let du_norm = du - (du / period).round() * period;
+                                let end_u = if du_norm < 0.0 {
+                                    su - period
+                                } else {
+                                    su + period
+                                };
+                                (Some(Point2::new(su, sv)), Some(Point2::new(end_u, sv)))
                             } else {
-                                su + period
-                            };
-                            (Some(Point2::new(su, sv)), Some(Point2::new(end_u, sv)))
+                                let s = pcurve.evaluate(0.0);
+                                (Some(s), Some(Point2::new(s.x() - period, s.y())))
+                            }
                         } else {
-                            let s = pcurve.evaluate(0.0);
-                            (Some(s), Some(Point2::new(s.x() - period, s.y())))
+                            // Plane surface — project via pcurve.
+                            (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
                         }
+                    } else if matches!(pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
+                        // Line2D pcurves use arc-length parameterization, so
+                        // `evaluate(1.0)` is one UV unit along the line, not the
+                        // endpoint (e.g. a horizontal circle on a cylinder maps
+                        // to a Line2D spanning the angular extent). Leave the
+                        // endpoints unset; downstream consumers fall back to
+                        // `uv_endpoints_from_pcurve`, which measures the true
+                        // 2D length.
+                        (None, None)
                     } else {
-                        // Plane surface — project via pcurve.
                         (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
-                    }
-                } else if matches!(pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
-                    // Line2D pcurves use arc-length parameterization, so
-                    // `evaluate(1.0)` is one UV unit along the line, not the
-                    // endpoint (e.g. a horizontal circle on a cylinder maps
-                    // to a Line2D spanning the angular extent). Leave the
-                    // endpoints unset; downstream consumers fall back to
-                    // `uv_endpoints_from_pcurve`, which measures the true
-                    // 2D length.
-                    (None, None)
-                } else {
-                    (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
-                };
+                    };
 
-                sections.push(SectionEdge {
-                    curve_3d,
-                    pcurve_a: pcurve.clone(),
-                    pcurve_b: pcurve,
-                    start,
-                    end,
-                    start_uv_a: start_uv_pt,
-                    end_uv_a: end_uv_pt,
-                    start_uv_b: start_uv_pt,
-                    end_uv_b: end_uv_pt,
-                    target_face: None,
-                    pave_block_id: None,
-                });
+                    sections.push(SectionEdge {
+                        curve_3d,
+                        pcurve_a: pcurve.clone(),
+                        pcurve_b: pcurve,
+                        start,
+                        end,
+                        start_uv_a: start_uv_pt,
+                        end_uv_a: end_uv_pt,
+                        start_uv_b: start_uv_pt,
+                        end_uv_b: end_uv_pt,
+                        target_face: None,
+                        pave_block_id: None,
+                    });
+                }
             }
             SectionSource::PaveBlock(pb_id, opposing_face) => {
                 // Individual PaveBlock edge — use the old Line2D pcurve approach.
