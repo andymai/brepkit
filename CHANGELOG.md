@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.3](https://github.com/andymai/brepkit/compare/v3.5.2...v3.5.3) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** mesh non-uniformly scaled spheres and tori ([#1694](https://github.com/andymai/brepkit/issues/1694)) ([9bac3b8](https://github.com/andymai/brepkit/commit/9bac3b8434aea787368b6abf0effdfbac135855c))
+
 ## [3.5.2](https://github.com/andymai/brepkit/compare/v3.5.1...v3.5.2) (2026-09-24)
 
 
