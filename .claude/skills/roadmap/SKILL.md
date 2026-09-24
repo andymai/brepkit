@@ -175,7 +175,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
 | **Feature recognition (Beta)** | The dihedral is `acos(n1·n2)` with a cylinder's AXIS standing in for its normal, so nothing is ever classed Convex; needs per-edge outward normals and a signed dihedral |
 | **Torus booleans, non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
-| **Stable row defect: tilted cylinder or cone cut by a box** | A 0.5 x 0.5 prism cut through `make_cylinder(1.5, 4)` rotated `Rx(0.7)` returns a GFA result with 4 inconsistent-orientation shared edges and an open mesh, and `boolean` ACCEPTS it (no fallback). Same for the cone. Probe `zz_cut_probe.rs` in the session scratchpad |
+| **Stable row defect: tilted cylinder or cone cut by a box** | A 0.5 x 0.5 prism cut through `make_cylinder(1.5, 4)` rotated `Rx(0.7)` returns a GFA result with 4 inconsistent-orientation shared edges and an open mesh, and `boolean` ACCEPTS it (no fallback). Same for the cone |
 | **Stable row defect: `loft_smooth`** | Three squares (half 3, 2, 3 at z 0, 2, 4): signed volume 3.4, magnitude 6.7, 8 open mesh edges |
 | **Stable row defect: heal `convert_to_bspline` on a cylinder** | 7 open mesh edges at the seam vertex: the band skips the rim's vertex sample while the cap keeps it |
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
