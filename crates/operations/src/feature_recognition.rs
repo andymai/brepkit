@@ -165,18 +165,16 @@ pub fn recognize_features(
     solid: SolidId,
     deflection: f64,
 ) -> Result<Vec<Feature>, OperationsError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<FaceId> = shell.faces().to_vec();
+    let face_ids = brepkit_topology::explorer::solid_faces(topo, solid)?;
 
     let mut features = Vec::new();
 
     let fag = build_face_adjacency_graph(topo, &face_ids, deflection)?;
 
     detect_chamfers_fag(topo, &fag, &mut features)?;
-    detect_fillet_like_fag(&fag, &mut features);
+    detect_fillet_like_fag(topo, &fag, &mut features);
     detect_holes(topo, &fag, &mut features)?;
-    detect_pockets_fag(&fag, &mut features);
+    detect_pockets_fag(topo, &fag, &mut features);
     detect_patterns(&mut features);
 
     Ok(features)
@@ -203,22 +201,29 @@ fn build_face_adjacency_graph(
         );
     }
 
-    let mut edge_to_faces: HashMap<usize, (EdgeId, Vec<FaceId>)> = HashMap::new();
+    // Every wire counts: a hole's wall meets its plate along an inner wire.
+    let mut edge_to_faces: HashMap<usize, (EdgeId, Vec<(FaceId, bool)>)> = HashMap::new();
     for &fid in face_ids {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        for oe in wire.edges() {
-            let entry = edge_to_faces
-                .entry(oe.edge().index())
-                .or_insert_with(|| (oe.edge(), Vec::new()));
-            entry.1.push(fid);
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            for oe in topo.wire(wire_id)?.edges() {
+                let entry = edge_to_faces
+                    .entry(oe.edge().index())
+                    .or_insert_with(|| (oe.edge(), Vec::new()));
+                entry.1.push((fid, oe.is_forward()));
+            }
         }
     }
 
     let mut adjacency: HashMap<usize, Vec<(usize, FagEdge)>> = HashMap::new();
-    for (eid, faces) in edge_to_faces.values() {
-        if faces.len() == 2 {
-            let angle = compute_dihedral_angle(topo, faces[0], faces[1], *eid)?;
+    for (eid, uses) in edge_to_faces.values() {
+        // A seam is one face meeting itself.
+        if let [(a, forward_in_a), (b, _)] = uses.as_slice()
+            && a != b
+        {
+            let faces = [*a, *b];
+            let angle = compute_dihedral_angle(topo, faces[0], faces[1], *eid, *forward_in_a)?;
             let concavity = classify_concavity(angle);
 
             let edge_info = FagEdge {
@@ -264,56 +269,71 @@ fn classify_concavity(angle: f64) -> ConcavityType {
     }
 }
 
-/// Compute the dihedral angle between two faces at a shared edge.
+/// The dihedral angle at a shared edge, measured through the material's
+/// outside: above π on a convex edge, below π on a concave one, π where the
+/// faces meet tangentially.
 ///
-/// The dihedral angle is the angle between the outward normals of the
-/// two faces, measured at the edge midpoint.
+/// The outward normals are taken at the edge's parametric midpoint. The edge
+/// runs as face A's boundary traverses it, which is counter-clockwise about
+/// A's outward normal, so the edge is convex exactly when `n_A × n_B` points
+/// along it.
 fn compute_dihedral_angle(
     topo: &Topology,
     face_a: FaceId,
     face_b: FaceId,
     edge_id: EdgeId,
+    forward_in_a: bool,
 ) -> Result<f64, OperationsError> {
     let edge = topo.edge(edge_id)?;
-    let v_start = topo.vertex(edge.start())?;
-    let v_end = topo.vertex(edge.end())?;
-    let midpoint = Point3::new(
-        (v_start.point().x() + v_end.point().x()) * 0.5,
-        (v_start.point().y() + v_end.point().y()) * 0.5,
-        (v_start.point().z() + v_end.point().z()) * 0.5,
+    let (sp, ep) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
     );
+    let curve = edge.curve();
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    let mid = 0.5 * (t0 + t1);
+    let point = curve.evaluate_with_endpoints(mid, sp, ep);
+    let mut tangent = curve.tangent_with_endpoints(mid, sp, ep);
+    // A whole NURBS edge can keep a domain that runs from its end vertex.
+    let from = curve.evaluate_with_endpoints(t0, sp, ep);
+    if edge.start() != edge.end() && (from - sp).length() > (from - ep).length() {
+        tangent = -tangent;
+    }
+    if forward_in_a == topo.face(face_a)?.is_reversed() {
+        tangent = -tangent;
+    }
 
-    let n_a = face_normal_at(topo, face_a, midpoint)?;
-    let n_b = face_normal_at(topo, face_b, midpoint)?;
-
-    // Dihedral angle via dot product, clamped for numerical safety.
-    let dot = n_a.dot(n_b).clamp(-1.0, 1.0);
-    Ok(dot.acos())
+    let n_a = outward_normal_at(topo, face_a, point)?;
+    let n_b = outward_normal_at(topo, face_b, point)?;
+    let bend = n_a.dot(n_b).clamp(-1.0, 1.0).acos();
+    Ok(if n_a.cross(n_b).dot(tangent) > 0.0 {
+        std::f64::consts::PI + bend
+    } else {
+        std::f64::consts::PI - bend
+    })
 }
 
-/// Get the outward normal of a face at a given point.
-///
-/// For planar faces this is exact. For analytic surfaces the axis or
-/// a geometric normal is used. For free-form surfaces a fallback Z
-/// normal is returned.
-fn face_normal_at(
+/// A face's outward unit normal at a point on it: the surface normal there,
+/// turned by the face's reversed flag.
+fn outward_normal_at(
     topo: &Topology,
     face_id: FaceId,
-    _point: Point3,
+    point: Point3,
 ) -> Result<Vec3, OperationsError> {
     let face = topo.face(face_id)?;
-    let normal = match face.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        FaceSurface::Cylinder(c) => c.axis(),
-        FaceSurface::Cone(c) => c.axis(),
-        FaceSurface::Sphere(_) => {
-            // For a sphere the normal varies; use a fallback.
-            Vec3::new(0.0, 0.0, 1.0)
-        }
-        FaceSurface::Torus(_) => Vec3::new(0.0, 0.0, 1.0),
-        FaceSurface::Nurbs(_) => Vec3::new(0.0, 0.0, 1.0),
+    let surface = face.surface();
+    let normal = if let FaceSurface::Plane { normal, .. } = surface {
+        *normal
+    } else {
+        let (u, v) = surface
+            .project_point(point)
+            .ok_or_else(|| OperationsError::InvalidInput {
+                reason: "cannot locate an edge point on its face".into(),
+            })?;
+        surface.normal(u, v)
     };
-    Ok(normal)
+    let normal = normal.normalize().unwrap_or(normal);
+    Ok(if face.is_reversed() { -normal } else { normal })
 }
 
 /// Detect chamfer faces using the face adjacency graph.
@@ -361,9 +381,21 @@ fn detect_chamfers_fag(
                     let dot1 = normal.dot(n1).abs();
                     let dot2 = normal.dot(n2).abs();
 
-                    // Chamfer face is at an angle (not parallel/perpendicular)
-                    // to both adjacent faces.
-                    if dot1 > 0.1 && dot1 < 0.95 && dot2 > 0.1 && dot2 < 0.95 {
+                    // A chamfer sits at an angle (neither parallel nor
+                    // perpendicular) to both faces it bevels and is small
+                    // beside the larger of them (on a thin part the other can
+                    // be a narrow side): a regular prism's equal sides meet at
+                    // the same angles and are not chamfers.
+                    let area = |ni: &usize| fag.nodes.get(ni).map_or(0.0, |n| n.area);
+                    let small = node.area <= 0.5 * area(ni).max(area(nj));
+                    let bevel = replaces_an_edge(
+                        topo,
+                        fag,
+                        idx,
+                        (*ni, &neighbors[i].1),
+                        (*nj, &neighbors[j].1),
+                    );
+                    if small && bevel && dot1 > 0.1 && dot1 < 0.95 && dot2 > 0.1 && dot2 < 0.95 {
                         let angle = normal.dot(n1).acos();
                         let f1 = fag.nodes.get(ni).map(|n| n.face);
                         let f2 = fag.nodes.get(nj).map(|n| n.face);
@@ -384,6 +416,52 @@ fn detect_chamfers_fag(
     Ok(())
 }
 
+/// A face's outward plane `(n, d)` (`n · p = d`, `n` unit), or `None` if it
+/// is not planar.
+fn outward_plane(
+    topo: &Topology,
+    fag: &FaceAdjacencyGraph,
+    node_idx: usize,
+) -> Option<(Vec3, f64)> {
+    let face = topo.face(fag.nodes.get(&node_idx)?.face).ok()?;
+    let FaceSurface::Plane { normal, d } = face.surface() else {
+        return None;
+    };
+    let len = normal.length();
+    let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+    (len > 0.0).then(|| (*normal * (sign / len), sign * d / len))
+}
+
+/// Whether face `idx` stands where an edge between neighbours `a` and `b`
+/// was cut away (or filled in): their planes meet along a line outside it
+/// when it meets them along convex edges, inside it when along concave ones.
+/// A triangular prism's side fails: its neighbours meet at the prism's own
+/// far edge, behind it.
+fn replaces_an_edge(
+    topo: &Topology,
+    fag: &FaceAdjacencyGraph,
+    idx: usize,
+    (a, edge_a): (usize, &FagEdge),
+    (b, edge_b): (usize, &FagEdge),
+) -> bool {
+    let (Some((nf, df)), Some((na, da)), Some((nb, db))) = (
+        outward_plane(topo, fag, idx),
+        outward_plane(topo, fag, a),
+        outward_plane(topo, fag, b),
+    ) else {
+        return false;
+    };
+    let c = na.dot(nb);
+    let det = c.mul_add(-c, 1.0);
+    if det < 1e-12 {
+        return false;
+    }
+    let meet = na * (c.mul_add(-db, da) / det) + nb * (c.mul_add(-da, db) / det);
+    let side = nf.dot(meet) - df;
+    let both = |kind: ConcavityType| edge_a.concavity == kind && edge_b.concavity == kind;
+    (both(ConcavityType::Convex) && side > 1e-9) || (both(ConcavityType::Concave) && side < -1e-9)
+}
+
 /// Get the planar normal for a FAG node, or `None` if non-planar.
 fn get_node_planar_normal(
     topo: &Topology,
@@ -401,19 +479,30 @@ fn get_node_planar_normal(
     }
 }
 
-/// Detect fillet-like faces by small area relative to the average.
-fn detect_fillet_like_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
-    if fag.nodes.is_empty() {
-        return;
-    }
-
-    let total_area: f64 = fag.nodes.values().map(|n| n.area).sum();
-    #[allow(clippy::cast_precision_loss)]
-    let avg_area = total_area / fag.nodes.len() as f64;
-    let threshold = avg_area * 0.25;
-
-    for node in fag.nodes.values() {
-        if node.area < threshold && node.area > 0.0 {
+/// Detect fillets: curved faces that meet at least two neighbours
+/// tangentially, as a rolling ball's band meets the two faces it blends.
+/// A curved face tangent only to parallel planes (a channel's round floor
+/// between its walls) blends no corner.
+fn detect_fillet_like_fag(topo: &Topology, fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
+    let mut nodes: Vec<(&usize, &FagNode)> = fag.nodes.iter().collect();
+    nodes.sort_unstable_by_key(|(idx, _)| **idx);
+    for (idx, node) in nodes {
+        if node.surface_class == SurfaceClass::Planar {
+            continue;
+        }
+        let tangent: Vec<usize> = fag.adjacency.get(idx).map_or_else(Vec::new, |adj| {
+            adj.iter()
+                .filter(|(_, e)| e.concavity == ConcavityType::Tangent)
+                .map(|(n, _)| *n)
+                .collect()
+        });
+        let normals: Option<Vec<Vec3>> = tangent
+            .iter()
+            .map(|&n| get_node_planar_normal(topo, fag, n).and_then(|v| v.normalize().ok()))
+            .collect();
+        let between_parallel_planes =
+            normals.is_some_and(|ns| ns.windows(2).all(|w| w[0].dot(w[1]).abs() > 1.0 - 1e-9));
+        if tangent.len() >= 2 && !between_parallel_planes {
             features.push(Feature::FilletLike {
                 face: node.face,
                 area: node.area,
@@ -422,16 +511,14 @@ fn detect_fillet_like_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>)
     }
 }
 
-/// Detect holes by finding cylindrical faces in the FAG.
-///
-/// A through-hole connects to two or more distinct planar faces;
-/// a blind hole connects to fewer.
+/// Detect holes: cylindrical faces whose material lies outside the
+/// cylinder, so their outward normal faces the axis (a boss's faces away).
 fn detect_holes(
     topo: &Topology,
     fag: &FaceAdjacencyGraph,
     features: &mut Vec<Feature>,
 ) -> Result<(), OperationsError> {
-    for (&idx, node) in &fag.nodes {
+    for node in fag.nodes.values() {
         if node.surface_class != SurfaceClass::Cylindrical {
             continue;
         }
@@ -441,21 +528,12 @@ fn detect_holes(
             FaceSurface::Cylinder(c) => c,
             _ => continue,
         };
+        // The cylinder's own normal points away from its axis.
+        if !face.is_reversed() {
+            continue;
+        }
 
         let diameter = cyl.radius() * 2.0;
-
-        let neighbors = fag
-            .adjacency
-            .get(&idx)
-            .map_or(&[] as &[_], |v| v.as_slice());
-        let _planar_neighbor_count = neighbors
-            .iter()
-            .filter(|(ni, _)| {
-                fag.nodes
-                    .get(ni)
-                    .is_some_and(|n| n.surface_class == SurfaceClass::Planar)
-            })
-            .count();
 
         features.push(Feature::Hole {
             faces: vec![node.face],
@@ -468,67 +546,155 @@ fn detect_holes(
 
 /// Detect pockets using concave-connected components in the FAG.
 ///
-/// A pocket is a set of faces connected by concave edges, with at
-/// least one planar floor face and two or more wall faces.
-fn detect_pockets_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
+/// A pocket is a planar floor with walls on two or more planes meeting it
+/// along concave edges. Coplanar pieces a boolean left split (joined by flat
+/// edges) count as one face. A component can hold several floors facing the
+/// same way (a stepped pocket's landings), each its own pocket.
+#[allow(clippy::too_many_lines)]
+fn detect_pockets_fag(topo: &Topology, fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
+    let planar = |ci: &usize| {
+        fag.nodes
+            .get(ci)
+            .is_some_and(|n| n.surface_class == SurfaceClass::Planar)
+    };
+    // Faces joined across a flat edge between two planes.
+    let flat = |a: &usize, b: &usize, e: &FagEdge| {
+        e.concavity == ConcavityType::Tangent && planar(a) && planar(b)
+    };
+    let outward = |ci: usize| {
+        let node = fag.nodes.get(&ci)?;
+        let normal = get_node_planar_normal(topo, fag, ci)?.normalize().ok()?;
+        let reversed = topo.face(node.face).ok()?.is_reversed();
+        Some(if reversed { -normal } else { normal })
+    };
+
+    let mut keys: Vec<usize> = fag.nodes.keys().copied().collect();
+    keys.sort_unstable();
     let mut visited: HashSet<usize> = HashSet::new();
-
-    for &idx in fag.nodes.keys() {
-        if visited.contains(&idx) {
-            continue;
-        }
-
-        let node = match fag.nodes.get(&idx) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        if node.surface_class != SurfaceClass::Planar {
+    for &idx in &keys {
+        if visited.contains(&idx) || !planar(&idx) {
             continue;
         }
 
         let mut component = HashSet::new();
         let mut stack = vec![idx];
-
         while let Some(current) = stack.pop() {
             if !component.insert(current) {
                 continue;
             }
-
             if let Some(adj) = fag.adjacency.get(&current) {
                 for (neighbor, edge) in adj {
-                    if edge.concavity == ConcavityType::Concave && !component.contains(neighbor) {
+                    let joins =
+                        edge.concavity == ConcavityType::Concave || flat(&current, neighbor, edge);
+                    if joins && !component.contains(neighbor) {
                         stack.push(*neighbor);
                     }
                 }
             }
         }
+        visited.extend(&component);
+        let mut members: Vec<usize> = component.iter().copied().collect();
+        members.sort_unstable();
 
-        // Classify component: floor = planar, walls = non-planar or
-        // perpendicular planar faces.
-        let mut floor = None;
-        let mut walls = Vec::new();
-
-        for &ci in &component {
-            if let Some(n) = fag.nodes.get(&ci) {
-                if n.surface_class == SurfaceClass::Planar {
-                    if floor.is_none() {
-                        floor = Some(n.face);
+        // Coplanar pieces, each labelled by its smallest member.
+        let mut group: HashMap<usize, usize> = HashMap::new();
+        for &m in &members {
+            if group.contains_key(&m) {
+                continue;
+            }
+            let mut piece = vec![m];
+            let mut at = 0;
+            while at < piece.len() {
+                let current = piece[at];
+                at += 1;
+                group.insert(current, m);
+                for (n, e) in fag.adjacency.get(&current).into_iter().flatten() {
+                    if flat(&current, n, e) && component.contains(n) && !piece.contains(n) {
+                        piece.push(*n);
                     }
-                } else {
-                    walls.push(n.face);
                 }
             }
         }
+        let concave_groups = |g: usize| -> Vec<usize> {
+            let mut out: Vec<usize> = members
+                .iter()
+                .filter(|m| group[m] == g)
+                .flat_map(|m| fag.adjacency.get(m).into_iter().flatten())
+                .filter(|(n, e)| e.concavity == ConcavityType::Concave && component.contains(n))
+                .map(|(n, _)| group[n])
+                .collect();
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+        let area = |ci: usize| fag.nodes.get(&ci).map_or(0.0, |n| n.area);
+        let group_area = |g: usize| {
+            members
+                .iter()
+                .filter(|m| group[m] == g)
+                .map(|&m| area(m))
+                .sum::<f64>()
+        };
+        let mut groups: Vec<usize> = group.values().copied().collect();
+        groups.sort_unstable();
+        groups.dedup();
 
-        if let Some(floor_face) = floor
-            && walls.len() >= 2
-        {
-            features.push(Feature::Pocket {
-                floor: floor_face,
-                walls,
-            });
-            visited.extend(&component);
+        // The pocket opens along a floor's outward normal: no face inside it
+        // looks back against that direction (a wall's opposite wall does).
+        // Of the floors that qualify, the deepest meets the most walls along
+        // concave edges (the larger on a tie).
+        let opens = |g: usize| {
+            outward(g).is_some_and(|up| {
+                groups
+                    .iter()
+                    .all(|&h| outward(h).is_none_or(|n| n.dot(up) > -1.0 + 1e-9))
+            })
+        };
+        let Some(up) = groups
+            .iter()
+            .copied()
+            .filter(|&g| planar(&g) && opens(g))
+            .max_by(|&a, &b| {
+                concave_groups(a)
+                    .len()
+                    .cmp(&concave_groups(b).len())
+                    .then(group_area(a).total_cmp(&group_area(b)))
+            })
+            .and_then(outward)
+        else {
+            continue;
+        };
+        let floors: Vec<usize> = groups
+            .iter()
+            .copied()
+            .filter(|&g| outward(g).is_some_and(|n| n.dot(up) > 1.0 - 1e-9))
+            .collect();
+        for &floor in &floors {
+            let wall_groups: Vec<usize> = concave_groups(floor)
+                .into_iter()
+                .filter(|g| !floors.contains(g))
+                .collect();
+            if wall_groups.len() < 2 {
+                continue;
+            }
+            let walls: Vec<FaceId> = members
+                .iter()
+                .filter(|m| wall_groups.contains(&group[m]))
+                .filter_map(|m| fag.nodes.get(m).map(|n| n.face))
+                .collect();
+            let floor_face = members
+                .iter()
+                .copied()
+                .filter(|m| group[m] == floor)
+                .max_by(|&a, &b| area(a).total_cmp(&area(b)))
+                .and_then(|m| fag.nodes.get(&m))
+                .map(|n| n.face);
+            if let Some(floor_face) = floor_face {
+                features.push(Feature::Pocket {
+                    floor: floor_face,
+                    walls,
+                });
+            }
         }
     }
 }
@@ -604,10 +770,392 @@ fn group_by_diameter(items: &[(usize, f64)]) -> Vec<Vec<(usize, f64)>> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::primitives::make_box;
+
+    use crate::boolean::{BooleanOp, boolean};
+    use crate::primitives::make_cylinder;
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    fn placed_box(topo: &mut Topology, lo: [f64; 3], size: [f64; 3]) -> SolidId {
+        let b = make_box(topo, size[0], size[1], size[2]).unwrap();
+        transform_solid(topo, b, &Mat4::translation(lo[0], lo[1], lo[2])).unwrap();
+        b
+    }
+
+    fn edge_concavities(topo: &Topology, solid: SolidId) -> Vec<(ConcavityType, f64)> {
+        let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
+        let fag = build_face_adjacency_graph(topo, &faces, 0.1).unwrap();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for adj in fag.adjacency.values() {
+            for (_, e) in adj {
+                if seen.insert(e.edge.index()) {
+                    out.push((e.concavity, e.dihedral_angle));
+                }
+            }
+        }
+        out
+    }
+
+    fn count(edges: &[(ConcavityType, f64)], kind: ConcavityType) -> usize {
+        edges.iter().filter(|(c, _)| *c == kind).count()
+    }
+
+    fn plane_of(topo: &Topology, face: FaceId) -> (Vec3, f64) {
+        match topo.face(face).unwrap().surface() {
+            FaceSurface::Plane { normal, d } => (*normal, *d),
+            other => panic!("not a plane: {}", other.type_tag()),
+        }
+    }
+
+    /// A shallow pocket with a deeper one in its floor, flush with three of
+    /// its walls: the landing and the deep floor are each a pocket's floor,
+    /// and neither is the other's wall.
+    #[test]
+    fn stepped_pocket_reports_each_floor() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 10.0, 10.0, 5.0).unwrap();
+        let shallow = placed_box(&mut topo, [2.0, 2.0, 3.0], [6.0, 6.0, 3.0]);
+        let block = boolean(&mut topo, BooleanOp::Cut, block, shallow).unwrap();
+        let deep = placed_box(&mut topo, [2.0, 2.0, 1.0], [3.0, 6.0, 3.0]);
+        let solid = boolean(&mut topo, BooleanOp::Cut, block, deep).unwrap();
+        let pockets: Vec<(FaceId, Vec<FaceId>)> = recognize_features(&topo, solid, 0.1)
+            .unwrap()
+            .into_iter()
+            .filter_map(|f| match f {
+                Feature::Pocket { floor, walls } => Some((floor, walls)),
+                _ => None,
+            })
+            .collect();
+        let mut depths: Vec<f64> = pockets
+            .iter()
+            .map(|(floor, _)| {
+                let (n, d) = plane_of(&topo, *floor);
+                d / n.z()
+            })
+            .collect();
+        depths.sort_by(f64::total_cmp);
+        assert_eq!(depths.len(), 2, "{pockets:?}");
+        assert!((depths[0] - 1.0).abs() < 1e-9 && (depths[1] - 3.0).abs() < 1e-9);
+        for (floor, walls) in &pockets {
+            for wall in walls {
+                let (n, _) = plane_of(&topo, *wall);
+                assert!(
+                    n.z().abs() < 1e-9,
+                    "floor {floor:?} lists a flat wall {n:?}"
+                );
+            }
+        }
+    }
+
+    /// A scalene triangular prism's narrow side sits at an angle to both
+    /// neighbours and is small beside the larger, but they meet at the
+    /// prism's own far edge behind it: nothing was bevelled.
+    #[test]
+    fn scalene_prism_side_is_not_a_chamfer() {
+        let mut topo = Topology::new();
+        let apex = (4.0_f64 - 1.85 * 1.85).sqrt();
+        let wire = brepkit_topology::builder::make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(2.5, 0.0, 0.0),
+                Point3::new(1.85, apex, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let face = topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let prism =
+            crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let chamfers = recognize_features(&topo, prism, 0.1)
+            .unwrap()
+            .into_iter()
+            .filter(|f| matches!(f, Feature::Chamfer { .. }))
+            .count();
+        assert_eq!(chamfers, 0);
+    }
+
+    /// On a thin plate the chamfered edge's side face shrinks below the
+    /// chamfer; the chamfer is still one.
+    #[test]
+    fn chamfer_on_a_thin_plate_is_found() {
+        let mut topo = Topology::new();
+        let plate = make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+        let edge = brepkit_topology::explorer::solid_edges(&topo, plate)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let e = topo.edge(e).unwrap();
+                let (s, t) = (
+                    topo.vertex(e.start()).unwrap().point(),
+                    topo.vertex(e.end()).unwrap().point(),
+                );
+                [s, t]
+                    .iter()
+                    .all(|p| (p.x() - 10.0).abs() < 1e-9 && (p.z() - 1.0).abs() < 1e-9)
+            })
+            .unwrap();
+        let solid = crate::blend_ops::chamfer_v2(&mut topo, plate, &[edge], 0.6, 0.6)
+            .unwrap()
+            .solid;
+        let chamfers = recognize_features(&topo, solid, 0.1)
+            .unwrap()
+            .into_iter()
+            .filter(|f| matches!(f, Feature::Chamfer { .. }))
+            .count();
+        assert_eq!(chamfers, 1);
+    }
+
+    /// A slot whose floor is a half-cylinder tangent to both walls: the
+    /// floor joins two parallel walls, not a corner, so it is no fillet.
+    #[test]
+    fn round_channel_floor_is_not_a_fillet() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 10.0, 10.0, 6.0).unwrap();
+        let slot = placed_box(&mut topo, [4.0, -1.0, 3.0], [2.0, 12.0, 4.0]);
+        let block = boolean(&mut topo, BooleanOp::Cut, block, slot).unwrap();
+        let round = make_cylinder(&mut topo, 1.0, 12.0).unwrap();
+        transform_solid(
+            &mut topo,
+            round,
+            &(Mat4::translation(5.0, -1.0, 3.0) * Mat4::rotation_x(-std::f64::consts::FRAC_PI_2)),
+        )
+        .unwrap();
+        let solid = boolean(&mut topo, BooleanOp::Cut, block, round).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let curved = faces
+            .iter()
+            .filter(|&&f| !topo.face(f).unwrap().surface().is_planar())
+            .count();
+        assert_eq!(curved, 1, "{} faces", faces.len());
+        let fillets = recognize_features(&topo, solid, 0.1)
+            .unwrap()
+            .into_iter()
+            .filter(|f| matches!(f, Feature::FilletLike { .. }))
+            .count();
+        assert_eq!(fillets, 0);
+    }
+
+    /// A cavity lives on an inner shell; its faces must reach the graph.
+    #[test]
+    fn hollow_solid_graph_includes_the_cavity() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 6.0, 6.0, 6.0).unwrap();
+        let void = placed_box(&mut topo, [2.0, 2.0, 2.0], [2.0, 2.0, 2.0]);
+        let hollow = boolean(&mut topo, BooleanOp::Cut, block, void).unwrap();
+        assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, hollow).unwrap();
+        let fag = build_face_adjacency_graph(&topo, &faces, 0.1).unwrap();
+        assert_eq!(fag.nodes.len(), 12);
+        let edges = edge_concavities(&topo, hollow);
+        assert_eq!(count(&edges, ConcavityType::Concave), 12);
+        assert_eq!(count(&edges, ConcavityType::Convex), 12);
+    }
+
+    #[test]
+    fn box_edges_are_convex_right_angles() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+        let edges = edge_concavities(&topo, solid);
+        assert_eq!(edges.len(), 12);
+        for (kind, angle) in edges {
+            assert_eq!(kind, ConcavityType::Convex);
+            assert!(
+                (angle - 1.5 * std::f64::consts::PI).abs() < 1e-9,
+                "dihedral {angle}"
+            );
+        }
+    }
+
+    /// A rectangular pocket, as cut and mirrored: its floor and corners are
+    /// concave, its rim convex, and it is found with its floor and four walls.
+    #[test]
+    fn rectangular_pocket_is_concave_and_found() {
+        for mirrored in [false, true] {
+            let mut topo = Topology::new();
+            let block = make_box(&mut topo, 10.0, 10.0, 5.0).unwrap();
+            let cutter = placed_box(&mut topo, [3.0, 3.0, 2.0], [4.0, 4.0, 4.0]);
+            let solid = boolean(&mut topo, BooleanOp::Cut, block, cutter).unwrap();
+            if mirrored {
+                transform_solid(&mut topo, solid, &Mat4::scale(-1.0, 1.0, 1.0)).unwrap();
+            }
+            let edges = edge_concavities(&topo, solid);
+            assert_eq!(
+                count(&edges, ConcavityType::Concave),
+                8,
+                "mirrored={mirrored}"
+            );
+            assert_eq!(
+                count(&edges, ConcavityType::Convex),
+                16,
+                "mirrored={mirrored}"
+            );
+
+            let features = recognize_features(&topo, solid, 0.1).unwrap();
+            let pockets: Vec<_> = features
+                .iter()
+                .filter_map(|f| match f {
+                    Feature::Pocket { floor, walls } => Some((*floor, walls.len())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(pockets.len(), 1, "mirrored={mirrored}: {pockets:?}");
+            let (floor, walls) = pockets[0];
+            assert_eq!(walls, 4, "mirrored={mirrored}");
+            let FaceSurface::Plane { normal, d } = topo.face(floor).unwrap().surface() else {
+                panic!("floor is not planar");
+            };
+            assert!((normal.z().abs() - 1.0).abs() < 1e-9 && (d.abs() - 2.0).abs() < 1e-9);
+        }
+    }
+
+    /// A drilled hole is a concave cylinder whose rims are convex; a plain
+    /// cylinder's wall is a boss, not a hole.
+    #[test]
+    fn drilled_hole_is_found_and_a_boss_is_not() {
+        for mirrored in [false, true] {
+            let mut topo = Topology::new();
+            let block = make_box(&mut topo, 10.0, 10.0, 4.0).unwrap();
+            let drill = make_cylinder(&mut topo, 1.5, 8.0).unwrap();
+            transform_solid(&mut topo, drill, &Mat4::translation(5.0, 5.0, -2.0)).unwrap();
+            let solid = boolean(&mut topo, BooleanOp::Cut, block, drill).unwrap();
+            if mirrored {
+                transform_solid(&mut topo, solid, &Mat4::scale(1.0, -1.0, 1.0)).unwrap();
+            }
+            let features = recognize_features(&topo, solid, 0.1).unwrap();
+            let holes: Vec<_> = features
+                .iter()
+                .filter_map(|f| match f {
+                    Feature::Hole { diameter, .. } => *diameter,
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(holes.len(), 1, "mirrored={mirrored}: {holes:?}");
+            assert!((holes[0] - 3.0).abs() < 1e-9);
+            let edges = edge_concavities(&topo, solid);
+            assert_eq!(
+                count(&edges, ConcavityType::Concave),
+                0,
+                "mirrored={mirrored}"
+            );
+        }
+
+        // A blind hole: its floor meets the wall concavely, but a single wall
+        // is no pocket.
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 10.0, 10.0, 4.0).unwrap();
+        let drill = make_cylinder(&mut topo, 1.0, 8.0).unwrap();
+        transform_solid(&mut topo, drill, &Mat4::translation(5.0, 5.0, 1.5)).unwrap();
+        let blind = boolean(&mut topo, BooleanOp::Cut, block, drill).unwrap();
+        let features = recognize_features(&topo, blind, 0.1).unwrap();
+        let holes = features
+            .iter()
+            .filter(
+                |f| matches!(f, Feature::Hole { diameter: Some(d), .. } if (d - 2.0).abs() < 1e-9),
+            )
+            .count();
+        assert_eq!(holes, 1, "{features:?}");
+        assert!(!features.iter().any(|f| matches!(f, Feature::Pocket { .. })));
+
+        let mut topo = Topology::new();
+        let boss = make_cylinder(&mut topo, 1.5, 4.0).unwrap();
+        let features = recognize_features(&topo, boss, 0.1).unwrap();
+        assert!(!features.iter().any(|f| matches!(f, Feature::Hole { .. })));
+    }
+
+    /// A rounded box edge is a cylinder tangent to both faces it blends;
+    /// nothing else on the box is.
+    #[test]
+    fn filleted_edge_is_found() {
+        for mirrored in [false, true] {
+            let mut topo = Topology::new();
+            let block = make_box(&mut topo, 4.0, 3.0, 2.0).unwrap();
+            let faces = brepkit_topology::explorer::solid_faces(&topo, block).unwrap();
+            let edge = topo
+                .wire(topo.face(faces[0]).unwrap().outer_wire())
+                .unwrap()
+                .edges()[0]
+                .edge();
+            let solid = crate::blend_ops::fillet_v2(&mut topo, block, &[edge], 0.5)
+                .unwrap()
+                .solid;
+            if mirrored {
+                transform_solid(&mut topo, solid, &Mat4::scale(1.0, 1.0, -1.0)).unwrap();
+            }
+            let features = recognize_features(&topo, solid, 0.1).unwrap();
+            let fillets: Vec<FaceId> = features
+                .iter()
+                .filter_map(|f| match f {
+                    Feature::FilletLike { face, .. } => Some(*face),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(fillets.len(), 1, "mirrored={mirrored}: {fillets:?}");
+            assert!(
+                matches!(
+                    topo.face(fillets[0]).unwrap().surface(),
+                    FaceSurface::Cylinder(_)
+                ),
+                "mirrored={mirrored}"
+            );
+        }
+    }
+
+    /// A regular hexagonal prism's sides meet at 120 degrees, like chamfers
+    /// on a triangular prism, but none is small beside its neighbours.
+    #[test]
+    fn hexagonal_prism_has_no_chamfers() {
+        let mut topo = Topology::new();
+        let vs: Vec<_> = (0..6)
+            .map(|k| {
+                let a = std::f64::consts::FRAC_PI_3 * f64::from(k);
+                topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+                    Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0),
+                    1e-7,
+                ))
+            })
+            .collect();
+        let edges = (0..6)
+            .map(|k| {
+                let e = topo.add_edge(brepkit_topology::edge::Edge::new(
+                    vs[k],
+                    vs[(k + 1) % 6],
+                    brepkit_topology::edge::EdgeCurve::Line,
+                ));
+                brepkit_topology::wire::OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(brepkit_topology::wire::Wire::new(edges, true).unwrap());
+        let face = topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let prism =
+            crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let features = recognize_features(&topo, prism, 0.1).unwrap();
+        assert!(
+            !features
+                .iter()
+                .any(|f| matches!(f, Feature::Chamfer { .. })),
+            "{features:?}"
+        );
+    }
 
     #[test]
     fn box_has_no_chamfers() {

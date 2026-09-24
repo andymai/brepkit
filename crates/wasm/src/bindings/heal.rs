@@ -258,6 +258,38 @@ impl BrepKernel {
 mod tests {
     use crate::kernel::BrepKernel;
 
+    /// A box drilled through reports one hole of the drill's diameter, and
+    /// its convex rims no pocket.
+    #[test]
+    fn recognize_features_finds_a_drilled_hole() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 4}},
+                {"op": "makeCylinder", "args": {"radius": 1.5, "height": 8}},
+                {"op": "transform", "args": {"solid": 1, "matrix":
+                    [1, 0, 0, 5, 0, 1, 0, 5, 0, 0, 1, -2, 0, 0, 0, 1]}},
+                {"op": "cut", "args": {"solidA": 0, "solidB": 1}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let solid = u32::try_from(parsed[3]["ok"].as_u64().expect("cut result")).unwrap();
+        let features: serde_json::Value =
+            serde_json::from_str(&k.recognize_features(solid, 0.1).unwrap()).unwrap();
+        let features = features.as_array().unwrap();
+        let holes: Vec<f64> = features
+            .iter()
+            .filter(|f| f["type"] == "hole")
+            .map(|f| f["diameter"].as_f64().unwrap())
+            .collect();
+        assert_eq!(holes.len(), 1, "{features:?}");
+        assert!((holes[0] - 3.0).abs() < 1e-9);
+        assert!(
+            !features.iter().any(|f| f["type"] == "pocket"),
+            "{features:?}"
+        );
+    }
+
     #[test]
     fn convert_to_bspline_returns_count_and_solid() {
         let mut k = BrepKernel::new();
