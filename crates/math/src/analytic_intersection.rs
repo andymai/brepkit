@@ -66,6 +66,7 @@ pub fn exact_plane_analytic(
 /// - a plane through the axis: the two tube cross-sections of radius `r`,
 ///   `R` either side of the axis.
 ///
+/// `Some` of no curves for a plane across the axis that misses the tube;
 /// `None` for any other plane, a plane tangent to the tube, or a torus whose
 /// tube reaches its axis.
 fn exact_plane_torus(
@@ -1644,13 +1645,16 @@ pub fn exact_torus_torus(
     for side in [1.0, -1.0] {
         let rho = first.major_radius() + along * ux - side * across * uz;
         let z = along * uz + side * across * ux;
-        if rho > slack {
-            circles.push(ExactIntersectionCurve::Circle(Circle3D::new(
-                first.center() + axis * z,
-                axis,
-                rho,
-            )?));
+        // A crossing on or past the axis is no circle about it: leave the
+        // pair to the marcher rather than drop part of the section.
+        if rho <= slack {
+            return Ok(None);
         }
+        circles.push(ExactIntersectionCurve::Circle(Circle3D::new(
+            first.center() + axis * z,
+            axis,
+            rho,
+        )?));
     }
     Ok(Some(circles))
 }

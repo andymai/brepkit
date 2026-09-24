@@ -2598,9 +2598,6 @@ fn line_misses_conic_face(topo: &Topology, face: FaceId, p0: Point3, p1: Point3)
     distance > 1.0 + 1e-9
 }
 
-/// Where a closed plane-section ellipse on a cylinder or cone wall meets
-/// that wall's seam line (a line its outer wire uses twice): the ellipse's
-/// parameter there and the point.
 /// Where a torus section circle meets the torus's reference lines: a circle
 /// about the axis crosses the meridian `u = 0` (along the torus frame's x
 /// axis), and a tube cross-section (a meridian circle) crosses the outer
@@ -2636,6 +2633,9 @@ fn torus_meridian_start(
     Some((t, circle.evaluate(t)))
 }
 
+/// Where a closed plane-section ellipse on a cylinder or cone wall meets
+/// that wall's seam line (a line its outer wire uses twice): the ellipse's
+/// parameter there and the point.
 fn ellipse_seam_crossing(
     topo: &Topology,
     fa: FaceId,

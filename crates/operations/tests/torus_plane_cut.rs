@@ -206,3 +206,40 @@ fn torus_halved_through_its_axis() {
         }
     }
 }
+
+/// A box over one side of a plane through the torus's axis, fused with the
+/// torus: the box, plus the half of the ring outside it.
+#[test]
+fn box_fused_over_half_a_torus() {
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let mut topo = Topology::new();
+    let torus = make_torus(&mut topo, big, small, 32).unwrap();
+    let lid = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+    let place =
+        Mat4::rotation_y(std::f64::consts::FRAC_PI_2) * Mat4::translation(-10.0, -10.0, 0.0);
+    transform_solid(&mut topo, lid, &place).unwrap();
+    let both = boolean(&mut topo, BooleanOp::Fuse, torus, lid).unwrap();
+
+    let report = validate_solid(&topo, both).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let truth = 8000.0 + PI * PI * big * small * small;
+    let volume = solid_volume(&topo, both, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-9 * truth,
+        "volume {volume}, truth {truth}"
+    );
+    let mesh = tessellate_solid(&topo, both, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "open or non-manifold mesh");
+    let inside = |x: f64, y: f64, z: f64| {
+        classify_point(
+            &topo,
+            both,
+            Point3::new(x, y, z),
+            &ClassifyOptions::default(),
+        )
+        .unwrap()
+    };
+    assert_eq!(inside(-big, 0.0, 0.0), PointClassification::Inside);
+    assert_eq!(inside(-big, 0.0, 1.6), PointClassification::Outside);
+    assert_eq!(inside(5.0, 5.0, 5.0), PointClassification::Inside);
+}

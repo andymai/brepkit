@@ -190,12 +190,14 @@ fn is_on_boundary(
             if polygon.len() >= 3 {
                 let normal = boundary::polygon_normal(&polygon);
                 if crate::util::point_in_polygon_3d(&point, &polygon, &normal) {
-                    // A point in one of the face's holes is off the face.
+                    // A point in one of the face's holes, clear of its rim,
+                    // is off the face.
                     let mut in_hole = false;
                     for &wid in face.inner_wires() {
                         let hole = crate::util::wire_polygon(topo, wid)?;
                         in_hole |= hole.len() >= 3
-                            && crate::util::point_in_polygon_3d(&point, &hole, &normal);
+                            && crate::util::point_in_polygon_3d(&point, &hole, &normal)
+                            && distance_to_loop(point, &hole) > tolerance;
                     }
                     if in_hole {
                         continue;
@@ -209,6 +211,24 @@ fn is_on_boundary(
         }
     }
     Ok(false)
+}
+
+/// The distance from `point` to the closed polygon through `loop_pts`.
+fn distance_to_loop(point: Point3, loop_pts: &[Point3]) -> f64 {
+    let n = loop_pts.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (loop_pts[i], loop_pts[(i + 1) % n]);
+            let ab = b - a;
+            let len2 = ab.dot(ab);
+            let t = if len2 > 0.0 {
+                ((point - a).dot(ab) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (point - (a + ab * t)).length()
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// Classify a point relative to a solid using generalized winding numbers.
