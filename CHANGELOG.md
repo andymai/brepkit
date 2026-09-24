@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.4](https://github.com/andymai/brepkit/compare/v3.5.3...v3.5.4) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** integrate planar faces exactly in solid_volume ([#1697](https://github.com/andymai/brepkit/issues/1697)) ([d38e20a](https://github.com/andymai/brepkit/commit/d38e20a7d470cfe462ce70b845a6b644a8e98c87))
+
 ## [3.5.3](https://github.com/andymai/brepkit/compare/v3.5.2...v3.5.3) (2026-09-24)
 
 
