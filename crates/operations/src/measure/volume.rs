@@ -9,6 +9,7 @@ use crate::tessellate;
 
 use super::helpers::{
     angular_range_from_wire_arcs, collect_solid_vertex_points, compute_angular_range,
+    planar_wire_signed_area2,
 };
 
 /// Volume of a solid that contains a bored quadric — a sphere (or torus) face
@@ -372,7 +373,8 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
 ///   * at least one quadric wall (cylinder/cone/torus) — it is a revolution;
 ///   * every cylinder/cone/torus shares ONE axis line;
 ///   * every planar face is a circular disc/annulus/sector whose bounding
-///     arc(s) are centred ON that shared axis.
+///     arc(s) are centred ON that shared axis, or, when every wall is a
+///     cylinder, a face parallel to the axis (it meets the walls in rulings).
 fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     use brepkit_topology::explorer::solid_faces;
 
@@ -386,6 +388,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     // Establish the shared revolution axis from the first quadric wall.
     let mut axis: Option<(Point3, Vec3)> = None;
     let mut has_wall = false;
+    let mut has_other_wall = false;
     let axis_tol = 1e-7;
 
     let set_or_check_axis = |axis: &mut Option<(Point3, Vec3)>, o: Point3, d: Vec3| -> bool {
@@ -436,12 +439,14 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
             }
             FaceSurface::Cone(c) => {
                 has_wall = true;
+                has_other_wall = true;
                 if !set_or_check_axis(&mut axis, c.apex(), c.axis()) {
                     return None;
                 }
             }
             FaceSurface::Torus(t) => {
                 has_wall = true;
+                has_other_wall = true;
                 if !set_or_check_axis(&mut axis, t.center(), t.z_axis()) {
                     return None;
                 }
@@ -455,29 +460,52 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     }
 
     // Second pass (axis known): every planar face must be a circular
-    // disc/annulus/sector centred on the shared axis, and every NURBS face must
+    // disc/annulus/sector centred on the shared axis or a side face along
+    // cylinder walls' rulings, and every NURBS face must
     // be the degenerate on-axis band (zero radial extent). Cache each planar
     // cap's analytic volume here so the summation below reuses it rather than
     // re-traversing the wire and re-running arc recognition a second time.
     let mut cap_volumes: std::collections::HashMap<FaceId, f64> = std::collections::HashMap::new();
+    let mut has_side_face = false;
     for &fid in &faces {
         let face = topo.face(fid).ok()?;
         match face.surface() {
             FaceSurface::Plane { normal, .. } => {
-                if normal.normalize().ok()?.cross(axis_d).length() > 1e-6 {
-                    return None; // cap not perpendicular to the axis
-                }
-                if !planar_face_arcs_centered_on_axis(topo, fid, axis_o, axis_d) {
-                    return None;
-                }
-                // Must be analytically integrable (a circular-arc-bounded cap).
-                let v = planar_cap_signed_volume(topo, fid, about).ok()??;
+                let unit = normal.normalize().ok()?;
+                let v = if unit.cross(axis_d).length() <= 1e-6 {
+                    if !planar_face_arcs_centered_on_axis(topo, fid, axis_o, axis_d) {
+                        return None;
+                    }
+                    // Must be analytically integrable (a circular-arc-bounded cap).
+                    planar_cap_signed_volume(topo, fid, about).ok()??
+                } else {
+                    // A face parallel to the axis of cylinder walls (a flat on
+                    // a shaft, the cut face of a half rod) meets them in
+                    // rulings, so the walls stay rectangles in (u, v).
+                    if unit.dot(axis_d).abs() > 1e-9 || has_other_wall {
+                        return None;
+                    }
+                    has_side_face = true;
+                    planar_face_signed_volume(topo, fid, about).ok()??.0
+                };
                 cap_volumes.insert(fid, v);
             }
             FaceSurface::Nurbs(_) if !nurbs_band_is_on_axis(topo, fid, axis_o, axis_d) => {
                 return None;
             }
             _ => {}
+        }
+    }
+
+    // A side face that stops short of a wall's full height leaves that wall
+    // an L in (u, v), which the rectangle integrator would over-count.
+    if has_side_face {
+        for &fid in &faces {
+            if matches!(topo.face(fid).ok()?.surface(), FaceSurface::Cylinder(_))
+                && !cylinder_wall_is_rectangle(topo, fid)?
+            {
+                return None;
+            }
         }
     }
 
@@ -498,6 +526,61 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
         total += c;
     }
     Some(total.abs())
+}
+
+/// Whether a cylinder face is a rectangle in `(u, v)`: every line a ruling
+/// (parallel to the axis) running its full height, every other edge a rim
+/// arc at its bottom or top spanning at most a half turn (the angular-range
+/// reader takes an arc's shorter side).
+fn cylinder_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> {
+    use brepkit_topology::edge::EdgeCurve;
+    let face = topo.face(face_id).ok()?;
+    let FaceSurface::Cylinder(cyl) = face.surface() else {
+        return Some(false);
+    };
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut ends = Vec::with_capacity(wire.edges().len());
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let (start, end) = (
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        if matches!(edge.curve(), EdgeCurve::Circle(_))
+            && (t1 - t0).abs() > std::f64::consts::PI + 1e-9
+        {
+            return Some(false);
+        }
+        if matches!(edge.curve(), EdgeCurve::Line)
+            && (end - start).cross(cyl.axis()).length() > 1e-9 * (end - start).length().max(1.0)
+        {
+            return Some(false);
+        }
+        ends.push((
+            edge.curve().clone(),
+            cyl.project_point(start).1,
+            cyl.project_point(end).1,
+        ));
+    }
+    let v_min = ends
+        .iter()
+        .map(|e| e.1.min(e.2))
+        .fold(f64::INFINITY, f64::min);
+    let v_max = ends
+        .iter()
+        .map(|e| e.1.max(e.2))
+        .fold(f64::NEG_INFINITY, f64::max);
+    let tol = 1e-9 * (v_max - v_min).abs().max(1.0);
+    let at = |v: f64, level: f64| (v - level).abs() <= tol;
+    Some(ends.iter().all(|(curve, a, b)| match curve {
+        EdgeCurve::Line => (at(*a, v_min) && at(*b, v_max)) || (at(*a, v_max) && at(*b, v_min)),
+        EdgeCurve::Circle(c) => {
+            c.normal().cross(cyl.axis()).length() <= 1e-9
+                && ((at(*a, v_min) && at(*b, v_min)) || (at(*a, v_max) && at(*b, v_max)))
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
+    }))
 }
 
 /// Whether a NURBS face is a degenerate revolution band on the axis — all its
@@ -2058,6 +2141,23 @@ fn planar_cap_signed_volume(
     face_id: FaceId,
     about: Point3,
 ) -> Result<Option<f64>, crate::OperationsError> {
+    // Only claim a circular CAP (disc / annulus / sector) — a face with no arc
+    // edge is an ordinary polygon (e.g. a box face), which the tessellation path
+    // already integrates exactly; deferring it keeps this analytic path scoped to
+    // genuine revolve caps and out of arbitrary planar-faced solids.
+    Ok(planar_face_signed_volume(topo, face_id, about)?
+        .filter(|&(_, arcs)| arcs > 0)
+        .map(|(volume, _)| volume))
+}
+
+/// The exact divergence-theorem contribution of a planar face bounded by
+/// lines and circular arcs, with its arc-edge count. `Ok(None)` when an edge
+/// is anything else.
+fn planar_face_signed_volume(
+    topo: &Topology,
+    face_id: FaceId,
+    about: Point3,
+) -> Result<Option<(f64, usize)>, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let FaceSurface::Plane { normal, d } = face.surface() else {
         return Ok(None);
@@ -2095,14 +2195,6 @@ fn planar_cap_signed_volume(
         return Ok(None); // holes exceed the outer boundary — not a sane cap
     }
 
-    // Only claim a circular CAP (disc / annulus / sector) — a face with no arc
-    // edge is an ordinary polygon (e.g. a box face), which the tessellation path
-    // already integrates exactly; deferring it keeps this analytic path scoped to
-    // genuine revolve caps and out of arbitrary planar-faced solids.
-    if arc_edges == 0 {
-        return Ok(None);
-    }
-
     // `area_mag2/2` is the geometric area. The divergence-theorem contribution
     // is (1/3)·(p·n̂_out)·|A|, where the outward normal is `+normal` for a
     // forward face and `−normal` for a reversed one, so `p·n̂_out = ±d` (the
@@ -2110,128 +2202,7 @@ fn planar_cap_signed_volume(
     // from the outward offset, not from the wire winding.
     let area = area_mag2 / 2.0;
     let d_out = if face.is_reversed() { -d } else { d };
-    Ok(Some(d_out * area / 3.0))
-}
-
-/// Green's-theorem signed doubled area (`∮(x dy − y dx)`) of one planar wire in
-/// the `(ex, ey)` frame, plus its circular-arc edge count. `Ok(None)` when an
-/// edge is neither a line nor a circular arc, so the caller falls back to
-/// tessellation.
-fn planar_wire_signed_area2(
-    topo: &Topology,
-    wire_id: brepkit_topology::wire::WireId,
-    ex: Vec3,
-    ey: Vec3,
-) -> Result<Option<(f64, usize)>, crate::OperationsError> {
-    let to_2d = |p: Point3| {
-        let v = Vec3::new(p.x(), p.y(), p.z());
-        (v.dot(ex), v.dot(ey))
-    };
-    let tol_lin = brepkit_math::tolerance::Tolerance::default().linear;
-    let mut area2: f64 = 0.0; // accumulates 2·A (Green's ∮(x dy − y dx))
-    let mut arc_edges = 0_usize;
-    let mut anchor: Option<(f64, f64)> = None;
-    {
-        let wire = topo.wire(wire_id)?;
-        for oe in wire.edges() {
-            let edge = topo.edge(oe.edge())?;
-            let (sv, ev) = if oe.is_forward() {
-                (edge.start(), edge.end())
-            } else {
-                (edge.end(), edge.start())
-            };
-            let pa = topo.vertex(sv)?.point();
-            let pb = topo.vertex(ev)?.point();
-            let (ax, ay) = to_2d(pa);
-            let (bx, by) = to_2d(pb);
-            // Chord term: triangle (anchor, a, b) doubled, about the wire's
-            // first vertex so far-off coordinates do not cancel the area.
-            let (qx, qy) = *anchor.get_or_insert((ax, ay));
-            area2 += (ax - qx) * (by - qy) - (bx - qx) * (ay - qy);
-
-            // A degenerate edge collapsed to a point that is NOT a closed circle
-            // (e.g. the inner "arc" at the axis where a disc cap reaches r = 0, or
-            // a zero-length line) contributes no chord and no bulge — skip it (and
-            // do NOT let curve recognition on a zero-length arc decline the whole
-            // cap). A CLOSED `Circle` rim also has coincident endpoints but bounds
-            // a full disc, so it falls through to the arc handler below.
-            let is_closed_circle =
-                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
-                    && edge.start() == edge.end();
-            if (pa - pb).length() < tol_lin && !is_closed_circle {
-                continue;
-            }
-
-            // Circular-arc bulge correction (segment between the arc and its
-            // chord). A `Line` has no bulge. A `Circle`/arc-`NurbsCurve` adds
-            // sign·ρ²·(|α| − sin|α|), α the signed sweep about the arc centre.
-            let arc = match edge.curve() {
-                brepkit_topology::edge::EdgeCurve::Line => None,
-                brepkit_topology::edge::EdgeCurve::Ellipse(_) => return Ok(None),
-                brepkit_topology::edge::EdgeCurve::Circle(c) => Some((c.center(), c.radius())),
-                brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => {
-                    let tol = brepkit_math::tolerance::Tolerance::default().linear * 100.0;
-                    match brepkit_geometry::convert::recognize_curve(nc, tol) {
-                        brepkit_geometry::convert::RecognizedCurve::Circle {
-                            center,
-                            radius,
-                            ..
-                        } => Some((center, radius)),
-                        brepkit_geometry::convert::RecognizedCurve::Line { .. } => None,
-                        _ => return Ok(None),
-                    }
-                }
-            };
-
-            if let Some((center, radius)) = arc {
-                arc_edges += 1;
-                // The bulge correction (circular segment between the arc and its
-                // chord) is `sign·ρ²·(|α| − sin|α|)`. Compute the sweep in the
-                // curve's NATURAL direction (start→mid→end), then flip its sign for
-                // a reversed `OrientedEdge`, so the bulge is consistent with the
-                // chord term above (which uses the oriented endpoints). Without the
-                // flip, a reversed inner rim of an annulus ADDS its segment instead
-                // of subtracting it (inflated area).
-                let nat_alpha = if is_closed_circle {
-                    // A full circle sweeps 2π in its natural (CCW) direction → the
-                    // bulge gives the disc area πρ². (The seam endpoint's antipode is
-                    // NOT the domain midpoint, so the open-arc disambiguation below
-                    // does not apply.)
-                    std::f64::consts::TAU
-                } else {
-                    // Sample the arc at its DOMAIN midpoint (the domain need not be
-                    // [0,1]) to disambiguate the signed sweep > π for a major arc.
-                    let nat_start = topo.vertex(edge.start())?.point();
-                    let nat_end = topo.vertex(edge.end())?.point();
-                    let (t0, t1) = edge.curve().domain_with_endpoints(nat_start, nat_end);
-                    let mid_pt = edge.curve().evaluate_with_endpoints(
-                        f64::midpoint(t0, t1),
-                        nat_start,
-                        nat_end,
-                    );
-                    let (cx, cy) = to_2d(center);
-                    let (sx, sy) = to_2d(nat_start);
-                    let (ex, ey) = to_2d(nat_end);
-                    let (mx, my) = to_2d(mid_pt);
-                    let va = (sx - cx, sy - cy);
-                    let vm = (mx - cx, my - cy);
-                    let vb = (ex - cx, ey - cy);
-                    // Signed sweep start→mid→end (each leg in (−π, π]).
-                    let ang = |u: (f64, f64), w: (f64, f64)| -> f64 {
-                        (u.0 * w.1 - u.1 * w.0).atan2(u.0 * w.0 + u.1 * w.1)
-                    };
-                    ang(va, vm) + ang(vm, vb)
-                };
-                let alpha = if oe.is_forward() {
-                    nat_alpha
-                } else {
-                    -nat_alpha
-                };
-                area2 += alpha.signum() * radius * radius * (alpha.abs() - alpha.abs().sin());
-            }
-        }
-    }
-    Ok(Some((area2, arc_edges)))
+    Ok(Some((d_out * area / 3.0, arc_edges)))
 }
 
 /// Exact signed volume contribution of a conical face via the divergence
