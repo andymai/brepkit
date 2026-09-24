@@ -1,0 +1,59 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_3d1685d700844a 1052-1081
+  s_ba2f7b5c6902b6::t_777d3254efde9b 1108-1110,1112-1124,1323-1343
+  s_ba2f7b5c6902b6::t_6f59d98851f7a2 1344-1345
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_7c363f96362c3e 32-34,189-190,194-199,200,211,255-257,315-316,318-325,327-328,333-334,336,338-340,351-362,372-373,375-386,396-401,403-406
+  s_ba2f7b5c6902b6::t_dae30c817ebe16 337,365-369,370-371
+  s_ba2f7b5c6902b6::t_0097ae06c47fe2 389,394
+  s_ba2f7b5c6902b6::t_a85b4b6b7bfc39 407-416
+  s_ba2f7b5c6902b6::t_954f9436940769 113-116,176-188,191-193,201-210,212-247,250-254,258-283,289-314,317,326,329-332,335,342-350,363-364,374,387-388,390-393,395,402
+  s_ba2f7b5c6902b6::t_a60d1f20c7fb42 248-249,284-288,341
+crates/operations/src/tessellate/solid.rs
+  s_ba2f7b5c6902b6::t_239bab66ac33e6 1081-1084
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_a940f1d7e02795 742-753,2588-2630,2635-2636,2640
+  s_ba2f7b5c6902b6::t_bdbbe9c94adc4b 544-555,2551-2587
+  s_ba2f7b5c6902b6::t_77a51ecd502fb6 2631-2634
+  s_ba2f7b5c6902b6::t_dfc2d972a2a9b4 2637-2639
+crates/operations/tests/oblique_rod_cut.rs
+  s_ba2f7b5c6902b6::t_d23a88322be6b1 1-109
+crates/topology/src/edge.rs
+  s_ba2f7b5c6902b6::t_5168da4743fdf8 142-146
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_4854e9dc805ffd 206-221
+  s_ba2f7b5c6902b6::t_e4796a455c3641 190-205
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_239bab66ac33e6 329
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_e4a94cddfa3bfb 1360-1367,1506,1518
+  s_ba2f7b5c6902b6::t_5bb024a50fef6a 1309-1310,1315-1320
+crates/operations/tests/cone_plane_cut.rs
+  s_ba2f7b5c6902b6::t_530f2ca8132371 173-174,176
+  s_ba2f7b5c6902b6::t_f068165f40f8da 1-49,64-172,177-181
+  s_ba2f7b5c6902b6::t_172309aa766e79 50-63,175
+crates/operations/src/boolean/assembly.rs
+  s_ba2f7b5c6902b6::t_5b4a8c8ce7d33c 782-787
+  s_ba2f7b5c6902b6::t_f5d05fcbb5c414 726-727,777-781,788-791
+  s_ba2f7b5c6902b6::t_e6901af1ea23be 720-723,725,728
+  s_ba2f7b5c6902b6::t_147ab6d7fed217 792-793
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_ba2f7b5c6902b6::t_11e0fbf9198847 903,925,931,964-965,968-969,972
+  s_ba2f7b5c6902b6::t_bddf2b42d7f691 821-902,904-924,926-930,932-956,992-999,1002-1010,1095-1097,1099,1101,1108-1111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "50459e508e9408ce4979c9cd2d503f7a8a3d5cf5",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
