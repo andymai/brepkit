@@ -529,7 +529,9 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
 }
 
 /// Whether a cylinder face is a rectangle in `(u, v)`: every line a ruling
-/// running its full height, every other edge a rim arc at its bottom or top.
+/// (parallel to the axis) running its full height, every other edge a rim
+/// arc at its bottom or top spanning at most a half turn (the angular-range
+/// reader takes an arc's shorter side).
 fn cylinder_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> {
     use brepkit_topology::edge::EdgeCurve;
     let face = topo.face(face_id).ok()?;
@@ -547,6 +549,11 @@ fn cylinder_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> 
         let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
         if matches!(edge.curve(), EdgeCurve::Circle(_))
             && (t1 - t0).abs() > std::f64::consts::PI + 1e-9
+        {
+            return Some(false);
+        }
+        if matches!(edge.curve(), EdgeCurve::Line)
+            && (end - start).cross(cyl.axis()).length() > 1e-9 * (end - start).length().max(1.0)
         {
             return Some(false);
         }
