@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.8](https://github.com/andymai/brepkit/compare/v4.0.7...v4.0.8) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** chamfer a round rim between a flat cap and a cylinder or cone wall ([#1722](https://github.com/andymai/brepkit/issues/1722)) ([bfccfb1](https://github.com/andymai/brepkit/commit/bfccfb153951c78e3d6e38d76b8051e7fc16874f))
+
 ## [4.0.7](https://github.com/andymai/brepkit/compare/v4.0.6...v4.0.7) (2026-09-24)
 
 
