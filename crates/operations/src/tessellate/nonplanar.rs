@@ -1821,6 +1821,16 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
 
+    close_loop_at_pole(
+        topo,
+        face_data,
+        &mut boundary_uv,
+        &mut boundary_3d,
+        merged,
+        point_to_global,
+    )?;
+    let n_boundary = boundary_3d.len();
+
     // Compute (u,v) bounding box from a set of UV pairs.
     #[allow(clippy::items_after_statements)]
     fn uv_bounds(uvs: &[(f64, f64)]) -> (f64, f64, f64, f64) {
@@ -2403,6 +2413,14 @@ pub(super) fn tessellate_nonplanar_cdt(
         if i0 < 3 || i1 < 3 || i2 < 3 {
             continue; // Skip super-triangle vertices
         }
+        let (g0, g1, g2) = (
+            final_global_ids[i0],
+            final_global_ids[i1],
+            final_global_ids[i2],
+        );
+        if g0 == g1 || g1 == g2 || g0 == g2 {
+            continue; // collapsed onto a pole row
+        }
         if flip_all {
             merged.indices.push(final_global_ids[i0]);
             merged.indices.push(final_global_ids[i2]);
@@ -2801,6 +2819,84 @@ fn inner_wire_uv_loops(
         holes.push(loop_uv);
     }
     Ok(holes)
+}
+
+/// Close a boundary loop that winds a NURBS face's periodic u direction once
+/// with no seam: such a face is a cap over a pole, a v-domain edge that
+/// collapses to one point. The loop runs counter-clockwise in (u, v) about
+/// the surface normal, so the cap lies on its left, at the far v edge for a
+/// loop run toward +u. That edge is appended as virtual boundary samples, all
+/// welded to the pole, so the region closes in (u, v); a loop that winds
+/// toward a non-degenerate edge is left alone.
+fn close_loop_at_pole(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    boundary_uv: &mut Vec<(f64, f64)>,
+    boundary_3d: &mut Vec<(Point3, u32, brepkit_topology::edge::EdgeId, bool)>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<(), crate::OperationsError> {
+    let FaceSurface::Nurbs(nurbs) = face_data.surface() else {
+        return Ok(());
+    };
+    let (Some((_, period)), _) = surface_periods(face_data.surface()) else {
+        return Ok(());
+    };
+    let wire = topo.wire(face_data.outer_wire())?;
+    let mut uses: DetHashMap<usize, usize> = DetHashMap::default();
+    for oe in wire.edges() {
+        *uses.entry(oe.edge().index()).or_default() += 1;
+    }
+    if uses.values().any(|&n| n > 1) {
+        return Ok(());
+    }
+    let (Some(&(first_u, _)), Some(&(last_u, last_v)), Some(&(_, _, edge, _))) =
+        (boundary_uv.first(), boundary_uv.last(), boundary_3d.last())
+    else {
+        return Ok(());
+    };
+    // Net winding of the closed loop: the unwrapped run plus the wrapped
+    // closing step back to the first sample.
+    let progress = last_u - first_u;
+    let closing = (first_u - last_u + period / 2.0).rem_euclid(period) - period / 2.0;
+    let winding = progress + closing;
+    if (winding.abs() - period).abs() > 1e-6 * period {
+        return Ok(());
+    }
+    let (v_lo, v_hi) = nurbs.domain_v();
+    let v_far = if winding > 0.0 { v_hi } else { v_lo };
+    let pole = nurbs.evaluate(first_u, v_far);
+    let scale = (nurbs.evaluate(last_u, last_v) - pole).length().max(1e-12);
+    let degenerate = (0..8).all(|k| {
+        let u = first_u + winding * f64::from(k) / 8.0;
+        (nurbs.evaluate(u, v_far) - pole).length() <= 1e-9 * scale
+    });
+    if !degenerate {
+        return Ok(());
+    }
+    let gid = *point_to_global
+        .entry(point_merge_key(pole, MERGE_GRID))
+        .or_insert_with(|| {
+            #[allow(clippy::cast_possible_truncation)]
+            let idx = merged.positions.len() as u32;
+            merged.positions.push(pole);
+            merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+            idx
+        });
+    // The loop continues into the first sample's image one winding on, like
+    // the far side of a seam; the pole row then runs back to its column.
+    let (first_pt, first_gid, _, _) = boundary_3d[0];
+    let first_v = boundary_uv[0].1;
+    boundary_uv.push((first_u + winding, first_v));
+    boundary_3d.push((first_pt, first_gid, edge, true));
+    let steps = boundary_uv.len().max(8);
+    for k in 0..=steps {
+        #[allow(clippy::cast_precision_loss)]
+        let u = first_u + winding * (1.0 - k as f64 / steps as f64);
+        boundary_uv.push((u, v_far));
+        boundary_3d.push((pole, gid, edge, true));
+    }
+    Ok(())
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.

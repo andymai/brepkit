@@ -179,12 +179,20 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Stable row defect: `loft_smooth`** | Three squares (half 3, 2, 3 at z 0, 2, 4): signed volume 3.4, magnitude 6.7, 8 open mesh edges |
 | **Stable row defect: heal `convert_to_bspline` on a cylinder** | 7 open mesh edges at the seam vertex: the band skips the rim's vertex sample while the cap keeps it |
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
-| **Stable row defect: seamless closed NURBS faces do not mesh (the `makeEllipsoid` primitive)** | The wasm ellipsoid is a unit sphere scaled non-uniformly, so it meshes to NOTHING. A sphere or torus under a non-uniform scale becomes exact NURBS (pinned by `non_uniform_scale_makes_a_sphere_an_exact_ellipsoid`), but a hemisphere whose outer wire winds once around the periodic direction with no seam edge meshes to NOTHING (volume 0), same on main; a squashed cone cracks (878 open mesh edges on main). The curved CDT needs the virtual seam and pole rows that close such a region in UV |
+| **Stable row defect: non-uniformly scaled tori and cones do not mesh** | `transform_solid` gives both exact NURBS images, but under `rotation_z(0.3) * scale(2, 1, 1)` a torus meshes to NOTHING (its doubly periodic NURBS face) and a cone cracks (8 open edges at 0.001, volume 22.8 against about 44). The ellipsoid case closed (Closed below); the torus needs the same kind of closure for a face whose wire is the a, b, a⁻¹, b⁻¹ seam pair on a doubly periodic NURBS |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **The ellipsoid primitive meshed to nothing (CLOSED 2026-09-23; pin `crates/operations/tests/ellipsoid_mesh.rs`)** —
+  `makeEllipsoid` scales a unit sphere non-uniformly, so each hemisphere
+  becomes an exact NURBS cap whose only wire is the equator, winding the
+  periodic u once with no seam. The curved CDT could not close that region
+  in (u, v) and returned no triangles. `close_loop_at_pole` continues such a
+  loop into its first sample's image one winding on and back along the
+  degenerate v edge on its left, welded to the pole.
 
 - **Mirrors broke solids that mix NURBS and analytic faces (CLOSED 2026-09-23; pin `crates/operations/tests/mirror_mixed_faces.rs`)**:
   `transform_solid` and `copy_and_transform_solid` reversed every wire and
