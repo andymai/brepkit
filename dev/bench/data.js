@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790238974308,
+  "lastUpdate": 1790239655453,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36449,6 +36449,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42022755,
             "range": "± 101003",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "931180c4d1b6bb8c6b3d721dd2f0321bb6f4fc01",
+          "message": "chore(main): release 3.5.3 (#1704)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.5.3](https://github.com/andymai/brepkit/compare/v3.5.2...v3.5.3)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **operations:** mesh non-uniformly scaled spheres and tori\n([#1694](https://github.com/andymai/brepkit/issues/1694))\n([9bac3b8](https://github.com/andymai/brepkit/commit/9bac3b8434aea787368b6abf0effdfbac135855c))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCuts the 3.5.3 release: bumps workspace crate versions to 3.5.3 and\nupdates the changelog and release manifest. This release ships a fix for\nmeshing non-uniformly scaled spheres and tori.\n\n<sup>Written for commit 2395bf5053fb2e947ee13e843472c635c53c705d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1704?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T08:44:58Z",
+          "tree_id": "4a4f39dbeabe74f9b00f0df115078bb19c944391",
+          "url": "https://github.com/andymai/brepkit/commit/931180c4d1b6bb8c6b3d721dd2f0321bb6f4fc01"
+        },
+        "date": 1790239651531,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1002856,
+            "range": "± 878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1087440,
+            "range": "± 3398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 15051,
+            "range": "± 51",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 742477,
+            "range": "± 4960",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42020432,
+            "range": "± 77393",
             "unit": "ns/iter"
           }
         ]
