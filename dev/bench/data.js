@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790275397888,
+  "lastUpdate": 1790276105681,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38285,6 +38285,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41824537,
             "range": "± 145892",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6ce89686cbbbe8ed6eeec977e88bbe50dff6872a",
+          "message": "chore(main): release 4.0.11 (#1737)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.11](https://github.com/andymai/brepkit/compare/v4.0.10...v4.0.11)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **check:** classify points against every shell, so a cavity reads\noutside ([#1732](https://github.com/andymai/brepkit/issues/1732))\n([52543c4](https://github.com/andymai/brepkit/commit/52543c4f219dffa8e596fea118f558b91d5e3dc4))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases brepkit 4.0.11, bumping all workspace crate versions and\nupdating the changelog.\n\nThis release fixes point classification in `brepkit-check`: points are\nnow classified against every shell of a solid, so a point inside a\ncavity correctly reads as outside.\n\n<sup>Written for commit 81e661959978c805ef13433b7f6bd8bc1bb007bf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1737?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T18:52:44Z",
+          "tree_id": "f9ef4497d668de35d33c475b88c96421e1b4b3a0",
+          "url": "https://github.com/andymai/brepkit/commit/6ce89686cbbbe8ed6eeec977e88bbe50dff6872a"
+        },
+        "date": 1790276101838,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 668531,
+            "range": "± 2258",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 726903,
+            "range": "± 843",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8657,
+            "range": "± 465",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 574145,
+            "range": "± 21325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30525417,
+            "range": "± 73339",
             "unit": "ns/iter"
           }
         ]
