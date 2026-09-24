@@ -306,7 +306,7 @@ fn meeting_point(planes: &[(Vec3, f64)], near: Point3, linear: f64) -> Option<Po
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used)]
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_math::vec::{Point3, Vec3};
@@ -361,8 +361,8 @@ mod tests {
             Point3::new(1.0e6, -2.0e6, 3.0e6),
             Point3::new(1.0e12, -2.0e12, 3.0e12),
         ] {
-            let point = meeting_point(&corner(at, 0.0), at + Vec3::new(0.5, 0.5, 0.5), 1e-7)
-                .expect("corner rejected");
+            let point =
+                meeting_point(&corner(at, 0.0), at + Vec3::new(0.5, 0.5, 0.5), 1e-7).unwrap();
             assert!(
                 (point - at).length()
                     <= 1e-3 * (at - Point3::new(0.0, 0.0, 0.0)).length().max(1e-6)
