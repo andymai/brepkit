@@ -631,16 +631,26 @@ fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64
     use brepkit_math::curves2d::Curve2D;
 
     // For NURBS pcurves, sample near the endpoint for tangent direction.
-    // Reverse edges reuse the same pcurve -- swap t0/tn to match the
-    // oriented edge direction.
+    // A pcurve may run in the edge's traversal order or in its stored
+    // order (a reverse edge reusing its forward pcurve): read it from
+    // whichever end sits on the edge's start, and fall back to the
+    // traversal flag when both ends do (a closed loop in the plane).
     if let Curve2D::Nurbs(ref nurbs) = edge.pcurve {
         let knots = nurbs.knots();
         if knots.len() >= 2 {
             let t0_raw = knots[0];
             let tn_raw = knots[knots.len() - 1];
-            // For reverse edges, the pcurve's t0 corresponds to the edge's
-            // end and tn corresponds to the edge's start.
-            let (t_start, t_end) = if edge.forward {
+            let off_start = |t: f64| {
+                let p = nurbs.evaluate(t);
+                (p.x() - edge.start_uv.x()).powi(2) + (p.y() - edge.start_uv.y()).powi(2)
+            };
+            let (d0, dn) = (off_start(t0_raw), off_start(tn_raw));
+            let traversal_order = if (d0 - dn).abs() <= 1e-18 {
+                edge.forward
+            } else {
+                d0 < dn
+            };
+            let (t_start, t_end) = if traversal_order {
                 (t0_raw, tn_raw)
             } else {
                 (tn_raw, t0_raw)

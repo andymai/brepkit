@@ -70,6 +70,77 @@ pub fn compute_pcurve_on_surface(
     } else {
         sample_edge_to_uv(curve_3d, start, end, surface)
     };
+    pcurve_through_uv_samples(uv_pts, start, end, surface)
+}
+
+/// The pcurve of a face's own boundary edge. An open circle or ellipse
+/// arc runs its native span (counter-clockwise in its own parameter from
+/// its stored start to its stored end), so a half or major arc traces
+/// itself; the shorter-arc convention of [`compute_pcurve_on_surface`]
+/// would trace the complement or, at exactly half a turn, either side.
+/// `forward = false` traverses the edge from its stored end.
+#[must_use]
+pub fn compute_boundary_pcurve_on_surface(
+    curve_3d: &EdgeCurve,
+    stored_start: Point3,
+    stored_end: Point3,
+    forward: bool,
+    surface: &FaceSurface,
+    wire_pts: &[Point3],
+    frame: Option<&PlaneFrame>,
+) -> Curve2D {
+    let (start, end) = if forward {
+        (stored_start, stored_end)
+    } else {
+        (stored_end, stored_start)
+    };
+    if !matches!(curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+        || (stored_start - stored_end).length() <= 1e-12
+    {
+        return compute_pcurve_on_surface(curve_3d, start, end, surface, wire_pts, frame);
+    }
+    let mut pts_3d = Vec::with_capacity(PCURVE_SAMPLES + 1);
+    sample_edge_uniform_native(
+        curve_3d,
+        stored_start,
+        stored_end,
+        PCURVE_SAMPLES,
+        forward,
+        &mut pts_3d,
+    );
+    pts_3d.push(end);
+    let uv_pts = if let FaceSurface::Plane { normal, .. } = surface {
+        let owned;
+        let f = if let Some(fr) = frame {
+            fr
+        } else {
+            owned = PlaneFrame::from_plane_face(*normal, wire_pts);
+            &owned
+        };
+        pts_3d.iter().map(|&p| f.project(p)).collect()
+    } else {
+        let mut uv: Vec<Point2> = pts_3d
+            .iter()
+            .map(|&p| {
+                let (u, v) = surface.project_point(p).unwrap_or((0.0, 0.0));
+                Point2::new(u, v)
+            })
+            .collect();
+        let (u_period, v_period) = surface_periods(surface);
+        unwrap_periodic_params(&mut uv, u_period, v_period);
+        uv
+    };
+    pcurve_through_uv_samples(uv_pts, start, end, surface)
+}
+
+/// A pcurve through UV samples running from `start` to `end`: a `Line2D`
+/// when they are collinear and distinct, else a fitted NURBS.
+fn pcurve_through_uv_samples(
+    uv_pts: Vec<Point2>,
+    start: Point3,
+    end: Point3,
+    surface: &FaceSurface,
+) -> Curve2D {
     if uv_pts.len() < 2 {
         // Degenerate: just project endpoints.
         let (u0, v0) = surface.project_point(start).unwrap_or((0.0, 0.0));
