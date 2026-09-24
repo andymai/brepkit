@@ -178,6 +178,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 | **Stable row defect: heal `convert_to_bspline` on a cylinder or a bored sphere** | Cylinder: 7 open mesh edges at the seam vertex, the band skips the rim's vertex sample while the cap keeps it. Bored sphere (`make_sphere(6, 24)` less an r=3 bore along z): 9141 open mesh edges at 0.01, the tunnel mouths filled, `solid_volume` 1533.7 against 587.6 before the conversion |
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
+| **Stable row defect: volumes far from the origin** | `solid_volume` and `oriented_solid_volume` sum divergence terms about the world origin (`d · A`, `a · (b × c)`), so a solid far from it cancels away its own volume: a 4 x 3 x 2 box with one side drafted 5 degrees, translated by 1e6 on each axis, reads 57.43 and 68.91 against 23.475 (its geometry is right to 1e-10; the untranslated box's fast path still reads 24). Every path needs a reference point near the solid (its first vertex or bounding-box centre) |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives

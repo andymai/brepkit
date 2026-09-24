@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
@@ -30,7 +31,8 @@ use crate::dot_normal_point;
 /// # Errors
 ///
 /// Returns an error if:
-/// - `angle_radians` is zero or `pull_direction` is zero-length
+/// - `angle_radians` is zero, not below a right angle in magnitude, or not
+///   finite, or `pull_direction` is zero-length
 /// - a drafted face is not a planar face of the solid, or lies parallel to
 ///   the neutral plane (it has no direction to lean in)
 /// - a vertex of a drafted face meets a non-planar face, or more planes
@@ -51,8 +53,13 @@ pub fn draft(
         reason: reason.into(),
     };
 
-    if angle_radians.abs() <= tol.angular {
-        return Err(invalid("draft angle must be non-zero"));
+    if !angle_radians.is_finite()
+        || angle_radians.abs() <= tol.angular
+        || angle_radians.abs() >= std::f64::consts::FRAC_PI_2
+    {
+        return Err(invalid(
+            "draft angle must be non-zero and smaller than a right angle",
+        ));
     }
     let pull = pull_direction.normalize()?;
     let neutral_d = dot_normal_point(pull, neutral_point);
@@ -101,12 +108,14 @@ pub fn draft(
         planes.insert(fid, (turned, turned.dot(on_line)));
     }
 
-    // Faces around each vertex.
+    // Faces around each vertex and each edge.
     let mut around: HashMap<VertexId, Vec<FaceId>> = HashMap::new();
+    let mut edge_faces: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
     for &fid in &faces {
         let face = topo.face(fid)?;
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             for oe in topo.wire(wid)?.edges() {
+                edge_faces.entry(oe.edge()).or_default().push(fid);
                 let edge = topo.edge(oe.edge())?;
                 for vid in [edge.start(), edge.end()] {
                     let list = around.entry(vid).or_default();
@@ -117,6 +126,23 @@ pub fn draft(
             }
         }
     }
+
+    // The solid's size sets how far an extra plane may miss a vertex; the
+    // distance from the origin must not.
+    let (lo, hi) = around.keys().try_fold(
+        (
+            Point3::new(f64::MAX, f64::MAX, f64::MAX),
+            Point3::new(f64::MIN, f64::MIN, f64::MIN),
+        ),
+        |(lo, hi), &vid| -> Result<_, crate::OperationsError> {
+            let p = topo.vertex(vid)?.point();
+            Ok((
+                Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z())),
+                Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z())),
+            ))
+        },
+    )?;
+    let miss = 10.0 * tol.linear + 1e-9 * (hi - lo).length();
 
     // Re-solve every vertex of a drafted face as its planes' meeting point.
     let mut moved: HashMap<VertexId, Point3> = HashMap::new();
@@ -136,7 +162,7 @@ pub fn draft(
                         };
                         vertex_planes.push(plane);
                     }
-                    let point = meeting_point(&vertex_planes, tol.linear).ok_or_else(|| {
+                    let point = meeting_point(&vertex_planes, miss).ok_or_else(|| {
                         invalid("the draft would split a vertex whose planes no longer meet")
                     })?;
                     moved.insert(vid, point);
@@ -169,10 +195,37 @@ pub fn draft(
         }
     }
 
+    // Every edge at a moved vertex runs between two of its planes, so it is
+    // straight; a curve stored for it (a boolean's straight NURBS) would keep
+    // the old span, and becomes a line.
+    let mut straighten = HashSet::new();
+    for &vid in moved.keys() {
+        for (&eid, owners) in &edge_faces {
+            let edge = topo.edge(eid)?;
+            if edge.start() != vid && edge.end() != vid {
+                continue;
+            }
+            if matches!(edge.curve(), EdgeCurve::Line) {
+                continue;
+            }
+            let distinct = owners.len() == 2
+                && owners
+                    .iter()
+                    .map(|f| planes.get(f))
+                    .collect::<Option<Vec<_>>>()
+                    .is_some_and(|p| p[0].0.cross(p[1].0).length() > 1e-9);
+            if !distinct {
+                return Err(invalid("a drafted face's vertex meets a curved edge"));
+            }
+            straighten.insert(eid);
+        }
+    }
+
     // Apply to a copy, matched to the source by traversal order.
     let copy = crate::copy::copy_solid(topo, solid)?;
     let copy_faces = solid_faces(topo, copy)?;
     let mut vertex_map: HashMap<VertexId, VertexId> = HashMap::new();
+    let mut edge_map: HashMap<(EdgeId, FaceId), (EdgeId, FaceId)> = HashMap::new();
     let mut face_map: HashMap<FaceId, FaceId> = HashMap::new();
     for (&src, &dst) in faces.iter().zip(&copy_faces) {
         face_map.insert(src, dst);
@@ -184,6 +237,7 @@ pub fn draft(
         for (sw, dw) in src_wires.zip(dst_wires) {
             let (sw, dw) = (topo.wire(sw)?, topo.wire(dw)?);
             for (se, de) in sw.edges().iter().zip(dw.edges()) {
+                edge_map.insert((se.edge(), src), (de.edge(), dst));
                 let (se, de) = (topo.edge(se.edge())?, topo.edge(de.edge())?);
                 vertex_map.insert(se.start(), de.start());
                 vertex_map.insert(se.end(), de.end());
@@ -214,20 +268,30 @@ pub fn draft(
             stale.insert(face_map[f]);
         }
     }
-    topo.pcurves_mut().remove_faces(&stale);
+    for (&(src_edge, src_face), &(dst_edge, dst_face)) in &edge_map {
+        if straighten.contains(&src_edge) {
+            topo.edge_mut(dst_edge)?.set_curve(EdgeCurve::Line);
+        }
+        // `copy_solid` carries no pcurves; untouched faces keep theirs.
+        if !stale.contains(&dst_face)
+            && let Some(pcurve) = topo.pcurves().get(src_edge, src_face).cloned()
+        {
+            topo.pcurves_mut().set(dst_edge, dst_face, pcurve);
+        }
+    }
     Ok(copy)
 }
 
 /// The point where planes `(n, d)` (`n · p = d`) meet: the best-conditioned
-/// triple fixes it, and every other plane must pass through it.
-fn meeting_point(planes: &[(Vec3, f64)], tol: f64) -> Option<Point3> {
+/// triple fixes it, and every other plane must pass within `miss` of it.
+fn meeting_point(planes: &[(Vec3, f64)], miss: f64) -> Option<Point3> {
     let mut best: Option<(f64, Point3)> = None;
     for i in 0..planes.len() {
         for j in i + 1..planes.len() {
             for k in j + 1..planes.len() {
                 let ((n1, d1), (n2, d2), (n3, d3)) = (planes[i], planes[j], planes[k]);
                 let det = n1.dot(n2.cross(n3));
-                if best.is_some_and(|(b, _)| det.abs() <= b) || det.abs() < 1e-9 {
+                if best.is_some_and(|(b, _)| det.abs() <= b) || det.abs() < 1e-14 {
                     continue;
                 }
                 let v = (n2.cross(n3) * d1 + n3.cross(n1) * d2 + n1.cross(n2) * d3) * (1.0 / det);
@@ -236,10 +300,9 @@ fn meeting_point(planes: &[(Vec3, f64)], tol: f64) -> Option<Point3> {
         }
     }
     let (_, point) = best?;
-    let scale = 1.0 + (point - Point3::new(0.0, 0.0, 0.0)).length();
     planes
         .iter()
-        .all(|&(n, d)| (dot_normal_point(n, point) - d).abs() <= tol * scale * 10.0)
+        .all(|&(n, d)| (dot_normal_point(n, point) - d).abs() <= miss)
         .then_some(point)
 }
 
@@ -488,6 +551,168 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn right_angle_drafts_are_refused() {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        for angle in [FRAC_PI_2, PI, -FRAC_PI_2, f64::NAN] {
+            let mut topo = Topology::new();
+            let cube = make_unit_cube_manifold(&mut topo);
+            let right = find_faces(&topo, cube, Vec3::new(1.0, 0.0, 0.0));
+            assert!(
+                draft(
+                    &mut topo,
+                    cube,
+                    &right,
+                    Vec3::new(0.0, 0.0, 1.0),
+                    Point3::new(0.0, 0.0, 0.0),
+                    angle,
+                )
+                .is_err(),
+                "angle {angle}"
+            );
+        }
+    }
+
+    /// The vertex check's tolerance follows the solid's size, so a box far
+    /// from the origin drafts like one at it: the drafted side's top edge
+    /// sits `2 tan(a)` in from its base.
+    #[test]
+    fn draft_far_from_the_origin_matches() {
+        let far = 1.0e6;
+        let a = 5.0_f64.to_radians();
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 4.0, 3.0, 2.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            block,
+            &brepkit_math::mat::Mat4::translation(far, far, far),
+        )
+        .unwrap();
+        let right = find_faces(&topo, block, Vec3::new(1.0, 0.0, 0.0));
+        let result = draft(
+            &mut topo,
+            block,
+            &right,
+            Vec3::new(0.0, 0.0, 1.0),
+            Point3::new(far, far, far),
+            a,
+        )
+        .unwrap();
+        let report = crate::validate::validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let mut xs: Vec<(f64, f64)> = Vec::new();
+        for f in solid_faces(&topo, result).unwrap() {
+            for oe in topo
+                .wire(topo.face(f).unwrap().outer_wire())
+                .unwrap()
+                .edges()
+            {
+                let p = topo
+                    .vertex(topo.edge(oe.edge()).unwrap().start())
+                    .unwrap()
+                    .point();
+                xs.push((p.x() - far, p.z() - far));
+            }
+        }
+        let top_right = xs
+            .iter()
+            .filter(|(x, z)| *z > 1.0 && *x > 1.0)
+            .map(|(x, _)| *x)
+            .collect::<Vec<_>>();
+        assert!(!top_right.is_empty());
+        for x in top_right {
+            assert!((x - (4.0 - 2.0 * a.tan())).abs() < 1e-6, "top edge at {x}");
+        }
+    }
+
+    /// A straight edge a boolean stored as a NURBS line follows its moved
+    /// vertices as a line; a face the draft never touches keeps its pcurves.
+    #[test]
+    fn draft_straightens_nurbs_edges_and_keeps_untouched_pcurves() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::edge::EdgeCurve;
+        use brepkit_topology::pcurve::PCurve;
+
+        let a = 5.0_f64.to_radians();
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 4.0, 3.0, 2.0).unwrap();
+        let right = find_faces(&topo, block, Vec3::new(1.0, 0.0, 0.0));
+        let left = find_faces(&topo, block, Vec3::new(-1.0, 0.0, 0.0))[0];
+
+        let bent = topo
+            .wire(topo.face(right[0]).unwrap().outer_wire())
+            .unwrap()
+            .edges()[0]
+            .edge();
+        let (p, q) = {
+            let edge = topo.edge(bent).unwrap();
+            (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            )
+        };
+        let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![p, q],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        topo.edge_mut(bent)
+            .unwrap()
+            .set_curve(EdgeCurve::NurbsCurve(line));
+
+        let kept = topo
+            .wire(topo.face(left).unwrap().outer_wire())
+            .unwrap()
+            .edges()[0]
+            .edge();
+        let pcurve = PCurve::new(
+            Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            0.0,
+            1.0,
+        );
+        topo.pcurves_mut().set(kept, left, pcurve);
+
+        let result = draft(
+            &mut topo,
+            block,
+            &right,
+            Vec3::new(0.0, 0.0, 1.0),
+            Point3::new(0.0, 0.0, 0.0),
+            a,
+        )
+        .unwrap();
+        let volume = crate::measure::solid_volume(&topo, result, 0.001).unwrap();
+        let truth = 24.0 - 6.0 * a.tan();
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "volume {volume}, expected {truth}"
+        );
+
+        let faces = solid_faces(&topo, result).unwrap();
+        for &f in &faces {
+            for oe in topo
+                .wire(topo.face(f).unwrap().outer_wire())
+                .unwrap()
+                .edges()
+            {
+                assert!(matches!(
+                    topo.edge(oe.edge()).unwrap().curve(),
+                    EdgeCurve::Line
+                ));
+            }
+        }
+        let new_left = find_faces(&topo, result, Vec3::new(-1.0, 0.0, 0.0))[0];
+        let new_kept = topo
+            .wire(topo.face(new_left).unwrap().outer_wire())
+            .unwrap()
+            .edges()[0]
+            .edge();
+        assert!(topo.pcurves().get(new_kept, new_left).is_some());
     }
 
     #[test]
