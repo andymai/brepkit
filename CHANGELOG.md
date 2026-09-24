@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.9](https://github.com/andymai/brepkit/compare/v4.0.8...v4.0.9) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** mesh a pointed cone as a fan over its shared rim samples ([#1723](https://github.com/andymai/brepkit/issues/1723)) ([bfcf685](https://github.com/andymai/brepkit/commit/bfcf68559bf059673f69f78fbe19d60c162dff09))
+
 ## [4.0.8](https://github.com/andymai/brepkit/compare/v4.0.7...v4.0.8) (2026-09-24)
 
 
